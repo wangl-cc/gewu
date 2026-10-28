@@ -43,6 +43,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private let sidebar = SidebarViewController()
 
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
+    private static let headerHeight: CGFloat = 32
     private static let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
     private static let searchItemID = NSToolbarItem.Identifier("search")
 
@@ -87,7 +88,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         window.toolbar = toolbar
 
         // Table
-        let headerView = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
+        let headerView = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: Self.headerHeight))
         headerView.onFilterClick = { [weak self] index in
             self?.filterColumn = index
             self?.showFilter(nil)
@@ -138,7 +139,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         NSLayoutConstraint.activate([
             // The row-number gutter sits left of the table and doesn't scroll
             // sideways with it.
-            gutter.topAnchor.constraint(equalTo: content.topAnchor),
+            // Only beside the rows: below the table header, above the status bar.
+            gutter.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor, constant: Self.headerHeight),
             gutter.leadingAnchor.constraint(equalTo: content.safeAreaLayoutGuide.leadingAnchor),
             gutter.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
