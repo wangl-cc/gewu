@@ -19,6 +19,7 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
     private let minField = NSTextField()
     private let maxField = NSTextField()
     private let summary = noteLabel("Loading…")
+    private let hint = noteLabel("Drag to select a range · Drag the handles or the selection · Double-click to reset")
     private lazy var nulls = NullMode.popUp(nullCount: nil, target: self, action: #selector(nullModeChanged(_:)))
 
     private static let bins: UInt32 = 60
@@ -79,7 +80,8 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
         heading.alignment = .firstBaseline
         heading.spacing = 6
 
-        for v in [heading, chart, fields, summary, buttons] as [NSView] {
+        hint.textColor = .tertiaryLabelColor
+        for v in [heading, chart, hint, fields, summary, buttons] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -93,7 +95,11 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
             chart.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -inset),
             chart.heightAnchor.constraint(equalToConstant: 140),
 
-            fields.topAnchor.constraint(equalTo: chart.bottomAnchor, constant: 10),
+            hint.topAnchor.constraint(equalTo: chart.bottomAnchor, constant: 2),
+            hint.leadingAnchor.constraint(equalTo: chart.leadingAnchor),
+            hint.trailingAnchor.constraint(equalTo: chart.trailingAnchor),
+
+            fields.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 8),
             fields.leadingAnchor.constraint(equalTo: chart.leadingAnchor),
             fields.trailingAnchor.constraint(equalTo: chart.trailingAnchor),
 
@@ -190,7 +196,7 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
         let exact = chart.isSnapped
         let prefix = exact ? "" : "≈ "
         summary.stringValue = isFullRange()
-            ? "All \(formatCount(base)) values · drag on the chart to choose a range"
+            ? "All \(formatCount(base)) values"
             : "\(prefix)\(formatCount(selected)) of \(formatCount(base)) values selected"
     }
 
@@ -312,7 +318,8 @@ final class HistogramView: NSView {
     // MARK: Geometry
 
     private var plot: NSRect {
-        NSRect(x: bounds.minX + 1, y: bounds.minY + 4, width: bounds.width - 2, height: bounds.height - 22)
+        // Side insets keep the edge handles (and their hit areas) inside the view.
+        NSRect(x: bounds.minX + 11, y: bounds.minY + 4, width: bounds.width - 22, height: bounds.height - 22)
     }
 
     private func x(_ v: Double) -> CGFloat {
@@ -362,11 +369,17 @@ final class HistogramView: NSView {
             NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
             NSRect(x: x0, y: p.minY - 2, width: max(1, x1 - x0), height: p.height + 4).fill()
         }
+        // Handles: a line with a grip, visible even before anything is chosen.
+        let handleColor = everything ? NSColor.labelColor.withAlphaComponent(0.55) : NSColor.controlAccentColor
         for hx in [x0, x1] {
-            (everything ? NSColor.secondaryLabelColor : NSColor.controlAccentColor).setFill()
+            handleColor.setFill()
             NSRect(x: hx - 1, y: p.minY - 2, width: 2, height: p.height + 4).fill()
-            NSBezierPath(roundedRect: NSRect(x: hx - 4, y: p.midY - 10, width: 8, height: 20),
-                         xRadius: 3, yRadius: 3).fill()
+            let grip = NSRect(x: hx - 5, y: p.midY - 13, width: 10, height: 26)
+            NSBezierPath(roundedRect: grip, xRadius: 4, yRadius: 4).fill()
+            NSColor.windowBackgroundColor.withAlphaComponent(0.8).setFill()
+            for dx in [-1.5, 1.5] as [CGFloat] {
+                NSRect(x: hx + dx - 0.5, y: grip.midY - 6, width: 1, height: 12).fill()
+            }
         }
 
         // Axis labels: column min and max.
@@ -390,20 +403,27 @@ final class HistogramView: NSView {
 
     // MARK: Mouse
 
+    /// Handles win over panning and new selections within this distance.
+    private static let handleReach: CGFloat = 10
+
     private func handle(at point: NSPoint) -> Drag? {
         let x0 = x(selection.0), x1 = x(selection.1)
-        if abs(point.x - x1) <= 6 { return .upper }
-        if abs(point.x - x0) <= 6 { return .lower }
-        return nil
+        let d0 = abs(point.x - x0), d1 = abs(point.x - x1)
+        guard min(d0, d1) <= Self.handleReach else { return nil }
+        // When both are in reach (a narrow selection), take the nearer one.
+        return d1 < d0 || (d1 == d0 && point.x > x1) ? .upper : .lower
     }
+
+    /// The chart handles its own drags; never let them move the window.
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    private var moved = false
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if event.clickCount == 2 {
-            setSelection(lo, hi, snapped: true)
-            onChange?()
-            return
-        }
+        // A double click resets, but only on mouse up without movement:
+        // trackpad "tap then drag" also arrives as a second click.
+        moved = false
         if let h = handle(at: point) {
             drag = h
         } else if !isEverything, point.x > x(selection.0), point.x < x(selection.1) {
@@ -416,6 +436,8 @@ final class HistogramView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard let drag else { return }
+        moved = true
+        if case .pan = drag { NSCursor.closedHand.set() }
         let v = snappedValue(convert(event.locationInWindow, from: nil).x)
         var (a, b) = selection
         switch drag {
@@ -436,6 +458,10 @@ final class HistogramView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         drag = nil
+        if !moved, event.clickCount >= 2 {
+            setSelection(lo, hi, snapped: true)
+            onChange?()
+        }
     }
 
     override func updateTrackingAreas() {

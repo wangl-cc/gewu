@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    ArrayRef, Date32Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     TimestampMicrosecondArray,
 };
 use parquet::arrow::ArrowWriter;
@@ -27,6 +27,16 @@ fn main() {
         state ^= state >> 7;
         state ^= state << 17;
         state
+    };
+
+    // Standard normal samples (Box-Muller) from the same generator.
+    let mut normal = {
+        let mut next = next;
+        move || {
+            let u1 = ((next() >> 11) as f64 + 1.0) / (1u64 << 53) as f64;
+            let u2 = (next() >> 11) as f64 / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        }
     };
 
     let file = std::fs::File::create(&path).unwrap();
@@ -68,6 +78,29 @@ fn main() {
             }))
             .with_timezone("UTC"),
         );
+        // Known shapes, to check the histogram (about 1% nulls each):
+        // score ~ N(100, 15); rating ~ N(30, 5) as integers, narrow enough
+        // for one bar per value; bimodal mixes N(40, 5) and N(120, 10);
+        // lognormal is right-skewed with median 50.
+        let float_column = |f: &mut dyn FnMut() -> f64| -> ArrayRef {
+            Arc::new(Float64Array::from_iter((0..len).map(|i| {
+                let v = (f() * 100.0).round() / 100.0;
+                ((start + i) % 97 != 0).then_some(v)
+            })))
+        };
+        let scores = float_column(&mut || 100.0 + 15.0 * normal());
+        let bimodal = float_column(&mut || {
+            let z = normal();
+            if normal() < 0.0 {
+                40.0 + 5.0 * z
+            } else {
+                120.0 + 10.0 * z
+            }
+        });
+        let lognormal = float_column(&mut || 50.0 * (0.6 * normal()).exp());
+        let ratings: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..len).map(|_| (30.0 + 5.0 * normal()).round() as i32),
+        ));
         let batch = RecordBatch::try_from_iter(vec![
             ("id", ids),
             ("label", labels),
@@ -75,6 +108,10 @@ fn main() {
             ("city", cities),
             ("day", days),
             ("updated", times),
+            ("score", scores),
+            ("rating", ratings),
+            ("bimodal", bimodal),
+            ("lognormal", lognormal),
         ])
         .unwrap();
         let w = writer.get_or_insert_with(|| {
