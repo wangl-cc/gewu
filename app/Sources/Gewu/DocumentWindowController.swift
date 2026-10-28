@@ -33,6 +33,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
     private static let rowNumberCellID = NSUserInterfaceItemIdentifier("rowNumberCell")
     private static let rowNumberID = NSUserInterfaceItemIdentifier("row")
+    private static let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
     private static let searchItemID = NSToolbarItem.Identifier("search")
 
     init(url: URL) {
@@ -81,7 +82,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             self?.showFilter(nil)
         }
         tableView.headerView = headerView
-        tableView.usesAlternatingRowBackgroundColors = true
+        // Stripes are painted per row by StripedRowView (see there for why).
+        tableView.usesAlternatingRowBackgroundColors = false
         tableView.allowsMultipleSelection = true
         tableView.allowsColumnReordering = true
         tableView.columnAutoresizingStyle = .noColumnAutoresizing
@@ -336,6 +338,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     func numberOfRows(in tableView: NSTableView) -> Int {
         Int(current.rowCount)
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = (tableView.makeView(withIdentifier: Self.rowViewID, owner: self) as? StripedRowView)
+            ?? StripedRowView()
+        view.identifier = Self.rowViewID
+        view.odd = row % 2 == 1
+        return view
     }
 
     private func block(for row: Int) -> RowBlock? {

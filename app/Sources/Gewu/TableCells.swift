@@ -211,6 +211,22 @@ final class FilterHeaderView: NSTableHeaderView {
     }
 }
 
+/// Row view that paints its own zebra stripe. NSTableView's built-in
+/// alternating backgrounds repaint stripes across a huge area on every
+/// resize frame for multi-million-row tables (most of the CPU when the
+/// sidebar animates); painting per visible row costs only what's on screen.
+final class StripedRowView: NSTableRowView {
+    var odd = false {
+        didSet { if odd != oldValue { needsDisplay = true } }
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        let colors = NSColor.alternatingContentBackgroundColors
+        (odd && colors.count > 1 ? colors[1] : colors[0]).setFill()
+        dirtyRect.fill()
+    }
+}
+
 /// Cell for the row-number column: tinted background and a divider on the right.
 final class RowNumberCellView: NSTableCellView {
     override func draw(_ dirtyRect: NSRect) {
