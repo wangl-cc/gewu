@@ -70,6 +70,14 @@ pub struct SortKey {
     pub descending: bool,
 }
 
+/// One end of a range filter. Integers stay exact.
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum Bound {
+    Int { value: i64 },
+    UInt { value: u64 },
+    Float { value: f64 },
+}
+
 #[derive(uniffi::Enum)]
 pub enum Filter {
     InValues {
@@ -84,6 +92,12 @@ pub enum Filter {
         column: u32,
         text: String,
         case_sensitive: bool,
+    },
+    /// Inclusive; a `nil` bound is open. Numeric, date and time columns.
+    Range {
+        column: u32,
+        min: Option<Bound>,
+        max: Option<Bound>,
     },
 }
 
@@ -125,6 +139,18 @@ pub struct DistinctResult {
     pub truncated: bool,
 }
 
+/// Distribution of a numeric column. Bins split `[lo, hi)` evenly.
+#[derive(uniffi::Record)]
+pub struct Histogram {
+    pub lo: Option<f64>,
+    pub hi: Option<f64>,
+    pub integer: bool,
+    pub counts: Vec<u64>,
+    pub null_count: u64,
+    pub nan_count: u64,
+    pub total: u64,
+}
+
 #[derive(uniffi::Record)]
 pub struct ColumnStats {
     pub null_count: u64,
@@ -159,9 +185,24 @@ impl From<ViewState> for core::ViewState {
                         text,
                         case_sensitive,
                     },
+                    Filter::Range { column, min, max } => core::Filter::Range {
+                        column,
+                        min: min.map(Into::into),
+                        max: max.map(Into::into),
+                    },
                 })
                 .collect(),
             search: s.search,
+        }
+    }
+}
+
+impl From<Bound> for core::Bound {
+    fn from(b: Bound) -> Self {
+        match b {
+            Bound::Int { value } => core::Bound::Int(value),
+            Bound::UInt { value } => core::Bound::UInt(value),
+            Bound::Float { value } => core::Bound::Float(value),
         }
     }
 }
@@ -266,6 +307,28 @@ impl GewuDocument {
                 .collect(),
             total: d.total,
             truncated: d.truncated,
+        })
+    }
+
+    /// Distribution for the range filter. Pass the current view state to
+    /// count only rows that pass filters on other columns. Slow on big files:
+    /// call off the main thread.
+    pub fn histogram(
+        &self,
+        column: u32,
+        state: Option<ViewState>,
+        bins: u32,
+    ) -> Result<Histogram, GewuError> {
+        let state: Option<core::ViewState> = state.map(Into::into);
+        let h = self.inner.histogram(column, state.as_ref(), bins)?;
+        Ok(Histogram {
+            lo: h.lo,
+            hi: h.hi,
+            integer: h.integer,
+            counts: h.counts,
+            null_count: h.null_count,
+            nan_count: h.nan_count,
+            total: h.total,
         })
     }
 

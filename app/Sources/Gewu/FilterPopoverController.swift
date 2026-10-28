@@ -1,35 +1,59 @@
 import AppKit
 
-/// Excel-style filter: a checkbox list of a column's distinct values.
+/// Filter for text (and other non-numeric) columns.
+///
+/// With few distinct values it is an Excel-style checkbox list. With many,
+/// checking boxes one by one is useless, so it becomes a "contains" search
+/// whose list previews the matching values.
 final class FilterPopoverController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
-    /// Called with the chosen keys, or `nil` when every value is chosen
-    /// (meaning: no filter on this column).
-    private let onApply: (Set<UInt64>?) -> Void
+    /// Called with the column's new filters; empty means no filter.
+    private let onApply: ([Filter]) -> Void
     private let doc: GewuDocument
     private let column: UInt32
     private let state: ViewState
-    private let initial: Set<UInt64>?
+    private let initialKeys: Set<UInt64>?
+    private let initialText: String
+    private var nullMode: NullMode
 
     private var values: [DistinctValue] = []
     private var shown: [Int] = []
     private var checked: Set<UInt64> = []
     private var truncated = false
+    private var maxCount: UInt64 = 0
+    /// Contains mode: too many values for a checkbox list.
+    private var containsMode = false
 
     private let list = NSTableView()
     private let searchField = NSSearchField()
-    private let note = NSTextField(labelWithString: "Loading…")
+    private let note = noteLabel("Loading…")
+    private lazy var selectAll = NSButton(title: "Select All", target: self, action: #selector(checkAllShown(_:)))
+    private lazy var clear = NSButton(title: "Clear", target: self, action: #selector(uncheckAllShown(_:)))
+    private lazy var nulls = NullMode.popUp(nullCount: nil, target: self, action: #selector(nullModeChanged(_:)))
 
-    private static let limit: UInt32 = 10_000
+    /// Above this many distinct values, use contains mode.
+    private static let checkboxLimit: UInt64 = 500
+    private static let fetchLimit: UInt32 = 10_000
     private static let cellID = NSUserInterfaceItemIdentifier("check")
 
-    init(doc: GewuDocument, column: UInt32, state: ViewState, selected: Set<UInt64>?,
-         onApply: @escaping (Set<UInt64>?) -> Void)
+    init(doc: GewuDocument, column: UInt32, state: ViewState, current: [Filter],
+         onApply: @escaping ([Filter]) -> Void)
     {
         self.doc = doc
         self.column = column
         self.state = state
-        self.initial = selected
         self.onApply = onApply
+        var keys: Set<UInt64>?
+        var text = ""
+        for filter in current {
+            switch filter {
+            case let .inValues(_, k): keys = Set(k)
+            case let .contains(_, t, _): text = t
+            default: break
+            }
+        }
+        initialKeys = keys
+        initialText = text
+        nullMode = NullMode(current)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -37,7 +61,7 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 420))
 
         searchField.placeholderString = "Find value"
         searchField.target = self
@@ -56,14 +80,10 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
 
-        note.textColor = .secondaryLabelColor
-        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-
-        let selectAll = NSButton(title: "Select All", target: self, action: #selector(checkAllShown(_:)))
-        let clear = NSButton(title: "Clear", target: self, action: #selector(uncheckAllShown(_:)))
+        nulls.isHidden = true
         let ok = NSButton(title: "OK", target: self, action: #selector(apply(_:)))
         ok.keyEquivalent = "\r"
-        let buttons = NSStackView(views: [selectAll, clear, NSView(), ok])
+        let buttons = NSStackView(views: [selectAll, clear, nulls, NSView(), ok])
         buttons.orientation = .horizontal
 
         for v in [searchField, scroll, note, buttons] as [NSView] {
@@ -93,23 +113,50 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let doc = doc, column = column, state = state, limit = Self.limit
+        let doc = doc, column = column, state = state, limit = Self.fetchLimit
         Task {
             do {
                 let result = try await Task.detached {
                     try doc.distinctValues(column: column, state: state, limit: limit)
                 }.value
-                values = result.values
-                maxCount = values.map(\.count).max() ?? 0
                 truncated = result.truncated
-                checked = initial ?? Set(values.map(\.key))
+                containsMode = result.total > Self.checkboxLimit
+                values = result.values
+                if containsMode {
+                    // Most common first, as a guide to what to type.
+                    values.sort { $0.count > $1.count }
+                }
+                maxCount = values.map(\.count).max() ?? 0
+                checked = initialKeys ?? Set(values.map(\.key))
+                configureMode(total: result.total)
                 applySearch()
-                note.stringValue = truncated
-                    ? "Showing the first \(values.count) of \(result.total) values"
-                    : "\(values.count) values"
             } catch {
                 note.stringValue = error.localizedDescription
             }
+        }
+    }
+
+    private func configureMode(total: UInt64) {
+        if containsMode {
+            searchField.placeholderString = "Contains…"
+            searchField.stringValue = initialText
+            selectAll.isHidden = true
+            clear.isHidden = true
+            nulls.isHidden = false
+            nulls.selectItem(at: nullMode.rawValue)
+            view.window?.makeFirstResponder(searchField)
+        }
+        updateNote(total: total)
+    }
+
+    private func updateNote(total: UInt64? = nil) {
+        if containsMode {
+            let scope = truncated ? "the first \(formatCount(UInt64(values.count)))" : "all"
+            note.stringValue = searchField.stringValue.isEmpty
+                ? "\(formatCount(total ?? UInt64(values.count))) distinct values · type to filter by text"
+                : "\(formatCount(UInt64(shown.count))) matching values (searched \(scope))"
+        } else {
+            note.stringValue = "\(formatCount(UInt64(values.count))) values"
         }
     }
 
@@ -122,19 +169,25 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
             ?? FilterValueCell(identifier: Self.cellID, target: self, action: #selector(toggle(_:)))
         let value = values[shown[row]]
         cell.checkbox.title = value.label ?? "(null)"
+        // In contains mode the list is a preview: no checkboxes.
+        cell.checkbox.imagePosition = containsMode ? .noImage : .imageLeading
         cell.checkbox.state = checked.contains(value.key) ? .on : .off
         cell.checkbox.tag = row
-        cell.count.stringValue = NumberFormatter.localizedString(from: NSNumber(value: value.count), number: .decimal)
+        cell.count.stringValue = formatCount(value.count)
         cell.bar.fraction = maxCount > 0 ? CGFloat(value.count) / CGFloat(maxCount) : 0
         return cell
     }
 
-    private var maxCount: UInt64 = 0
-
     @objc private func toggle(_ sender: NSButton) {
         guard sender.tag < shown.count else { return }
-        let key = values[shown[sender.tag]].key
-        if sender.state == .on { checked.insert(key) } else { checked.remove(key) }
+        let value = values[shown[sender.tag]]
+        if containsMode {
+            // Clicking a value fills the search with it.
+            searchField.stringValue = value.label ?? ""
+            applySearch()
+            return
+        }
+        if sender.state == .on { checked.insert(value.key) } else { checked.remove(value.key) }
     }
 
     @objc private func searchChanged(_ sender: NSSearchField) {
@@ -147,6 +200,7 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
             text.isEmpty || (values[i].label ?? "(null)").lowercased().contains(text)
         }
         list.reloadData()
+        updateNote()
     }
 
     @objc private func checkAllShown(_ sender: Any?) {
@@ -159,10 +213,29 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
         list.reloadData()
     }
 
+    @objc private func nullModeChanged(_ sender: NSPopUpButton) {
+        nullMode = NullMode(rawValue: sender.indexOfSelectedItem) ?? .include
+    }
+
     @objc private func apply(_ sender: Any?) {
-        let all = Set(values.map(\.key))
-        let everything = !truncated && all.isSubset(of: checked)
-        onApply(everything ? nil : checked)
+        if containsMode {
+            if let only = nullMode == .only ? nullMode.filter(column: column) : nil {
+                onApply([only])
+                return
+            }
+            var filters: [Filter] = []
+            let text = searchField.stringValue
+            if !text.isEmpty {
+                filters.append(.contains(column: column, text: text, caseSensitive: false))
+            }
+            // "contains" already drops nulls; only add the null filter alone.
+            if text.isEmpty, let f = nullMode.filter(column: column) { filters.append(f) }
+            onApply(filters)
+        } else {
+            let all = Set(values.map(\.key))
+            let everything = !truncated && all.isSubset(of: checked)
+            onApply(everything ? [] : [.inValues(column: column, keys: checked.sorted())])
+        }
     }
 }
 

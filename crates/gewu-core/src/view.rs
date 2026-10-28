@@ -24,7 +24,16 @@ pub struct SortKey {
     pub descending: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One end of a [`Filter::Range`]. Integers stay exact so large ids
+/// compare correctly; any bound works on any numeric column.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bound {
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
     /// Keep rows whose value is one of `keys` (keys come from
     /// [`crate::Document::distinct_values`]). This is the Excel-style
@@ -38,6 +47,13 @@ pub enum Filter {
         text: String,
         case_sensitive: bool,
     },
+    /// Keep rows with `min <= value <= max` (inclusive; a missing bound is
+    /// open). Numeric, date and time columns only. Nulls and NaN never pass.
+    Range {
+        column: u32,
+        min: Option<Bound>,
+        max: Option<Bound>,
+    },
 }
 
 impl Filter {
@@ -45,13 +61,14 @@ impl Filter {
         match self {
             Filter::InValues { column, .. }
             | Filter::IsNull { column, .. }
-            | Filter::Contains { column, .. } => *column,
+            | Filter::Contains { column, .. }
+            | Filter::Range { column, .. } => *column,
         }
     }
 }
 
 /// What the user wants to see. Filters are combined with AND.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ViewState {
     pub sort: Vec<SortKey>,
     pub filters: Vec<Filter>,
@@ -100,6 +117,24 @@ pub struct DistinctResult {
     /// Number of distinct values before `limit` was applied.
     pub total: u64,
     pub truncated: bool,
+}
+
+/// Distribution of a numeric column, for the range filter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Histogram {
+    /// Bins split `[lo, hi)` evenly. Both are `None` when the column has no
+    /// non-null, non-NaN value. They span the whole column, not just the
+    /// counted rows, so the axis stays put while other filters change.
+    pub lo: Option<f64>,
+    pub hi: Option<f64>,
+    /// Integer column (including dates and times). Then `hi` is max + 1,
+    /// and when the span is small each bin is exactly one integer.
+    pub integer: bool,
+    pub counts: Vec<u64>,
+    pub null_count: u64,
+    pub nan_count: u64,
+    /// Rows counted (including nulls and NaN).
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

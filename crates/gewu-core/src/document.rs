@@ -9,10 +9,11 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn, SortO
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
+use crate::numeric::Numeric;
 use crate::value_index::ValueIndex;
 use crate::{
     format, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, Error, FileInfo, Filter,
-    Result, RowBlock, ViewInfo, ViewState,
+    Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
 
 /// How many rows to process between cancellation checks.
@@ -52,6 +53,7 @@ pub struct Document {
     columns: Vec<ArrayRef>,
     n_rows: usize,
     indexes: Vec<OnceLock<Arc<ValueIndex>>>,
+    numerics: Vec<OnceLock<Option<Arc<Numeric>>>>,
     current: Mutex<Arc<View>>,
     generation: Arc<AtomicU64>,
     next_version: AtomicU64,
@@ -111,6 +113,7 @@ impl Document {
 
         let columns = batch.columns().to_vec();
         let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
+        let numerics = (0..columns.len()).map(|_| OnceLock::new()).collect();
         let all_rows = Arc::new((0..n_rows as u32).collect());
 
         Ok(Self {
@@ -119,6 +122,7 @@ impl Document {
             columns,
             n_rows,
             indexes,
+            numerics,
             current: Mutex::new(Arc::new(View {
                 version: 0,
                 rows: all_rows,
@@ -285,6 +289,31 @@ impl Document {
         })
     }
 
+    /// Distribution of a numeric, date or time column in `bins` bins, for
+    /// the range filter. With `filters`, counts only rows that pass the
+    /// filters on *other* columns, like [`Self::distinct_values`].
+    pub fn histogram(
+        &self,
+        column: u32,
+        filters: Option<&ViewState>,
+        bins: u32,
+    ) -> Result<Histogram> {
+        let numeric = self.numeric(column)?;
+        match filters {
+            Some(state) => {
+                let token = self.detached_token();
+                let rows = self.select(
+                    &state.filters,
+                    state.search.as_deref(),
+                    Some(column),
+                    &token,
+                )?;
+                numeric.histogram(rows.into_iter().map(|r| r as usize), bins)
+            }
+            None => numeric.histogram(0..self.n_rows, bins),
+        }
+    }
+
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used by the CLI and MCP, which filter by value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
@@ -326,6 +355,24 @@ impl Document {
         }
         let built = Arc::new(ValueIndex::build(array)?);
         Ok(cell.get_or_init(|| built).clone())
+    }
+
+    fn numeric(&self, c: u32) -> Result<Arc<Numeric>> {
+        let array = self.column(c)?;
+        let cell = &self.numerics[c as usize];
+        let n = match cell.get() {
+            Some(n) => n.clone(),
+            None => {
+                let built = Numeric::build(array)?.map(Arc::new);
+                cell.get_or_init(|| built).clone()
+            }
+        };
+        n.ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "column {} ({}) is not numeric",
+                self.info.columns[c as usize].name, self.info.columns[c as usize].type_name
+            ))
+        })
     }
 
     /// A token that is never cancelled, for short read-only work.
@@ -372,6 +419,9 @@ impl Document {
                     let idx = self.index(*column)?;
                     let allowed = matching_codes(&idx, text, *case_sensitive);
                     tests.push(Box::new(move |r| allowed[idx.codes[r] as usize]));
+                }
+                Filter::Range { column, min, max } => {
+                    tests.push(self.numeric(*column)?.range_test(*min, *max));
                 }
             }
             token.check()?;

@@ -12,8 +12,10 @@ spreadsheet, without loading anything into Python first.
 - Opens Parquet files and scrolls through millions of rows smoothly.
 - Click a column header to sort. Sorting runs in the background and a newer
   click cancels the older one, so the window never freezes.
-- Click the funnel in a column header (or right-click it → **Filter…**) for an
-  Excel-style checkbox list of the column’s values with counts.
+- Click the funnel in a column header (or right-click it → **Filter…**) to
+  filter that column. Number columns show a histogram you drag across to pick a
+  range. Text columns with up to 500 distinct values get an Excel-style
+  checkbox list with counts; with more, a "contains" search.
 - Search across all columns; copy selected rows as tab-separated text.
 - A `gewu` command line with JSON output, for scripts and AI agents.
 
@@ -42,7 +44,9 @@ cd app && swift run --build-system native Gewu -- /path/to/file.parquet
 cargo install --path crates/gewu-cli
 gewu schema data.parquet
 gewu rows data.parquet --sort price:desc --where label=cat --where label=dog --limit 20
+gewu rows data.parquet --range price=10..99.5 --range id=1000..
 gewu distinct data.parquet label
+gewu hist data.parquet price --bins 20
 gewu stats data.parquet price
 ```
 

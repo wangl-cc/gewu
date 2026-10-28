@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use gewu_core::{Document, Filter, SortKey, ViewState};
+use gewu_core::{Bound, Document, Filter, SortKey, ViewState};
 use serde_json::{json, Value};
 
 #[derive(Parser)]
@@ -44,6 +44,15 @@ enum Command {
     },
     /// Null count, distinct count, min and max of a column.
     Stats { file: PathBuf, column: String },
+    /// Distribution of a numeric, date or time column.
+    Hist {
+        file: PathBuf,
+        column: String,
+        #[command(flatten)]
+        view: ViewArgs,
+        #[arg(long, default_value_t = 20)]
+        bins: u32,
+    },
 }
 
 #[derive(Args, Default)]
@@ -64,6 +73,10 @@ struct ViewArgs {
     /// Keep rows where the column contains text, e.g. `name=smith`.
     #[arg(long)]
     contains: Vec<String>,
+    /// Keep rows whose value is in a range, e.g. `price=10..99.5`,
+    /// `id=1000..` or `price=..5`. Both ends are inclusive.
+    #[arg(long)]
+    range: Vec<String>,
     /// Keep rows where any column contains this text.
     #[arg(long)]
     search: Option<String>,
@@ -105,6 +118,31 @@ fn run(cli: Cli) -> Result<()> {
                     "value": v.label,
                     "count": v.count,
                 })).collect::<Vec<_>>(),
+            })
+        }
+        Command::Hist {
+            file,
+            column,
+            view,
+            bins,
+        } => {
+            let doc = open(&file)?;
+            let col = column_index(&doc, &column)?;
+            let state = view_state(&doc, &view)?;
+            let h = doc.histogram(col, Some(&state), bins)?;
+            let width = match (h.lo, h.hi) {
+                (Some(lo), Some(hi)) if !h.counts.is_empty() => (hi - lo) / h.counts.len() as f64,
+                _ => 0.0,
+            };
+            json!({
+                "column": column,
+                "rows": h.total,
+                "null_count": h.null_count,
+                "nan_count": h.nan_count,
+                "bins": h.counts.iter().enumerate().map(|(i, n)| {
+                    let lo = h.lo.unwrap_or(0.0) + width * i as f64;
+                    json!({ "from": lo, "to": lo + width, "count": n })
+                }).collect::<Vec<_>>(),
             })
         }
         Command::Stats { file, column } => {
@@ -190,7 +228,35 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
             case_sensitive: false,
         });
     }
+    for r in &args.range {
+        let (name, span) = split_pair(r, "range")?;
+        let (lo, hi) = span
+            .split_once("..")
+            .ok_or_else(|| anyhow!("--range expects column=lo..hi, got {r:?}"))?;
+        state.filters.push(Filter::Range {
+            column: column_index(doc, name)?,
+            min: parse_bound(lo)?,
+            max: parse_bound(hi)?,
+        });
+    }
     Ok(state)
+}
+
+/// Empty is an open end. Integers stay exact; anything else is a float.
+fn parse_bound(s: &str) -> Result<Option<Bound>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(v) = s.parse::<i64>() {
+        return Ok(Some(Bound::Int(v)));
+    }
+    if let Ok(v) = s.parse::<u64>() {
+        return Ok(Some(Bound::UInt(v)));
+    }
+    s.parse::<f64>()
+        .map(|v| Some(Bound::Float(v)))
+        .map_err(|_| anyhow!("not a number: {s:?}"))
 }
 
 fn schema(doc: &Document) -> Value {

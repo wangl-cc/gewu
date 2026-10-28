@@ -8,12 +8,13 @@
 mod document;
 mod error;
 mod format;
+mod numeric;
 mod value_index;
 mod view;
 
 pub use document::{CancelToken, Document};
 pub use error::{Error, Result};
 pub use view::{
-    ColumnInfo, ColumnStats, DistinctResult, DistinctValue, FileInfo, Filter, RowBlock, SortKey,
-    ViewInfo, ViewState,
+    Bound, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, FileInfo, Filter, Histogram,
+    RowBlock, SortKey, ViewInfo, ViewState,
 };

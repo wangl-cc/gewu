@@ -15,7 +15,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     // What the user asked to see. Sent to Rust as a ViewState.
     private var sort: [SortKey] = []
-    private var valueFilters: [UInt32: [UInt64]] = [:]
+    /// Filters per column, from that column's filter popover.
+    private var columnFilters: [UInt32: [Filter]] = [:]
     private var search: String?
 
     private let cache = RowCache(blockSize: 256)
@@ -290,8 +291,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private func viewState() -> ViewState {
         ViewState(
             sort: sort,
-            filters: valueFilters.sorted { $0.key < $1.key }
-                .map { .inValues(column: $0.key, keys: $0.value) },
+            filters: columnFilters.sorted { $0.key < $1.key }.flatMap(\.value),
             search: search
         )
     }
@@ -330,7 +330,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let total = NumberFormatter.localizedString(from: NSNumber(value: info.rowCount), number: .decimal)
         var text = current.rowCount == info.rowCount ? "\(total) rows" : "\(shown) of \(total) rows"
         text += " · \(info.columns.count) columns"
-        if !valueFilters.isEmpty { text += " · \(valueFilters.count) filtered" }
+        if !columnFilters.isEmpty { text += " · \(columnFilters.count) filtered" }
         statusLabel.stringValue = text
     }
 
@@ -474,12 +474,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         filter.target = self
         menu.addItem(filter)
 
-        if valueFilters[UInt32(col)] != nil {
+        if columnFilters[UInt32(col)] != nil {
             let clear = NSMenuItem(title: "Clear Filter", action: #selector(clearColumnFilter(_:)), keyEquivalent: "")
             clear.target = self
             menu.addItem(clear)
         }
-        if !valueFilters.isEmpty {
+        if !columnFilters.isEmpty {
             let clearAll = NSMenuItem(title: "Clear All Filters", action: #selector(clearAllFilters(_:)), keyEquivalent: "")
             clearAll.target = self
             menu.addItem(clearAll)
@@ -491,20 +491,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
               let col = columnIndex(tableView.tableColumns[headerMenuColumn])
         else { return }
         let column = UInt32(col)
-        let selected = valueFilters[column].map { Set($0) }
-
-        let controller = FilterPopoverController(
-            doc: doc, column: column, state: viewState(), selected: selected
-        ) { [weak self] keys in
+        let current = columnFilters[column] ?? []
+        let apply: ([Filter]) -> Void = { [weak self] filters in
             guard let self else { return }
             self.popover?.close()
-            if let keys {
-                self.valueFilters[column] = Array(keys).sorted()
-            } else {
-                self.valueFilters[column] = nil
-            }
+            self.columnFilters[column] = filters.isEmpty ? nil : filters
             self.updateHeaderTitles()
             self.refreshView()
+        }
+        // Numbers get a range with a histogram; everything else a value list.
+        let controller: NSViewController = if kinds[col] == .number, let info {
+            RangeFilterController(doc: doc, column: column, info: info.columns[col],
+                                  state: viewState(), current: current, onApply: apply)
+        } else {
+            FilterPopoverController(doc: doc, column: column, state: viewState(),
+                                    current: current, onApply: apply)
         }
         let popover = NSPopover()
         popover.behavior = .transient
@@ -515,13 +516,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     @objc private func clearColumnFilter(_ sender: Any?) {
         guard headerMenuColumn >= 0, let col = columnIndex(tableView.tableColumns[headerMenuColumn]) else { return }
-        valueFilters[UInt32(col)] = nil
+        columnFilters[UInt32(col)] = nil
         updateHeaderTitles()
         refreshView()
     }
 
     @objc private func clearAllFilters(_ sender: Any?) {
-        valueFilters.removeAll()
+        columnFilters.removeAll()
         updateHeaderTitles()
         refreshView()
     }
@@ -529,13 +530,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private func updateHeaderTitles() {
         for column in tableView.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
-            header.filtered = valueFilters[UInt32(i)] != nil
+            header.filtered = columnFilters[UInt32(i)] != nil
             let key = sort.first { $0.column == UInt32(i) }
             header.sorted = key != nil
             header.sortAscending = !(key?.descending ?? false)
         }
         tableView.headerView?.needsDisplay = true
-        sidebar.setFiltered(Set(valueFilters.keys.map { Int($0) }))
+        sidebar.setFiltered(Set(columnFilters.keys.map { Int($0) }))
     }
 
     // MARK: - Copy
