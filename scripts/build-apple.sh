@@ -12,6 +12,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Keep in sync with platforms in app/Package.swift.
+export MACOSX_DEPLOYMENT_TARGET=15.0
+
 TARGETS=("$(uname -m | sed 's/arm64/aarch64/')-apple-darwin")
 if [[ "${1:-}" == "--universal" ]]; then
   TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)

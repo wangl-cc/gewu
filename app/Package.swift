@@ -5,7 +5,7 @@ import PackageDescription
 // It produces GewuCore.xcframework and Sources/Gewu/Generated/gewu_ffi.swift.
 let package = Package(
     name: "Gewu",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("15.0")],
     targets: [
         .binaryTarget(name: "GewuCore", path: "GewuCore.xcframework"),
         .executableTarget(

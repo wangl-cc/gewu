@@ -31,7 +31,7 @@ numbers in display order, and the table asks for the ~50 rows on screen.
 
 ## Build
 
-Requirements: Rust (stable), Xcode command line tools, macOS 13+.
+Requirements: Rust (stable), Xcode command line tools, macOS 15+.
 
 ```sh
 # macOS app
