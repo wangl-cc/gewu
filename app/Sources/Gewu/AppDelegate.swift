@@ -88,6 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s"
         )
         sidebar.keyEquivalentModifierMask = [.command, .control]
+        let rowNumbers = viewMenu.addItem(
+            withTitle: "Show Row Numbers", action: #selector(DocumentWindowController.toggleRowNumbers(_:)),
+            keyEquivalent: "r"
+        )
+        rowNumbers.keyEquivalentModifierMask = [.command, .option]
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 

@@ -22,7 +22,7 @@ enum ColumnKind {
 enum CellFonts {
     static let text = NSFont.systemFont(ofSize: 12)
     static let digits = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    static let rowNumber = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+    static let rowNumber = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
     static let null: NSFont = {
         let base = NSFont.systemFont(ofSize: 12)
         return NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.italic), size: 12) ?? base
@@ -262,16 +262,6 @@ func highlighted(_ text: String, query: String, font: NSFont) -> NSAttributedStr
         range = found.upperBound..<text.endIndex
     }
     return result
-}
-
-/// Cell for the row-number column: tinted background and a divider on the right.
-final class RowNumberCellView: NSTableCellView {
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.quaternarySystemFill.setFill()
-        bounds.fill()
-        NSColor.separatorColor.setFill()
-        NSRect(x: bounds.maxX - 1, y: bounds.minY, width: 1, height: bounds.height).fill()
-    }
 }
 
 /// A thin horizontal bar showing a fraction, used in the filter list.

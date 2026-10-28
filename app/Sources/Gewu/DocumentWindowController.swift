@@ -26,6 +26,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private var popover: NSPopover?
 
     private let tableView = NSTableView()
+    private let scrollView = NSScrollView()
+    private lazy var gutter = RowGutterView(table: tableView)
     private let searchItem = NSSearchToolbarItem(itemIdentifier: DocumentWindowController.searchItemID)
     private var searchField: NSSearchField { searchItem.searchField }
     private let statusLabel = NSTextField(labelWithString: "")
@@ -41,8 +43,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private let sidebar = SidebarViewController()
 
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
-    private static let rowNumberCellID = NSUserInterfaceItemIdentifier("rowNumberCell")
-    private static let rowNumberID = NSUserInterfaceItemIdentifier("row")
     private static let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
     private static let searchItemID = NSToolbarItem.Identifier("search")
 
@@ -106,7 +106,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         tableView.delegate = self
 
 
-        let scroll = NSScrollView()
+        let scroll = scrollView
         scroll.documentView = tableView
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
@@ -131,13 +131,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         status.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
 
         let content = NSView()
-        for v in [scroll, divider, status] as [NSView] {
+        for v in [gutter, scroll, divider, status] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
         NSLayoutConstraint.activate([
+            // The row-number gutter sits left of the table and doesn't scroll
+            // sideways with it.
+            gutter.topAnchor.constraint(equalTo: content.topAnchor),
+            gutter.leadingAnchor.constraint(equalTo: content.safeAreaLayoutGuide.leadingAnchor),
+            gutter.bottomAnchor.constraint(equalTo: divider.topAnchor),
+
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.leadingAnchor.constraint(equalTo: gutter.trailingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
@@ -176,13 +182,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private func buildColumns(_ info: FileInfo) {
         tableView.tableColumns.forEach(tableView.removeTableColumn)
 
-        let rowNumber = NSTableColumn(identifier: Self.rowNumberID)
-        let rowHeader = ColumnHeaderCell(textCell: "#")
-        rowHeader.rightAligned = true
-        rowNumber.headerCell = rowHeader
-        rowNumber.width = rowNumberWidth(info)
-        rowNumber.headerToolTip = "Row number in the file"
-        tableView.addTableColumn(rowNumber)
+        // Row numbers live in a gutter beside the table, not in it. They are
+        // positions in the file, 0-based like pandas/polars iloc, so they
+        // still identify a row after sorting and filtering.
+        gutter.fit(largest: max(info.rowCount, 1) - 1)
+        gutter.toolTip = "Row in file (0-based)"
+        gutter.label = { [weak self] row in
+            guard let self, let block = self.block(for: row) else { return nil }
+            let r = row - Int(block.start)
+            return r >= 0 && r < Int(block.nRows) ? String(block.sourceRows[r]) : nil
+        }
+        gutter.setShown(Self.showsRowNumbers)
 
         for (i, column) in info.columns.enumerated() {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
@@ -206,10 +216,18 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    /// Wide enough for the largest row number in the file.
-    private func rowNumberWidth(_ info: FileInfo) -> CGFloat {
-        let digits = String(repeating: "8", count: String(info.rowCount).count)
-        return max(44, Self.textWidth(digits, CellFonts.rowNumber) + 2 * Self.cellPadding)
+    // MARK: - Row numbers
+
+    private static let showRowNumbersKey = "ShowRowNumbers"
+
+    private static var showsRowNumbers: Bool {
+        UserDefaults.standard.object(forKey: showRowNumbersKey) as? Bool ?? true
+    }
+
+    @objc func toggleRowNumbers(_ sender: Any?) {
+        let show = !Self.showsRowNumbers
+        UserDefaults.standard.set(show, forKey: Self.showRowNumbersKey)
+        gutter.setShown(show)
     }
 
     /// Width that fits the header (name and type) and the given rows' text.
@@ -237,7 +255,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     /// Double-clicking a column divider fits the column to the visible rows.
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
         let tableColumn = tableView.tableColumns[column]
-        if tableColumn.identifier == Self.rowNumberID, let info { return rowNumberWidth(info) }
         guard let i = columnIndex(tableColumn) else { return tableColumn.width }
         let visible = tableView.rows(in: tableView.visibleRect)
         return fittedWidth(column: i, rows: visible.location..<(visible.location + visible.length), maxWidth: 600)
@@ -317,6 +334,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
                 current = view
                 cache.clear()
                 tableView.reloadData()
+                gutter.needsDisplay = true
                 setBusy(false)
             } catch GewuError.Cancelled {
                 // Replaced by a newer request.
@@ -382,14 +400,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let tableColumn else { return nil }
-        let isRowNumber = tableColumn.identifier == Self.rowNumberID
-        let id = isRowNumber ? Self.rowNumberCellID : Self.cellID
-        let cell = (tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView)
-            ?? makeCell(id)
+        let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? NSTableCellView)
+            ?? makeCell()
         guard let field = cell.textField else { return cell }
 
         let col = columnIndex(tableColumn) ?? 0
-        let kind = isRowNumber || col >= kinds.count ? ColumnKind.number : kinds[col]
+        let kind = col < kinds.count ? kinds[col] : ColumnKind.text
         field.alignment = kind.alignment
 
         guard let block = block(for: row) else {
@@ -399,11 +415,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         }
         let r = row - Int(block.start)
         guard r >= 0, r < Int(block.nRows) else { return cell }
-
-        if isRowNumber {
-            field.stringValue = String(block.sourceRows[r] + 1)
-            return cell
-        }
 
         let index = r * Int(block.nCols) + col
         let isMatch = index < block.matched.count && block.matched[index]
@@ -426,16 +437,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         return cell
     }
 
-    private func makeCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let isRowNumber = id == Self.rowNumberCellID
-        let cell = isRowNumber ? RowNumberCellView() : MatchCellView()
-        cell.identifier = id
+    private func makeCell() -> NSTableCellView {
+        let cell = MatchCellView()
+        cell.identifier = Self.cellID
         let field = NSTextField(labelWithString: "")
         field.lineBreakMode = .byTruncatingTail
-        if isRowNumber {
-            field.font = CellFonts.rowNumber
-            field.textColor = .secondaryLabelColor
-        }
         field.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(field)
         cell.textField = field
@@ -522,6 +528,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        gutter.needsDisplay = true
         if search != nil { updateStatus() }
     }
 
@@ -570,6 +577,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(clearAllFilters(_:)) { return !columnFilters.isEmpty }
+        if item.action == #selector(toggleRowNumbers(_:)) {
+            item.state = Self.showsRowNumbers ? .on : .off
+        }
         return true
     }
 
