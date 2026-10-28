@@ -4,7 +4,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+use arrow::array::{
+    ArrayRef, Date32Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    TimestampMicrosecondArray,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
@@ -49,11 +52,29 @@ fn main() {
         let cities: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..len).map(|_| format!("city-{:04}", next() % 2000)),
         ));
+        // Days from 2020-01-01 (18262) over six years, some missing.
+        let days: ArrayRef = Arc::new(Date32Array::from_iter((0..len).map(|_| {
+            let r = next();
+            (r % 40 != 0).then(|| 18_262 + (r % 2_192) as i32)
+        })));
+        // Timestamps in UTC across 2024, weighted towards working hours.
+        let times: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from_iter_values((0..len).map(|_| {
+                let r = next();
+                let day = (r % 366) as i64;
+                let hour = [9, 10, 11, 13, 14, 15, 16, 20, 2][(r / 366 % 9) as usize];
+                let second = (r / 3_294 % 3_600) as i64;
+                (1_704_067_200 + day * 86_400 + hour * 3_600 + second) * 1_000_000
+            }))
+            .with_timezone("UTC"),
+        );
         let batch = RecordBatch::try_from_iter(vec![
             ("id", ids),
             ("label", labels),
             ("price", prices),
             ("city", cities),
+            ("day", days),
+            ("updated", times),
         ])
         .unwrap();
         let w = writer.get_or_insert_with(|| {

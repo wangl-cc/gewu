@@ -10,3 +10,4 @@ repository.workspace = true
 arrow.workspace = true
 parquet.workspace = true
 thiserror.workspace = true
+chrono.workspace = true

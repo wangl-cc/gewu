@@ -295,3 +295,164 @@ fn histogram_counts() {
     assert!(doc.histogram(1, None, 10).is_err());
     std::fs::remove_file(path).ok();
 }
+
+/// name | day (date32) | at (timestamp µs, UTC) | n (int64) | x (float64)
+fn temporal_sample() -> (PathBuf, Document) {
+    use arrow::array::{Date32Array, TimestampMicrosecondArray};
+    let names: ArrayRef = Arc::new(StringArray::from(vec!["Alpha", "beta", "Gamma", "delta"]));
+    // 2024-01-01, 2024-01-02, null, 2024-03-15
+    let days: ArrayRef = Arc::new(Date32Array::from(vec![
+        Some(19_723),
+        Some(19_724),
+        None,
+        Some(19_797),
+    ]));
+    // 2024-01-01T09:00:00Z, +1h, +2h, +3h
+    let base = 1_704_099_600_000_000i64;
+    let at: ArrayRef = Arc::new(
+        TimestampMicrosecondArray::from(vec![
+            base,
+            base + 3_600_000_000,
+            base + 7_200_000_000,
+            base + 10_800_000_000,
+        ])
+        .with_timezone("UTC"),
+    );
+    let n: ArrayRef = Arc::new(Int64Array::from(vec![7, 170, 1700, -7]));
+    let x: ArrayRef = Arc::new(Float64Array::from(vec![0.5, 2.25, 17.0, f64::NAN]));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("name", names),
+        ("day", days),
+        ("at", at),
+        ("n", n),
+        ("x", x),
+    ])
+    .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "gewu-temporal-{}-{:?}.parquet",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let file = std::fs::File::create(&path).unwrap();
+    let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let doc = Document::open(&path).unwrap();
+    (path, doc)
+}
+
+fn search(doc: &Document, text: &str) -> Vec<String> {
+    doc.apply_view(&ViewState {
+        search: Some(text.into()),
+        ..Default::default()
+    })
+    .unwrap();
+    names(doc)
+}
+
+// n: 7, 170, 1700, -7 · x: 0.5, 2.25, 17.0, NaN
+// day: 2024-01-01, 2024-01-02, null, 2024-03-15 · at: 2024-01-01 09:00..12:00 UTC
+
+#[test]
+fn search_text_is_case_insensitive_substring() {
+    let (path, doc) = temporal_sample();
+    assert_eq!(search(&doc, "ALPHA"), ["Alpha"]);
+    assert_eq!(search(&doc, "gam"), ["Gamma"]);
+    // Characters that are special in LIKE patterns match literally.
+    assert_eq!(search(&doc, "%"), Vec::<String>::new());
+    assert_eq!(search(&doc, "_"), Vec::<String>::new());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn search_integers_by_value() {
+    let (path, doc) = temporal_sample();
+    // Exact value, not a substring: 170 does not match 1700.
+    assert_eq!(search(&doc, "170"), ["beta"]);
+    assert_eq!(search(&doc, "-7"), ["delta"]);
+    assert_eq!(search(&doc, "+7"), ["Alpha"]);
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn search_floats_by_typed_precision() {
+    let (path, doc) = temporal_sample();
+    assert_eq!(search(&doc, "2.25"), ["beta"]);
+    // "2.3" means [2.25, 2.35): includes 2.25.
+    assert_eq!(search(&doc, "2.3"), ["beta"]);
+    assert_eq!(search(&doc, "2.2"), Vec::<String>::new());
+    // "17" means [16.5, 17.5) for floats; ints need exactly 17.
+    assert_eq!(search(&doc, "17"), ["Gamma"]);
+    assert_eq!(search(&doc, "5e-1"), ["Alpha"]);
+    assert_eq!(search(&doc, "NaN"), ["delta"]);
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn search_dates_by_period() {
+    let (path, doc) = temporal_sample();
+    // A month or day matches the whole period; null dates never match.
+    assert_eq!(search(&doc, "2024-03"), ["delta"]);
+    assert_eq!(search(&doc, "2024-01-02"), ["beta"]);
+    // Every timestamp is in 2024, so the year matches all rows.
+    assert_eq!(search(&doc, "2024"), ["Alpha", "beta", "Gamma", "delta"]);
+    // Hours and minutes apply to timestamps only.
+    assert_eq!(search(&doc, "2024-01-01 10"), ["beta"]);
+    assert_eq!(search(&doc, "2024-01-01T11:00"), ["Gamma"]);
+    assert_eq!(search(&doc, "2024-01-01 11:01"), Vec::<String>::new());
+    // Not a date: skipped, not an error.
+    assert_eq!(search(&doc, "2024-13"), Vec::<String>::new());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn contains_filter_on_numbers() {
+    let (path, doc) = temporal_sample();
+    doc.apply_view(&ViewState {
+        filters: vec![Filter::Contains {
+            column: 3,
+            text: "1700".into(),
+            case_sensitive: false,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    // Same rules as search: integers match by value.
+    assert_eq!(names(&doc), ["Gamma"]);
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn dates_format_parse_and_filter() {
+    let (path, doc) = temporal_sample();
+    assert_eq!(doc.format_value(1, 19_724).unwrap(), "2024-01-02");
+    assert_eq!(
+        doc.parse_value(1, "2024-01-02").unwrap(),
+        Bound::Int(19_724)
+    );
+    assert!(doc.parse_value(1, "not a date").is_err());
+
+    let base = 1_704_099_600_000_000i64;
+    assert_eq!(doc.format_value(2, base).unwrap(), "2024-01-01T09:00:00Z");
+    assert_eq!(
+        doc.parse_value(2, "2024-01-01T10:00:00Z").unwrap(),
+        Bound::Int(base + 3_600_000_000)
+    );
+
+    // Range on dates: nulls excluded, bounds inclusive.
+    let min = doc.parse_value(1, "2024-01-02").unwrap();
+    doc.apply_view(&range(1, Some(min), None)).unwrap();
+    assert_eq!(names(&doc), ["beta", "delta"]);
+
+    // Range on timestamps.
+    let max = doc.parse_value(2, "2024-01-01T10:00:00Z").unwrap();
+    doc.apply_view(&range(2, None, Some(max))).unwrap();
+    assert_eq!(names(&doc), ["Alpha", "beta"]);
+
+    // Dates are integers: the histogram ends one day past the last date.
+    let h = doc.histogram(1, None, 100).unwrap();
+    assert!(h.integer);
+    assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_798.0)));
+    assert_eq!(h.null_count, 1);
+    std::fs::remove_file(path).ok();
+}

@@ -1,12 +1,15 @@
 import AppKit
 
-/// Range filter for numeric columns: a histogram of the column with a
-/// draggable selection, plus min/max fields kept in sync.
+/// Range filter for number, date and time columns: a histogram of the
+/// column with a draggable selection, plus min/max fields kept in sync.
+/// Dates and times are handled as their integer physical value; the Rust
+/// core formats and parses them so they read exactly like the table.
 final class RangeFilterController: NSViewController, NSTextFieldDelegate {
     private let onApply: ([Filter]) -> Void
     private let doc: GewuDocument
     private let column: UInt32
     private let info: ColumnInfo
+    private let temporal: Bool
     private let state: ViewState
     private let initialRange: (Bound?, Bound?)
     private var nullMode: NullMode
@@ -20,12 +23,13 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
 
     private static let bins: UInt32 = 60
 
-    init(doc: GewuDocument, column: UInt32, info: ColumnInfo, state: ViewState, current: [Filter],
-         onApply: @escaping ([Filter]) -> Void)
+    init(doc: GewuDocument, column: UInt32, info: ColumnInfo, temporal: Bool, state: ViewState,
+         current: [Filter], onApply: @escaping ([Filter]) -> Void)
     {
         self.doc = doc
         self.column = column
         self.info = info
+        self.temporal = temporal
         self.state = state
         self.onApply = onApply
         var range: (Bound?, Bound?) = (nil, nil)
@@ -48,6 +52,7 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
         let type = noteLabel(shortTypeName(info.typeName))
 
         chart.onChange = { [weak self] in self?.selectionChanged(fromChart: true) }
+        chart.labelFormatter = { [weak self] v in self?.format(v) ?? "" }
 
         for (field, placeholder) in [(minField, "Min"), (maxField, "Max")] {
             field.placeholderString = placeholder
@@ -162,8 +167,15 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
     }
 
     private func format(_ v: Double) -> String {
+        if temporal, let text = try? doc.formatValue(column: column, value: Int64(v)) { return text }
         if isInteger { return String(Int64(v)) }
         return String(format: "%.7g", v)
+    }
+
+    /// A typed bound: a plain number, or a date/time in the column's format.
+    private func parse(_ text: String) -> Double? {
+        if !temporal, let v = Double(text) { return v }
+        return (try? doc.parseValue(column: column, text: text)).map(value)
     }
 
     private func selectionChanged(fromChart: Bool) {
@@ -174,7 +186,8 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
 
         let selected = chart.selectedCount()
         let base = h.total - h.nullCount - h.nanCount
-        let exact = isInteger || chart.isSnapped
+        // Counts are exact only when the selection sits on bin edges.
+        let exact = chart.isSnapped
         let prefix = exact ? "" : "≈ "
         summary.stringValue = isFullRange()
             ? "All \(formatCount(base)) values · drag on the chart to choose a range"
@@ -186,10 +199,10 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
         var (a, b) = chart.selection
         let text = sender.stringValue.trimmingCharacters(in: .whitespaces)
         if sender === minField {
-            a = Double(text).map { Swift.max(lo, $0) } ?? lo
+            a = parse(text).map { Swift.max(lo, $0) } ?? lo
         } else {
             // Inclusive max: for integers the bin edge is one past it.
-            b = Double(text).map { Swift.min(hi, isInteger ? $0.rounded(.down) + 1 : $0) } ?? hi
+            b = parse(text).map { Swift.min(hi, isInteger ? $0.rounded(.down) + 1 : $0) } ?? hi
         }
         chart.setSelection(a, Swift.max(a, b), snapped: false)
         selectionChanged(fromChart: false)
@@ -242,6 +255,8 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
 /// Dragging snaps to bin edges.
 final class HistogramView: NSView {
     var onChange: (() -> Void)?
+    /// Text for axis values; numbers by default.
+    var labelFormatter: ((Double) -> String)?
     private(set) var selection: (Double, Double) = (0, 1)
     /// Whether the selection sits on bin edges (counts are then exact).
     private(set) var isSnapped = true
@@ -366,6 +381,7 @@ final class HistogramView: NSView {
     }
 
     private func axisLabel(_ v: Double) -> String {
+        if let labelFormatter { return labelFormatter(v) }
         if v == v.rounded(), abs(v) < 1e15 {
             return NumberFormatter.localizedString(from: NSNumber(value: Int64(v)), number: .decimal)
         }

@@ -50,6 +50,18 @@ impl Numeric {
         }
     }
 
+    /// The value at row `r` as a range bound. `None` for null.
+    pub(crate) fn bound(&self, r: usize) -> Option<Bound> {
+        if !self.is_valid(r) {
+            return None;
+        }
+        Some(match self {
+            Numeric::Int(a) => Bound::Int(a.value(r)),
+            Numeric::UInt(a) => Bound::UInt(a.value(r)),
+            Numeric::Float(a) => Bound::Float(a.value(r)),
+        })
+    }
+
     /// The value as `f64`, for binning. `None` for null.
     fn as_f64(&self, r: usize) -> Option<f64> {
         if !self.is_valid(r) {

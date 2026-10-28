@@ -74,7 +74,8 @@ struct ViewArgs {
     #[arg(long)]
     contains: Vec<String>,
     /// Keep rows whose value is in a range, e.g. `price=10..99.5`,
-    /// `id=1000..` or `price=..5`. Both ends are inclusive.
+    /// `id=1000..`, `price=..5` or `day=2024-01-01..2024-03-31`. Both ends
+    /// are inclusive.
     #[arg(long)]
     range: Vec<String>,
     /// Keep rows where any column contains this text.
@@ -141,7 +142,15 @@ fn run(cli: Cli) -> Result<()> {
                 "nan_count": h.nan_count,
                 "bins": h.counts.iter().enumerate().map(|(i, n)| {
                     let lo = h.lo.unwrap_or(0.0) + width * i as f64;
-                    json!({ "from": lo, "to": lo + width, "count": n })
+                    let mut bin = json!({ "from": lo, "to": lo + width, "count": n });
+                    // Integer columns include dates and times: also show the
+                    // bin start the way the table displays it.
+                    if h.integer {
+                        if let Ok(text) = doc.format_value(col, lo.ceil() as i64) {
+                            bin["from_text"] = json!(text);
+                        }
+                    }
+                    bin
                 }).collect::<Vec<_>>(),
             })
         }
@@ -233,17 +242,19 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
         let (lo, hi) = span
             .split_once("..")
             .ok_or_else(|| anyhow!("--range expects column=lo..hi, got {r:?}"))?;
+        let column = column_index(doc, name)?;
         state.filters.push(Filter::Range {
-            column: column_index(doc, name)?,
-            min: parse_bound(lo)?,
-            max: parse_bound(hi)?,
+            column,
+            min: parse_bound(doc, column, lo)?,
+            max: parse_bound(doc, column, hi)?,
         });
     }
     Ok(state)
 }
 
-/// Empty is an open end. Integers stay exact; anything else is a float.
-fn parse_bound(s: &str) -> Result<Option<Bound>> {
+/// Empty is an open end. Integers stay exact; other numbers are floats;
+/// anything else is read in the column's own format (dates, times).
+fn parse_bound(doc: &Document, column: u32, s: &str) -> Result<Option<Bound>> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(None);
@@ -254,9 +265,10 @@ fn parse_bound(s: &str) -> Result<Option<Bound>> {
     if let Ok(v) = s.parse::<u64>() {
         return Ok(Some(Bound::UInt(v)));
     }
-    s.parse::<f64>()
-        .map(|v| Some(Bound::Float(v)))
-        .map_err(|_| anyhow!("not a number: {s:?}"))
+    if let Ok(v) = s.parse::<f64>() {
+        return Ok(Some(Bound::Float(v)));
+    }
+    Ok(Some(doc.parse_value(column, s)?))
 }
 
 fn schema(doc: &Document) -> Value {

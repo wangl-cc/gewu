@@ -4,15 +4,16 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use arrow::array::{Array, ArrayRef, UInt32Array};
-use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray, UInt32Array};
+use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::numeric::Numeric;
+use crate::search;
 use crate::value_index::ValueIndex;
 use crate::{
-    format, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, Error, FileInfo, Filter,
+    format, Bound, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, Error, FileInfo, Filter,
     Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
 
@@ -31,7 +32,7 @@ impl CancelToken {
         self.counter.load(Ordering::SeqCst) != self.mine
     }
 
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         if self.is_cancelled() {
             Err(Error::Cancelled)
         } else {
@@ -314,6 +315,35 @@ impl Document {
         }
     }
 
+    /// Display text for a raw value of a date, time, timestamp or duration
+    /// column (its integer physical value, as used by histograms and range
+    /// bounds), formatted exactly like the table's cells. Also works for
+    /// integer columns.
+    pub fn format_value(&self, column: u32, value: i64) -> Result<String> {
+        let data_type = self.column(column)?.data_type().clone();
+        let raw: ArrayRef = Arc::new(Int64Array::from(vec![value]));
+        let typed = match data_type {
+            // Arrow casts these from 32-bit integers only.
+            DataType::Date32 | DataType::Time32(_) => {
+                cast(&cast(&raw, &DataType::Int32)?, &data_type)?
+            }
+            _ => cast(&raw, &data_type)?,
+        };
+        let f = format::formatter(typed.as_ref())?;
+        Ok(f.value(0).to_string())
+    }
+
+    /// Read text typed by the user (a number, or a date/time in the
+    /// column's own format such as `2024-03-01` or `2024-03-01T12:00:00`)
+    /// as a range bound for a numeric, date or time column.
+    pub fn parse_value(&self, column: u32, text: &str) -> Result<Bound> {
+        let data_type = self.column(column)?.data_type().clone();
+        let input: ArrayRef = Arc::new(StringArray::from(vec![text.trim()]));
+        let typed = cast(&input, &data_type)?;
+        let bound = Numeric::build(&typed)?.and_then(|n| n.bound(0));
+        bound.ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as {data_type}")))
+    }
+
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used by the CLI and MCP, which filter by value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
@@ -416,9 +446,15 @@ impl Document {
                     text,
                     case_sensitive,
                 } => {
-                    let idx = self.index(*column)?;
-                    let allowed = matching_codes(&idx, text, *case_sensitive);
-                    tests.push(Box::new(move |r| allowed[idx.codes[r] as usize]));
+                    let mut hits = vec![false; self.n_rows];
+                    search::mark_matches(
+                        self.column(*column)?,
+                        text,
+                        *case_sensitive,
+                        &mut hits,
+                        token,
+                    )?;
+                    tests.push(Box::new(move |r| hits[r]));
                 }
                 Filter::Range { column, min, max } => {
                     tests.push(self.numeric(*column)?.range_test(*min, *max));
@@ -428,18 +464,12 @@ impl Document {
         }
 
         if let Some(text) = search.filter(|s| !s.is_empty()) {
-            let mut per_column = Vec::with_capacity(self.columns.len());
-            for c in 0..self.columns.len() as u32 {
-                let idx = self.index(c)?;
-                let allowed = matching_codes(&idx, text, false);
-                per_column.push((idx, allowed));
-                token.check()?;
+            // One bitmap for all columns; nothing is cached afterwards.
+            let mut hits = vec![false; self.n_rows];
+            for column in &self.columns {
+                search::mark_matches(column, text, false, &mut hits, token)?;
             }
-            tests.push(Box::new(move |r| {
-                per_column
-                    .iter()
-                    .any(|(idx, allowed)| allowed[idx.codes[r] as usize])
-            }));
+            tests.push(Box::new(move |r| hits[r]));
         }
 
         let mut rows = Vec::new();
@@ -480,20 +510,4 @@ impl Document {
             .map(|&i| selected[i as usize])
             .collect())
     }
-}
-
-fn matching_codes(idx: &ValueIndex, text: &str, case_sensitive: bool) -> Vec<bool> {
-    let needle = if case_sensitive {
-        text.to_string()
-    } else {
-        text.to_lowercase()
-    };
-    idx.labels
-        .iter()
-        .map(|l| match l {
-            None => false,
-            Some(s) if case_sensitive => s.contains(&needle),
-            Some(s) => s.to_lowercase().contains(&needle),
-        })
-        .collect()
 }

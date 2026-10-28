@@ -3,7 +3,7 @@ import AppKit
 /// One window showing one file. All data work happens in the Rust core;
 /// this class only asks for the rows that are on screen.
 final class DocumentWindowController: NSWindowController, NSWindowDelegate,
-    NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSToolbarDelegate
+    NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate, NSMenuItemValidation
 {
     var onClose: (() -> Void)?
 
@@ -21,13 +21,21 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     private let cache = RowCache(blockSize: 256)
     private var viewTask: Task<Void, Never>?
-    private var headerMenuColumn = -1
+    private var filterColumn = -1
     private var popover: NSPopover?
 
     private let tableView = NSTableView()
     private let searchItem = NSSearchToolbarItem(itemIdentifier: DocumentWindowController.searchItemID)
     private var searchField: NSSearchField { searchItem.searchField }
     private let statusLabel = NSTextField(labelWithString: "")
+    private lazy var clearFiltersButton: NSButton = {
+        let b = NSButton(title: "Clear Filters", target: self, action: #selector(clearAllFilters(_:)))
+        b.bezelStyle = .inline
+        b.controlSize = .small
+        b.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        b.isHidden = true
+        return b
+    }()
     private let spinner = NSProgressIndicator()
     private let sidebar = SidebarViewController()
 
@@ -79,7 +87,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         // Table
         let headerView = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
         headerView.onFilterClick = { [weak self] index in
-            self?.headerMenuColumn = index
+            self?.filterColumn = index
             self?.showFilter(nil)
         }
         tableView.headerView = headerView
@@ -95,9 +103,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         tableView.dataSource = self
         tableView.delegate = self
 
-        let headerMenu = NSMenu()
-        headerMenu.delegate = self
-        tableView.headerView?.menu = headerMenu
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -118,7 +123,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
         let divider = NSBox()
         divider.boxType = .separator
-        let status = NSStackView(views: [statusLabel, NSView(), spinner])
+        let status = NSStackView(views: [statusLabel, clearFiltersButton, NSView(), spinner])
         status.orientation = .horizontal
         status.spacing = 6
         status.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
@@ -330,8 +335,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let total = NumberFormatter.localizedString(from: NSNumber(value: info.rowCount), number: .decimal)
         var text = current.rowCount == info.rowCount ? "\(total) rows" : "\(shown) of \(total) rows"
         text += " · \(info.columns.count) columns"
-        if !columnFilters.isEmpty { text += " · \(columnFilters.count) filtered" }
+        let filtered = columnFilters.count
+        if filtered > 0 { text += " · \(filtered) \(filtered == 1 ? "filter" : "filters")" }
         statusLabel.stringValue = text
+        clearFiltersButton.isHidden = filtered == 0
     }
 
     // MARK: - Table data
@@ -459,36 +466,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         searchItem.beginSearchInteraction()
     }
 
-    // MARK: - Filter (header right-click)
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        guard let header = tableView.headerView, let event = NSApp.currentEvent else { return }
-        let point = header.convert(event.locationInWindow, from: nil)
-        headerMenuColumn = header.column(at: point)
-        guard headerMenuColumn >= 0,
-              let col = columnIndex(tableView.tableColumns[headerMenuColumn])
-        else { return }
-
-        let filter = NSMenuItem(title: "Filter…", action: #selector(showFilter(_:)), keyEquivalent: "")
-        filter.target = self
-        menu.addItem(filter)
-
-        if columnFilters[UInt32(col)] != nil {
-            let clear = NSMenuItem(title: "Clear Filter", action: #selector(clearColumnFilter(_:)), keyEquivalent: "")
-            clear.target = self
-            menu.addItem(clear)
-        }
-        if !columnFilters.isEmpty {
-            let clearAll = NSMenuItem(title: "Clear All Filters", action: #selector(clearAllFilters(_:)), keyEquivalent: "")
-            clearAll.target = self
-            menu.addItem(clearAll)
-        }
-    }
+    // MARK: - Filter (header funnel)
 
     @objc private func showFilter(_ sender: Any?) {
-        guard let doc, let header = tableView.headerView, headerMenuColumn >= 0,
-              let col = columnIndex(tableView.tableColumns[headerMenuColumn])
+        guard let doc, let header = tableView.headerView, filterColumn >= 0,
+              let col = columnIndex(tableView.tableColumns[filterColumn])
         else { return }
         let column = UInt32(col)
         let current = columnFilters[column] ?? []
@@ -499,10 +481,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             self.updateHeaderTitles()
             self.refreshView()
         }
-        // Numbers get a range with a histogram; everything else a value list.
-        let controller: NSViewController = if kinds[col] == .number, let info {
+        // Numbers, dates and times get a range with a histogram; everything
+        // else a value list or text search.
+        let controller: NSViewController = if kinds[col] != .text, let info, !info.columns[col].typeName.hasPrefix("Interval") {
             RangeFilterController(doc: doc, column: column, info: info.columns[col],
-                                  state: viewState(), current: current, onApply: apply)
+                                  temporal: kinds[col] == .temporal, state: viewState(),
+                                  current: current, onApply: apply)
         } else {
             FilterPopoverController(doc: doc, column: column, state: viewState(),
                                     current: current, onApply: apply)
@@ -510,21 +494,20 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = controller
-        popover.show(relativeTo: header.headerRect(ofColumn: headerMenuColumn), of: header, preferredEdge: .maxY)
+        popover.show(relativeTo: header.headerRect(ofColumn: filterColumn), of: header, preferredEdge: .maxY)
         self.popover = popover
     }
 
-    @objc private func clearColumnFilter(_ sender: Any?) {
-        guard headerMenuColumn >= 0, let col = columnIndex(tableView.tableColumns[headerMenuColumn]) else { return }
-        columnFilters[UInt32(col)] = nil
+    @objc func clearAllFilters(_ sender: Any?) {
+        guard !columnFilters.isEmpty else { return }
+        columnFilters.removeAll()
         updateHeaderTitles()
         refreshView()
     }
 
-    @objc private func clearAllFilters(_ sender: Any?) {
-        columnFilters.removeAll()
-        updateHeaderTitles()
-        refreshView()
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(clearAllFilters(_:)) { return !columnFilters.isEmpty }
+        return true
     }
 
     private func updateHeaderTitles() {

@@ -332,6 +332,21 @@ impl GewuDocument {
         })
     }
 
+    /// Display text for a raw value of a date, time or timestamp column
+    /// (as in histogram axes and range bounds), formatted like its cells.
+    pub fn format_value(&self, column: u32, value: i64) -> Result<String, GewuError> {
+        Ok(self.inner.format_value(column, value)?)
+    }
+
+    /// Read user-typed text (a number or a date/time) as a range bound.
+    pub fn parse_value(&self, column: u32, text: String) -> Result<Bound, GewuError> {
+        Ok(match self.inner.parse_value(column, &text)? {
+            core::Bound::Int(value) => Bound::Int { value },
+            core::Bound::UInt(value) => Bound::UInt { value },
+            core::Bound::Float(value) => Bound::Float { value },
+        })
+    }
+
     pub fn column_stats(&self, column: u32) -> Result<ColumnStats, GewuError> {
         let s = self.inner.column_stats(column)?;
         Ok(ColumnStats {

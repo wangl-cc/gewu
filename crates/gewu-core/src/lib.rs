@@ -9,6 +9,7 @@ mod document;
 mod error;
 mod format;
 mod numeric;
+mod search;
 mod value_index;
 mod view;
 

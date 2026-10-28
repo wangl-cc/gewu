@@ -12,12 +12,32 @@ spreadsheet, without loading anything into Python first.
 - Opens Parquet files and scrolls through millions of rows smoothly.
 - Click a column header to sort. Sorting runs in the background and a newer
   click cancels the older one, so the window never freezes.
-- Click the funnel in a column header (or right-click it → **Filter…**) to
-  filter that column. Number columns show a histogram you drag across to pick a
-  range. Text columns with up to 500 distinct values get an Excel-style
+- Click the funnel in a column header to filter that column. Number, date and
+  time columns show a histogram you drag across to pick a range (or type the
+  bounds, e.g. `2024-02-29`). Text columns with up to 500 distinct values get an Excel-style
   checkbox list with counts; with more, a "contains" search.
-- Search across all columns; copy selected rows as tab-separated text.
+- Search across all columns (see below); copy selected rows as tab-separated
+  text.
+- Clear every filter from the status bar or **Filter → Clear All Filters**
+  (⇧⌘L).
 - A `gewu` command line with JSON output, for scripts and AI agents.
+
+## Search
+
+The search box (and `gewu rows --search`) matches each column by its type:
+
+| Column | Query | Matches |
+|---|---|---|
+| Text | any text | case-insensitive substring |
+| Integer | `170` | exactly 170 (not 1700) |
+| Float, decimal | `3.14`, `3`, `1e3` | the precision typed: [3.135, 3.145), [2.5, 3.5), [500, 1500); also `nan`, `inf` |
+| Date, timestamp | `2024`, `2024-03`, `2024-03-15`, `2024-03-15 10:30` | that whole period, in the column's time zone (hours and minutes for timestamps only) |
+| Boolean | `true`, `false` | that value |
+| Other | any text | substring of the displayed value |
+
+A query that means nothing for a column (a word in a number column) skips it.
+Search reads the data in place and keeps no index, so it adds almost no
+memory.
 
 ## Layout
 
@@ -62,6 +82,8 @@ cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
   are not supported yet.
 - Parquet only for now; other formats (CSV, Arrow IPC, NDJSON) are planned.
 - The app is run with `swift run`; there is no signed `.app` bundle yet.
+- `scripts/build-apple.sh` needs Xcode set up: if `xcodebuild` says it failed
+  to load a plug-in, run `xcodebuild -runFirstLaunch` once.
 - Use `--build-system native` with `swift build` / `swift run`. SwiftPM's default
   build system currently links the app as if built for the macOS 15 SDK, so
   macOS draws the pre-macOS 26 window style (title bar and sidebar look patched).

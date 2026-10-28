@@ -86,6 +86,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 
+        let filterItem = NSMenuItem()
+        let filterMenu = NSMenu(title: "Filter")
+        let clear = filterMenu.addItem(
+            withTitle: "Clear All Filters", action: #selector(DocumentWindowController.clearAllFilters(_:)),
+            keyEquivalent: "l"
+        )
+        clear.keyEquivalentModifierMask = [.command, .shift]
+        filterItem.submenu = filterMenu
+        main.addItem(filterItem)
+
         return main
     }
 }
