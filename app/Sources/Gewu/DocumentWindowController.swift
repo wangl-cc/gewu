@@ -271,7 +271,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
                 self.current = doc.currentView()
                 buildColumns(info)
                 sidebar.show(info: info)
-                window?.subtitle = ByteCountFormatter.string(fromByteCount: Int64(info.fileSize), countStyle: .file)
+                let rows = NumberFormatter.localizedString(from: NSNumber(value: info.rowCount), number: .decimal)
+                let size = ByteCountFormatter.string(fromByteCount: Int64(info.fileSize), countStyle: .file)
+                window?.subtitle = "\(rows) rows · \(info.columns.count) columns · \(size)"
                 tableView.reloadData()
                 setBusy(false)
             } catch {
