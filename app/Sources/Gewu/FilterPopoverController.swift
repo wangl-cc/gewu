@@ -59,8 +59,8 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
 
-        let selectAll = NSButton(title: "Select All", target: self, action: #selector(selectAll(_:)))
-        let clear = NSButton(title: "Clear", target: self, action: #selector(clearAll(_:)))
+        let selectAll = NSButton(title: "Select All", target: self, action: #selector(checkAllShown(_:)))
+        let clear = NSButton(title: "Clear", target: self, action: #selector(uncheckAllShown(_:)))
         let ok = NSButton(title: "OK", target: self, action: #selector(apply(_:)))
         ok.keyEquivalent = "\r"
         let buttons = NSStackView(views: [selectAll, clear, NSView(), ok])
@@ -93,11 +93,11 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let doc = doc, column = column, state = state
+        let doc = doc, column = column, state = state, limit = Self.limit
         Task {
             do {
                 let result = try await Task.detached {
-                    try doc.distinctValues(column: column, state: state, limit: Self.limit)
+                    try doc.distinctValues(column: column, state: state, limit: limit)
                 }.value
                 values = result.values
                 truncated = result.truncated
@@ -150,12 +150,12 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
         list.reloadData()
     }
 
-    @objc private func selectAll(_ sender: Any?) {
+    @objc private func checkAllShown(_ sender: Any?) {
         shown.forEach { checked.insert(values[$0].key) }
         list.reloadData()
     }
 
-    @objc private func clearAll(_ sender: Any?) {
+    @objc private func uncheckAllShown(_ sender: Any?) {
         shown.forEach { checked.remove(values[$0].key) }
         list.reloadData()
     }

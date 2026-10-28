@@ -147,7 +147,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             } catch {
                 setBusy(false, "Could not open file")
                 if let window {
-                    NSAlert(error: error).beginSheetModal(for: window)
+                    NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil)
                 }
             }
         }
