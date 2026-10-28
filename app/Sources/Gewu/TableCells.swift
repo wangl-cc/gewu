@@ -47,35 +47,83 @@ func shortTypeName(_ typeName: String) -> String {
     }
 }
 
-/// The funnel shown on filtered columns.
-let filterSymbol: NSImage? = NSImage(
-    systemSymbolName: "line.3.horizontal.decrease.circle.fill",
-    accessibilityDescription: "Filtered"
-)?.withSymbolConfiguration(.init(hierarchicalColor: .controlAccentColor))
+private func funnel(filled: Bool, color: NSColor) -> NSImage? {
+    NSImage(
+        systemSymbolName: filled ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle",
+        accessibilityDescription: filled ? "Filtered" : "Filter"
+    )?.withSymbolConfiguration(.init(hierarchicalColor: color))
+}
 
-/// Table header cell with the column name on top and its type below.
+/// The funnel shown on filtered columns.
+let filterSymbol = funnel(filled: true, color: .controlAccentColor)
+private let idleFilterSymbol = funnel(filled: false, color: .tertiaryLabelColor)
+private let hoverFilterSymbol = funnel(filled: false, color: .secondaryLabelColor)
+
+/// Table header cell with the column name on top and its type below,
+/// and a funnel button on the right that opens the column's filter.
 final class ColumnHeaderCell: NSTableHeaderCell {
     var subtitle = ""
     var filtered = false
     var rightAligned = false
     var sorted = false
+    var sortAscending = true
+    /// Data columns show the funnel button; the row-number column does not.
+    var showsFunnel = false
+    var funnelHovered = false
 
-    /// Room kept on the right for the sort arrow.
+    private static let funnelSize: CGFloat = 14
     private static let sortIndicatorWidth: CGFloat = 14
+
+    /// Where the funnel button sits inside a header cell's frame.
+    static func funnelRect(in frame: NSRect) -> NSRect {
+        NSRect(x: frame.maxX - 8 - funnelSize, y: frame.midY - funnelSize / 2,
+               width: funnelSize, height: funnelSize)
+    }
+
+    /// The frame AppKit lays the sort arrow out in: everything left of the funnel.
+    private func sortFrame(_ frame: NSRect) -> NSRect {
+        guard showsFunnel else { return frame }
+        var f = frame
+        f.size.width -= Self.funnelSize + 6
+        return f
+    }
+
+    override func sortIndicatorRect(forBounds rect: NSRect) -> NSRect {
+        super.sortIndicatorRect(forBounds: sortFrame(rect))
+    }
+
+    /// The arrow is drawn by drawInterior, next to the funnel.
+    override func drawSortIndicator(withFrame cellFrame: NSRect, in controlView: NSView,
+                                    ascending: Bool, priority: Int) {}
+
+    private static let ascendingArrow = sortArrow("chevron.up")
+    private static let descendingArrow = sortArrow("chevron.down")
+
+    private static func sortArrow(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .bold)
+                .applying(.init(hierarchicalColor: .secondaryLabelColor)))
+    }
 
     override func drawInterior(withFrame frame: NSRect, in controlView: NSView) {
         // AppKit reuses the last header cell to draw the empty area after the last column.
         guard !stringValue.isEmpty else { return }
         // Same inset as the data cells, so header and values line up.
         var rect = frame.insetBy(dx: 10, dy: 0)
-        if sorted { rect.size.width -= Self.sortIndicatorWidth }
 
-        if filtered, let image = filterSymbol {
-            let size: CGFloat = 13
-            let imageRect = NSRect(x: rect.maxX - size, y: frame.midY - size / 2, width: size, height: size)
-            image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1,
+        if showsFunnel {
+            let image = filtered ? filterSymbol : (funnelHovered ? hoverFilterSymbol : idleFilterSymbol)
+            image?.draw(in: Self.funnelRect(in: frame), from: .zero, operation: .sourceOver, fraction: 1,
+                        respectFlipped: true, hints: nil)
+            rect.size.width = Self.funnelRect(in: frame).minX - 4 - rect.minX
+        }
+        if sorted, let arrow = sortAscending ? Self.ascendingArrow : Self.descendingArrow {
+            let size = arrow.size
+            let arrowRect = NSRect(x: rect.maxX - size.width, y: frame.midY - size.height / 2,
+                                   width: size.width, height: size.height)
+            arrow.draw(in: arrowRect, from: .zero, operation: .sourceOver, fraction: 1,
                        respectFlipped: true, hints: nil)
-            rect.size.width -= size + 4
+            rect.size.width -= Self.sortIndicatorWidth
         }
         guard rect.width > 4 else { return }
 
@@ -105,6 +153,61 @@ final class ColumnHeaderCell: NSTableHeaderCell {
         ])
         type.draw(with: NSRect(x: rect.minX, y: top + nameHeight, width: rect.width, height: typeHeight),
                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+}
+
+/// Header view that turns clicks on a column's funnel into a filter request
+/// instead of a sort, and highlights the funnel under the mouse.
+final class FilterHeaderView: NSTableHeaderView {
+    var onFilterClick: ((Int) -> Void)?
+    private var hovered: ColumnHeaderCell?
+
+    private func funnelCell(at event: NSEvent) -> (Int, ColumnHeaderCell)? {
+        guard let tableView else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        let index = column(at: point)
+        guard index >= 0, let cell = tableView.tableColumns[index].headerCell as? ColumnHeaderCell,
+              cell.showsFunnel,
+              ColumnHeaderCell.funnelRect(in: headerRect(ofColumn: index)).insetBy(dx: -4, dy: -4).contains(point)
+        else { return nil }
+        return (index, cell)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let (index, _) = funnelCell(at: event) {
+            onFilterClick?(index)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        setHovered(funnelCell(at: event)?.1)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        setHovered(nil)
+    }
+
+    private func setHovered(_ cell: ColumnHeaderCell?) {
+        guard cell !== hovered else { return }
+        hovered?.funnelHovered = false
+        cell?.funnelHovered = true
+        hovered = cell
+        needsDisplay = true
     }
 }
 

@@ -75,7 +75,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         window.toolbar = toolbar
 
         // Table
-        tableView.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
+        let headerView = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
+        headerView.onFilterClick = { [weak self] index in
+            self?.headerMenuColumn = index
+            self?.showFilter(nil)
+        }
+        tableView.headerView = headerView
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.allowsMultipleSelection = true
         tableView.allowsColumnReordering = true
@@ -169,7 +174,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
             let header = ColumnHeaderCell(textCell: column.name)
             header.subtitle = shortTypeName(column.typeName)
-            header.rightAligned = kinds[i] != .text
+            header.showsFunnel = true
             c.headerCell = header
             c.headerToolTip = "\(column.name): \(column.typeName)"
             c.width = fittedWidth(column: i, rows: 0..<min(200, Int(current.rowCount)), maxWidth: 320)
@@ -198,11 +203,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         guard let info, i < info.columns.count else { return 150 }
         let column = info.columns[i]
         let kind = kinds[i]
-        // Header: text inset, sort arrow and room for the filter funnel.
+        // Header: text insets, the funnel button and room for the sort arrow.
         var width = max(
             Self.textWidth(column.name, .systemFont(ofSize: 12, weight: .semibold)),
             Self.textWidth(shortTypeName(column.typeName), .systemFont(ofSize: 10))
-        ) + 16 + 14 + 17
+        ) + 10 + 4 + 14 + 8 + 14
         for row in rows {
             guard let block = block(for: row) else { break }
             let r = row - Int(block.start)
@@ -509,7 +514,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         for column in tableView.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.filtered = valueFilters[UInt32(i)] != nil
-            header.sorted = sort.contains { $0.column == UInt32(i) }
+            let key = sort.first { $0.column == UInt32(i) }
+            header.sorted = key != nil
+            header.sortAscending = !(key?.descending ?? false)
         }
         tableView.headerView?.needsDisplay = true
         sidebar.setFiltered(Set(valueFilters.keys.map { Int($0) }))
