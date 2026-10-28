@@ -456,3 +456,28 @@ fn dates_format_parse_and_filter() {
     assert_eq!(h.null_count, 1);
     std::fs::remove_file(path).ok();
 }
+
+#[test]
+fn rows_mark_matching_cells() {
+    let (path, doc) = temporal_sample();
+    // "170" matches n = 170 only; "2024-01-02" matches the day column.
+    for (query, expected) in [("170", vec![(1, 3)]), ("2024-01-02", vec![(1, 1)])] {
+        let v = doc
+            .apply_view(&ViewState {
+                search: Some(query.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let block = doc.rows(v.version, 0, 10, &[0, 1, 2, 3, 4]).unwrap();
+        assert_eq!(block.n_rows, 1);
+        let hits: Vec<(u64, u32)> = (0..block.n_cols)
+            .filter(|&c| block.is_match(0, c))
+            .map(|c| (block.source_rows[0], c))
+            .collect();
+        assert_eq!(hits, expected, "query {query}");
+    }
+    // No search: no match flags.
+    let v = doc.apply_view(&ViewState::default()).unwrap();
+    assert!(doc.rows(v.version, 0, 10, &[0]).unwrap().matched.is_empty());
+    std::fs::remove_file(path).ok();
+}

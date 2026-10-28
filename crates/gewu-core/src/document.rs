@@ -45,6 +45,8 @@ struct View {
     version: u64,
     /// Source row numbers in display order.
     rows: Arc<Vec<u32>>,
+    /// The search that produced this view, for marking matched cells.
+    search: Option<String>,
 }
 
 /// One open file. Safe to share between threads.
@@ -127,6 +129,7 @@ impl Document {
             current: Mutex::new(Arc::new(View {
                 version: 0,
                 rows: all_rows,
+                search: None,
             })),
             generation: Arc::new(AtomicU64::new(0)),
             next_version: AtomicU64::new(1),
@@ -189,6 +192,7 @@ impl Document {
         *current = Arc::new(View {
             version,
             rows: Arc::new(rows),
+            search: state.search.clone().filter(|s| !s.trim().is_empty()),
         });
         Ok(info)
     }
@@ -228,6 +232,24 @@ impl Document {
             }
         }
 
+        // Which cells match the search, using the search's own matcher on
+        // just these rows. Nothing is kept afterwards.
+        let mut matched = Vec::new();
+        if let Some(text) = &view.search {
+            let indices = UInt32Array::from(source_rows.to_vec());
+            let token = self.detached_token();
+            let mut per_column = Vec::with_capacity(columns.len());
+            for &c in columns {
+                let block = take(self.columns[c as usize].as_ref(), &indices, None)?;
+                let mut hits = vec![false; source_rows.len()];
+                search::mark_matches(&block, text, false, &mut hits, &token)?;
+                per_column.push(hits);
+            }
+            matched = (0..source_rows.len())
+                .flat_map(|r| per_column.iter().map(move |hits| hits[r]))
+                .collect();
+        }
+
         Ok(RowBlock {
             version,
             start,
@@ -235,6 +257,7 @@ impl Document {
             n_cols: columns.len() as u32,
             cells,
             source_rows: source_rows.iter().map(|&r| r as u64).collect(),
+            matched,
         })
     }
 

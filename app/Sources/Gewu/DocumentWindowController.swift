@@ -3,7 +3,8 @@ import AppKit
 /// One window showing one file. All data work happens in the Rust core;
 /// this class only asks for the rows that are on screen.
 final class DocumentWindowController: NSWindowController, NSWindowDelegate,
-    NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate, NSMenuItemValidation
+    NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate, NSMenuItemValidation,
+    NSSearchFieldDelegate
 {
     var onClose: (() -> Void)?
 
@@ -77,6 +78,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         searchField.placeholderString = "Search all columns"
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
+        searchField.delegate = self
         searchItem.preferredWidthForSearchField = 260
         let toolbar = NSToolbar(identifier: "GewuDocumentToolbar")
         toolbar.delegate = self
@@ -330,11 +332,22 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             statusLabel.stringValue = message
             return
         }
+        updateStatus()
+    }
+
+    /// Row counts, search position and filters, shown in the status bar.
+    private func updateStatus() {
         guard let info else { return }
         let shown = NumberFormatter.localizedString(from: NSNumber(value: current.rowCount), number: .decimal)
         let total = NumberFormatter.localizedString(from: NSNumber(value: info.rowCount), number: .decimal)
         var text = current.rowCount == info.rowCount ? "\(total) rows" : "\(shown) of \(total) rows"
         text += " · \(info.columns.count) columns"
+        if search != nil, current.rowCount > 0 {
+            let selected = tableView.selectedRow
+            text += selected >= 0
+                ? " · match \(formatCount(UInt64(selected + 1))) of \(shown)"
+                : " · ⏎ next match"
+        }
         let filtered = columnFilters.count
         if filtered > 0 { text += " · \(filtered) \(filtered == 1 ? "filter" : "filters")" }
         statusLabel.stringValue = text
@@ -392,10 +405,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             return cell
         }
 
-        if let text = block.cells[r * Int(block.nCols) + col] {
-            field.stringValue = text
-            field.font = kind.font
-            field.textColor = .labelColor
+        let index = r * Int(block.nCols) + col
+        let isMatch = index < block.matched.count && block.matched[index]
+        // Text matches highlight the matched part; other types the whole value.
+        (cell as? MatchCellView)?.wholeCellMatch = isMatch && kind != .text
+        if let text = block.cells[index] {
+            if isMatch, kind == .text, let search {
+                field.attributedStringValue = highlighted(text, query: search, font: kind.font)
+            } else {
+                field.stringValue = text
+                field.font = kind.font
+                // Dark text on the light find highlight, in both appearances.
+                field.textColor = isMatch ? .black : .labelColor
+            }
         } else {
             field.stringValue = "null"
             field.font = CellFonts.null
@@ -406,7 +428,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     private func makeCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
         let isRowNumber = id == Self.rowNumberCellID
-        let cell = isRowNumber ? RowNumberCellView() : NSTableCellView()
+        let cell = isRowNumber ? RowNumberCellView() : MatchCellView()
         cell.identifier = id
         let field = NSTextField(labelWithString: "")
         field.lineBreakMode = .byTruncatingTail
@@ -460,6 +482,47 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let text = sender.stringValue.trimmingCharacters(in: .whitespaces)
         search = text.isEmpty ? nil : text
         refreshView()
+    }
+
+    // MARK: - Moving between matches
+
+    /// Return in the search field goes to the next match, Shift-Return to
+    /// the previous one. Esc (cancel) clears the search as usual.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === searchField, search != nil else { return false }
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            let back = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+            back ? findPrevious(nil) : findNext(nil)
+            return true
+        }
+        return false
+    }
+
+    @objc func findNext(_ sender: Any?) { moveToMatch(by: 1) }
+    @objc func findPrevious(_ sender: Any?) { moveToMatch(by: -1) }
+
+    /// Every row in a searched view matches, so moving selects the next or
+    /// previous row and scrolls its first matching cell into view.
+    private func moveToMatch(by step: Int) {
+        let count = Int(current.rowCount)
+        guard search != nil, count > 0 else { return }
+        let selected = tableView.selectedRow
+        let row = selected < 0 ? (step > 0 ? 0 : count - 1) : (selected + step + count) % count
+        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+        if let block = block(for: row) {
+            let r = row - Int(block.start)
+            let cols = Int(block.nCols)
+            if let c = (0..<cols).first(where: { r * cols + $0 < block.matched.count && block.matched[r * cols + $0] }) {
+                let index = tableView.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(c)"))
+                if index >= 0 { tableView.scrollColumnToVisible(index) }
+            }
+        }
+        updateStatus()
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        if search != nil { updateStatus() }
     }
 
     @objc func focusSearch(_ sender: Any?) {

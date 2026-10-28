@@ -123,6 +123,8 @@ pub struct RowBlock {
     /// Row-major, `n_rows * n_cols` cells; `nil` is null.
     pub cells: Vec<Option<String>>,
     pub source_rows: Vec<u64>,
+    /// With a search active, row-major flags for cells that match it.
+    pub matched: Vec<bool>,
 }
 
 #[derive(uniffi::Record)]
@@ -282,6 +284,7 @@ impl GewuDocument {
             n_cols: b.n_cols,
             cells: b.cells,
             source_rows: b.source_rows,
+            matched: b.matched,
         })
     }
 

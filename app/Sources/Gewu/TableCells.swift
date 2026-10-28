@@ -227,6 +227,43 @@ final class StripedRowView: NSTableRowView {
     }
 }
 
+/// Data cell that can show a search match: a find-highlight behind the
+/// whole value (numbers, dates) or behind matched text (via attributes).
+final class MatchCellView: NSTableCellView {
+    var wholeCellMatch = false {
+        didSet { if wholeCellMatch != oldValue { needsDisplay = true } }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard wholeCellMatch, let field = textField else { return }
+        // Hug the text, like Finder and Xcode find results.
+        let text = field.attributedStringValue.size()
+        let width = min(text.width + 8, bounds.width - 4)
+        let x = field.alignment == .right ? bounds.maxX - 6 - width : bounds.minX + 6
+        let rect = NSRect(x: x, y: bounds.midY - text.height / 2 - 1, width: width, height: text.height + 2)
+        NSColor.findHighlightColor.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+    }
+}
+
+/// Text with every case-insensitive occurrence of `query` highlighted.
+func highlighted(_ text: String, query: String, font: NSFont) -> NSAttributedString {
+    let result = NSMutableAttributedString(string: text, attributes: [
+        .font: font, .foregroundColor: NSColor.labelColor,
+    ])
+    guard !query.isEmpty else { return result }
+    var range = text.startIndex..<text.endIndex
+    while let found = text.range(of: query, options: [.caseInsensitive], range: range) {
+        result.addAttributes([
+            .backgroundColor: NSColor.findHighlightColor,
+            // The highlight is light in both appearances; keep text dark on it.
+            .foregroundColor: NSColor.black,
+        ], range: NSRange(found, in: text))
+        range = found.upperBound..<text.endIndex
+    }
+    return result
+}
+
 /// Cell for the row-number column: tinted background and a divider on the right.
 final class RowNumberCellView: NSTableCellView {
     override func draw(_ dirtyRect: NSRect) {

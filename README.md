@@ -35,6 +35,10 @@ The search box (and `gewu rows --search`) matches each column by its type:
 | Boolean | `true`, `false` | that value |
 | Other | any text | substring of the displayed value |
 
+Matching cells are highlighted (the matched text for text columns, the whole
+value otherwise). Press Return or ⌘G for the next match, ⇧⌘G for the previous
+one, and Esc to clear the search.
+
 A query that means nothing for a column (a word in a number column) skips it.
 Search reads the data in place and keeps no index, so it adds almost no
 memory.

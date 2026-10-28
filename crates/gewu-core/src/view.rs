@@ -93,11 +93,22 @@ pub struct RowBlock {
     pub cells: Vec<Option<String>>,
     /// Row number in the source file for each returned row.
     pub source_rows: Vec<u64>,
+    /// With a search active, `n_rows * n_cols` flags (row-major) for the
+    /// cells that match it; empty otherwise.
+    pub matched: Vec<bool>,
 }
 
 impl RowBlock {
     pub fn cell(&self, row: u32, col: u32) -> Option<&str> {
         self.cells[(row * self.n_cols + col) as usize].as_deref()
+    }
+
+    /// Whether this cell matches the view's search.
+    pub fn is_match(&self, row: u32, col: u32) -> bool {
+        self.matched
+            .get((row * self.n_cols + col) as usize)
+            .copied()
+            .unwrap_or(false)
     }
 }
 
