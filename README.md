@@ -12,8 +12,8 @@ spreadsheet, without loading anything into Python first.
 - Opens Parquet files and scrolls through millions of rows smoothly.
 - Click a column header to sort. Sorting runs in the background and a newer
   click cancels the older one, so the window never freezes.
-- Right-click a column header → **Filter…** for an Excel-style checkbox list
-  of the column's values with counts.
+- Click the funnel in a column header (or right-click it → **Filter…**) for an
+  Excel-style checkbox list of the column’s values with counts.
 - Search across all columns; copy selected rows as tab-separated text.
 - A `gewu` command line with JSON output, for scripts and AI agents.
 
@@ -36,7 +36,7 @@ Requirements: Rust (stable), Xcode command line tools, macOS 15+.
 ```sh
 # macOS app
 scripts/build-apple.sh          # builds the Rust core + Swift bindings
-cd app && swift run Gewu -- /path/to/file.parquet
+cd app && swift run --build-system native Gewu -- /path/to/file.parquet
 
 # command line
 cargo install --path crates/gewu-cli
@@ -58,6 +58,9 @@ cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
   are not supported yet.
 - Parquet only for now; other formats (CSV, Arrow IPC, NDJSON) are planned.
 - The app is run with `swift run`; there is no signed `.app` bundle yet.
+- Use `--build-system native` with `swift build` / `swift run`. SwiftPM's default
+  build system currently links the app as if built for the macOS 15 SDK, so
+  macOS draws the pre-macOS 26 window style (title bar and sidebar look patched).
 
 ## License
 

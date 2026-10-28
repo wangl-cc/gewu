@@ -131,11 +131,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
-            divider.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            divider.leadingAnchor.constraint(equalTo: content.safeAreaLayoutGuide.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: status.topAnchor),
 
-            status.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            status.leadingAnchor.constraint(equalTo: content.safeAreaLayoutGuide.leadingAnchor),
             status.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             status.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             status.heightAnchor.constraint(equalToConstant: 26),
@@ -151,6 +151,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         sidebarItem.canCollapse = true
         let contentItem = NSSplitViewItem(viewController: contentController)
         contentItem.minimumThickness = 400
+        if #available(macOS 26.0, *) {
+            // The sidebar floats over the table, which scrolls underneath it.
+            contentItem.automaticallyAdjustsSafeAreaInsets = true
+        }
 
         let split = NSSplitViewController()
         split.addSplitViewItem(sidebarItem)

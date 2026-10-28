@@ -46,4 +46,4 @@ xcodebuild -create-xcframework \
   -library "$OUT/libgewu_ffi.a" -headers "$OUT/include" \
   -output app/GewuCore.xcframework
 
-echo "Done. Now: cd app && swift run"
+echo "Done. Now: cd app && swift run --build-system native"
