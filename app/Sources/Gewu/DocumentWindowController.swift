@@ -179,17 +179,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspector)
         inspectorItem.minimumThickness = 240
         inspectorItem.maximumThickness = 420
-        inspectorItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.showInspectorKey)
-        // Remember whether it was open.
-        inspectorObservation = inspectorItem.observe(\.isCollapsed) { item, _ in
-            UserDefaults.standard.set(!item.isCollapsed, forKey: Self.showInspectorKey)
-        }
         self.inspectorItem = inspectorItem
 
         let split = NSSplitViewController()
         split.addSplitViewItem(contentItem)
         split.addSplitViewItem(inspectorItem)
-        split.splitView.autosaveName = "GewuDocumentSplit"
+        // Hidden unless it was open last time. Set after adding: the split
+        // view controller ignores it before.
+        inspectorItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.showInspectorKey)
+        inspectorObservation = inspectorItem.observe(\.isCollapsed) { item, _ in
+            UserDefaults.standard.set(!item.isCollapsed, forKey: Self.showInspectorKey)
+        }
         window.contentViewController = split
     }
 
