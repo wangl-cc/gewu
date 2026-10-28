@@ -215,19 +215,25 @@ final class FilterHeaderView: NSTableHeaderView {
     }
 }
 
-/// Row view that paints its own zebra stripe. NSTableView's built-in
+/// Row view that colors its own zebra stripe. NSTableView's built-in
 /// alternating backgrounds repaint stripes across a huge area on every
 /// resize frame for multi-million-row tables (most of the CPU when the
-/// sidebar animates); painting per visible row costs only what's on screen.
+/// sidebar animates); assigning a color per visible row limits that work.
 final class StripedRowView: NSTableRowView {
     var odd = false {
-        didSet { if odd != oldValue { needsDisplay = true } }
+        didSet { updateStripe() }
     }
 
-    override func drawBackground(in dirtyRect: NSRect) {
-        let colors = NSColor.alternatingContentBackgroundColors
-        (odd && colors.count > 1 ? colors[1] : colors[0]).setFill()
-        dirtyRect.fill()
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateStripe()
+    }
+
+    private func updateStripe() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let colors = NSColor.alternatingContentBackgroundColors
+            layer?.backgroundColor = (odd && colors.count > 1 ? colors[1] : colors[0]).cgColor
+        }
     }
 }
 
@@ -266,20 +272,4 @@ func highlighted(_ text: String, query: String, font: NSFont) -> NSAttributedStr
         range = found.upperBound..<text.endIndex
     }
     return result
-}
-
-/// A thin horizontal bar showing a fraction, used in the filter list.
-final class ProportionBar: NSView {
-    var fraction: CGFloat = 0 { didSet { needsDisplay = true } }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let track = bounds.insetBy(dx: 0, dy: (bounds.height - 4) / 2)
-        NSColor.quaternarySystemFill.setFill()
-        NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
-        guard fraction > 0 else { return }
-        var fill = track
-        fill.size.width = max(2, track.width * min(fraction, 1))
-        NSColor.controlAccentColor.withAlphaComponent(0.7).setFill()
-        NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
-    }
 }

@@ -20,7 +20,10 @@ spreadsheet, without loading anything into Python first.
   text.
 - Clear every filter from the status bar or **Filter → Clear All Filters**
   (⇧⌘L).
+- Open the selected column's filter with **Filter → Filter Column…** (⌥⌘F).
 - A `gewu` command line with JSON output, for scripts and AI agents.
+- Native windows and menus, including **File → Open…** (⌘O), **Open Recent**,
+  and **Edit → Find…** (⌘F). Toggle the Inspector and row numbers in **View**.
 
 ## Search
 
@@ -50,7 +53,7 @@ memory.
 | `crates/gewu-core` | Data engine (Rust, arrow-rs). Owns the data, sorting, filtering, formatting. |
 | `crates/gewu-ffi` | UniFFI bindings used by the app. |
 | `crates/gewu-cli` | `gewu` command line. |
-| `app/` | macOS app (Swift, AppKit `NSTableView`). Only displays; asks Rust for visible rows. |
+| `app/` | macOS app: SwiftUI windows, menus, Inspector and filter forms; AppKit `NSTableView` for the data grid. Asks Rust for visible rows. |
 
 Sorting and filtering never copy data. The core keeps a list of source row
 numbers in display order, and the table asks for the ~50 rows on screen.
@@ -62,7 +65,9 @@ Requirements: Rust (stable), Xcode command line tools, macOS 15+.
 ```sh
 # macOS app
 scripts/build-apple.sh          # builds the Rust core + Swift bindings
-cd app && swift run --build-system native Gewu -- /path/to/file.parquet
+scripts/package-app.sh          # builds a release app in build/Gewu.app
+open build/Gewu.app
+# Or: scripts/package-app.sh --debug
 
 # command line
 cargo install --path crates/gewu-cli
@@ -85,7 +90,8 @@ cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
 - The whole file is decoded into memory when opened. Files larger than RAM
   are not supported yet.
 - Parquet only for now; other formats (CSV, Arrow IPC, NDJSON) are planned.
-- The app is run with `swift run`; there is no signed `.app` bundle yet.
+- The local `.app` bundle is ad-hoc signed; distribution signing and
+  notarization are not configured yet.
 - `scripts/build-apple.sh` needs Xcode set up: if `xcodebuild` says it failed
   to load a plug-in, run `xcodebuild -runFirstLaunch` once.
 - Use `--build-system native` with `swift build` / `swift run`. SwiftPM's default
