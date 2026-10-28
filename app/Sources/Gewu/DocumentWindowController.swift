@@ -47,6 +47,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
     private static let headerHeight: CGFloat = 32
+    private static let rowHeaderID = NSUserInterfaceItemIdentifier("rowHeader")
     private static let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
     private static let searchItemID = NSToolbarItem.Identifier("search")
 
@@ -139,7 +140,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         status.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
 
         let content = NSView()
-        for v in [gutter, scroll, divider, status] as [NSView] {
+        // The gutter goes on top of the scroll view, over its left edge.
+        for v in [scroll, gutter, divider, status] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
@@ -152,7 +154,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             gutter.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: gutter.trailingAnchor),
+            // Full width, so the toolbar reads as one section across the table.
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
@@ -207,6 +210,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         }
         gutter.setShown(Self.showsRowNumbers)
 
+        // An empty first column under the gutter: it keeps the data clear of
+        // the numbers, and its header cell is the corner of the header row.
+        let rowHeader = NSTableColumn(identifier: Self.rowHeaderID)
+        rowHeader.headerCell = ColumnHeaderCell(textCell: "")
+        rowHeader.width = gutter.fittedWidth
+        rowHeader.minWidth = gutter.fittedWidth
+        rowHeader.maxWidth = gutter.fittedWidth
+        rowHeader.resizingMask = []
+        rowHeader.isHidden = !Self.showsRowNumbers
+        tableView.addTableColumn(rowHeader)
+
         for (i, column) in info.columns.enumerated() {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
             let header = ColumnHeaderCell(textCell: column.name)
@@ -233,6 +247,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let show = !Self.showsRowNumbers
         UserDefaults.standard.set(show, forKey: Self.showRowNumbersKey)
         gutter.setShown(show)
+        tableView.tableColumn(withIdentifier: Self.rowHeaderID)?.isHidden = !show
     }
 
     // MARK: - Column widths
@@ -266,6 +281,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     }
 
     /// Double-clicking a column divider fits the column to the visible rows.
+    /// The row-header column stays first.
+    func tableView(_ tableView: NSTableView, shouldReorderColumn columnIndex: Int, toColumn newColumnIndex: Int) -> Bool {
+        tableView.tableColumns[columnIndex].identifier != Self.rowHeaderID && newColumnIndex > 0
+    }
+
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
         let tableColumn = tableView.tableColumns[column]
         guard let i = columnIndex(tableColumn) else { return tableColumn.width }
@@ -433,7 +453,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let tableColumn else { return nil }
+        guard let tableColumn, tableColumn.identifier != Self.rowHeaderID else { return nil }
         let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? NSTableCellView)
             ?? makeCell()
         guard let field = cell.textField else { return cell }
