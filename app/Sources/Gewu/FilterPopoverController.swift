@@ -37,17 +37,17 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 380))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 400))
 
         searchField.placeholderString = "Find value"
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
 
         let col = NSTableColumn(identifier: Self.cellID)
-        col.width = 270
+        col.width = 330
         list.addTableColumn(col)
         list.headerView = nil
-        list.rowHeight = 20
+        list.rowHeight = 22
         list.dataSource = self
         list.delegate = self
 
@@ -100,6 +100,7 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
                     try doc.distinctValues(column: column, state: state, limit: limit)
                 }.value
                 values = result.values
+                maxCount = values.map(\.count).max() ?? 0
                 truncated = result.truncated
                 checked = initial ?? Set(values.map(\.key))
                 applySearch()
@@ -117,20 +118,18 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
     func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let button = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? NSButton)
-            ?? {
-                let b = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggle(_:)))
-                b.identifier = Self.cellID
-                b.lineBreakMode = .byTruncatingTail
-                return b
-            }()
+        let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? FilterValueCell)
+            ?? FilterValueCell(identifier: Self.cellID, target: self, action: #selector(toggle(_:)))
         let value = values[shown[row]]
-        let label = value.label ?? "(null)"
-        button.title = "\(label)  (\(value.count))"
-        button.state = checked.contains(value.key) ? .on : .off
-        button.tag = row
-        return button
+        cell.checkbox.title = value.label ?? "(null)"
+        cell.checkbox.state = checked.contains(value.key) ? .on : .off
+        cell.checkbox.tag = row
+        cell.count.stringValue = NumberFormatter.localizedString(from: NSNumber(value: value.count), number: .decimal)
+        cell.bar.fraction = maxCount > 0 ? CGFloat(value.count) / CGFloat(maxCount) : 0
+        return cell
     }
+
+    private var maxCount: UInt64 = 0
 
     @objc private func toggle(_ sender: NSButton) {
         guard sender.tag < shown.count else { return }
@@ -165,4 +164,44 @@ final class FilterPopoverController: NSViewController, NSTableViewDataSource, NS
         let everything = !truncated && all.isSubset(of: checked)
         onApply(everything ? nil : checked)
     }
+}
+
+/// One value in the filter list: checkbox, a bar for its share, and its count.
+private final class FilterValueCell: NSTableCellView {
+    let checkbox: NSButton
+    let bar = ProportionBar()
+    let count = NSTextField(labelWithString: "")
+
+    init(identifier: NSUserInterfaceItemIdentifier, target: AnyObject, action: Selector) {
+        checkbox = NSButton(checkboxWithTitle: "", target: target, action: action)
+        super.init(frame: .zero)
+        self.identifier = identifier
+        checkbox.lineBreakMode = .byTruncatingTail
+        checkbox.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        count.textColor = .secondaryLabelColor
+        count.alignment = .right
+
+        for v in [checkbox, bar, count] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            checkbox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            checkbox.centerYAnchor.constraint(equalTo: centerYAnchor),
+            checkbox.trailingAnchor.constraint(lessThanOrEqualTo: bar.leadingAnchor, constant: -8),
+
+            bar.widthAnchor.constraint(equalToConstant: 48),
+            bar.heightAnchor.constraint(equalToConstant: 10),
+            bar.centerYAnchor.constraint(equalTo: centerYAnchor),
+            bar.trailingAnchor.constraint(equalTo: count.leadingAnchor, constant: -8),
+
+            count.widthAnchor.constraint(equalToConstant: 64),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            count.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
 }

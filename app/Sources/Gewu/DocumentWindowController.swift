@@ -3,13 +3,14 @@ import AppKit
 /// One window showing one file. All data work happens in the Rust core;
 /// this class only asks for the rows that are on screen.
 final class DocumentWindowController: NSWindowController, NSWindowDelegate,
-    NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate
+    NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSToolbarDelegate
 {
     var onClose: (() -> Void)?
 
     private let url: URL
     private var doc: GewuDocument?
     private var info: FileInfo?
+    private var kinds: [ColumnKind] = []
     private var current = ViewInfo(version: 0, rowCount: 0)
 
     // What the user asked to see. Sent to Rust as a ViewState.
@@ -23,28 +24,34 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private var popover: NSPopover?
 
     private let tableView = NSTableView()
-    private let searchField = NSSearchField()
+    private let searchItem = NSSearchToolbarItem(itemIdentifier: DocumentWindowController.searchItemID)
+    private var searchField: NSSearchField { searchItem.searchField }
     private let statusLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
+    private let sidebar = SidebarViewController()
 
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
+    private static let rowNumberCellID = NSUserInterfaceItemIdentifier("rowNumberCell")
     private static let rowNumberID = NSUserInterfaceItemIdentifier("row")
+    private static let searchItemID = NSToolbarItem.Identifier("search")
 
     init(url: URL) {
         self.url = url
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = url.lastPathComponent
         window.representedURL = url
-        window.setFrameAutosaveName("GewuDocumentWindow")
-        window.center()
+        window.toolbarStyle = .unified
         super.init(window: window)
         window.delegate = self
         buildLayout()
+        window.setContentSize(NSSize(width: 1200, height: 720))
+        window.center()
+        window.setFrameAutosaveName("GewuDocumentWindow")
         load()
     }
 
@@ -54,19 +61,29 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     // MARK: - Layout
 
     private func buildLayout() {
-        guard let content = window?.contentView else { return }
+        guard let window else { return }
 
+        // Toolbar: sidebar toggle on the left, search on the right.
         searchField.placeholderString = "Search all columns"
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
+        searchItem.preferredWidthForSearchField = 260
+        let toolbar = NSToolbar(identifier: "GewuDocumentToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
 
+        // Table
+        tableView.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 36))
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.allowsMultipleSelection = true
         tableView.allowsColumnReordering = true
         tableView.columnAutoresizingStyle = .noColumnAutoresizing
         tableView.style = .plain
-        tableView.rowHeight = 20
-        tableView.gridStyleMask = [.solidVerticalGridLineMask]
+        tableView.rowHeight = 24
+        tableView.intercellSpacing = NSSize(width: 0, height: 0)
+        tableView.gridStyleMask = []
         tableView.dataSource = self
         tableView.delegate = self
 
@@ -80,53 +97,107 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
 
+        // Status bar
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
 
-        let status = NSStackView(views: [statusLabel, spinner])
+        let divider = NSBox()
+        divider.boxType = .separator
+        let status = NSStackView(views: [statusLabel, NSView(), spinner])
         status.orientation = .horizontal
         status.spacing = 6
+        status.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
 
-        for v in [searchField, scroll, status] as [NSView] {
+        let content = NSView()
+        for v in [scroll, divider, status] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
-            searchField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
-            searchField.widthAnchor.constraint(equalToConstant: 260),
-
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            scroll.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -4),
+            scroll.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
-            status.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
-            status.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
+            divider.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: status.topAnchor),
+
+            status.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            status.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            status.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            status.heightAnchor.constraint(equalToConstant: 26),
         ])
+        let contentController = NSViewController()
+        contentController.view = content
+
+        // Sidebar + content
+        sidebar.onSelectColumn = { [weak self] i in self?.scrollToColumn(i) }
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        sidebarItem.minimumThickness = 200
+        sidebarItem.maximumThickness = 360
+        sidebarItem.canCollapse = true
+        let contentItem = NSSplitViewItem(viewController: contentController)
+        contentItem.minimumThickness = 400
+
+        let split = NSSplitViewController()
+        split.addSplitViewItem(sidebarItem)
+        split.addSplitViewItem(contentItem)
+        split.splitView.autosaveName = "GewuDocumentSplit"
+        window.contentViewController = split
     }
 
     private func buildColumns(_ info: FileInfo) {
         tableView.tableColumns.forEach(tableView.removeTableColumn)
 
         let rowNumber = NSTableColumn(identifier: Self.rowNumberID)
-        rowNumber.title = "#"
-        rowNumber.width = 60
+        let rowHeader = ColumnHeaderCell(textCell: "#")
+        rowHeader.rightAligned = true
+        rowNumber.headerCell = rowHeader
+        rowNumber.width = 64
         rowNumber.headerToolTip = "Row number in the file"
         tableView.addTableColumn(rowNumber)
 
         for (i, column) in info.columns.enumerated() {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
-            c.title = column.name
+            let header = ColumnHeaderCell(textCell: column.name)
+            header.subtitle = shortTypeName(column.typeName)
+            header.rightAligned = kinds[i] != .text
+            c.headerCell = header
             c.headerToolTip = "\(column.name): \(column.typeName)"
-            c.width = 140
-            c.minWidth = 40
+            c.width = 150
+            c.minWidth = 50
             c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
             tableView.addTableColumn(c)
         }
+    }
+
+    private func scrollToColumn(_ i: Int) {
+        let index = tableView.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(i)"))
+        guard index >= 0 else { return }
+        tableView.scrollColumnToVisible(index)
+        window?.makeFirstResponder(tableView)
+    }
+
+    // MARK: - Toolbar
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.searchItemID]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem?
+    {
+        id == Self.searchItemID ? searchItem : NSToolbarItem(itemIdentifier: id)
     }
 
     // MARK: - Loading and view updates
@@ -140,8 +211,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
                 self.doc = doc
                 let info = doc.info()
                 self.info = info
+                self.kinds = info.columns.map { ColumnKind(typeName: $0.typeName) }
                 self.current = doc.currentView()
                 buildColumns(info)
+                sidebar.show(info: info)
+                window?.subtitle = ByteCountFormatter.string(fromByteCount: Int64(info.fileSize), countStyle: .file)
                 tableView.reloadData()
                 setBusy(false)
             } catch {
@@ -220,9 +294,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let tableColumn else { return nil }
-        let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? NSTableCellView)
-            ?? makeCell()
+        let isRowNumber = tableColumn.identifier == Self.rowNumberID
+        let id = isRowNumber ? Self.rowNumberCellID : Self.cellID
+        let cell = (tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView)
+            ?? makeCell(id)
         guard let field = cell.textField else { return cell }
+
+        let col = columnIndex(tableColumn) ?? 0
+        let kind = isRowNumber || col >= kinds.count ? ColumnKind.number : kinds[col]
+        field.alignment = kind.alignment
 
         guard let block = block(for: row) else {
             field.stringValue = "…"
@@ -232,37 +312,39 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let r = row - Int(block.start)
         guard r >= 0, r < Int(block.nRows) else { return cell }
 
-        if tableColumn.identifier == Self.rowNumberID {
+        if isRowNumber {
             field.stringValue = String(block.sourceRows[r] + 1)
-            field.textColor = .secondaryLabelColor
-            field.alignment = .right
             return cell
         }
 
-        field.alignment = .left
-        let col = columnIndex(tableColumn) ?? 0
         if let text = block.cells[r * Int(block.nCols) + col] {
             field.stringValue = text
+            field.font = kind.font
             field.textColor = .labelColor
         } else {
             field.stringValue = "null"
+            field.font = CellFonts.null
             field.textColor = .tertiaryLabelColor
         }
         return cell
     }
 
-    private func makeCell() -> NSTableCellView {
-        let cell = NSTableCellView()
-        cell.identifier = Self.cellID
+    private func makeCell(_ id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
+        let isRowNumber = id == Self.rowNumberCellID
+        let cell = isRowNumber ? RowNumberCellView() : NSTableCellView()
+        cell.identifier = id
         let field = NSTextField(labelWithString: "")
         field.lineBreakMode = .byTruncatingTail
-        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        if isRowNumber {
+            field.font = CellFonts.rowNumber
+            field.textColor = .secondaryLabelColor
+        }
         field.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(field)
         cell.textField = field
         NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
@@ -305,7 +387,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     }
 
     @objc func focusSearch(_ sender: Any?) {
-        window?.makeFirstResponder(searchField)
+        searchItem.beginSearchInteraction()
     }
 
     // MARK: - Filter (header right-click)
@@ -376,12 +458,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     }
 
     private func updateHeaderTitles() {
-        guard let info else { return }
         for column in tableView.tableColumns {
-            guard let i = columnIndex(column) else { continue }
-            let name = info.columns[i].name
-            column.title = valueFilters[UInt32(i)] != nil ? "\(name) ⏷" : name
+            guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
+            header.filtered = valueFilters[UInt32(i)] != nil
         }
+        tableView.headerView?.needsDisplay = true
+        sidebar.setFiltered(Set(valueFilters.keys.map { Int($0) }))
     }
 
     // MARK: - Copy

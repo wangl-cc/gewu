@@ -70,6 +70,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editItem.submenu = editMenu
         main.addItem(editItem)
 
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let sidebar = viewMenu.addItem(
+            withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s"
+        )
+        sidebar.keyEquivalentModifierMask = [.command, .control]
+        viewItem.submenu = viewMenu
+        main.addItem(viewItem)
+
         return main
     }
 }
