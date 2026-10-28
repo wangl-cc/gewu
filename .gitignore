@@ -1,0 +1,6 @@
+/target
+/app/.build
+/app/GewuCore.xcframework
+/app/Sources/Gewu/Generated/
+/build
+.DS_Store
