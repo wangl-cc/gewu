@@ -16,6 +16,10 @@ pub struct FileInfo {
     pub file_size: u64,
     /// Compression codecs used in the file, e.g. `["SNAPPY"]`.
     pub compression: Vec<String>,
+    /// The program that wrote the file, if recorded.
+    pub created_by: Option<String>,
+    /// Key-value metadata from the file footer, except Arrow's own schema.
+    pub metadata: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +150,26 @@ pub struct Histogram {
     pub nan_count: u64,
     /// Rows counted (including nulls and NaN).
     pub total: u64,
+}
+
+/// Facts about one column over the rows of the current view (so filters
+/// and search apply), for the inspector.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnSummary {
+    /// Rows in the current view.
+    pub rows: u64,
+    pub null_count: u64,
+    pub nan_count: u64,
+    /// Distinct non-null values.
+    pub distinct_count: u64,
+    /// Numbers, dates and times only (dates and times as their integer
+    /// value; see `Document::format_value`).
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    /// Other columns: the most common values, most common first.
+    pub top_values: Vec<DistinctValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -13,8 +13,8 @@ use crate::numeric::Numeric;
 use crate::search;
 use crate::value_index::ValueIndex;
 use crate::{
-    format, Bound, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, Error, FileInfo, Filter,
-    Histogram, Result, RowBlock, ViewInfo, ViewState,
+    format, Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, Error,
+    FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
 
 /// How many rows to process between cancellation checks.
@@ -112,6 +112,15 @@ impl Document {
             row_groups: meta.num_row_groups() as u32,
             file_size,
             compression: compression.into_iter().collect(),
+            created_by: meta.file_metadata().created_by().map(str::to_string),
+            metadata: meta
+                .file_metadata()
+                .key_value_metadata()
+                .into_iter()
+                .flatten()
+                .filter(|kv| kv.key != "ARROW:schema")
+                .map(|kv| (kv.key.clone(), kv.value.clone().unwrap_or_default()))
+                .collect(),
         };
 
         let columns = batch.columns().to_vec();
@@ -378,6 +387,95 @@ impl Document {
             .filter(|(_, l)| labels.contains(l))
             .map(|(k, _)| k as u64)
             .collect())
+    }
+
+    /// Summary of one column over the current view's rows, with up to
+    /// `top` most common values for non-numeric columns.
+    pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary> {
+        let array = self.column(column)?.clone();
+        let rows = self.current.lock().unwrap().rows.clone();
+        let mut s = ColumnSummary {
+            rows: rows.len() as u64,
+            null_count: 0,
+            nan_count: 0,
+            distinct_count: 0,
+            min: None,
+            max: None,
+            mean: None,
+            std_dev: None,
+            top_values: Vec::new(),
+        };
+        match Numeric::build(&array)? {
+            Some(numeric) => {
+                // One pass: Welford's mean and variance, plus distinct bit
+                // patterns (dropped when done).
+                let mut distinct = std::collections::HashSet::new();
+                let (mut n, mut mean, mut m2) = (0u64, 0.0f64, 0.0f64);
+                let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+                for &r in rows.iter() {
+                    let (v, bits) = match numeric.bound(r as usize) {
+                        None => {
+                            s.null_count += 1;
+                            continue;
+                        }
+                        Some(Bound::Float(v)) if v.is_nan() => {
+                            s.nan_count += 1;
+                            continue;
+                        }
+                        Some(Bound::Int(v)) => (v as f64, v as u64),
+                        Some(Bound::UInt(v)) => (v as f64, v),
+                        // +0.0 and -0.0 are one value.
+                        Some(Bound::Float(v)) => (v, (v + 0.0).to_bits()),
+                    };
+                    distinct.insert(bits);
+                    n += 1;
+                    let delta = v - mean;
+                    mean += delta / n as f64;
+                    m2 += delta * (v - mean);
+                    min = min.min(v);
+                    max = max.max(v);
+                }
+                s.distinct_count = distinct.len() as u64;
+                if n > 0 {
+                    s.min = Some(min);
+                    s.max = Some(max);
+                    s.mean = Some(mean);
+                    s.std_dev = Some(if n > 1 {
+                        (m2 / (n - 1) as f64).sqrt()
+                    } else {
+                        0.0
+                    });
+                }
+            }
+            None => {
+                let idx = self.index(column)?;
+                let mut counts = vec![0u64; idx.len()];
+                for &r in rows.iter() {
+                    counts[idx.codes[r as usize] as usize] += 1;
+                }
+                let mut values: Vec<DistinctValue> = counts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(code, &count)| DistinctValue {
+                        key: code as u64,
+                        label: idx.labels[code].clone(),
+                        count,
+                    })
+                    .collect();
+                s.null_count = values
+                    .iter()
+                    .filter(|v| v.label.is_none())
+                    .map(|v| v.count)
+                    .sum();
+                values.retain(|v| v.label.is_some());
+                s.distinct_count = values.len() as u64;
+                values.sort_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
+                values.truncate(top as usize);
+                s.top_values = values;
+            }
+        }
+        Ok(s)
     }
 
     pub fn column_stats(&self, column: u32) -> Result<ColumnStats> {

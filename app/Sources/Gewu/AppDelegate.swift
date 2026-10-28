@@ -84,10 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
-        let sidebar = viewMenu.addItem(
-            withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s"
+        let inspector = viewMenu.addItem(
+            withTitle: "Show Inspector", action: #selector(NSSplitViewController.toggleInspector(_:)), keyEquivalent: "i"
         )
-        sidebar.keyEquivalentModifierMask = [.command, .control]
+        inspector.keyEquivalentModifierMask = [.command, .option]
         let rowNumbers = viewMenu.addItem(
             withTitle: "Show Row Numbers", action: #selector(DocumentWindowController.toggleRowNumbers(_:)),
             keyEquivalent: "r"

@@ -481,3 +481,37 @@ fn rows_mark_matching_cells() {
     assert!(doc.rows(v.version, 0, 10, &[0]).unwrap().matched.is_empty());
     std::fs::remove_file(path).ok();
 }
+
+#[test]
+fn column_summary_follows_the_view() {
+    let (path, doc) = sample();
+    // price: 3.5, 1.0, 9.0, null, 2.25, 7.0
+    let s = doc.column_summary(2, 5).unwrap();
+    assert_eq!((s.rows, s.null_count, s.distinct_count), (6, 1, 5));
+    assert_eq!((s.min, s.max), (Some(1.0), Some(9.0)));
+    assert!((s.mean.unwrap() - 4.55).abs() < 1e-9);
+    // Sample standard deviation: sqrt(44.8 / 4).
+    assert!((s.std_dev.unwrap() - 3.3466).abs() < 1e-3);
+    assert!(s.top_values.is_empty());
+
+    // label: cat, dog, null, cat, bird, dog
+    let s = doc.column_summary(1, 2).unwrap();
+    assert_eq!((s.null_count, s.distinct_count), (1, 3));
+    let top: Vec<_> = s
+        .top_values
+        .iter()
+        .map(|v| (v.label.clone().unwrap(), v.count))
+        .collect();
+    assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
+
+    // With a filter, only the view's rows count.
+    let keys = doc.keys_for_labels(1, &[Some("dog".into())]).unwrap();
+    doc.apply_view(&ViewState {
+        filters: vec![Filter::InValues { column: 1, keys }],
+        ..Default::default()
+    })
+    .unwrap();
+    let s = doc.column_summary(2, 5).unwrap();
+    assert_eq!((s.rows, s.min, s.max), (2, Some(1.0), Some(7.0)));
+    std::fs::remove_file(path).ok();
+}

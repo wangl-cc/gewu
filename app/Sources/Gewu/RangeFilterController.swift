@@ -261,6 +261,8 @@ final class RangeFilterController: NSViewController, NSTextFieldDelegate {
 /// Dragging snaps to bin edges.
 final class HistogramView: NSView {
     var onChange: (() -> Void)?
+    /// When false, only shows the distribution: no handles, no dragging.
+    var isInteractive = true
     /// Text for axis values; numbers by default.
     var labelFormatter: ((Double) -> String)?
     private(set) var selection: (Double, Double) = (0, 1)
@@ -363,6 +365,9 @@ final class HistogramView: NSView {
             r.fill()
         }
 
+        drawAxisLabels(p)
+        guard isInteractive else { return }
+
         // Selection band and handles.
         let x0 = x(selection.0), x1 = x(selection.1)
         if !everything {
@@ -381,7 +386,9 @@ final class HistogramView: NSView {
                 NSRect(x: hx + dx - 0.5, y: grip.midY - 6, width: 1, height: 12).fill()
             }
         }
+    }
 
+    private func drawAxisLabels(_ p: NSRect) {
         // Axis labels: column min and max.
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
@@ -420,6 +427,7 @@ final class HistogramView: NSView {
     private var moved = false
 
     override func mouseDown(with event: NSEvent) {
+        guard isInteractive else { return }
         let point = convert(event.locationInWindow, from: nil)
         // A double click resets, but only on mouse up without movement:
         // trackpad "tap then drag" also arrives as a second click.
@@ -472,6 +480,7 @@ final class HistogramView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        guard isInteractive else { return }
         let point = convert(event.locationInWindow, from: nil)
         if handle(at: point) != nil {
             NSCursor.resizeLeftRight.set()

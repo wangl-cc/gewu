@@ -15,13 +15,6 @@ final class RowGutterView: NSView {
         self.table = table
         super.init(frame: .zero)
         widthConstraint.isActive = true
-        // Selection colour depends on focus: redraw when the window's key
-        // state changes.
-        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(tableScrolled(_:)), name: name, object: nil
-            )
-        }
         // Redraw as the table scrolls.
         if let clip = table.enclosingScrollView?.contentView {
             clip.postsBoundsChangedNotifications = true
@@ -60,43 +53,35 @@ final class RowGutterView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let table, let label else { return }
+        guard let table else { return }
+        // Same background as the table, so the numbers read as its row
+        // headers rather than a separate strip.
+        table.backgroundColor.setFill()
+        dirtyRect.fill()
+
+        // Corner cell: part of the header row, with its bottom separator.
+        let headerHeight = table.headerView?.frame.height ?? 0
+        NSColor.separatorColor.setFill()
+        NSRect(x: bounds.minX, y: headerHeight - 1, width: bounds.width, height: 1).fill()
+        // Hairline between the numbers and the data, below the header only.
+        NSRect(x: bounds.maxX - 1, y: headerHeight, width: 1, height: max(0, bounds.height - headerHeight)).fill()
+
+        guard let label else { return }
         let visible = table.rows(in: table.visibleRect)
+        guard visible.length > 0 else { return }
+        NSBezierPath(rect: NSRect(x: 0, y: headerHeight, width: bounds.width,
+                                  height: max(0, bounds.height - headerHeight))).setClip()
         let selected = table.selectedRowIndexes
-        // Selection is emphasized (accent) only while the table has focus,
-        // matching how the table draws it.
-        let emphasized = table.window?.isKeyWindow == true && table.window?.firstResponder === table
-        let stripes = NSColor.alternatingContentBackgroundColors
-
         for row in visible.location..<(visible.location + visible.length) {
-            var rowRect = convert(table.rect(ofRow: row), from: table)
-            rowRect.origin.x = bounds.minX
-            rowRect.size.width = bounds.width
-            guard rowRect.intersects(dirtyRect) else { continue }
-
-            // Continue the table's zebra stripes and selection into the gutter.
-            let isSelected = selected.contains(row)
-            if isSelected {
-                (emphasized ? NSColor.selectedContentBackgroundColor
-                    : NSColor.unemphasizedSelectedContentBackgroundColor).setFill()
-            } else {
-                stripes[row % stripes.count].setFill()
-            }
-            rowRect.fill()
-
             guard let text = label(row) else { continue }
-            let color: NSColor = isSelected
-                ? (emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor)
-                : .tertiaryLabelColor
+            let rowRect = convert(table.rect(ofRow: row), from: table)
+            guard rowRect.intersects(dirtyRect) else { continue }
             let string = NSAttributedString(string: text, attributes: [
-                .font: CellFonts.rowNumber, .foregroundColor: color,
+                .font: CellFonts.rowNumber,
+                .foregroundColor: selected.contains(row) ? NSColor.controlAccentColor : NSColor.tertiaryLabelColor,
             ])
             let size = string.size()
             string.draw(at: NSPoint(x: bounds.maxX - 8 - size.width, y: rowRect.midY - size.height / 2))
         }
-
-        // A hairline between the numbers and the data.
-        NSColor.separatorColor.setFill()
-        NSRect(x: bounds.maxX - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height).fill()
     }
 }

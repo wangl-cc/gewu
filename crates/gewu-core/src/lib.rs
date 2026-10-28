@@ -16,6 +16,6 @@ mod view;
 pub use document::{CancelToken, Document};
 pub use error::{Error, Result};
 pub use view::{
-    Bound, ColumnInfo, ColumnStats, DistinctResult, DistinctValue, FileInfo, Filter, Histogram,
-    RowBlock, SortKey, ViewInfo, ViewState,
+    Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter,
+    Histogram, RowBlock, SortKey, ViewInfo, ViewState,
 };

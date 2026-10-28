@@ -62,6 +62,31 @@ pub struct FileInfo {
     pub row_groups: u32,
     pub file_size: u64,
     pub compression: Vec<String>,
+    pub created_by: Option<String>,
+    /// Footer key-value metadata (Arrow's own schema left out).
+    pub metadata: Vec<KeyValue>,
+}
+
+#[derive(uniffi::Record)]
+pub struct KeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+/// One column over the current view's rows, for the inspector.
+#[derive(uniffi::Record)]
+pub struct ColumnSummary {
+    pub rows: u64,
+    pub null_count: u64,
+    pub nan_count: u64,
+    pub distinct_count: u64,
+    /// Numbers, dates and times (dates and times as raw integer values).
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    /// Other columns: most common values first.
+    pub top_values: Vec<DistinctValue>,
 }
 
 #[derive(uniffi::Record)]
@@ -251,6 +276,15 @@ impl GewuDocument {
             row_groups: i.row_groups,
             file_size: i.file_size,
             compression: i.compression.clone(),
+            created_by: i.created_by.clone(),
+            metadata: i
+                .metadata
+                .iter()
+                .map(|(key, value)| KeyValue {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -347,6 +381,31 @@ impl GewuDocument {
             core::Bound::Int(value) => Bound::Int { value },
             core::Bound::UInt(value) => Bound::UInt { value },
             core::Bound::Float(value) => Bound::Float { value },
+        })
+    }
+
+    /// Summary of a column over the current view (filters and search apply).
+    /// Call off the main thread.
+    pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary, GewuError> {
+        let s = self.inner.column_summary(column, top)?;
+        Ok(ColumnSummary {
+            rows: s.rows,
+            null_count: s.null_count,
+            nan_count: s.nan_count,
+            distinct_count: s.distinct_count,
+            min: s.min,
+            max: s.max,
+            mean: s.mean,
+            std_dev: s.std_dev,
+            top_values: s
+                .top_values
+                .into_iter()
+                .map(|v| DistinctValue {
+                    key: v.key,
+                    label: v.label,
+                    count: v.count,
+                })
+                .collect(),
         })
     }
 

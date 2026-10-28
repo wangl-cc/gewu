@@ -40,7 +40,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         return b
     }()
     private let spinner = NSProgressIndicator()
-    private let sidebar = SidebarViewController()
+    private let inspector = InspectorViewController()
+    private var inspectorItem: NSSplitViewItem?
+    private var inspectorObservation: NSKeyValueObservation?
+    private static let showInspectorKey = "ShowInspector"
 
     private static let cellID = NSUserInterfaceItemIdentifier("cell")
     private static let headerHeight: CGFloat = 32
@@ -75,7 +78,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private func buildLayout() {
         guard let window else { return }
 
-        // Toolbar: sidebar toggle on the left, search on the right.
+        // Toolbar: search, then the inspector toggle on the right.
         searchField.placeholderString = "Search all columns"
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
@@ -93,6 +96,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             self?.filterColumn = index
             self?.showFilter(nil)
         }
+        // Clicking a header or a cell picks the column the inspector shows.
+        headerView.onColumnClick = { [weak self] index in self?.inspectColumn(atTableIndex: index) }
+        tableView.target = self
+        tableView.action = #selector(tableClicked(_:))
         tableView.headerView = headerView
         // Stripes are painted per row by StripedRowView (see there for why).
         tableView.usesAlternatingRowBackgroundColors = false
@@ -137,10 +144,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             content.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            // The row-number gutter sits left of the table and doesn't scroll
-            // sideways with it.
-            // Only beside the rows: below the table header, above the status bar.
-            gutter.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor, constant: Self.headerHeight),
+            // Row headers for the table: a corner cell in the header row, then
+            // the numbers beside the rows, ending above the status bar. They
+            // don't scroll sideways with the table.
+            gutter.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             gutter.leadingAnchor.constraint(equalTo: content.safeAreaLayoutGuide.leadingAnchor),
             gutter.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
@@ -161,22 +168,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let contentController = NSViewController()
         contentController.view = content
 
-        // Sidebar + content
-        sidebar.onSelectColumn = { [weak self] i in self?.scrollToColumn(i) }
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.minimumThickness = 200
-        sidebarItem.maximumThickness = 360
-        sidebarItem.canCollapse = true
+        // Content + inspector on the right (hidden until asked for).
+        inspector.onSelectColumn = { [weak self] i in self?.scrollToColumn(i) }
         let contentItem = NSSplitViewItem(viewController: contentController)
         contentItem.minimumThickness = 400
         if #available(macOS 26.0, *) {
-            // The sidebar floats over the table, which scrolls underneath it.
+            // The inspector floats over the table, which scrolls underneath it.
             contentItem.automaticallyAdjustsSafeAreaInsets = true
         }
+        let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspector)
+        inspectorItem.minimumThickness = 240
+        inspectorItem.maximumThickness = 420
+        inspectorItem.isCollapsed = !UserDefaults.standard.bool(forKey: Self.showInspectorKey)
+        // Remember whether it was open.
+        inspectorObservation = inspectorItem.observe(\.isCollapsed) { item, _ in
+            UserDefaults.standard.set(!item.isCollapsed, forKey: Self.showInspectorKey)
+        }
+        self.inspectorItem = inspectorItem
 
         let split = NSSplitViewController()
-        split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(contentItem)
+        split.addSplitViewItem(inspectorItem)
         split.splitView.autosaveName = "GewuDocumentSplit"
         window.contentViewController = split
     }
@@ -184,9 +196,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     private func buildColumns(_ info: FileInfo) {
         tableView.tableColumns.forEach(tableView.removeTableColumn)
 
-        // Row numbers live in a gutter beside the table, not in it. They are
-        // positions in the file, 0-based like pandas/polars iloc, so they
-        // still identify a row after sorting and filtering.
+        // Row numbers are positions in the file, 0-based like pandas/polars
+        // iloc, so they still identify a row after sorting and filtering.
         gutter.fit(largest: max(info.rowCount, 1) - 1)
         gutter.toolTip = "Row in file (0-based)"
         gutter.label = { [weak self] row in
@@ -210,14 +221,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         }
     }
 
-    // MARK: - Column widths
-
-    private static let cellPadding: CGFloat = 10
-
-    private static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
-        ceil((text as NSString).size(withAttributes: [.font: font]).width)
-    }
-
     // MARK: - Row numbers
 
     private static let showRowNumbersKey = "ShowRowNumbers"
@@ -230,6 +233,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let show = !Self.showsRowNumbers
         UserDefaults.standard.set(show, forKey: Self.showRowNumbersKey)
         gutter.setShown(show)
+    }
+
+    // MARK: - Column widths
+
+    private static let cellPadding: CGFloat = 10
+
+    private static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
     /// Width that fits the header (name and type) and the given rows' text.
@@ -262,6 +273,17 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         return fittedWidth(column: i, rows: visible.location..<(visible.location + visible.length), maxWidth: 600)
     }
 
+    /// Show a column (by its position in the table) in the inspector.
+    private func inspectColumn(atTableIndex index: Int) {
+        guard index >= 0, index < tableView.tableColumns.count,
+              let column = columnIndex(tableView.tableColumns[index]) else { return }
+        inspector.select(column: column)
+    }
+
+    @objc private func tableClicked(_ sender: Any?) {
+        inspectColumn(atTableIndex: tableView.clickedColumn)
+    }
+
     private func scrollToColumn(_ i: Int) {
         let index = tableView.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(i)"))
         guard index >= 0 else { return }
@@ -272,7 +294,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
     // MARK: - Toolbar
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.searchItemID]
+        [.flexibleSpace, Self.searchItemID, .inspectorTrackingSeparator, .toggleInspector]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -299,7 +321,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
                 self.kinds = info.columns.map { ColumnKind(typeName: $0.typeName) }
                 self.current = doc.currentView()
                 buildColumns(info)
-                sidebar.show(info: info)
+                inspector.show(doc: doc, info: info, kinds: kinds)
                 let rows = NumberFormatter.localizedString(from: NSNumber(value: info.rowCount), number: .decimal)
                 let size = ByteCountFormatter.string(fromByteCount: Int64(info.fileSize), countStyle: .file)
                 window?.subtitle = "\(rows) rows · \(info.columns.count) columns · \(size)"
@@ -337,6 +359,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
                 cache.clear()
                 tableView.reloadData()
                 gutter.needsDisplay = true
+                inspector.viewChanged(state)
                 setBusy(false)
             } catch GewuError.Cancelled {
                 // Replaced by a newer request.
@@ -370,6 +393,15 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         }
         let filtered = columnFilters.count
         if filtered > 0 { text += " · \(filtered) \(filtered == 1 ? "filter" : "filters")" }
+        // The selected row's position in the file, 0-based like pandas/polars
+        // iloc, so it still identifies the row after sorting and filtering.
+        let selected = tableView.selectedRow
+        if selected >= 0, let block = block(for: selected) {
+            let r = selected - Int(block.start)
+            if r >= 0, r < Int(block.nRows) {
+                text += " · row \(formatCount(block.sourceRows[r])) in file"
+            }
+        }
         statusLabel.stringValue = text
         clearFiltersButton.isHidden = filtered == 0
     }
@@ -531,7 +563,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         gutter.needsDisplay = true
-        if search != nil { updateStatus() }
+        updateStatus()
     }
 
     @objc func focusSearch(_ sender: Any?) {
@@ -594,7 +626,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             header.sortAscending = !(key?.descending ?? false)
         }
         tableView.headerView?.needsDisplay = true
-        sidebar.setFiltered(Set(columnFilters.keys.map { Int($0) }))
+        inspector.setFiltered(Set(columnFilters.keys.map { Int($0) }))
     }
 
     // MARK: - Copy

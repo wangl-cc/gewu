@@ -160,6 +160,8 @@ final class ColumnHeaderCell: NSTableHeaderCell {
 /// instead of a sort, and highlights the funnel under the mouse.
 final class FilterHeaderView: NSTableHeaderView {
     var onFilterClick: ((Int) -> Void)?
+    /// Any other click on a column header (it also sorts, as usual).
+    var onColumnClick: ((Int) -> Void)?
     private var hovered: ColumnHeaderCell?
 
     private func funnelCell(at event: NSEvent) -> (Int, ColumnHeaderCell)? {
@@ -177,6 +179,8 @@ final class FilterHeaderView: NSTableHeaderView {
         if let (index, _) = funnelCell(at: event) {
             onFilterClick?(index)
         } else {
+            let index = column(at: convert(event.locationInWindow, from: nil))
+            if index >= 0 { onColumnClick?(index) }
             super.mouseDown(with: event)
         }
     }
