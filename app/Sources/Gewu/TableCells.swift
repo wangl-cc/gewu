@@ -58,13 +58,17 @@ final class ColumnHeaderCell: NSTableHeaderCell {
     var subtitle = ""
     var filtered = false
     var rightAligned = false
+    var sorted = false
 
     /// Room kept on the right for the sort arrow.
     private static let sortIndicatorWidth: CGFloat = 14
 
     override func drawInterior(withFrame frame: NSRect, in controlView: NSView) {
-        var rect = frame.insetBy(dx: 8, dy: 0)
-        rect.size.width -= Self.sortIndicatorWidth
+        // AppKit reuses the last header cell to draw the empty area after the last column.
+        guard !stringValue.isEmpty else { return }
+        // Same inset as the data cells, so header and values line up.
+        var rect = frame.insetBy(dx: 10, dy: 0)
+        if sorted { rect.size.width -= Self.sortIndicatorWidth }
 
         if filtered, let image = filterSymbol {
             let size: CGFloat = 13

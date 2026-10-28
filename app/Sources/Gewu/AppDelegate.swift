@@ -9,7 +9,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         // `swift run Gewu -- path/to/file.parquet` opens the file directly.
-        let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
+        // Cocoa options come as "-Key value" pairs; skip both.
+        var paths: [String] = []
+        var args = CommandLine.arguments.dropFirst().makeIterator()
+        while let arg = args.next() {
+            if arg == "--" { continue }
+            if arg.hasPrefix("-") { _ = args.next(); continue }
+            paths.append(arg)
+        }
         if paths.isEmpty {
             openDocument(nil)
         } else {

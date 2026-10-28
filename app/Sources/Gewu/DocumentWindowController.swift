@@ -75,13 +75,13 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         window.toolbar = toolbar
 
         // Table
-        tableView.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 36))
+        tableView.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.allowsMultipleSelection = true
         tableView.allowsColumnReordering = true
         tableView.columnAutoresizingStyle = .noColumnAutoresizing
         tableView.style = .plain
-        tableView.rowHeight = 24
+        tableView.rowHeight = 28
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.gridStyleMask = []
         tableView.dataSource = self
@@ -96,6 +96,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
+        // Extends under the toolbar; the system insets the header and rows below it.
+        scroll.automaticallyAdjustsContentInsets = true
 
         // Status bar
         statusLabel.textColor = .secondaryLabelColor
@@ -119,7 +121,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             content.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: divider.topAnchor),
@@ -159,7 +161,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         let rowHeader = ColumnHeaderCell(textCell: "#")
         rowHeader.rightAligned = true
         rowNumber.headerCell = rowHeader
-        rowNumber.width = 64
+        rowNumber.width = rowNumberWidth(info)
         rowNumber.headerToolTip = "Row number in the file"
         tableView.addTableColumn(rowNumber)
 
@@ -170,11 +172,56 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
             header.rightAligned = kinds[i] != .text
             c.headerCell = header
             c.headerToolTip = "\(column.name): \(column.typeName)"
-            c.width = 150
+            c.width = fittedWidth(column: i, rows: 0..<min(200, Int(current.rowCount)), maxWidth: 320)
             c.minWidth = 50
             c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
             tableView.addTableColumn(c)
         }
+    }
+
+    // MARK: - Column widths
+
+    private static let cellPadding: CGFloat = 10
+
+    private static func textWidth(_ text: String, _ font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    /// Wide enough for the largest row number in the file.
+    private func rowNumberWidth(_ info: FileInfo) -> CGFloat {
+        let digits = String(repeating: "8", count: String(info.rowCount).count)
+        return max(44, Self.textWidth(digits, CellFonts.rowNumber) + 2 * Self.cellPadding)
+    }
+
+    /// Width that fits the header (name and type) and the given rows' text.
+    private func fittedWidth(column i: Int, rows: Range<Int>, maxWidth: CGFloat) -> CGFloat {
+        guard let info, i < info.columns.count else { return 150 }
+        let column = info.columns[i]
+        let kind = kinds[i]
+        // Header: text inset, sort arrow and room for the filter funnel.
+        var width = max(
+            Self.textWidth(column.name, .systemFont(ofSize: 12, weight: .semibold)),
+            Self.textWidth(shortTypeName(column.typeName), .systemFont(ofSize: 10))
+        ) + 16 + 14 + 17
+        for row in rows {
+            guard let block = block(for: row) else { break }
+            let r = row - Int(block.start)
+            guard r >= 0, r < Int(block.nRows) else { continue }
+            let text = block.cells[r * Int(block.nCols) + i]
+            let w = text.map { Self.textWidth(String($0.prefix(200)), kind.font) }
+                ?? Self.textWidth("null", CellFonts.null)
+            width = max(width, w + 2 * Self.cellPadding)
+        }
+        return min(max(width, 60), maxWidth)
+    }
+
+    /// Double-clicking a column divider fits the column to the visible rows.
+    func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
+        let tableColumn = tableView.tableColumns[column]
+        if tableColumn.identifier == Self.rowNumberID, let info { return rowNumberWidth(info) }
+        guard let i = columnIndex(tableColumn) else { return tableColumn.width }
+        let visible = tableView.rows(in: tableView.visibleRect)
+        return fittedWidth(column: i, rows: visible.location..<(visible.location + visible.length), maxWidth: 600)
     }
 
     private func scrollToColumn(_ i: Int) {
@@ -343,8 +390,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         cell.addSubview(field)
         cell.textField = field
         NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
-            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: Self.cellPadding),
+            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -Self.cellPadding),
             field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
@@ -375,6 +422,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         } else {
             sort = []
         }
+        updateHeaderTitles()
         refreshView()
     }
 
@@ -461,6 +509,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate,
         for column in tableView.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.filtered = valueFilters[UInt32(i)] != nil
+            header.sorted = sort.contains { $0.column == UInt32(i) }
         }
         tableView.headerView?.needsDisplay = true
         sidebar.setFiltered(Set(valueFilters.keys.map { Int($0) }))
