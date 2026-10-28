@@ -1,0 +1,24 @@
+[package]
+name = "gewu-ffi"
+description = "UniFFI bindings of gewu-core for the macOS app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "gewu_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+gewu-core.workspace = true
+thiserror.workspace = true
+uniffi = "0.32"

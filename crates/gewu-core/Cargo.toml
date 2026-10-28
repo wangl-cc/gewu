@@ -1,0 +1,12 @@
+[package]
+name = "gewu-core"
+description = "Data engine for the gewu table viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arrow.workspace = true
+parquet.workspace = true
+thiserror.workspace = true

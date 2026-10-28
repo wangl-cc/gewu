@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/gewu-core", "crates/gewu-ffi", "crates/gewu-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/wangl-cc/gewu"
+
+[workspace.dependencies]
+arrow = { version = "60", default-features = false, features = ["prettyprint"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "brotli", "simdutf8"] }
+thiserror = "2"
+gewu-core = { path = "crates/gewu-core" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
