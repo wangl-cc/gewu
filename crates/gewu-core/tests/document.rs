@@ -95,12 +95,15 @@ fn checkbox_filter_and_distinct() {
     let (path, doc) = sample();
     let all = doc.distinct_values(1, None, 100).unwrap();
     let labels: Vec<_> = all.values.iter().map(|v| v.label.clone()).collect();
-    assert_eq!(labels, [
-        None,
-        Some("bird".into()),
-        Some("cat".into()),
-        Some("dog".into())
-    ]);
+    assert_eq!(
+        labels,
+        [
+            None,
+            Some("bird".into()),
+            Some("cat".into()),
+            Some("dog".into())
+        ]
+    );
     assert_eq!(all.values[2].count, 2);
 
     let keys = doc
@@ -273,11 +276,14 @@ fn histogram_counts() {
     // the column's own range filter is ignored.
     let keys = doc.keys_for_labels(1, &[Some("cat".into())]).unwrap();
     let state = ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
-            column: 2,
-            min: Some(Bound::Float(100.0)),
-            max: None,
-        }],
+        filters: vec![
+            Filter::InValues { column: 1, keys },
+            Filter::Range {
+                column: 2,
+                min: Some(Bound::Float(100.0)),
+                max: None,
+            },
+        ],
         ..Default::default()
     };
     let h = doc.histogram(2, Some(&state), 4).unwrap();

@@ -142,23 +142,30 @@ fn nested_delimited_cells_are_parseable_json_in_snapshot_order() {
     for (format, delimiter) in [(ExportFormat::Csv, b','), (ExportFormat::Tsv, b'\t')] {
         let path = directory.path().join(format!("nested.{format:?}"));
         let export = doc
-            .prepare_export(version, &[3, 2, 1, 0], format, ExportOptions {
-                convert_nested_to_json: true,
-            })
+            .prepare_export(
+                version,
+                &[3, 2, 1, 0],
+                format,
+                ExportOptions {
+                    convert_nested_to_json: true,
+                },
+            )
             .unwrap();
         export.write(&path).unwrap();
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(delimiter)
             .from_path(path)
             .unwrap();
-        assert_eq!(reader.headers().unwrap().iter().collect::<Vec<_>>(), [
-            "items", "profile", "tags", "id"
-        ]);
+        assert_eq!(
+            reader.headers().unwrap().iter().collect::<Vec<_>>(),
+            ["items", "profile", "tags", "id"]
+        );
         let rows = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows.iter().map(|row| &row[3]).collect::<Vec<_>>(), [
-            "3", "2", "1"
-        ]);
+        assert_eq!(
+            rows.iter().map(|row| &row[3]).collect::<Vec<_>>(),
+            ["3", "2", "1"]
+        );
         assert_eq!(
             serde_json::from_str::<Value>(&rows[0][0]).unwrap(),
             json!([first.clone()])
@@ -192,9 +199,10 @@ fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
     let batch = nested_sample();
     let (directory, doc) = document_from_batch(&batch);
     let version = doc.current_view().version;
-    assert_eq!(doc.nested_export_columns(&[3, 0, 1]).unwrap(), [
-        "items", "tags"
-    ]);
+    assert_eq!(
+        doc.nested_export_columns(&[3, 0, 1]).unwrap(),
+        ["items", "tags"]
+    );
     assert!(doc.nested_export_columns(&[99]).is_err());
     for format in [ExportFormat::Csv, ExportFormat::Tsv] {
         let result = doc.prepare_export(version, &[0, 2], format, ExportOptions::default());
