@@ -90,6 +90,18 @@ Generate a large test file:
 cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
 ```
 
+## Benchmarks
+
+```sh
+scripts/bench.sh                              # engine benchmarks (criterion), 2M generated rows
+scripts/bench.sh -- --save-baseline before    # save a baseline ...
+scripts/bench.sh -- --baseline before         # ... and compare against it later
+scripts/bench-mem.sh                          # peak memory per operation, via the CLI
+```
+
+Both scripts generate the same fixed-seed file on first use. Reports land in
+`target/criterion/`.
+
 ## Current limits
 
 - The whole file is decoded into memory when opened. Files larger than RAM
