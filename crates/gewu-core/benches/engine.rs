@@ -200,6 +200,9 @@ fn facets(c: &mut Criterion) {
         ("city", city),
         ("id_high_card", id),
         ("uuid_high_card", uuid),
+        ("country_dictionary", col(&doc, "country")),
+        ("tags_list", col(&doc, "tags")),
+        ("location_struct", col(&doc, "location")),
     ] {
         g.bench_function(format!("distinct_cold_{name}"), |b| {
             b.iter_batched(
