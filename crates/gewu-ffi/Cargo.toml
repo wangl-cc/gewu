@@ -8,7 +8,7 @@ repository.workspace = true
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
-name = "gewu_ffi"
+name = "gewu"
 
 [[bin]]
 name = "uniffi-bindgen"

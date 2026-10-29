@@ -4,35 +4,34 @@
 //!
 //! - Text: case-insensitive substring, with Arrow's `like` kernels in place.
 //! - Integers: the query read as an integer, compared by value.
-//! - Floats and decimals: the query read as a number, matching the interval
-//!   its precision implies: `3.14` matches [3.135, 3.145), `3` matches
-//!   [2.5, 3.5), `1e3` matches [500, 1500). `nan` and `inf` match those.
-//! - Dates and timestamps: a date prefix (`2024`, `2024-03`, `2024-03-15`,
-//!   optionally with ` 10`, ` 10:30` or ` 10:30:15`) matches the whole period
-//!   it names, in the column's own unit and time zone. Date columns accept
-//!   only the date parts.
+//! - Floats and decimals: the query read as a number, matching the interval its precision implies:
+//!   `3.14` matches [3.135, 3.145), `3` matches [2.5, 3.5), `1e3` matches [500, 1500). `nan` and
+//!   `inf` match those.
+//! - Dates and timestamps: a date prefix (`2024`, `2024-03`, `2024-03-15`, optionally with ` 10`, `
+//!   10:30` or ` 10:30:15`) matches the whole period it names, in the column's own unit and time
+//!   zone. Date columns accept only the date parts.
 //! - Booleans: `true` or `false`.
-//! - Anything else: substring of the displayed text, formatted into one
-//!   reused buffer.
+//! - Anything else: substring of the displayed text, formatted into one reused buffer.
 //!
 //! A column the query cannot mean anything for (a word in a number column)
 //! is skipped. Nothing is cached after the call.
 
-use std::fmt::Write;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Datum, LargeStringArray, Scalar, StringArray,
-    StringViewArray,
+use arrow::{
+    array::{
+        downcast_integer_array, downcast_temporal_array, Array, ArrayRef, AsArray, BooleanArray,
+        Datum, LargeStringArray, PrimitiveArray, Scalar, StringArray, StringViewArray,
+    },
+    compute::{
+        cast,
+        kernels::comparison::{ilike, like},
+    },
+    datatypes::{ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type},
 };
-use arrow::compute::cast;
-use arrow::compute::kernels::comparison::{ilike, like};
-use arrow::datatypes::{DataType, Float64Type};
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 
-use crate::document::CancelToken;
-use crate::numeric::Numeric;
-use crate::{format, Bound, Result};
+use crate::{document::CancelToken, format, numeric::Numeric, Bound, Result};
 
 /// How many rows to process between cancellation checks.
 const CHUNK: usize = 64 * 1024;
@@ -62,23 +61,28 @@ pub(crate) fn mark_matches(
             let Ok(target) = query.trim_start_matches('+').parse::<i128>() else {
                 return Ok(());
             };
-            match Numeric::build(array)? {
-                Some(Numeric::Int(a)) => {
-                    let Ok(target) = i64::try_from(target) else {
-                        return Ok(());
-                    };
-                    mark(hits, token, |r| a.is_valid(r) && a.value(r) == target)?;
-                }
-                Some(Numeric::UInt(a)) => {
-                    let Ok(target) = u64::try_from(target) else {
-                        return Ok(());
-                    };
-                    mark(hits, token, |r| a.is_valid(r) && a.value(r) == target)?;
-                }
-                _ => {}
+            downcast_integer_array!(array => {
+                mark_integer(array, target, hits, token)?;
+            }
+            _ => unreachable!("integer types were matched above"))
+        }
+        Float16 | Float32 | Float64 => {
+            let Some(test) = float_test(query) else {
+                return Ok(());
+            };
+            match array.data_type() {
+                Float16 => mark_values(array.as_primitive::<Float16Type>(), hits, token, |v| {
+                    test(f64::from(v))
+                })?,
+                Float32 => mark_values(array.as_primitive::<Float32Type>(), hits, token, |v| {
+                    test(f64::from(v))
+                })?,
+                Float64 => mark_values(array.as_primitive::<Float64Type>(), hits, token, test)?,
+                _ => unreachable!("float types were matched above"),
             }
         }
-        Float16 | Float32 | Float64 | Decimal128(..) | Decimal256(..) => {
+        Decimal128(..) | Decimal256(..) => {
+            // Keep Arrow's scale-aware decimal conversion and rounding semantics.
             let Some(test) = float_test(query) else {
                 return Ok(());
             };
@@ -94,11 +98,10 @@ pub(crate) fn mark_matches(
             let (Some(lo), Some(hi)) = (physical(array, &start)?, physical(array, &end)?) else {
                 return Ok(());
             };
-            if let Some(Numeric::Int(a)) = Numeric::build(array)? {
-                mark(hits, token, |r| {
-                    a.is_valid(r) && (lo..hi).contains(&a.value(r))
-                })?;
+            downcast_temporal_array!(array => {
+                mark_period(array, lo..hi, hits, token)?;
             }
+            _ => unreachable!("date and timestamp types were matched above"))
         }
         Boolean => {
             let target = match query.to_ascii_lowercase().as_str() {
@@ -112,6 +115,44 @@ pub(crate) fn mark_matches(
         _ => formatted_substring(array, query, case_sensitive, hits, token)?,
     }
     Ok(())
+}
+
+/// Compare in the column's native type; out-of-range targets cannot match.
+fn mark_integer<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    target: i128,
+    hits: &mut [bool],
+    token: &CancelToken,
+) -> Result<()>
+where
+    T::Native: TryFrom<i128>,
+{
+    let Ok(target) = T::Native::try_from(target) else {
+        return Ok(());
+    };
+    mark_values(array, hits, token, |v| v == target)
+}
+
+fn mark_period<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    period: std::ops::Range<i64>,
+    hits: &mut [bool],
+    token: &CancelToken,
+) -> Result<()>
+where
+    T::Native: Into<i64>,
+{
+    mark_values(array, hits, token, |v| period.contains(&v.into()))
+}
+
+/// Borrow native values without materializing a widened array.
+fn mark_values<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    hits: &mut [bool],
+    token: &CancelToken,
+    test: impl Fn(T::Native) -> bool,
+) -> Result<()> {
+    mark(hits, token, |r| array.is_valid(r) && test(array.value(r)))
 }
 
 /// Mark rows passing `test`, checking for cancellation between chunks.
@@ -176,7 +217,9 @@ fn float_test(query: &str) -> Option<FloatTest> {
     let decimals = mantissa.split_once('.').map_or(0, |(_, d)| d.len() as i32);
     let half = 0.5 * 10f64.powi(exponent - decimals);
     let (lo, hi) = (value - half, value + half);
-    Some(Box::new(move |v| v >= lo && v < hi))
+    // Rounding can collapse the interval or its upper bound onto the target.
+    // Always include the parsed value without widening the interval.
+    Some(Box::new(move |v| v == value || (v >= lo && v < hi)))
 }
 
 /// A run of exactly `len` ASCII digits.
@@ -240,7 +283,7 @@ fn physical(array: &ArrayRef, at: &NaiveDateTime) -> Result<Option<i64>> {
     };
     let text: ArrayRef = Arc::new(StringArray::from(vec![text]));
     let typed = cast(&text, array.data_type())?;
-    Ok(match Numeric::build(&typed)?.and_then(|n| n.bound(0)) {
+    Ok(match Numeric::new(&typed).and_then(|n| n.bound(0)) {
         Some(Bound::Int(v)) => Some(v),
         _ => None,
     })
@@ -284,4 +327,61 @@ fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
         && haystack
             .windows(needle.len())
             .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::float_test;
+
+    #[test]
+    fn float_search_preserves_target_when_interval_collapses() {
+        for query in ["3089.62000000000000", "-3089.62000000000000"] {
+            let value: f64 = query.parse().unwrap();
+            let matches = float_test(query).unwrap();
+            assert!(matches(value), "{query} must match its parsed value");
+            assert!(
+                !matches(value.next_down()),
+                "{query} must exclude its predecessor"
+            );
+            assert!(
+                !matches(value.next_up()),
+                "{query} must exclude its successor"
+            );
+        }
+    }
+
+    #[test]
+    fn float_search_preserves_target_when_only_upper_bound_rounds_to_it() {
+        // At 2^52, the predecessor is 0.5 away and the successor is 1 away.
+        let value = 4_503_599_627_370_496.0_f64;
+        let matches = float_test("4503599627370496").unwrap();
+        assert!(matches(value));
+        assert!(matches(value.next_down()));
+        assert!(!matches(value.next_up()));
+    }
+
+    #[test]
+    fn float_search_preserves_zero_when_half_width_underflows() {
+        let matches = float_test("0e-324").unwrap();
+        assert!(matches(0.0));
+        assert!(matches(-0.0));
+        assert!(!matches(0.0_f64.next_down()));
+        assert!(!matches(0.0_f64.next_up()));
+    }
+
+    #[test]
+    fn float_search_preserves_typed_precision_and_half_open_boundaries() {
+        assert!(float_test("1.2").unwrap()(1.23));
+        assert!(!float_test("1.20").unwrap()(1.23));
+        for (query, lo, hi) in [("2", 1.5_f64, 2.5_f64), ("-2", -2.5, -1.5)] {
+            let matches = float_test(query).unwrap();
+            assert!(!matches(lo.next_down()));
+            assert!(matches(lo));
+            assert!(matches(hi.next_down()));
+            assert!(!matches(hi));
+            assert!(!matches(f64::NAN));
+            assert!(!matches(f64::INFINITY));
+            assert!(!matches(f64::NEG_INFINITY));
+        }
+    }
 }

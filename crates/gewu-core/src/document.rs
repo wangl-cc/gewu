@@ -1,19 +1,23 @@
-use std::collections::BTreeSet;
-use std::fs::File;
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    collections::BTreeSet,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+};
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray, UInt32Array};
-use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::{
+    array::{Array, ArrayRef, Int64Array, UInt32Array},
+    compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions},
+    datatypes::{DataType, SchemaRef},
+};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::numeric::Numeric;
-use crate::search;
-use crate::value_index::ValueIndex;
 use crate::{
-    format, Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, Error,
+    format, numeric::Numeric, search, value_index::ValueIndex, Bound, ColumnInfo, ColumnStats,
+    ColumnSummary, DistinctResult, DistinctValue, Error, Export, ExportFormat, ExportOptions,
     FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
 
@@ -52,11 +56,11 @@ struct View {
 /// One open file. Safe to share between threads.
 pub struct Document {
     info: FileInfo,
+    source_path: PathBuf,
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
     n_rows: usize,
     indexes: Vec<OnceLock<Arc<ValueIndex>>>,
-    numerics: Vec<OnceLock<Option<Arc<Numeric>>>>,
     current: Mutex<Arc<View>>,
     generation: Arc<AtomicU64>,
     next_version: AtomicU64,
@@ -67,6 +71,7 @@ impl Document {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)?;
+        let source_path = path.canonicalize()?;
         let file_size = file.metadata()?.len();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
 
@@ -125,16 +130,15 @@ impl Document {
 
         let columns = batch.columns().to_vec();
         let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
-        let numerics = (0..columns.len()).map(|_| OnceLock::new()).collect();
         let all_rows = Arc::new((0..n_rows as u32).collect());
 
         Ok(Self {
             info,
+            source_path,
             schema,
             columns,
             n_rows,
             indexes,
-            numerics,
             current: Mutex::new(Arc::new(View {
                 version: 0,
                 rows: all_rows,
@@ -168,6 +172,69 @@ impl Document {
             version: v.version,
             row_count: v.rows.len() as u64,
         }
+    }
+
+    /// Capture a view and column order for export without copying its cells or
+    /// row indices. The returned job remains valid when the current view changes.
+    pub fn prepare_export(
+        &self,
+        version: u64,
+        columns: &[u32],
+        format: ExportFormat,
+        options: ExportOptions,
+    ) -> Result<Export> {
+        let view = self.current.lock().unwrap().clone();
+        if view.version != version {
+            return Err(Error::StaleVersion {
+                requested: version,
+                current: view.version,
+            });
+        }
+        if columns.is_empty() {
+            return Err(Error::InvalidArgument(
+                "select at least one column to export".into(),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        let arrays = columns
+            .iter()
+            .map(|&column| {
+                if !seen.insert(column) {
+                    return Err(Error::InvalidArgument("duplicate export column".into()));
+                }
+                self.column(column).cloned()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
+        let schema = Arc::new(self.schema.project(&indices)?);
+        if format != ExportFormat::Parquet && !options.convert_nested_to_json {
+            let nested = self.nested_export_columns(columns)?;
+            if !nested.is_empty() {
+                return Err(Error::Unsupported(format!(
+                    "nested columns ({}) require JSON conversion for CSV/TSV; enable it or export as Parquet",
+                    nested.join(", ")
+                )));
+            }
+        }
+        Ok(Export::new(
+            self.source_path.clone(),
+            schema,
+            arrays,
+            view.rows.clone(),
+            format,
+        ))
+    }
+
+    /// Names of selected columns that require conversion for CSV/TSV export.
+    /// Inspect types only; this does not scan or copy any cells.
+    pub fn nested_export_columns(&self, columns: &[u32]) -> Result<Vec<String>> {
+        let mut nested = Vec::new();
+        for &column in columns {
+            if self.column(column)?.data_type().is_nested() {
+                nested.push(self.schema.field(column as usize).name().clone());
+            }
+        }
+        Ok(nested)
     }
 
     /// Cancel any `apply_view` still running.
@@ -347,6 +414,20 @@ impl Document {
         }
     }
 
+    /// Distribution over the displayed rows, including this column's own
+    /// filters and the text search. The axis still spans the source column.
+    pub fn view_histogram(&self, version: u64, column: u32, bins: u32) -> Result<Histogram> {
+        let view = self.current.lock().unwrap().clone();
+        if view.version != version {
+            return Err(Error::StaleVersion {
+                requested: version,
+                current: view.version,
+            });
+        }
+        self.numeric(column)?
+            .histogram(view.rows.iter().map(|&r| r as usize), bins)
+    }
+
     /// Display text for a raw value of a date, time, timestamp or duration
     /// column (its integer physical value, as used by histograms and range
     /// bounds), formatted exactly like the table's cells. Also works for
@@ -368,12 +449,11 @@ impl Document {
     /// Read text typed by the user (a number, or a date/time in the
     /// column's own format such as `2024-03-01` or `2024-03-01T12:00:00`)
     /// as a range bound for a numeric, date or time column.
+    /// Integer literals use exact Int/UInt bounds when representable. Fractional
+    /// and float inputs use f64 without first narrowing to the column's type.
+    /// Range preparation handles fractions and bounds outside the column's domain.
     pub fn parse_value(&self, column: u32, text: &str) -> Result<Bound> {
-        let data_type = self.column(column)?.data_type().clone();
-        let input: ArrayRef = Arc::new(StringArray::from(vec![text.trim()]));
-        let typed = cast(&input, &data_type)?;
-        let bound = Numeric::build(&typed)?.and_then(|n| n.bound(0));
-        bound.ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as {data_type}")))
+        self.numeric(column)?.parse_bound(text)
     }
 
     /// Keys for the given displayed labels (`None` = null). Unknown labels
@@ -405,48 +485,8 @@ impl Document {
             std_dev: None,
             top_values: Vec::new(),
         };
-        match Numeric::build(&array)? {
-            Some(numeric) => {
-                // One pass: Welford's mean and variance, plus distinct bit
-                // patterns (dropped when done).
-                let mut distinct = std::collections::HashSet::new();
-                let (mut n, mut mean, mut m2) = (0u64, 0.0f64, 0.0f64);
-                let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-                for &r in rows.iter() {
-                    let (v, bits) = match numeric.bound(r as usize) {
-                        None => {
-                            s.null_count += 1;
-                            continue;
-                        }
-                        Some(Bound::Float(v)) if v.is_nan() => {
-                            s.nan_count += 1;
-                            continue;
-                        }
-                        Some(Bound::Int(v)) => (v as f64, v as u64),
-                        Some(Bound::UInt(v)) => (v as f64, v),
-                        // +0.0 and -0.0 are one value.
-                        Some(Bound::Float(v)) => (v, (v + 0.0).to_bits()),
-                    };
-                    distinct.insert(bits);
-                    n += 1;
-                    let delta = v - mean;
-                    mean += delta / n as f64;
-                    m2 += delta * (v - mean);
-                    min = min.min(v);
-                    max = max.max(v);
-                }
-                s.distinct_count = distinct.len() as u64;
-                if n > 0 {
-                    s.min = Some(min);
-                    s.max = Some(max);
-                    s.mean = Some(mean);
-                    s.std_dev = Some(if n > 1 {
-                        (m2 / (n - 1) as f64).sqrt()
-                    } else {
-                        0.0
-                    });
-                }
-            }
+        match Numeric::new(&array) {
+            Some(numeric) => numeric.summarize(&rows, &mut s),
             None => {
                 let idx = self.index(column)?;
                 let mut counts = vec![0u64; idx.len()];
@@ -508,17 +548,9 @@ impl Document {
         Ok(cell.get_or_init(|| built).clone())
     }
 
-    fn numeric(&self, c: u32) -> Result<Arc<Numeric>> {
+    fn numeric(&self, c: u32) -> Result<Numeric<'_>> {
         let array = self.column(c)?;
-        let cell = &self.numerics[c as usize];
-        let n = match cell.get() {
-            Some(n) => n.clone(),
-            None => {
-                let built = Numeric::build(array)?.map(Arc::new);
-                cell.get_or_init(|| built).clone()
-            }
-        };
-        n.ok_or_else(|| {
+        Numeric::new(array).ok_or_else(|| {
             Error::InvalidArgument(format!(
                 "column {} ({}) is not numeric",
                 self.info.columns[c as usize].name, self.info.columns[c as usize].type_name
@@ -541,7 +573,7 @@ impl Document {
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
         // Turn each filter into a per-row test.
-        let mut tests: Vec<Box<dyn Fn(usize) -> bool + Send + Sync>> = Vec::new();
+        let mut tests: Vec<crate::numeric::RowTest<'_>> = Vec::new();
         for f in filters {
             if Some(f.column()) == skip {
                 continue;

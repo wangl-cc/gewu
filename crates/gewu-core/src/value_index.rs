@@ -7,8 +7,10 @@
 
 use std::collections::HashMap;
 
-use arrow::array::{Array, ArrayRef};
-use arrow::row::{RowConverter, SortField};
+use arrow::{
+    array::{Array, ArrayRef},
+    row::{RowConverter, SortField},
+};
 
 use crate::{format, Result};
 
@@ -74,9 +76,11 @@ impl ValueIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{Int32Array, StringArray};
     use std::sync::Arc;
+
+    use arrow::array::{Int32Array, StringArray};
+
+    use super::*;
 
     #[test]
     fn codes_follow_value_order() {
@@ -87,10 +91,11 @@ mod tests {
             Some("dog"),
         ]));
         let idx = ValueIndex::build(&a).unwrap();
-        assert_eq!(
-            idx.labels,
-            vec![None, Some("cat".into()), Some("dog".into())]
-        );
+        assert_eq!(idx.labels, vec![
+            None,
+            Some("cat".into()),
+            Some("dog".into())
+        ]);
         assert_eq!(idx.codes, vec![2, 0, 1, 2]);
     }
 
@@ -98,9 +103,10 @@ mod tests {
     fn numbers_sort_numerically() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![10, -3, 2, 10]));
         let idx = ValueIndex::build(&a).unwrap();
-        assert_eq!(
-            idx.labels,
-            vec![Some("-3".into()), Some("2".into()), Some("10".into())]
-        );
+        assert_eq!(idx.labels, vec![
+            Some("-3".into()),
+            Some("2".into()),
+            Some("10".into())
+        ]);
     }
 }

@@ -105,6 +105,23 @@ final class ColumnHeaderCell: NSTableHeaderCell {
                 .applying(.init(hierarchicalColor: .secondaryLabelColor)))
     }
 
+    override func draw(withFrame frame: NSRect, in controlView: NSView) {
+        // NSTableHeaderCell's bezel adds two bottom edges. The header view
+        // owns the single separator; cells draw only their fill and contents.
+        (isHighlighted ? NSColor.selectedControlColor : NSColor.controlBackgroundColor).setFill()
+        frame.fill()
+        drawInterior(withFrame: frame, in: controlView)
+
+        // AppKit draws the trailing empty area with a copy of the last cell
+        // whose title is cleared. Do not add a divider to that filler cell.
+        if !stringValue.isEmpty || !showsFunnel {
+            let pixel = 1 / (controlView.window?.backingScaleFactor ?? 1)
+            NSColor.separatorColor.setFill()
+            NSRect(x: frame.maxX - pixel, y: frame.minY + 8,
+                   width: pixel, height: max(0, frame.height - 16)).fill()
+        }
+    }
+
     override func drawInterior(withFrame frame: NSRect, in controlView: NSView) {
         // AppKit reuses the last header cell to draw the empty area after the last column.
         guard !stringValue.isEmpty else { return }
@@ -162,7 +179,38 @@ final class FilterHeaderView: NSTableHeaderView {
     var onFilterClick: ((Int) -> Void)?
     /// Any other click on a column header (it also sorts, as usual).
     var onColumnClick: ((Int) -> Void)?
+    var onColumnInfo: ((Int) -> Void)?
     private var hovered: ColumnHeaderCell?
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let pixel = 1 / (window?.backingScaleFactor ?? 1)
+        NSColor.separatorColor.setFill()
+        NSRect(x: bounds.minX, y: bounds.maxY - pixel, width: bounds.width, height: pixel).fill()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let index = column(at: convert(event.locationInWindow, from: nil))
+        guard let tableView, index >= 0, index < tableView.tableColumns.count,
+              (tableView.tableColumns[index].headerCell as? ColumnHeaderCell)?.showsFunnel == true else { return nil }
+        onColumnClick?(index)
+        let menu = NSMenu()
+        for (title, action) in [("Column Info…", #selector(columnInfo(_:))), ("Filter…", #selector(filterColumn(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = index
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func columnInfo(_ sender: NSMenuItem) {
+        if let index = sender.representedObject as? Int { onColumnInfo?(index) }
+    }
+
+    @objc private func filterColumn(_ sender: NSMenuItem) {
+        if let index = sender.representedObject as? Int { onFilterClick?(index) }
+    }
 
     private func funnelCell(at event: NSEvent) -> (Int, ColumnHeaderCell)? {
         guard let tableView else { return nil }

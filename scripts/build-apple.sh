@@ -24,26 +24,31 @@ LIBS=()
 for t in "${TARGETS[@]}"; do
   rustup target add "$t" >/dev/null
   cargo build --release -p gewu-ffi --target "$t"
-  LIBS+=("target/$t/release/libgewu_ffi.a")
+  LIBS+=("target/$t/release/libgewu.a")
 done
 
 OUT=build/apple
-rm -rf "$OUT" app/GewuCore.xcframework
+# Remove previous bindings too, so renamed modules cannot leave stale Swift files.
+for generated in "$OUT" app/GewuCore.xcframework app/Sources/Gewu/Generated; do
+  if [[ -e "$generated" ]]; then
+    /usr/bin/trash --stopOnError "$generated"
+  fi
+done
 mkdir -p "$OUT/include" app/Sources/Gewu/Generated
 
-lipo -create "${LIBS[@]}" -output "$OUT/libgewu_ffi.a"
+lipo -create "${LIBS[@]}" -output "$OUT/libgewu.a"
 
 # Generate bindings from the compiled library.
 cargo run --release -p gewu-ffi --features bindgen --bin uniffi-bindgen -- \
-  generate --library "target/${TARGETS[0]}/release/libgewu_ffi.dylib" \
+  generate --library "target/${TARGETS[0]}/release/libgewu.dylib" \
   --language swift --out-dir "$OUT/swift"
 
-cp "$OUT/swift/gewu_ffiFFI.h" "$OUT/include/"
-cp "$OUT/swift/gewu_ffiFFI.modulemap" "$OUT/include/module.modulemap"
-cp "$OUT/swift/gewu_ffi.swift" app/Sources/Gewu/Generated/
+cp "$OUT/swift/gewuFFI.h" "$OUT/include/"
+cp "$OUT/swift/gewuFFI.modulemap" "$OUT/include/module.modulemap"
+cp "$OUT/swift/gewu.swift" app/Sources/Gewu/Generated/
 
 xcodebuild -create-xcframework \
-  -library "$OUT/libgewu_ffi.a" -headers "$OUT/include" \
+  -library "$OUT/libgewu.a" -headers "$OUT/include" \
   -output app/GewuCore.xcframework
 
 echo "Done. Now: cd app && swift run --build-system native"

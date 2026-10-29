@@ -1,66 +1,24 @@
 import SwiftUI
 
-/// SwiftUI owns the inspector's presentation; the Rust document owns its statistics.
-struct InspectorView: View {
-    let doc: GewuDocument
-    let info: FileInfo
-    let kinds: [ColumnKind]
-    let state: ViewState
-    let revision: UInt64
-    @Binding var selectedColumn: Int?
-    let filteredColumns: Set<Int>
-    let onSelectColumn: (Int) -> Void
-
-    @State private var query = ""
+/// Statistics are requested only while this column's popover is open.
+struct ColumnInfoView: View {
+    @ObservedObject var model: DocumentModel
+    let column: Int
     @State private var summary: ColumnSummary?
     @State private var histogram: Histogram?
     @State private var error: String?
     @State private var loading = false
 
-    private struct Request: Hashable {
-        let column: Int?
-        let revision: UInt64
-    }
-
-    private var shownColumns: [Int] {
-        info.columns.indices.filter {
-            query.isEmpty || info.columns[$0].name.localizedCaseInsensitiveContains(query)
-        }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Columns").font(.headline)
-                TextField("Find column", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Find column")
-                List(selection: $selectedColumn) {
-                    ForEach(shownColumns, id: \.self) { column in
-                        HStack {
-                            Text(info.columns[column].name).lineLimit(1)
-                            if filteredColumns.contains(column) {
-                                Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                                    .foregroundStyle(.tint)
-                                    .accessibilityLabel("Filtered")
-                            }
-                            Spacer(minLength: 4)
-                            Text(shortTypeName(info.columns[column].typeName))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        .tag(column)
-                    }
-                }
-                .listStyle(.plain)
-                .frame(height: 150)
-                .onChange(of: selectedColumn) { _, column in
-                    if let column { onSelectColumn(column) }
-                }
-                Divider()
-                if let column = selectedColumn, info.columns.indices.contains(column) {
+                if let info = model.info, info.columns.indices.contains(column) {
                     Text(info.columns[column].name).font(.headline)
                     Text(info.columns[column].typeName + (info.columns[column].nullable ? " · nullable" : ""))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text("Current results · filters and search included")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Divider()
                     if loading { ProgressView().controlSize(.small) }
                     if let error { Text(error).font(.caption).foregroundStyle(.red) }
                     if let summary {
@@ -74,30 +32,13 @@ struct InspectorView: View {
                             .frame(height: 100)
                             .accessibilityLabel("Distribution of \(info.columns[column].name)")
                     }
-                } else {
-                    Text("Select a column to inspect it").foregroundStyle(.secondary)
-                }
-                Divider()
-                Text("File").font(.headline)
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-                    detail("Name", (info.path as NSString).lastPathComponent)
-                    detail("Rows", formatCount(info.rowCount))
-                    detail("Size", ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file))
-                    detail("Row groups", formatCount(UInt64(info.rowGroups)))
-                    detail("Compression", info.compression.joined(separator: ", "))
-                    if let createdBy = info.createdBy { detail("Created by", createdBy) }
-                    ForEach(Array(info.metadata.enumerated()), id: \.offset) { _, item in
-                        detail(item.key, item.value)
-                    }
                 }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task(id: Request(column: selectedColumn, revision: revision)) { await loadSummary() }
-        .onAppear {
-            if selectedColumn == nil, !info.columns.isEmpty { selectedColumn = 0 }
-        }
+        .frame(width: 340, height: 420)
+        .task(id: model.current.version) { await loadSummary() }
     }
 
     @ViewBuilder private func statistics(_ s: ColumnSummary, column: Int) -> some View {
@@ -109,7 +50,7 @@ struct InspectorView: View {
             if let min = s.min { detail("Min", value(min, column: column)) }
             if let max = s.max { detail("Max", value(max, column: column)) }
             if let mean = s.mean { detail("Mean", value(mean, column: column)) }
-            if kinds[column] == .number, let sd = s.stdDev { detail("Std dev", Self.decimal(sd)) }
+            if model.kinds[column] == .number, let sd = s.stdDev { detail("Std dev", Self.decimal(sd)) }
         }
         if !s.topValues.isEmpty {
             Text("Most common").font(.subheadline)
@@ -139,7 +80,7 @@ struct InspectorView: View {
     }
 
     private func value(_ value: Double, column: Int) -> String {
-        if kinds[column] == .temporal, let integer = Int64(exactly: value.rounded()),
+        if model.kinds[column] == .temporal, let doc = model.doc, let integer = Int64(exactly: value.rounded()),
            let text = try? doc.formatValue(column: UInt32(column), value: integer) {
             return text
         }
@@ -159,19 +100,27 @@ struct InspectorView: View {
         summary = nil
         histogram = nil
         error = nil
-        guard let column = selectedColumn, info.columns.indices.contains(column) else { return }
+        guard let doc = model.doc, let info = model.info, info.columns.indices.contains(column) else { return }
         loading = true
-        let numeric = kinds[column] != .text && !info.columns[column].typeName.hasPrefix("Interval")
+        let numeric = model.kinds[column] != .text && !info.columns[column].typeName.hasPrefix("Interval")
+        let revision = model.current.version
         do {
-            let doc = doc, state = state
             let result = try await Task.detached { () -> (ColumnSummary, Histogram?) in
+                guard doc.currentView().version == revision else { throw CancellationError() }
                 let summary = try doc.columnSummary(column: UInt32(column), top: 8)
-                let histogram = numeric ? try doc.histogram(column: UInt32(column), state: state, bins: 40) : nil
+                let histogram = numeric ? try doc.viewHistogram(version: revision, column: UInt32(column), bins: 40) : nil
+                guard doc.currentView().version == revision else { throw CancellationError() }
                 return (summary, histogram)
             }.value
             guard !Task.isCancelled else { return }
             summary = result.0
             histogram = result.1
+            loading = false
+        } catch is CancellationError {
+            guard !Task.isCancelled else { return }
+            loading = false
+        } catch GewuError.StaleVersion {
+            guard !Task.isCancelled else { return }
             loading = false
         } catch {
             guard !Task.isCancelled else { return }

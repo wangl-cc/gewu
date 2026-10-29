@@ -10,7 +10,15 @@ struct GewuApp: App {
             ViewerScene(url: url).environmentObject(files)
         }
         .defaultSize(width: 1200, height: 720)
+        .windowToolbarStyle(.unified)
         .commands { ViewerCommands(files: files) }
+
+        WindowGroup("File Info", id: "file-info", for: FileDetails.self) { $details in
+            if let details { FileInfoView(details: details) }
+        }
+        .defaultSize(width: 460, height: 440)
+        .windowResizability(.contentMinSize)
+        .restorationBehavior(.disabled)
     }
 }
 
@@ -60,7 +68,6 @@ private struct WelcomeView: View {
 
 private struct DocumentScene: View {
     @StateObject private var model: DocumentModel
-    @AppStorage("ShowInspector") private var showsInspector = false
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
     @FocusState private var searchFocused: Bool
 
@@ -89,6 +96,15 @@ private struct DocumentScene: View {
                     Button("Clear Filters") { model.clearFilters() }.buttonStyle(.borderless)
                 }
                 Spacer(minLength: 0)
+                if let progress = model.exportProgress {
+                    ProgressView(value: Double(progress.rowsWritten), total: Double(max(progress.totalRows, 1)))
+                        .frame(width: 70)
+                    Text("Exporting \(formatCount(progress.rowsWritten)) of \(formatCount(progress.totalRows))")
+                        .monospacedDigit()
+                    Button("Cancel") { model.cancelExport() }.buttonStyle(.borderless)
+                } else if let message = model.exportMessage {
+                    Text(message).lineLimit(1).help(message)
+                }
                 if model.isBusy { ProgressView().controlSize(.small).help("Updating view") }
             }
             .font(.caption).foregroundStyle(.secondary)
@@ -101,25 +117,6 @@ private struct DocumentScene: View {
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search all columns")
         .searchFocused($searchFocused)
         .onSubmit(of: .search) { model.findNext(backwards: NSEvent.modifierFlags.contains(.shift)) }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showsInspector.toggle() } label: {
-                    Label(showsInspector ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.right")
-                }.help(showsInspector ? "Hide Inspector" : "Show Inspector")
-            }
-        }
-        .inspector(isPresented: $showsInspector) {
-            if let doc = model.doc, let info = model.info {
-                InspectorView(doc: doc, info: info, kinds: model.kinds, state: model.appliedState,
-                              revision: model.current.version, selectedColumn: $model.selectedColumn,
-                              filteredColumns: Set(model.columnFilters.keys.map(Int.init))) { column in
-                    model.table?.scrollToColumn(column)
-                }.inspectorColumnWidth(min: 240, ideal: 290, max: 420)
-            } else {
-                Text("Open a file to inspect columns").foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
         .focusedSceneObject(model)
         .onChange(of: model.searchText) { _, _ in model.refresh(debounce: true) }
         .onChange(of: model.searchFocusRequest) { _, _ in searchFocused = true }
@@ -134,7 +131,6 @@ private struct DocumentScene: View {
 private struct ViewerCommands: Commands {
     @ObservedObject var files: FileCoordinator
     @FocusedObject private var model: DocumentModel?
-    @AppStorage("ShowInspector") private var showsInspector = false
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
     @Environment(\.openWindow) private var openWindow
 
@@ -149,6 +145,16 @@ private struct ViewerCommands: Commands {
                 Button("Clear Menu") { files.clearRecent() }.disabled(files.recentURLs.isEmpty)
             }
             Button("Show Welcome Window") { openWindow(id: "viewer") }
+            Divider()
+            Button("Get Info…") {
+                if let info = model?.info { openWindow(id: "file-info", value: FileDetails(info: info)) }
+            }.keyboardShortcut("i").disabled(model?.info == nil)
+        }
+        CommandGroup(after: .newItem) {
+            Divider()
+            Button("Export…") { model?.chooseExport() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(model?.canExport != true)
         }
         CommandGroup(after: .textEditing) {
             Divider()
@@ -159,8 +165,9 @@ private struct ViewerCommands: Commands {
                 .disabled(model?.appliedState.search == nil || model?.current.rowCount == 0)
         }
         CommandGroup(after: .sidebar) {
-            Toggle("Show Inspector", isOn: $showsInspector).keyboardShortcut("i", modifiers: [.command, .option])
-                .disabled(model == nil)
+            Button("Column Info…") { model?.table?.showSelectedColumnInfo() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(model?.doc == nil || model?.selectedColumn == nil || model?.isBusy == true)
             Toggle("Show Row Numbers", isOn: $showsRowNumbers).keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(model == nil)
         }

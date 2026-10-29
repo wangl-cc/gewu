@@ -20,15 +20,103 @@ final class DocumentModel: ObservableObject {
     @Published private(set) var sort: [SortKey] = []
     @Published private(set) var columnFilters: [UInt32: [Filter]] = [:]
     @Published var searchFocusRequest = 0
+    @Published private(set) var exportProgress: ExportProgress?
+    @Published private(set) var exportMessage: String?
+    @Published private var choosingExport = false
 
     weak var table: DataTableController?
     private var viewTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
+    private var exportJob: GewuExport?
+    private var exportPanel: NSSavePanel?
     private var request: UInt64 = 0
     private let gate = RequestGate()
     // Serial execution keeps Rust's request order consistent with UI order.
     private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
     init(url: URL) { self.url = url }
+
+    var canExport: Bool { doc != nil && !isBusy && !choosingExport && exportProgress == nil }
+
+    func chooseExport() {
+        guard canExport, let doc, let table, let window = table.view.window else { return }
+        let version = current.version
+        let columns = table.displayedColumns
+        let nestedColumns: [String]
+        do {
+            nestedColumns = try doc.nestedExportColumns(columns: columns)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Export"
+        panel.prompt = "Export"
+        panel.message = "Export all \(formatCount(current.rowCount)) rows in the current results, in the displayed row and column order."
+        panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + "-export.csv"
+        panel.allowedContentTypes = ExportFileFormat.allCases.map(\.contentType)
+        panel.showsContentTypes = true
+        panel.currentContentType = ExportFileFormat.csv.contentType
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.showsTagField = false
+        let panelOptions = ExportPanelOptions(nestedColumns: nestedColumns)
+        panelOptions.attach(to: panel)
+        exportPanel = panel
+        choosingExport = true
+        // NSSavePanel holds its delegate weakly. Keep the options alive through
+        // the completion handler, including after switching to Parquet.
+        panel.beginSheetModal(for: window) { [weak self, weak panel, panelOptions] response in
+            guard let self else { return }
+            let destination = response == .OK ? panel?.url : nil
+            let format = ExportFileFormat(contentType: panel?.currentContentType)
+            self.choosingExport = false
+            self.exportPanel = nil
+            guard let destination else { return }
+            guard let format else {
+                self.errorMessage = "Choose CSV, TSV or Parquet as the export format."
+                return
+            }
+            do {
+                let options = ExportOptions(convertNestedToJson: panelOptions.convertNestedToJson)
+                let job = try doc.prepareExport(version: version, columns: columns,
+                                                format: format.coreFormat, options: options)
+                self.startExport(job, to: destination)
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startExport(_ job: GewuExport, to destination: URL) {
+        exportJob = job
+        exportProgress = job.progress()
+        exportMessage = nil
+        exportTask = Task { [weak self] in
+            let polling = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.exportProgress = job.progress()
+                    do { try await Task.sleep(for: .milliseconds(150)) }
+                    catch { return }
+                }
+            }
+            defer { polling.cancel() }
+            do {
+                try await Task.detached(priority: .userInitiated) { try job.write(path: destination.path) }.value
+                self?.exportMessage = "Exported \(destination.lastPathComponent)"
+            } catch GewuError.Cancelled {
+                self?.exportMessage = "Export cancelled"
+            } catch {
+                self?.exportMessage = nil
+                self?.errorMessage = "Could not export: \(error.localizedDescription)"
+            }
+            self?.exportProgress = nil
+            self?.exportJob = nil
+            self?.exportTask = nil
+        }
+    }
+
+    func cancelExport() { exportJob?.cancel() }
 
     var state: ViewState {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,8 +139,12 @@ final class DocumentModel: ObservableObject {
         text += " · \(info.columns.count) columns"
         if !columnFilters.isEmpty { text += " · \(columnFilters.count) filtered" }
         if let row = selectedSourceRow { text += " · row \(formatCount(row)) in file" }
-        if appliedState.search != nil, let row = selectedDisplayRow {
-            text += " · match \(formatCount(UInt64(row + 1))) of \(formatCount(current.rowCount))"
+        if appliedState.search != nil, current.rowCount > 0 {
+            if let row = selectedDisplayRow {
+                text += " · match \(formatCount(UInt64(row + 1))) of \(formatCount(current.rowCount))"
+            } else {
+                text += " · ⏎ next match · ⇧⏎ previous"
+            }
         }
         return text
     }
@@ -145,6 +237,8 @@ final class DocumentModel: ObservableObject {
         gate.set(request)
         viewTask?.cancel()
         doc?.cancelPending()
+        exportPanel?.cancel(nil)
+        cancelExport()
     }
 
     func findNext(backwards: Bool = false) { table?.moveToMatch(by: backwards ? -1 : 1) }

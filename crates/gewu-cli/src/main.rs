@@ -1,8 +1,7 @@
 //! `gewu` command line. Every command prints JSON so scripts and agents can
 //! read the output.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};

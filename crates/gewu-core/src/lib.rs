@@ -7,6 +7,7 @@
 
 mod document;
 mod error;
+mod export;
 mod format;
 mod numeric;
 mod search;
@@ -15,6 +16,7 @@ mod view;
 
 pub use document::{CancelToken, Document};
 pub use error::{Error, Result};
+pub use export::{Export, ExportFormat, ExportOptions, ExportProgress};
 pub use view::{
     Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter,
     Histogram, RowBlock, SortKey, ViewInfo, ViewState,

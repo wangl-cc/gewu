@@ -2,7 +2,7 @@
 import PackageDescription
 
 // Build the Rust core first: ../scripts/build-apple.sh
-// It produces GewuCore.xcframework and Sources/Gewu/Generated/gewu_ffi.swift.
+// It produces GewuCore.xcframework and Sources/Gewu/Generated/gewu.swift.
 let package = Package(
     name: "Gewu",
     platforms: [.macOS("15.0")],

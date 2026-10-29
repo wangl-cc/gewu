@@ -5,7 +5,7 @@ spreadsheet, without loading anything into Python first.
 
 一个原生的 macOS Parquet 查看器：像 Excel 一样浏览、排序、勾选筛选。
 
-> Early work in progress. Read-only by design: gewu never changes your files.
+> Early work in progress. Read-only by design: gewu never changes the open source file. Export writes a separate file.
 
 ## What it does
 
@@ -21,9 +21,14 @@ spreadsheet, without loading anything into Python first.
 - Clear every filter from the status bar or **Filter → Clear All Filters**
   (⇧⌘L).
 - Open the selected column's filter with **Filter → Filter Column…** (⌥⌘F).
+- Right-click a column header for **Column Info…**, or use **View → Column Info…** (⌥⌘I). Statistics and distribution describe the current filtered and searched results.
+- **File → Get Info…** (⌘I) opens file metadata in its own window.
+- **File → Export…** (⇧⌘E) exports all current results to CSV, TSV or Parquet, preserving the displayed row and column order. Export runs in the background with progress and cancellation; it replaces the destination only after success.
+- CSV and TSV include headers and use UTF-8, quoted fields and empty fields for nulls. For nested columns, the native export panel shows **Convert lists and structs to JSON**, enabled by default. Disabling it requires choosing Parquet or omitting those columns. Parquet preserves column types and nulls. Row numbers are not exported.
+- Nested CSV/TSV cells use compact JSON: lists become arrays, structs and string-key maps become objects, and null children remain `null`. Non-finite floats become the strings `"NaN"`, `"inf"`, and `"-inf"`; dates become strings. JSON text does not retain the full Arrow schema. Unsupported conversions fail without replacing the destination.
 - A `gewu` command line with JSON output, for scripts and AI agents.
 - Native windows and menus, including **File → Open…** (⌘O), **Open Recent**,
-  and **Edit → Find…** (⌘F). Toggle the Inspector and row numbers in **View**.
+  and **Edit → Find…** (⌘F). Toggle row numbers in **View**.
 
 ## Search
 
@@ -53,7 +58,7 @@ memory.
 | `crates/gewu-core` | Data engine (Rust, arrow-rs). Owns the data, sorting, filtering, formatting. |
 | `crates/gewu-ffi` | UniFFI bindings used by the app. |
 | `crates/gewu-cli` | `gewu` command line. |
-| `app/` | macOS app: SwiftUI windows, menus, Inspector and filter forms; AppKit `NSTableView` for the data grid. Asks Rust for visible rows. |
+| `app/` | macOS app: SwiftUI windows, menus, column information and filter forms; AppKit `NSTableView` for the data grid. Asks Rust for visible rows. |
 
 Sorting and filtering never copy data. The core keeps a list of source row
 numbers in display order, and the table asks for the ~50 rows on screen.
@@ -89,7 +94,7 @@ cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
 
 - The whole file is decoded into memory when opened. Files larger than RAM
   are not supported yet.
-- Parquet only for now; other formats (CSV, Arrow IPC, NDJSON) are planned.
+- Opens Parquet only for now; opening other formats is planned. Export supports CSV, TSV and Parquet.
 - The local `.app` bundle is ad-hoc signed; distribution signing and
   notarization are not configured yet.
 - `scripts/build-apple.sh` needs Xcode set up: if `xcodebuild` says it failed

@@ -50,6 +50,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let header = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
         header.onFilterClick = { [weak self] in self?.showFilter(at: $0) }
         header.onColumnClick = { [weak self] in self?.inspectColumn(at: $0) }
+        header.onColumnInfo = { [weak self] in self?.showColumnInfo(at: $0) }
         table.headerView = header
         table.target = self
         table.action = #selector(tableClicked(_:))
@@ -138,7 +139,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             header.subtitle = shortTypeName(column.typeName)
             header.showsFunnel = true
             c.headerCell = header
-            c.headerToolTip = "\(column.name): \(column.typeName)"
+            c.headerToolTip = "\(column.name): \(column.typeName)\nClick to sort; use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column.\nRight-click for Column Info."
             c.width = fittedWidth(column: i, rows: 0..<min(200, Int(model.current.rowCount)), maxWidth: 320)
             c.minWidth = 50
             c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
@@ -264,9 +265,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         model.selectedColumn = column
     }
 
-    func scrollToColumn(_ column: Int) {
+    func scrollToColumn(_ column: Int, focus: Bool = false) {
         let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
-        if index >= 0 { table.scrollColumnToVisible(index) }
+        guard index >= 0 else { return }
+        table.scrollColumnToVisible(index)
+        if focus { table.window?.makeFirstResponder(table) }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -298,6 +301,27 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard let column = model.selectedColumn,
               let index = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "c\(column)" }) else { return }
         showFilter(at: index)
+    }
+
+    var displayedColumns: [UInt32] { table.tableColumns.compactMap(columnIndex).map(UInt32.init) }
+
+    func showSelectedColumnInfo() {
+        guard let column = model.selectedColumn,
+              let index = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "c\(column)" }) else { return }
+        table.scrollColumnToVisible(index)
+        showColumnInfo(at: index)
+    }
+
+    private func showColumnInfo(at index: Int) {
+        guard !model.isBusy, let header = table.headerView,
+              index >= 0, index < table.tableColumns.count, let column = columnIndex(table.tableColumns[index]) else { return }
+        closePopover()
+        model.selectedColumn = column
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: ColumnInfoView(model: model, column: column))
+        popover.show(relativeTo: header.headerRect(ofColumn: index), of: header, preferredEdge: .maxY)
+        self.popover = popover
     }
 
     private func showFilter(at index: Int) {

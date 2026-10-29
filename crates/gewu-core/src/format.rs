@@ -1,8 +1,10 @@
 //! Turning cell values into display text. All front ends share this so the
 //! app, CLI and MCP show exactly the same strings.
 
-use arrow::array::Array;
-use arrow::util::display::{ArrayFormatter, FormatOptions};
+use arrow::{
+    array::Array,
+    util::display::{ArrayFormatter, FormatOptions},
+};
 
 use crate::Result;
 

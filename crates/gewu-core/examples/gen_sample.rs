@@ -8,9 +8,11 @@ use arrow::array::{
     ArrayRef, Date32Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     TimestampMicrosecondArray,
 };
-use parquet::arrow::ArrowWriter;
-use parquet::basic::{Compression, ZstdLevel};
-use parquet::file::properties::WriterProperties;
+use parquet::{
+    arrow::ArrowWriter,
+    basic::{Compression, ZstdLevel},
+    file::properties::WriterProperties,
+};
 
 const LABELS: [&str; 8] = [
     "cat", "dog", "bird", "fish", "horse", "lizard", "frog", "owl",

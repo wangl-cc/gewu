@@ -243,6 +243,74 @@ impl From<core::ViewInfo> for ViewInfo {
     }
 }
 
+#[derive(uniffi::Enum)]
+pub enum ExportFormat {
+    Csv,
+    Tsv,
+    Parquet,
+}
+
+impl From<ExportFormat> for core::ExportFormat {
+    fn from(value: ExportFormat) -> Self {
+        match value {
+            ExportFormat::Csv => Self::Csv,
+            ExportFormat::Tsv => Self::Tsv,
+            ExportFormat::Parquet => Self::Parquet,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct ExportOptions {
+    pub convert_nested_to_json: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct ExportProgress {
+    pub rows_written: u64,
+    pub total_rows: u64,
+}
+
+/// An immutable view snapshot with independent cancellation. Single-use.
+#[derive(uniffi::Object)]
+pub struct GewuExport {
+    inner: core::Export,
+}
+
+#[uniffi::export]
+impl GewuExport {
+    /// Write the captured result. Slow: call off the main thread.
+    pub fn write(&self, path: String) -> Result<(), GewuError> {
+        Ok(self.inner.write(path)?)
+    }
+
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+
+    pub fn progress(&self) -> ExportProgress {
+        let progress = self.inner.progress();
+        ExportProgress {
+            rows_written: progress.rows_written,
+            total_rows: progress.total_rows,
+        }
+    }
+}
+
+impl From<core::Histogram> for Histogram {
+    fn from(h: core::Histogram) -> Self {
+        Self {
+            lo: h.lo,
+            hi: h.hi,
+            integer: h.integer,
+            counts: h.counts,
+            null_count: h.null_count,
+            nan_count: h.nan_count,
+            total: h.total,
+        }
+    }
+}
+
 /// One open file.
 #[derive(uniffi::Object)]
 pub struct GewuDocument {
@@ -290,6 +358,31 @@ impl GewuDocument {
 
     pub fn current_view(&self) -> ViewInfo {
         self.inner.current_view().into()
+    }
+
+    /// Capture the current result and displayed column order without copying
+    /// cells. Later queries do not change this export's contents.
+    pub fn prepare_export(
+        &self,
+        version: u64,
+        columns: Vec<u32>,
+        format: ExportFormat,
+        options: ExportOptions,
+    ) -> Result<Arc<GewuExport>, GewuError> {
+        Ok(Arc::new(GewuExport {
+            inner: self.inner.prepare_export(
+                version,
+                &columns,
+                format.into(),
+                core::ExportOptions {
+                    convert_nested_to_json: options.convert_nested_to_json,
+                },
+            )?,
+        }))
+    }
+
+    pub fn nested_export_columns(&self, columns: Vec<u32>) -> Result<Vec<String>, GewuError> {
+        Ok(self.inner.nested_export_columns(&columns)?)
     }
 
     /// Sort and filter. Slow: call off the main thread. A newer call makes
@@ -357,16 +450,18 @@ impl GewuDocument {
         bins: u32,
     ) -> Result<Histogram, GewuError> {
         let state: Option<core::ViewState> = state.map(Into::into);
-        let h = self.inner.histogram(column, state.as_ref(), bins)?;
-        Ok(Histogram {
-            lo: h.lo,
-            hi: h.hi,
-            integer: h.integer,
-            counts: h.counts,
-            null_count: h.null_count,
-            nan_count: h.nan_count,
-            total: h.total,
-        })
+        Ok(self.inner.histogram(column, state.as_ref(), bins)?.into())
+    }
+
+    /// Distribution over the current displayed rows, with all filters applied.
+    /// Call off the main thread.
+    pub fn view_histogram(
+        &self,
+        version: u64,
+        column: u32,
+        bins: u32,
+    ) -> Result<Histogram, GewuError> {
+        Ok(self.inner.view_histogram(version, column, bins)?.into())
     }
 
     /// Display text for a raw value of a date, time or timestamp column

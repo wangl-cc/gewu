@@ -137,9 +137,12 @@ pub struct DistinctResult {
 /// Distribution of a numeric column, for the range filter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Histogram {
-    /// Bins split `[lo, hi)` evenly. Both are `None` when the column has no
-    /// non-null, non-NaN value. They span the whole column, not just the
-    /// counted rows, so the axis stays put while other filters change.
+    /// Display axis for equally spaced bins over the source column, not just
+    /// the counted rows. Integer membership is exact, but these f64 endpoints
+    /// are rounded outward when large integers cannot be represented exactly.
+    /// Float axes span finite values; infinities count in the end bins. Both
+    /// endpoints are `None` for an all-null/NaN column. An infinity-only column
+    /// cannot supply a finite axis and returns an error from histogram creation.
     pub lo: Option<f64>,
     pub hi: Option<f64>,
     /// Integer column (including dates and times). Then `hi` is max + 1,
@@ -162,8 +165,9 @@ pub struct ColumnSummary {
     pub nan_count: u64,
     /// Distinct non-null values.
     pub distinct_count: u64,
-    /// Numbers, dates and times only (dates and times as their integer
-    /// value; see `Document::format_value`).
+    /// Numbers, dates and times only (dates and times as their physical
+    /// value; see `Document::format_value`). These f64 results can approximate
+    /// large integers and decimals; distinct counts use the native values.
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub mean: Option<f64>,
