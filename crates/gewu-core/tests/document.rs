@@ -405,19 +405,25 @@ fn search_dates_by_period() {
 }
 
 #[test]
-fn contains_filter_on_numbers() {
+fn contains_filter_is_for_text_only() {
     let (path, doc) = temporal_sample();
-    doc.apply_view(&ViewState {
-        filters: vec![Filter::Contains {
-            column: 3,
-            text: "1700".into(),
-            case_sensitive: false,
-        }],
-        ..Default::default()
-    })
-    .unwrap();
-    // Same rules as search: integers match by value.
-    assert_eq!(names(&doc), ["Gamma"]);
+    let before = doc.current_view();
+    // Numbers and dates are filtered by range; "contains" would mean
+    // something different for them, so it is refused.
+    for column in [1, 3] {
+        let err = doc
+            .apply_view(&ViewState {
+                filters: vec![Filter::Contains {
+                    column,
+                    text: "1700".into(),
+                    case_sensitive: false,
+                }],
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
+    }
+    assert_eq!(doc.current_view(), before);
     std::fs::remove_file(path).ok();
 }
 

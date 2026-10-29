@@ -16,16 +16,14 @@ use crate::{
     engine::{CancelToken, ViewEngine},
     format,
     numeric::Numeric,
+    predicate::ColumnTest,
+    query,
     scope::{RowScope, Selection},
-    search,
     value_index::ValueIndex,
     Bound, ColumnInfo, ColumnStats, ColumnSummary, DataKind, DistinctResult, DistinctValue, Error,
     Export, ExportFormat, ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo,
     ViewState,
 };
-
-/// How many rows to process between cancellation checks.
-const CHUNK: usize = 64 * 1024;
 
 /// One open file. Safe to share between threads.
 pub struct Document {
@@ -240,17 +238,20 @@ impl Document {
             }
         }
 
-        // Which cells match the search, using the search's own matcher on
-        // just these rows. Nothing is kept afterwards.
+        // Which cells match the search: the same tests the search filtered
+        // with, run on just these rows. Nothing is kept afterwards.
         let mut matched = Vec::new();
         if let Some(text) = &view.search {
             let indices = UInt32Array::from(source_rows.to_vec());
             let token = CancelToken::never();
             let mut per_column = Vec::with_capacity(columns.len());
             for &c in columns {
-                let block = take(self.columns[c as usize].as_ref(), &indices, None)?;
+                let column = &self.columns[c as usize];
                 let mut hits = vec![false; source_rows.len()];
-                search::mark_matches(&block, text, false, &mut hits, &token)?;
+                if let Some(test) = query::search_test(column.data_type(), text)? {
+                    let block = take(column.as_ref(), &indices, None)?;
+                    test.mark(&block, &mut hits, &token)?;
+                }
                 per_column.push(hits);
             }
             matched = (0..source_rows.len())
@@ -450,7 +451,8 @@ impl Document {
         })
     }
 
-    /// Source rows that pass all filters (except those on `skip`).
+    /// Source rows that pass all filters (except those on `skip`) and the
+    /// search, in file order. Each filter marks a mask; masks are ANDed.
     fn select(
         &self,
         filters: &[Filter],
@@ -458,70 +460,86 @@ impl Document {
         skip: Option<u32>,
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
-        // Turn each filter into a per-row test.
-        let mut tests: Vec<crate::numeric::RowTest<'_>> = Vec::new();
+        let mut keep: Option<Vec<bool>> = None;
         for f in filters {
             if Some(f.column()) == skip {
                 continue;
             }
-            match f {
-                Filter::InValues { column, keys } => {
-                    let idx = self.index(*column)?;
-                    let mut allowed = vec![false; idx.len()];
-                    for &k in keys {
-                        if let Some(slot) = allowed.get_mut(k as usize) {
-                            *slot = true;
-                        }
-                    }
-                    tests.push(Box::new(move |r| allowed[idx.codes[r] as usize]));
-                }
-                Filter::IsNull { column, negate } => {
-                    let array = self.column(*column)?.clone();
-                    let negate = *negate;
-                    tests.push(Box::new(move |r| array.is_null(r) != negate));
-                }
-                Filter::Contains {
-                    column,
-                    text,
-                    case_sensitive,
-                } => {
-                    let mut hits = vec![false; self.n_rows];
-                    search::mark_matches(
-                        self.column(*column)?,
-                        text,
-                        *case_sensitive,
-                        &mut hits,
-                        token,
-                    )?;
-                    tests.push(Box::new(move |r| hits[r]));
-                }
-                Filter::Range { column, min, max } => {
-                    tests.push(self.numeric(*column)?.range_test(*min, *max));
-                }
-            }
-            token.check()?;
+            let test = self.filter_test(f)?;
+            let mut mask = vec![false; self.n_rows];
+            test.mark(self.column(f.column())?, &mut mask, token)?;
+            and_into(&mut keep, mask);
         }
 
-        if let Some(text) = search.filter(|s| !s.is_empty()) {
-            // One bitmap for all columns; nothing is cached afterwards.
-            let mut hits = vec![false; self.n_rows];
+        if let Some(text) = search.filter(|s| !s.trim().is_empty()) {
+            // Any column may match: OR the columns into one mask.
+            let mut mask = vec![false; self.n_rows];
             for column in &self.columns {
-                search::mark_matches(column, text, false, &mut hits, token)?;
+                if let Some(test) = query::search_test(column.data_type(), text)? {
+                    test.mark(column, &mut mask, token)?;
+                }
             }
-            tests.push(Box::new(move |r| hits[r]));
+            and_into(&mut keep, mask);
         }
 
-        let mut rows = Vec::new();
-        for chunk_start in (0..self.n_rows).step_by(CHUNK) {
-            token.check()?;
-            let end = (chunk_start + CHUNK).min(self.n_rows);
-            rows.extend(
-                (chunk_start..end)
-                    .filter(|&r| tests.iter().all(|t| t(r)))
-                    .map(|r| r as u32),
-            );
-        }
-        Ok(rows)
+        token.check()?;
+        Ok(match keep {
+            None => (0..self.n_rows as u32).collect(),
+            Some(keep) => keep
+                .iter()
+                .enumerate()
+                .filter(|&(_, &k)| k)
+                .map(|(r, _)| r as u32)
+                .collect(),
+        })
+    }
+
+    /// The test a filter means, after checking it fits the column.
+    fn filter_test(&self, filter: &Filter) -> Result<ColumnTest> {
+        let column = filter.column();
+        self.column(column)?;
+        let info = &self.info.columns[column as usize];
+        Ok(match filter {
+            Filter::InValues { keys, .. } => {
+                let index = self.index(column)?;
+                let mut allowed = vec![false; index.len()];
+                for &k in keys {
+                    if let Some(slot) = allowed.get_mut(k as usize) {
+                        *slot = true;
+                    }
+                }
+                ColumnTest::Codes { index, allowed }
+            }
+            Filter::IsNull { negate, .. } => ColumnTest::Null { negate: *negate },
+            Filter::Contains {
+                text,
+                case_sensitive,
+                ..
+            } => {
+                if info.kind.is_ordered() || info.kind == DataKind::Boolean {
+                    return Err(Error::InvalidArgument(format!(
+                        "\"contains\" is for text; column {} holds {:?} values, filter it by range or value",
+                        info.name, info.kind
+                    )));
+                }
+                ColumnTest::Text {
+                    text: text.clone(),
+                    case_sensitive: *case_sensitive,
+                }
+            }
+            Filter::Range { min, max, .. } => {
+                if !info.kind.is_ordered() {
+                    return Err(Error::InvalidArgument(format!(
+                        "column {} ({}) is not numeric",
+                        info.name, info.type_name
+                    )));
+                }
+                ColumnTest::Range {
+                    min: *min,
+                    max: *max,
+                }
+            }
+        })
     }
 
     fn sort(&self, rows: Vec<u32>, state: &ViewState) -> Result<Vec<u32>> {
@@ -571,4 +589,12 @@ fn value_counts(idx: &ValueIndex, rows: &Selection) -> Vec<DistinctValue> {
             count,
         })
         .collect()
+}
+
+/// AND `mask` into `keep` (which starts as "everything").
+fn and_into(keep: &mut Option<Vec<bool>>, mask: Vec<bool>) {
+    match keep {
+        None => *keep = Some(mask),
+        Some(keep) => keep.iter_mut().zip(mask).for_each(|(k, m)| *k &= m),
+    }
 }

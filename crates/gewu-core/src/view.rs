@@ -48,7 +48,10 @@ pub enum Filter {
     InValues { column: u32, keys: Vec<u64> },
     /// Keep rows where the value is null (or not null when `negate`).
     IsNull { column: u32, negate: bool },
-    /// Keep rows whose displayed text contains `text`.
+    /// Keep rows whose displayed text contains `text`. For text, lists and
+    /// other non-ordered columns; numbers, dates, times and booleans are
+    /// refused with [`crate::Error::InvalidArgument`] (use `Range` or
+    /// `InValues`).
     Contains {
         column: u32,
         text: String,
@@ -79,7 +82,9 @@ impl Filter {
 pub struct ViewState {
     pub sort: Vec<SortKey>,
     pub filters: Vec<Filter>,
-    /// Case-insensitive search across all columns.
+    /// Keep rows where any column matches. What "matches" means depends on
+    /// the column: substring for text, value or period for numbers, dates
+    /// and times (see the `query` module).
     pub search: Option<String>,
 }
 
@@ -140,12 +145,9 @@ pub struct DistinctResult {
 /// Distribution of a numeric column, for the range filter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Histogram {
-    /// Display axis for equally spaced bins over the source column, not just
-    /// the counted rows. Integer membership is exact, but these f64 endpoints
-    /// are rounded outward when large integers cannot be represented exactly.
-    /// Float axes span finite values; infinities count in the end bins. Both
-    /// endpoints are `None` for an all-null/NaN column. An infinity-only column
-    /// cannot supply a finite axis and returns an error from histogram creation.
+    /// Axis of equally spaced bins over the whole source column, not just the
+    /// counted rows, so it stays put while filters change. Infinities count
+    /// in the end bins. `None` when the column has no finite values.
     pub lo: Option<f64>,
     pub hi: Option<f64>,
     /// Integer column (including dates and times). Then `hi` is max + 1,

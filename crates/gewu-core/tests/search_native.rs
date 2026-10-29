@@ -8,10 +8,10 @@ use arrow::{
     compute::cast,
     datatypes::{DataType, TimeUnit},
 };
-use gewu_core::{Document, Filter, ViewState};
+use gewu_core::{Document, ViewState};
 use parquet::arrow::ArrowWriter;
 
-/// Exercise both callers of the typed matcher, including fetched-cell highlights.
+/// Search for each query and check the rows it keeps and highlights.
 fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
@@ -21,20 +21,10 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let doc = Document::open(file.path()).unwrap();
 
     for (query, expected) in queries {
-        let states = [
-            ViewState {
-                search: Some((*query).into()),
-                ..Default::default()
-            },
-            ViewState {
-                filters: vec![Filter::Contains {
-                    column: 0,
-                    text: (*query).into(),
-                    case_sensitive: false,
-                }],
-                ..Default::default()
-            },
-        ];
+        let states = [ViewState {
+            search: Some((*query).into()),
+            ..Default::default()
+        }];
         for state in states {
             let view = doc.apply_view(&state).unwrap();
             let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
@@ -152,4 +142,42 @@ fn temporal_search_keeps_native_units_and_pre_epoch_values() {
             ],
         );
     }
+}
+
+#[test]
+fn time_of_day_search_names_a_period() {
+    let times: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("00:00:00"),
+        Some("10:30:15"),
+        Some("10:59:59"),
+        Some("23:59:59"),
+        None,
+    ]));
+    for data_type in [
+        DataType::Time32(TimeUnit::Second),
+        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Time64(TimeUnit::Nanosecond),
+    ] {
+        check_queries(
+            cast(&times, &data_type).unwrap(),
+            &[
+                ("10", vec![1, 2]),
+                ("10:30", vec![1]),
+                ("10:30:15", vec![1]),
+                ("00", vec![0]),
+                // The last hour ends at midnight, past the column's range.
+                ("23", vec![3]),
+                ("24", vec![]),
+                ("lunch", vec![]),
+            ],
+        );
+    }
+}
+
+#[test]
+fn duration_search_is_by_value() {
+    let d: ArrayRef = Arc::new(Int64Array::from(vec![Some(5), Some(50), None]));
+    let d = cast(&d, &DataType::Duration(TimeUnit::Second)).unwrap();
+    check_queries(d, &[("5", vec![0]), ("50", vec![1]), ("5s", vec![])]);
 }

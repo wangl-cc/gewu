@@ -12,8 +12,9 @@ mod export;
 mod format;
 mod kind;
 mod numeric;
+mod predicate;
+mod query;
 mod scope;
-mod search;
 mod value_index;
 mod view;
 
