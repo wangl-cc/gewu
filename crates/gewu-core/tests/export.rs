@@ -4,13 +4,13 @@ use std::{fs, sync::Arc};
 
 use arrow::{
     array::{
-        Array, ArrayRef, Date32Array, Float64Array, Float64Builder, Int64Array, Int64Builder,
-        ListArray, ListBuilder, MapBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
+        Array, ArrayRef, Date32Array, Float64Array, Int64Array, ListArray, ListBuilder,
+        RecordBatch, StringArray, StringBuilder, StructArray,
     },
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, Schema},
 };
-use gewu_core::{Document, Error, ExportOptions, FileType, Filter, SortKey, ViewState};
+use gewu_core::{Document, Error, FileType, Filter, SortKey, ViewState};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
@@ -119,78 +119,7 @@ fn nested_sample() -> RecordBatch {
 }
 
 #[test]
-fn nested_delimited_cells_are_parseable_json_in_snapshot_order() {
-    use serde_json::{json, Value};
-
-    let (directory, doc) = document_from_batch(&nested_sample());
-    let version = doc
-        .apply_view(&ViewState {
-            sort: vec![SortKey {
-                column: 0,
-                descending: true,
-            }],
-            filters: vec![Filter::Range {
-                column: 0,
-                min: None,
-                max: Some(doc.parse_bound(0, "3").unwrap()),
-            }],
-            search: None,
-        })
-        .unwrap()
-        .version;
-    let first = json!({"na\"me\n": "Alice\r\n雪", "number": 9_007_199_254_740_993i64,
-        "tags": ["a,\"雪\"\t\n\\tail", null, ""]});
-    let last = json!({"na\"me\n": "", "number": null, "tags": []});
-    for (format, delimiter) in [(FileType::Csv, b','), (FileType::Tsv, b'\t')] {
-        let path = directory.path().join(format!("nested.{format:?}"));
-        let export = doc
-            .prepare_export(version, &[3, 2, 1, 0], format, ExportOptions {
-                convert_nested_to_json: true,
-            })
-            .unwrap();
-        export.write(&path).unwrap();
-        let mut reader = csv::ReaderBuilder::new()
-            .delimiter(delimiter)
-            .from_path(path)
-            .unwrap();
-        assert_eq!(reader.headers().unwrap().iter().collect::<Vec<_>>(), [
-            "items", "profile", "tags", "id"
-        ]);
-        let rows = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows.iter().map(|row| &row[3]).collect::<Vec<_>>(), [
-            "3", "2", "1"
-        ]);
-        assert_eq!(
-            serde_json::from_str::<Value>(&rows[0][0]).unwrap(),
-            json!([first.clone()])
-        );
-        assert_eq!(serde_json::from_str::<Value>(&rows[0][1]).unwrap(), first);
-        assert_eq!(
-            serde_json::from_str::<Value>(&rows[0][2]).unwrap(),
-            first["tags"]
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(&rows[1][0]).unwrap(),
-            json!([null])
-        );
-        assert_eq!(&rows[1][1], "");
-        assert_eq!(&rows[1][2], "");
-        assert_eq!(
-            serde_json::from_str::<Value>(&rows[2][0]).unwrap(),
-            json!([last.clone()])
-        );
-        assert_eq!(serde_json::from_str::<Value>(&rows[2][1]).unwrap(), last);
-        assert_eq!(
-            serde_json::from_str::<Value>(&rows[2][2]).unwrap(),
-            json!([])
-        );
-        assert_eq!(export.progress().rows_written, 3);
-    }
-}
-
-#[test]
-fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
+fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     let batch = nested_sample();
     let (directory, doc) = document_from_batch(&batch);
     let version = doc.current_view().version;
@@ -198,24 +127,24 @@ fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
         "items", "tags"
     ]);
     assert!(doc.nested_export_columns(&[99]).is_err());
-    for format in [FileType::Csv, FileType::Tsv] {
-        let result = doc.prepare_export(version, &[0, 2], format, ExportOptions::default());
+    for format in [FileType::Csv, FileType::Tsv, FileType::Xlsx]
+        .into_iter()
+        .filter(|format| format.is_enabled())
+    {
+        let result = doc.prepare_export(version, &[0, 2], format);
         assert!(matches!(result, Err(Error::Unsupported(message))
             if message.contains("profile") && message.contains("Parquet")));
-        assert!(doc
-            .prepare_export(version, &[0], format, ExportOptions::default())
-            .is_ok());
+        assert!(matches!(
+            doc.prepare_export(version, &[1], format),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(doc.prepare_export(version, &[0], format).is_ok());
     }
     let path = directory.path().join("native.parquet");
-    doc.prepare_export(
-        version,
-        &[0, 1, 2, 3],
-        FileType::Parquet,
-        ExportOptions::default(),
-    )
-    .unwrap()
-    .write(&path)
-    .unwrap();
+    doc.prepare_export(version, &[0, 1, 2, 3], FileType::Parquet)
+        .unwrap()
+        .write(&path)
+        .unwrap();
     let result = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(path).unwrap())
         .unwrap()
         .build()
@@ -226,93 +155,6 @@ fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
     assert_eq!(result, batch);
 }
 
-#[test]
-fn nested_json_preserves_non_finite_values_separately_from_nulls() {
-    use serde_json::{json, Value};
-
-    let mut values = ListBuilder::new(Float64Builder::new());
-    values
-        .values()
-        .append_slice(&[f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 1.5]);
-    values.values().append_null();
-    values.append(true);
-    let batch = RecordBatch::try_from_iter(vec![("values", Arc::new(values.finish()) as ArrayRef)])
-        .unwrap();
-    let (directory, doc) = document_from_batch(&batch);
-    let path = directory.path().join("floats.csv");
-    doc.prepare_export(
-        doc.current_view().version,
-        &[0],
-        FileType::Csv,
-        ExportOptions {
-            convert_nested_to_json: true,
-        },
-    )
-    .unwrap()
-    .write(&path)
-    .unwrap();
-    let row = csv::Reader::from_path(path)
-        .unwrap()
-        .records()
-        .next()
-        .unwrap()
-        .unwrap();
-    let value = serde_json::from_str::<Value>(&row[0]).unwrap();
-    assert_eq!(value, json!(["NaN", "inf", "-inf", -0.0, 1.5, null]));
-    assert_eq!(value[3].as_f64().unwrap().to_bits(), (-0.0f64).to_bits());
-}
-
-#[test]
-fn unsupported_json_conversion_preserves_the_existing_destination() {
-    let mut values = MapBuilder::new(None, Int64Builder::new(), StringBuilder::new());
-    values.keys().append_value(1);
-    values.values().append_value("value");
-    values.append(true).unwrap();
-    let batch =
-        RecordBatch::try_from_iter(vec![("map", Arc::new(values.finish()) as ArrayRef)]).unwrap();
-    let (directory, doc) = document_from_batch(&batch);
-    let path = directory.path().join("map.csv");
-    fs::write(&path, "existing data").unwrap();
-    let export = doc
-        .prepare_export(
-            doc.current_view().version,
-            &[0],
-            FileType::Csv,
-            ExportOptions {
-                convert_nested_to_json: true,
-            },
-        )
-        .unwrap();
-    assert!(matches!(export.write(&path), Err(Error::Arrow(_))));
-    assert_eq!(fs::read_to_string(path).unwrap(), "existing data");
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
-}
-
-#[test]
-fn nested_date_formatting_failure_does_not_become_json_data() {
-    let dates = Arc::new(StructArray::from(vec![(
-        Arc::new(Field::new("date", DataType::Date32, false)),
-        Arc::new(Date32Array::from(vec![0, i32::MAX])) as ArrayRef,
-    )]));
-    let batch = RecordBatch::try_from_iter(vec![("dates", dates as ArrayRef)]).unwrap();
-    let (directory, doc) = document_from_batch(&batch);
-    let path = directory.path().join("dates.csv");
-    fs::write(&path, "existing data").unwrap();
-    let export = doc
-        .prepare_export(
-            doc.current_view().version,
-            &[0],
-            FileType::Csv,
-            ExportOptions {
-                convert_nested_to_json: true,
-            },
-        )
-        .unwrap();
-    assert!(matches!(export.write(&path), Err(Error::Arrow(_))));
-    assert_eq!(fs::read_to_string(path).unwrap(), "existing data");
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
-}
-
 fn filtered(doc: &Document) -> u64 {
     doc.apply_view(&ViewState {
         sort: vec![SortKey {
@@ -320,6 +162,7 @@ fn filtered(doc: &Document) -> u64 {
             descending: true,
         }],
         filters: vec![Filter::Range {
+            include_nulls: false,
             column: 0,
             min: Some(doc.parse_bound(0, "2").unwrap()),
             max: None,
@@ -340,7 +183,7 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
             concat!(
                 "\"text,\"\"name\",id,value,date\r\n",
                 ",9007199254740993,2.2250738585072014e-308,1969-12-31\r\n",
-                "\"\",4,,1970-01-02\r\n",
+                ",4,,1970-01-02\r\n",
                 "\"a,\"\"雪\"\"\nline\",3,1.2345678901234567,1970-01-01\r\n",
                 "\"tab\tcell\rtail\",2,-0.0,1970-01-03\r\n",
             ),
@@ -350,16 +193,14 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
             concat!(
                 "\"text,\"\"name\"\tid\tvalue\tdate\r\n",
                 "\t9007199254740993\t2.2250738585072014e-308\t1969-12-31\r\n",
-                "\"\"\t4\t\t1970-01-02\r\n",
+                "\t4\t\t1970-01-02\r\n",
                 "\"a,\"\"雪\"\"\nline\"\t3\t1.2345678901234567\t1970-01-01\r\n",
                 "\"tab\tcell\rtail\"\t2\t-0.0\t1970-01-03\r\n",
             ),
         ),
     ] {
         let path = directory.path().join(format!("result.{format:?}"));
-        let export = doc
-            .prepare_export(version, &[1, 0, 2, 3], format, ExportOptions::default())
-            .unwrap();
+        let export = doc.prepare_export(version, &[1, 0, 2, 3], format).unwrap();
         export.write(&path).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap(), expected);
         assert_eq!(export.progress().rows_written, 4);
@@ -372,12 +213,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
     let (directory, doc) = sample();
     let version = filtered(&doc);
     let export = doc
-        .prepare_export(
-            version,
-            &[1, 0, 2, 3],
-            FileType::Parquet,
-            ExportOptions::default(),
-        )
+        .prepare_export(version, &[1, 0, 2, 3], FileType::Parquet)
         .unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
     doc.apply_view(&ViewState::default()).unwrap();
@@ -438,7 +274,7 @@ fn empty_results_keep_headers_and_parquet_schema() {
         .version;
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
         let path = directory.path().join(format!("empty.{format:?}"));
-        doc.prepare_export(version, &[0], format, ExportOptions::default())
+        doc.prepare_export(version, &[0], format)
             .unwrap()
             .write(&path)
             .unwrap();
@@ -459,12 +295,12 @@ fn stale_and_invalid_exports_are_rejected_before_writing() {
     let old = doc.current_view().version;
     let version = filtered(&doc);
     assert!(matches!(
-        doc.prepare_export(old, &[0], FileType::Csv, ExportOptions::default()),
+        doc.prepare_export(old, &[0], FileType::Csv),
         Err(Error::StaleVersion { .. })
     ));
     for columns in [vec![], vec![0, 0], vec![99]] {
         assert!(matches!(
-            doc.prepare_export(version, &columns, FileType::Csv, ExportOptions::default()),
+            doc.prepare_export(version, &columns, FileType::Csv),
             Err(Error::InvalidArgument(_))
         ));
     }
@@ -476,9 +312,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
     let version = doc.current_view().version;
     let path = directory.path().join("existing.csv");
     fs::write(&path, "keep me").unwrap();
-    let export = doc
-        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
-        .unwrap();
+    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
     export.cancel();
     assert!(matches!(export.write(&path), Err(Error::Cancelled)));
     assert_eq!(fs::read_to_string(&path).unwrap(), "keep me");
@@ -489,9 +323,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
     // A rename failure also discards the complete temporary output.
     let target_directory = directory.path().join("directory.csv");
     fs::create_dir(&target_directory).unwrap();
-    let export = doc
-        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
-        .unwrap();
+    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
     assert!(matches!(export.write(&target_directory), Err(Error::Io(_))));
     assert!(target_directory.is_dir());
     assert!(fs::read_dir(directory.path()).unwrap().all(|entry| !entry
@@ -500,9 +332,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
         .to_string_lossy()
         .starts_with(".gewu-export-")));
     // Successful export can replace a destination once, after all rows exist.
-    let export = doc
-        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
-        .unwrap();
+    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
     export.write(&path).unwrap();
     assert!(fs::read_to_string(&path)
         .unwrap()
@@ -530,12 +360,7 @@ fn formatting_failure_does_not_publish_a_partial_file() {
     let destination = directory.path().join("result.csv");
     fs::write(&destination, "existing data").unwrap();
     let export = doc
-        .prepare_export(
-            doc.current_view().version,
-            &[0],
-            FileType::Csv,
-            ExportOptions::default(),
-        )
+        .prepare_export(doc.current_view().version, &[0], FileType::Csv)
         .unwrap();
     assert!(matches!(export.write(&destination), Err(Error::Arrow(_))));
     assert_eq!(fs::read_to_string(destination).unwrap(), "existing data");
@@ -562,12 +387,7 @@ fn source_file_and_aliases_cannot_be_overwritten() {
     }
     for path in paths {
         let export = doc
-            .prepare_export(
-                doc.current_view().version,
-                &[0],
-                FileType::Parquet,
-                ExportOptions::default(),
-            )
+            .prepare_export(doc.current_view().version, &[0], FileType::Parquet)
             .unwrap();
         assert!(matches!(export.write(path), Err(Error::InvalidArgument(_))));
     }
@@ -579,6 +399,7 @@ fn view_histogram_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
     let state = ViewState {
         filters: vec![Filter::Range {
+            include_nulls: false,
             column: 0,
             min: Some(doc.parse_bound(0, "2").unwrap()),
             max: Some(doc.parse_bound(0, "4").unwrap()),

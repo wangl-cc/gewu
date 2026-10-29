@@ -29,14 +29,6 @@ fn col(doc: &Document, name: &str) -> u32 {
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
-fn range(doc: &Document, column: u32, min: i64, max: i64) -> Filter {
-    Filter::Range {
-        column,
-        min: Some(doc.make_bound_i64(column, min).unwrap()),
-        max: Some(doc.make_bound_i64(column, max).unwrap()),
-    }
-}
-
 fn search(text: &str) -> ViewState {
     ViewState {
         search: Some(text.into()),
@@ -68,14 +60,34 @@ fn apply_view(c: &mut Criterion) {
     let cases: Vec<(&str, ViewState)> = vec![
         ("no_filter", ViewState::default()),
         ("range_1", ViewState {
-            filters: vec![range(&doc, price, 100, 5000)],
+            filters: vec![Filter::Range {
+                include_nulls: false,
+                column: price,
+                min: Some(doc.make_bound_i64(price, 100).unwrap()),
+                max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+            }],
             ..Default::default()
         }),
         ("range_3", ViewState {
             filters: vec![
-                range(&doc, price, 100, 5000),
-                range(&doc, score, 80, 120),
-                range(&doc, rating, 20, 40),
+                Filter::Range {
+                    include_nulls: false,
+                    column: price,
+                    min: Some(doc.make_bound_i64(price, 100).unwrap()),
+                    max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                },
+                Filter::Range {
+                    include_nulls: false,
+                    column: score,
+                    min: Some(doc.make_bound_i64(score, 80).unwrap()),
+                    max: Some(doc.make_bound_i64(score, 120).unwrap()),
+                },
+                Filter::Range {
+                    include_nulls: false,
+                    column: rating,
+                    min: Some(doc.make_bound_i64(rating, 20).unwrap()),
+                    max: Some(doc.make_bound_i64(rating, 40).unwrap()),
+                },
             ],
             ..Default::default()
         }),
@@ -88,6 +100,7 @@ fn apply_view(c: &mut Criterion) {
         }),
         ("contains_city", ViewState {
             filters: vec![Filter::Contains {
+                include_nulls: false,
                 column: city,
                 text: "city-12".into(),
                 case_sensitive: false,
@@ -128,7 +141,12 @@ fn apply_view(c: &mut Criterion) {
             ..Default::default()
         }),
         ("range_decimal", ViewState {
-            filters: vec![range(&doc, amount, 50, 500)],
+            filters: vec![Filter::Range {
+                include_nulls: false,
+                column: amount,
+                min: Some(doc.make_bound_i64(amount, 50).unwrap()),
+                max: Some(doc.make_bound_i64(amount, 500).unwrap()),
+            }],
             ..Default::default()
         }),
         ("sort_uuid", ViewState {
@@ -139,7 +157,12 @@ fn apply_view(c: &mut Criterion) {
             ..Default::default()
         }),
         ("range_then_sort", ViewState {
-            filters: vec![range(&doc, price, 100, 5000)],
+            filters: vec![Filter::Range {
+                include_nulls: false,
+                column: price,
+                min: Some(doc.make_bound_i64(price, 100).unwrap()),
+                max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+            }],
             sort: vec![SortKey {
                 column: score,
                 descending: false,
@@ -186,7 +209,12 @@ fn facets(c: &mut Criterion) {
         col(&doc, "price"),
     );
     let other_filter = ViewState {
-        filters: vec![range(&doc, price, 100, 5000)],
+        filters: vec![Filter::Range {
+            include_nulls: false,
+            column: price,
+            min: Some(doc.make_bound_i64(price, 100).unwrap()),
+            max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+        }],
         ..Default::default()
     };
 

@@ -23,8 +23,7 @@ A native macOS viewer for Parquet, CSV, TSV and XLSX files: browse, sort and fil
 - Right-click a column header for **Column Info…**, or use **View → Column Info…** (⌥⌘I). Statistics and distribution describe the current filtered and searched results.
 - **File → Get Info…** (⌘I) opens file metadata in its own window.
 - **File → Export…** (⇧⌘E) exports all current results to CSV, TSV, Parquet or XLSX, preserving the displayed row and column order. Export runs in the background with progress and cancellation; it replaces the destination only after success.
-- CSV and TSV include headers and use UTF-8, quoted fields and empty fields for nulls. For nested columns, the native export panel shows **Convert lists and structs to JSON**, enabled by default. Disabling it requires choosing Parquet or omitting those columns. XLSX does not export nested columns. Parquet preserves column types and nulls. Row numbers are not exported.
-- Nested CSV/TSV cells use compact JSON: lists become arrays, structs and string-key maps become objects, and null children remain `null`. Non-finite floats become the strings `"NaN"`, `"inf"`, and `"-inf"`; dates become strings. JSON text does not retain the full Arrow schema. Unsupported conversions fail without replacing the destination.
+- CSV and TSV include headers and use UTF-8 and standard Arrow CSV quoting. Empty strings and nulls both use empty fields. CSV, TSV and XLSX reject nested columns (including lists, structs and maps); export them as Parquet to preserve their types and nulls. The export panel offers only Parquet when the selected columns contain nested data. Row numbers are not exported.
 - A `gewu` command line with JSON output, for scripts and AI agents.
 - Native windows and menus, including **File → Open…** (⌘O), **Open Recent**,
   and **Edit → Find…** (⌘F). Toggle row numbers in **View**.
@@ -67,7 +66,7 @@ The document retains immutable Arrow columns and a list of source row numbers in
 
 ### Query API
 
-`Document` remains the public entry point. `ViewState.search` is raw text interpreted independently by each column type; matching columns are ORed. Explicit filters are ANDed. `Filter::Equals { column, value }` parses a literal in the column's type, while `Filter::Range { column, min, max }` consumes typed `Bound` endpoints without search precision widening. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Decimal text comparisons retain exact coefficients, including Decimal256; Float32 equality parses to Float32. String equality is literal and case-sensitive. Invalid searches skip incompatible columns; invalid or reversed explicit ranges return an error.
+`Document` remains the public entry point. `ViewState.search` is raw text interpreted independently by each column type; matching columns are ORed. Explicit filters are ANDed. `Filter::Equals { column, value }` parses a literal in the column's type, while `Filter::Range { column, min, max, include_nulls }` consumes typed `Bound` endpoints without search precision widening. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Decimal text comparisons retain exact coefficients, including Decimal256; Float32 equality parses to Float32. String equality is literal and case-sensitive. Invalid searches skip incompatible columns; invalid or reversed explicit ranges return an error. `Range` and `Contains` carry `include_nulls`: when enabled, that condition also matches nulls in its own column; other filters and global search still apply. NaN is not null. Use `IsNull` for null-only filtering.
 
 `Document::validate_filter` prepares a filter without applying a view. `Document::column_capabilities` reports supported operations; dictionary range support is separate from histogram availability. Preparation parses scalar inputs and binds borrowed arrays without scanning rows (value-list filters may build the existing lazy value index). String matching prepares one reusable Unicode matcher per query, without compiling it again for each batch. The executor scans in batches, checks cancellation, combines predicates and produces source row IDs; sorting and view publication stay in `Document` / `ViewEngine`. Display formatting delegates to Arrow through the column facade; file adapters own read/write policies independently.
 
@@ -99,12 +98,14 @@ gewu hist data.parquet price --bins 20
 gewu stats data.parquet price --where label=cat
 ```
 
+`hist` returns exact inclusive `min`/`max` text bounds for each bin, with `null` meaning an unbounded edge. These bounds can be passed to typed range filters; they replace the former approximate numeric `from`/`to` fields. The top-level `min`/`max` labels describe the finite source extrema. Plotting coordinates are internal display data and are never used to reconstruct these bounds. Core callers use `Document::histogram_ranges` for exact bins or `Document::histogram` for counts and axis labels without allocating all filter bounds.
+
 The core has three additive Cargo features, all enabled by default:
 
 | Feature | Read and write support | Codec dependencies |
 |---|---|---|
 | `parquet` | Parquet | `parquet` |
-| `csv` | CSV and TSV | `arrow-csv`, `csv`; existing output encoding preserves quoted empty strings and nested JSON |
+| `csv` | CSV and TSV | `arrow-csv` for reading/writing; `csv` for the inference precision check |
 | `xlsx` | XLSX | `calamine`, `rust_xlsxwriter` with constant-memory writing |
 
 For an embedded core with selected codecs:

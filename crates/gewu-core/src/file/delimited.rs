@@ -1,18 +1,14 @@
-//! CSV and TSV decoding and encoding. The writer preserves quoted empty strings
-//! separately from null fields and the existing nested JSON representation.
+//! CSV and TSV decoding and encoding through Arrow's CSV adapter.
 
 use std::{
     fs::File,
-    io::{BufWriter, Seek, Write},
-    sync::{Arc, OnceLock},
+    io::{Seek, Write},
+    sync::Arc,
 };
 
 use arrow::{
-    array::Array,
-    datatypes::{DataType, FieldRef, Schema},
-    error::ArrowError,
-    json::writer::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullableEncoder},
-    util::display::{ArrayFormatter, FormatOptions},
+    array::RecordBatch,
+    datatypes::{DataType, Schema},
 };
 
 use super::{collect_batches, ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
@@ -94,165 +90,20 @@ pub(super) fn write(
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
 ) -> Result<()> {
-    let mut writer = BufWriter::new(file);
-    for (i, field) in data.schema.fields().iter().enumerate() {
-        if i > 0 {
-            writer.write_all(&[delimiter])?;
-        }
-        write_field(&mut writer, field.name().as_bytes(), delimiter)?;
-    }
-    writer.write_all(b"\r\n")?;
-    let options = FormatOptions::default();
-    let json_error = Arc::new(OnceLock::new());
-    let json_options = EncoderOptions::default()
-        .with_explicit_nulls(true)
-        .with_encoder_factory(Arc::new(ExportJsonEncoderFactory {
-            error: json_error.clone(),
-        }));
-    let mut formatters = data
-        .columns
-        .iter()
-        .zip(data.schema.fields())
-        .map(|(array, field)| {
-            if array.data_type().is_nested() {
-                make_encoder(field, array.as_ref(), &json_options).map(CellFormatter::Json)
-            } else {
-                ArrayFormatter::try_new(array.as_ref(), &options).map(CellFormatter::Scalar)
-            }
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    // Dictionary values and Null arrays can be logically null without a
-    // physical validity bitmap on the outer array.
-    let nulls = data
-        .columns
-        .iter()
-        .map(|array| array.logical_nulls())
-        .collect::<Vec<_>>();
-    let mut cell = String::new();
-    let mut json_cell = Vec::new();
-    for chunk in data.rows.chunks(CHUNK_ROWS) {
+    progress.check()?;
+    let mut writer = arrow_csv::WriterBuilder::new()
+        .with_delimiter(delimiter)
+        .with_line_terminator(arrow_csv::writer::Terminator::CRLF)
+        .build(file);
+    // Emit headers even when the snapshot has no rows; this also validates
+    // the schema before any row processing.
+    writer.write(&RecordBatch::new_empty(data.schema.clone()))?;
+    for rows in data.rows.chunks(CHUNK_ROWS) {
         progress.check()?;
-        for &row in chunk {
-            for (column, (nulls, formatter)) in nulls.iter().zip(&mut formatters).enumerate() {
-                if column > 0 {
-                    writer.write_all(&[delimiter])?;
-                }
-                if !nulls
-                    .as_ref()
-                    .is_some_and(|nulls| nulls.is_null(row as usize))
-                {
-                    let bytes = match formatter {
-                        CellFormatter::Scalar(formatter) => {
-                            cell.clear();
-                            formatter.value(row as usize).write(&mut cell)?;
-                            cell.as_bytes()
-                        }
-                        CellFormatter::Json(encoder) => {
-                            json_cell.clear();
-                            encoder.encode(row as usize, &mut json_cell);
-                            if let Some(error) = json_error.get() {
-                                return Err(ArrowError::JsonError(error.clone()).into());
-                            }
-                            &json_cell
-                        }
-                    };
-                    write_field(&mut writer, bytes, delimiter)?;
-                }
-            }
-            writer.write_all(b"\r\n")?;
-        }
-        progress.advance(chunk.len());
+        writer.write(&data.batch(rows)?)?;
+        progress.advance(rows.len());
     }
-    writer.flush()?;
     progress.check()
-}
-
-enum CellFormatter<'a> {
-    Scalar(ArrayFormatter<'a>),
-    Json(NullableEncoder<'a>),
-}
-
-/// Keep non-finite floats distinct from null, and propagate temporal formatting
-/// errors instead of encoding Arrow's diagnostic display text as data.
-#[derive(Debug)]
-struct ExportJsonEncoderFactory {
-    // Arrow's Encoder callback cannot return an error. Record the first failure
-    // and check it before writing the cell. Successful encodes only read this.
-    error: Arc<OnceLock<String>>,
-}
-
-impl EncoderFactory for ExportJsonEncoderFactory {
-    fn make_default_encoder<'a>(
-        &self,
-        _field: &'a FieldRef,
-        array: &'a dyn Array,
-        _options: &'a EncoderOptions,
-    ) -> std::result::Result<Option<NullableEncoder<'a>>, ArrowError> {
-        if !array.data_type().is_floating() && !array.data_type().is_temporal() {
-            return Ok(None);
-        }
-        let formatter = ArrayFormatter::try_new(array, &FormatOptions::default())?;
-        let encoder: Box<dyn Encoder + 'a> = if array.data_type().is_floating() {
-            Box::new(JsonFloatEncoder(formatter))
-        } else {
-            Box::new(JsonTemporalEncoder {
-                formatter,
-                text: String::new(),
-                error: self.error.clone(),
-            })
-        };
-        Ok(Some(NullableEncoder::new(encoder, array.nulls().cloned())))
-    }
-}
-
-struct JsonTemporalEncoder<'a> {
-    formatter: ArrayFormatter<'a>,
-    text: String,
-    error: Arc<OnceLock<String>>,
-}
-
-impl Encoder for JsonTemporalEncoder<'_> {
-    fn encode(&mut self, row: usize, out: &mut Vec<u8>) {
-        self.text.clear();
-        match self.formatter.value(row).write(&mut self.text) {
-            Ok(()) => serde_json::to_writer(out, &self.text).expect("writing a string to a Vec"),
-            Err(error) => {
-                let _ = self.error.set(error.to_string());
-            }
-        }
-    }
-}
-
-struct JsonFloatEncoder<'a>(ArrayFormatter<'a>);
-
-impl Encoder for JsonFloatEncoder<'_> {
-    fn encode(&mut self, row: usize, out: &mut Vec<u8>) {
-        let start = out.len();
-        // Float formatting and writing to a Vec cannot fail.
-        write!(out, "{}", self.0.value(row)).expect("infallible float formatting");
-        if matches!(&out[start..], b"NaN" | b"inf" | b"-inf") {
-            out.insert(start, b'"');
-            out.push(b'"');
-        }
-    }
-}
-
-fn write_field(writer: &mut impl Write, value: &[u8], delimiter: u8) -> std::io::Result<()> {
-    if !value.is_empty()
-        && !value
-            .iter()
-            .any(|byte| [delimiter, b'"', b'\r', b'\n'].contains(byte))
-    {
-        return writer.write_all(value);
-    }
-    writer.write_all(b"\"")?;
-    for (i, part) in value.split(|&byte| byte == b'"').enumerate() {
-        if i > 0 {
-            writer.write_all(b"\"\"")?;
-        }
-        writer.write_all(part)?;
-    }
-    writer.write_all(b"\"")
 }
 
 #[cfg(test)]
@@ -292,7 +143,11 @@ mod tests {
         struct CancellingWriter<'a>(&'a AtomicBool);
         impl Write for CancellingWriter<'_> {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.store(true, Ordering::Relaxed);
+                // Let header emission finish, then cancel while row data is
+                // being written so this exercises the chunk boundary.
+                if bytes != b"id\r\n" {
+                    self.0.store(true, Ordering::Relaxed);
+                }
                 Ok(bytes.len())
             }
 
@@ -304,6 +159,7 @@ mod tests {
             write(CancellingWriter(&cancelled), b',', data, progress),
             Err(crate::Error::Cancelled)
         ));
+        assert!(written.load(Ordering::Relaxed) > 0);
         assert!(written.load(Ordering::Relaxed) < rows.len() as u64);
     }
 
@@ -334,7 +190,7 @@ mod tests {
         write(&mut bytes, b',', data, progress).unwrap();
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
-            "dictionary,null\r\n,\r\n\"\",\r\n"
+            "dictionary,null\r\n,\r\n,\r\n"
         );
     }
 }

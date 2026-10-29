@@ -151,27 +151,22 @@ fn run(cli: Cli) -> Result<()> {
             let doc = open(&file, &options)?;
             let col = column_index(&doc, &column)?;
             let state = view_state(&doc, &view)?;
-            let h = doc.histogram(col, Some(&state), bins)?;
-            let width = match (h.lo, h.hi) {
-                (Some(lo), Some(hi)) if !h.counts.is_empty() => (hi - lo) / h.counts.len() as f64,
-                _ => 0.0,
-            };
+            let distribution = doc.histogram_ranges(col, Some(&state), bins)?;
+            let h = distribution.histogram;
             json!({
                 "column": column,
                 "rows": h.total,
                 "null_count": h.null_count,
                 "nan_count": h.nan_count,
-                "bins": h.counts.iter().enumerate().map(|(i, n)| {
-                    let lo = h.lo.unwrap_or(0.0) + width * i as f64;
-                    let mut bin = json!({ "from": lo, "to": lo + width, "count": n });
-                    // Integer columns include dates and times: also show the
-                    // bin start the way the table displays it.
-                    if h.integer {
-                        if let Ok(text) = doc.format_value(col, lo.ceil() as i64) {
-                            bin["from_text"] = json!(text);
-                        }
-                    }
-                    bin
+                "min": h.min_label,
+                "max": h.max_label,
+                "bounds": "inclusive",
+                "bins": distribution.ranges.iter().zip(&h.counts).map(|(range, n)| {
+                    json!({
+                        "min": range.min.as_ref().map(|bound| bound.display()),
+                        "max": range.max.as_ref().map(|bound| bound.display()),
+                        "count": n,
+                    })
                 }).collect::<Vec<_>>(),
             })
         }
@@ -253,9 +248,9 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
             .push(Some(value.to_string()));
     }
     for (column, labels) in eq {
-        let ordered = doc.column_capabilities(column)?.range;
-        if let (true, [Some(value)]) = (ordered, labels.as_slice()) {
-            // One value of a number, date or time: no value index needed.
+        let equals = doc.column_capabilities(column)?.equals;
+        if let (true, [Some(value)]) = (equals, labels.as_slice()) {
+            // A single typed equality does not need a distinct-value index.
             state.filters.push(Filter::Equals {
                 column,
                 value: value.clone(),
@@ -281,6 +276,7 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
     for c in &args.contains {
         let (name, text) = split_pair(c, "contains")?;
         state.filters.push(Filter::Contains {
+            include_nulls: false,
             column: column_index(doc, name)?,
             text: text.to_string(),
             case_sensitive: false,
@@ -293,6 +289,7 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
             .ok_or_else(|| anyhow!("--range expects column=lo..hi, got {r:?}"))?;
         let column = column_index(doc, name)?;
         state.filters.push(Filter::Range {
+            include_nulls: false,
             column,
             min: bound_text(lo)
                 .map(|text| doc.parse_bound(column, text))

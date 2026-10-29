@@ -11,7 +11,7 @@ use arrow::{
 };
 
 use crate::{
-    column::{range_histogram, Column, FilterEditorKind, CHOICE_LIMIT},
+    column::{histogram, Column, FilterEditorKind, CHOICE_LIMIT},
     engine::{CancelToken, ViewEngine},
     file, format,
     numeric::Numeric,
@@ -19,8 +19,7 @@ use crate::{
     scope::{for_rows, RowScope, Selection},
     value_index::{count_values, ValueIndex, INDEX_LIMIT},
     ColumnCapabilities, ColumnInfo, ColumnSummary, DataKind, DistinctResult, Error, Export,
-    ExportOptions, FileInfo, FileType, Filter, Histogram, OpenOptions, Result, RowBlock, ViewInfo,
-    ViewState,
+    FileInfo, FileType, Filter, Histogram, OpenOptions, Result, RowBlock, ViewInfo, ViewState,
 };
 
 /// One open file. Safe to share between threads.
@@ -182,7 +181,7 @@ impl Document {
                 let rows = self.rows_in(RowScope::facet(state, column))?;
                 FilterEditor::Range {
                     kind: DataKind::of(typed.logical_data_type()),
-                    distribution: range_histogram::build(array, &rows, 60)?,
+                    distribution: histogram::build(array, &rows, 60)?,
                 }
             }
             FilterEditorKind::Contains => FilterEditor::Contains,
@@ -214,7 +213,6 @@ impl Document {
         version: u64,
         columns: &[u32],
         format: FileType,
-        options: ExportOptions,
     ) -> Result<Export> {
         format.require_enabled()?;
         let view = self.views.snapshot(version)?;
@@ -235,14 +233,11 @@ impl Document {
             .collect::<Result<Vec<_>>>()?;
         let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
         let schema = Arc::new(self.schema.project(&indices)?);
-        if format == FileType::Xlsx && !self.nested_export_columns(columns)?.is_empty() {
-            return Err(Error::Unsupported("XLSX export does not support nested columns; use Parquet or CSV/TSV with JSON conversion".into()));
-        }
-        if matches!(format, FileType::Csv | FileType::Tsv) && !options.convert_nested_to_json {
+        if format != FileType::Parquet {
             let nested = self.nested_export_columns(columns)?;
             if !nested.is_empty() {
                 return Err(Error::Unsupported(format!(
-                    "nested columns ({}) require JSON conversion for CSV/TSV; enable it or export as Parquet",
+                    "{format} cannot export nested columns ({}); use Parquet to preserve them",
                     nested.join(", ")
                 )));
             }
@@ -256,7 +251,7 @@ impl Document {
         ))
     }
 
-    /// Names of selected columns that require conversion for CSV/TSV export.
+    /// Names of selected nested columns, which require Parquet for export.
     /// Inspect types only; this does not scan or copy any cells.
     pub fn nested_export_columns(&self, columns: &[u32]) -> Result<Vec<String>> {
         let mut nested = Vec::new();
@@ -394,18 +389,33 @@ impl Document {
         filters: Option<&ViewState>,
         bins: u32,
     ) -> Result<Histogram> {
-        let numeric = self.numeric(column)?;
+        let array = self.column(column)?;
         let rows = self.rows_in(RowScope::facet(filters, column))?;
-        for_rows!(&rows, |it| numeric.histogram(it, bins))
+        histogram::counts(array, &rows, bins)
     }
 
     /// Distribution over the displayed rows, including this column's own
     /// filters and the text search. The axis still spans the source column.
     pub fn view_histogram(&self, version: u64, column: u32, bins: u32) -> Result<Histogram> {
-        let numeric = self.numeric(column)?;
+        let array = self.column(column)?;
         let view = self.views.snapshot(version)?;
         let rows = self.rows_in(RowScope::Rows(view.rows.clone()))?;
-        for_rows!(&rows, |it| numeric.histogram(it, bins))
+        histogram::counts(array, &rows, bins)
+    }
+
+    /// Distribution with exact inclusive bounds for each bin. Counts use the
+    /// same facet scope as [`Self::histogram`]; unbounded outer edges include
+    /// infinities. Empty/all-NaN data returns no ranges. Unlike filter editor
+    /// charts, this preserves the requested bin count.
+    pub fn histogram_ranges(
+        &self,
+        column: u32,
+        filters: Option<&ViewState>,
+        bins: u32,
+    ) -> Result<crate::RangeHistogram> {
+        let array = self.column(column)?;
+        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        histogram::ranges(array, &rows, bins)
     }
 
     /// Display text for a raw value of a date, time, timestamp or duration
@@ -487,7 +497,7 @@ impl Document {
                 s.distinct_count = values.len() as u64;
                 // Value order: the first and last non-null are the extremes.
                 let mut present = values.iter().filter_map(|v| v.label.as_ref());
-                s.min_label = present.next().cloned();
+                s.min_label = present.clone().next().cloned();
                 s.max_label = present.next_back().cloned();
                 values
             }
@@ -545,16 +555,6 @@ impl Document {
             Error::InvalidArgument(format!(
                 "column {} has more than {INDEX_LIMIT} distinct values; filter it with contains or a range",
                 self.info.columns[c as usize].name
-            ))
-        })
-    }
-
-    fn numeric(&self, c: u32) -> Result<Numeric<'_>> {
-        let array = self.column(c)?;
-        Numeric::new(array).ok_or_else(|| {
-            Error::InvalidArgument(format!(
-                "column {} ({}) is not numeric",
-                self.info.columns[c as usize].name, self.info.columns[c as usize].type_name
             ))
         })
     }

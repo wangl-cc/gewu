@@ -203,6 +203,30 @@ pub(crate) struct ExportData<'a> {
     pub rows: &'a [u32],
 }
 
+#[cfg(any(feature = "parquet", feature = "csv"))]
+impl ExportData<'_> {
+    /// Borrow contiguous source rows; gather sorted/filtered rows only for the
+    /// current bounded chunk. Neither codec needs a whole-column copy.
+    fn batch(self, rows: &[u32]) -> Result<RecordBatch> {
+        let columns = if let Some(&first) = rows
+            .first()
+            .filter(|_| rows.windows(2).all(|pair| pair[1] == pair[0] + 1))
+        {
+            self.columns
+                .iter()
+                .map(|array| array.slice(first as usize, rows.len()))
+                .collect()
+        } else {
+            let indices = arrow::array::UInt32Array::from(rows.to_vec());
+            self.columns
+                .iter()
+                .map(|array| arrow::compute::take(array.as_ref(), &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(RecordBatch::try_new(self.schema.clone(), columns)?)
+    }
+}
+
 #[derive(Clone, Copy)]
 #[cfg_attr(
     not(any(feature = "parquet", feature = "csv", feature = "xlsx")),

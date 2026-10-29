@@ -5,8 +5,8 @@
 //! the type parsers; value indexes remain owned by the document.
 
 pub(crate) mod bound;
+pub(crate) mod histogram;
 mod nested;
-pub(crate) mod range_histogram;
 mod scalar;
 mod text;
 
@@ -126,6 +126,36 @@ impl<'a> Column<'a> {
     /// Type-dependent filters. InValues is prepared separately once the
     /// document has obtained its lazy value index.
     pub(crate) fn prepare_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
+        let predicate = self.prepare_value_filter(filter)?;
+        let include_nulls = matches!(
+            filter,
+            Filter::Range {
+                include_nulls: true,
+                ..
+            } | Filter::Contains {
+                include_nulls: true,
+                ..
+            }
+        );
+        let array = self.array;
+        if !include_nulls || array.null_count() == 0 {
+            return Ok(predicate);
+        }
+        Ok(match predicate {
+            Predicate::Rows(test) => {
+                Predicate::rows(Box::new(move |row| array.is_null(row) || test(row)))
+            }
+            predicate => Predicate::batch(Box::new(move |rows, hits, cancel| {
+                predicate.evaluate(rows.clone(), hits, cancel)?;
+                for (row, hit) in rows.zip(hits) {
+                    *hit |= array.is_null(row);
+                }
+                Ok(())
+            })),
+        })
+    }
+
+    fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
         if let Filter::IsNull { negate, .. } = filter {
             let negate = *negate;
             let array = self.array;
@@ -226,6 +256,47 @@ mod tests {
     }
 
     #[test]
+    fn included_nulls_cover_dictionary_keys_values_and_nested_batches() {
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![Some(0), None, Some(1), Some(2), Some(0)]),
+                Arc::new(StringArray::from(vec![Some("keep"), None, Some("skip")])),
+            )
+            .unwrap(),
+        );
+        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(12)]),
+            None,
+            Some(vec![]),
+            Some(vec![Some(12)]),
+            Some(vec![Some(34)]),
+        ]));
+        for (array, text, excluded, included) in [
+            (dictionary, "keep", [false, false, false, true], [
+                true, true, false, true,
+            ]),
+            (list, "12", [false, false, true, false], [
+                true, false, true, false,
+            ]),
+        ] {
+            for (include_nulls, expected) in [(false, excluded), (true, included)] {
+                let test = Column::new(&array)
+                    .prepare_filter(&Filter::Contains {
+                        column: 0,
+                        text: text.into(),
+                        case_sensitive: true,
+                        include_nulls,
+                    })
+                    .unwrap();
+                let mut hits = [false; 4];
+                test.evaluate(1..5, &mut hits, &CancelToken::never())
+                    .unwrap();
+                assert_eq!(hits, expected);
+            }
+        }
+    }
+
+    #[test]
     fn empty_contains_fallback_matches_non_null_without_panicking() {
         let array: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
             Some(vec![Some(12)]),
@@ -234,6 +305,7 @@ mod tests {
         ]));
         let test = Column::new(&array)
             .prepare_filter(&Filter::Contains {
+                include_nulls: false,
                 column: 0,
                 text: String::new(),
                 case_sensitive: false,

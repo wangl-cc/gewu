@@ -36,20 +36,6 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
     })
 }
 
-pub(super) fn range<'a>(
-    array: &'a ArrayRef,
-    min: Option<&str>,
-    max: Option<&str>,
-) -> Result<Predicate<'a>> {
-    let min = min
-        .map(|text| Bound::parse(array.data_type(), text))
-        .transpose()?;
-    let max = max
-        .map(|text| Bound::parse(array.data_type(), text))
-        .transpose()?;
-    prepare_range(array, min.as_ref(), max.as_ref())
-}
-
 pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a>> {
     let text = text.trim();
     match DataKind::of(array.data_type()) {
@@ -57,7 +43,10 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
             .map(|target| bool_test(array, target))
             .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
         DataKind::Float => float::equals(array, text),
-        _ => range(array, Some(text), Some(text)),
+        _ => {
+            let bound = Bound::parse(array.data_type(), text)?;
+            prepare_range(array, Some(&bound), Some(&bound))
+        }
     }
 }
 
@@ -93,10 +82,6 @@ mod tests {
     use super::*;
     use crate::engine::CancelToken;
 
-    fn parse_axis_value(array: &ArrayRef, text: &str) -> Result<f64> {
-        Bound::parse(array.data_type(), text).map(|bound| bound.axis_value())
-    }
-
     fn matches(predicate: Predicate<'_>, len: usize) -> Vec<bool> {
         let mut matched = vec![false; len];
         predicate
@@ -120,24 +105,18 @@ mod tests {
         assert_eq!(matches(equals(&array, "9007199254740993").unwrap(), 4), [
             false, true, false, false
         ]);
+        let lower = Bound::parse(array.data_type(), "9007199254740992.1").unwrap();
+        let upper = Bound::parse(array.data_type(), "9007199254740993.9").unwrap();
         assert_eq!(
             matches(
-                range(
-                    &array,
-                    Some("9007199254740992.1"),
-                    Some("9007199254740993.9")
-                )
-                .unwrap(),
+                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 4
             ),
             [false, true, false, false]
         );
-        assert!(range(
-            &array,
-            Some("9007199254740993.1"),
-            Some("9007199254740993.0")
-        )
-        .is_err());
+        let lower = Bound::parse(array.data_type(), "9007199254740993.1").unwrap();
+        let upper = Bound::parse(array.data_type(), "9007199254740993.0").unwrap();
+        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
 
         let n: i256 = "123456789012345678901234567890123456789012345678901234567890"
             .parse()
@@ -194,13 +173,16 @@ mod tests {
                 .with_precision_and_scale(20, 0)
                 .unwrap(),
         );
+        let lower = Bound::parse(array.data_type(), "1e1000000").unwrap();
         assert_eq!(
-            matches(range(&array, Some("1e1000000"), None).unwrap(), 3),
+            matches(prepare_range(&array, Some(&lower), None).unwrap(), 3),
             [false; 3]
         );
+        let lower = Bound::parse(array.data_type(), "-1e1000000").unwrap();
+        let upper = Bound::parse(array.data_type(), "1e1000000").unwrap();
         assert_eq!(
             matches(
-                range(&array, Some("-1e1000000"), Some("1e1000000")).unwrap(),
+                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 3
             ),
             [true; 3]
@@ -219,12 +201,18 @@ mod tests {
     #[test]
     fn integer_ranges_are_exact_and_do_not_narrow_inputs_to_column_width() {
         let array: ArrayRef = Arc::new(Int8Array::from(vec![Some(-128), Some(2), Some(127), None]));
+        let lower = Bound::parse(array.data_type(), "1.1").unwrap();
+        let upper = Bound::parse(array.data_type(), "2.9").unwrap();
         assert_eq!(
-            matches(range(&array, Some("1.1"), Some("2.9")).unwrap(), 4),
+            matches(
+                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
+                4
+            ),
             [false, true, false, false]
         );
+        let lower = Bound::parse(array.data_type(), "128").unwrap();
         assert_eq!(
-            matches(range(&array, Some("128"), None).unwrap(), 4),
+            matches(prepare_range(&array, Some(&lower), None).unwrap(), 4),
             [false; 4]
         );
         assert!(search(&array, "2.0").unwrap().is_none());
@@ -232,8 +220,9 @@ mod tests {
             9_007_199_254_740_992,
             9_007_199_254_740_993,
         ]));
+        let lower = Bound::parse(array.data_type(), "9007199254740992.1").unwrap();
         assert_eq!(
-            matches(range(&array, Some("9007199254740992.1"), None).unwrap(), 2),
+            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
             [false, true]
         );
         let array: ArrayRef = Arc::new(UInt64Array::from(vec![u64::MAX - 1, u64::MAX]));
@@ -260,9 +249,13 @@ mod tests {
         assert_eq!(matches(search(&array, "NaN").unwrap().unwrap(), 4), [
             false, false, true, false
         ]);
-        assert!(range(&array, Some("NaN"), None).is_err());
-        assert!(range(&array, Some("2"), Some("1")).is_err());
-        assert!(range(&array, Some("9007199254740993"), Some("9007199254740992")).is_err());
+        assert!(Bound::parse(array.data_type(), "NaN").is_err());
+        let lower = Bound::parse(array.data_type(), "2").unwrap();
+        let upper = Bound::parse(array.data_type(), "1").unwrap();
+        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
+        let lower = Bound::parse(array.data_type(), "9007199254740993").unwrap();
+        let upper = Bound::parse(array.data_type(), "9007199254740992").unwrap();
+        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
         assert_eq!(matches(equals(&array, "1e100").unwrap(), 4), [false; 4]);
         let array: ArrayRef = Arc::new(Float64Array::from(vec![f64::INFINITY, f64::NEG_INFINITY]));
         assert_eq!(matches(search(&array, "+inf").unwrap().unwrap(), 2), [
@@ -274,27 +267,23 @@ mod tests {
             9_007_199_254_740_992.0,
             9_007_199_254_740_994.0,
         ]));
+        let lower = Bound::parse(array.data_type(), "9007199254740993").unwrap();
         assert_eq!(
-            matches(range(&array, Some("9007199254740993"), None).unwrap(), 2),
+            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
             [false, true]
         );
         let edge = u64::MAX as f64;
         let array: ArrayRef = Arc::new(Float64Array::from(vec![edge.next_down(), edge]));
+        let lower = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
         assert_eq!(
-            matches(
-                range(&array, None, Some("18446744073709551615")).unwrap(),
-                2
-            ),
+            matches(prepare_range(&array, None, Some(&lower)).unwrap(), 2),
             [true, false]
         );
+        let lower = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
+        let upper = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
         assert_eq!(
             matches(
-                range(
-                    &array,
-                    Some("18446744073709551615"),
-                    Some("18446744073709551615")
-                )
-                .unwrap(),
+                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 2
             ),
             [false; 2]
@@ -309,26 +298,47 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            parse_axis_value(&array, "9007199254740992").unwrap(),
-            parse_axis_value(&array, "9007199254740993").unwrap()
+            Bound::parse(array.data_type(), "9007199254740992")
+                .unwrap()
+                .axis_value(),
+            Bound::parse(array.data_type(), "9007199254740993")
+                .unwrap()
+                .axis_value()
         );
         assert_eq!(matches(equals(&array, "9007199254740993").unwrap(), 2), [
             false, true
         ]);
-        assert_eq!(parse_axis_value(&array, "1e999").unwrap(), f64::INFINITY);
         assert_eq!(
-            matches(range(&array, Some("1e999"), None).unwrap(), 2),
+            Bound::parse(array.data_type(), "1e999")
+                .unwrap()
+                .axis_value(),
+            f64::INFINITY
+        );
+        let lower = Bound::parse(array.data_type(), "1e999").unwrap();
+        assert_eq!(
+            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
             [false; 2]
         );
         for text in ["NaN", "inf", "1.2.3", "cat"] {
-            assert!(parse_axis_value(&array, text).is_err());
+            assert!(Bound::parse(array.data_type(), text).is_err());
         }
         let array: ArrayRef = Arc::new(Float32Array::from(vec![1.0]));
-        assert_eq!(parse_axis_value(&array, "inf").unwrap(), f64::INFINITY);
-        assert!(parse_axis_value(&array, "NaN").is_err());
+        assert_eq!(
+            Bound::parse(array.data_type(), "inf").unwrap().axis_value(),
+            f64::INFINITY
+        );
+        assert!(Bound::parse(array.data_type(), "NaN").is_err());
         let array: ArrayRef = Arc::new(Int8Array::from(vec![1]));
-        assert_eq!(parse_axis_value(&array, "1000").unwrap(), 1000.0);
-        assert_eq!(parse_axis_value(&array, "1.5").unwrap(), 1.5);
+        assert_eq!(
+            Bound::parse(array.data_type(), "1000")
+                .unwrap()
+                .axis_value(),
+            1000.0
+        );
+        assert_eq!(
+            Bound::parse(array.data_type(), "1.5").unwrap().axis_value(),
+            1.5
+        );
     }
 
     #[test]
@@ -376,7 +386,7 @@ mod tests {
         ];
         for (array, text, coordinate) in cases {
             assert_eq!(
-                parse_axis_value(&array, text).unwrap(),
+                Bound::parse(array.data_type(), text).unwrap().axis_value(),
                 coordinate,
                 "{}",
                 array.data_type()
@@ -394,11 +404,13 @@ mod tests {
         ]));
         let text = "1970-04-15T05:59:59.254740993";
         assert_eq!(
-            parse_axis_value(&array, text).unwrap(),
+            Bound::parse(array.data_type(), text).unwrap().axis_value(),
             9_007_199_254_740_992.0
         );
         assert_eq!(matches(equals(&array, text).unwrap(), 2), [false, true]);
-        assert!(range(&array, Some("1970-04-16"), Some("1970-04-15")).is_err());
+        let lower = Bound::parse(array.data_type(), "1970-04-16").unwrap();
+        let upper = Bound::parse(array.data_type(), "1970-04-15").unwrap();
+        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
     }
 
     #[test]

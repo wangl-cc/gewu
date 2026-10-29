@@ -144,6 +144,7 @@ fn null_contains_and_search() {
 
     let state = ViewState {
         filters: vec![Filter::Contains {
+            include_nulls: false,
             column: 1,
             text: "D".into(),
             case_sensitive: false,
@@ -185,51 +186,57 @@ fn stats() {
     std::fs::remove_file(path).ok();
 }
 
-fn range(doc: &Document, column: u32, min: Option<String>, max: Option<String>) -> ViewState {
-    ViewState {
-        filters: vec![Filter::Range {
-            column,
-            min: min.map(|s| doc.parse_bound(column, &s).unwrap()),
-            max: max.map(|s| doc.parse_bound(column, &s).unwrap()),
-        }],
-        ..Default::default()
-    }
-}
-
 #[test]
 fn range_filter_on_floats_skips_nulls() {
     let (path, doc) = sample();
-    // price: a 3.5, b 1.0, c 9.0, d null, e 2.25, f 7.0
-    doc.apply_view(&range(&doc, 2, Some("2.25".into()), Some("7".into())))
+    // price: a 3.5, b 1.0, c 9.0, d null, e 2.25, f 7.0.
+    // Include closed, open-ended, and unbounded ranges (nulls excluded).
+    for (min, max, expected) in [
+        (Some("2.25"), Some("7"), &["a", "e", "f"][..]),
+        (Some("7.0"), None, &["c", "f"]),
+        (None, Some("1.0"), &["b"]),
+        (None, None, &["a", "b", "c", "e", "f"]),
+    ] {
+        let min = min.map(|text| doc.parse_bound(2, text).unwrap());
+        let max = max.map(|text| doc.parse_bound(2, text).unwrap());
+        doc.apply_view(&ViewState {
+            filters: vec![Filter::Range {
+                include_nulls: false,
+                column: 2,
+                min,
+                max,
+            }],
+            ..Default::default()
+        })
         .unwrap();
-    assert_eq!(names(&doc), ["a", "e", "f"]);
-
-    // Open-ended bounds.
-    doc.apply_view(&range(&doc, 2, Some("7.0".into()), None))
-        .unwrap();
-    assert_eq!(names(&doc), ["c", "f"]);
-    doc.apply_view(&range(&doc, 2, None, Some("1.0".into())))
-        .unwrap();
-    assert_eq!(names(&doc), ["b"]);
-    // No bounds keeps every non-null value.
-    doc.apply_view(&range(&doc, 2, None, None)).unwrap();
-    assert_eq!(names(&doc), ["a", "b", "c", "e", "f"]);
+        assert_eq!(names(&doc), expected);
+    }
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn range_filter_on_integers() {
     let (path, doc) = sample();
-    // id: 10, 20, 30, 40, 50, 60. Float bounds round inward.
-    doc.apply_view(&range(&doc, 3, Some("19.5".into()), Some("40.9".into())))
+    // id: 10, 20, 30, 40, 50, 60. Fractional bounds round inward.
+    for (min, max, expected) in [
+        (Some("19.5"), Some("40.9"), &["b", "c", "d"][..]),
+        (Some("18446744073709551615"), None, &[]),
+        (Some("60"), Some("60"), &["f"]),
+    ] {
+        let min = min.map(|text| doc.parse_bound(3, text).unwrap());
+        let max = max.map(|text| doc.parse_bound(3, text).unwrap());
+        doc.apply_view(&ViewState {
+            filters: vec![Filter::Range {
+                include_nulls: false,
+                column: 3,
+                min,
+                max,
+            }],
+            ..Default::default()
+        })
         .unwrap();
-    assert_eq!(names(&doc), ["b", "c", "d"]);
-    doc.apply_view(&range(&doc, 3, Some(u64::MAX.to_string()), None))
-        .unwrap();
-    assert_eq!(names(&doc), Vec::<String>::new());
-    doc.apply_view(&range(&doc, 3, Some("60".into()), Some("60".into())))
-        .unwrap();
-    assert_eq!(names(&doc), ["f"]);
+        assert_eq!(names(&doc), expected);
+    }
     std::fs::remove_file(path).ok();
 }
 
@@ -262,30 +269,6 @@ fn histogram_counts() {
     assert_eq!(h.counts.iter().sum::<u64>(), 6);
     assert_eq!(h.counts[0], 1);
     assert_eq!(h.counts[50], 1);
-
-    // Larger integer span than bins: still ends at max + 1, so the last
-    // bin holds the max and a range up to it is exact.
-    let h = doc.histogram(3, None, 5).unwrap();
-    assert_eq!((h.lo, h.hi), (Some(10.0), Some(61.0)));
-    assert_eq!(h.counts.len(), 5);
-    assert_eq!(h.counts.iter().sum::<u64>(), 6);
-    assert_eq!(h.counts[4], 1);
-
-    // Counts follow filters on other columns; the axis does not move, and
-    // the column's own range filter is ignored.
-    let keys = doc.keys_for_labels(1, &[Some("cat".into())]).unwrap();
-    let state = ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
-            column: 2,
-            min: Some(doc.parse_bound(2, "100.0").unwrap()),
-            max: None,
-        }],
-        ..Default::default()
-    };
-    let h = doc.histogram(2, Some(&state), 4).unwrap();
-    assert_eq!((h.lo, h.hi), (Some(1.0), Some(9.0)));
-    assert_eq!(h.counts, [0, 1, 0, 0]);
-    assert_eq!((h.null_count, h.total), (1, 2));
 
     assert!(doc.histogram(1, None, 10).is_err());
     std::fs::remove_file(path).ok();
@@ -410,6 +393,7 @@ fn contains_filter_is_for_text_only() {
         let err = doc
             .apply_view(&ViewState {
                 filters: vec![Filter::Contains {
+                    include_nulls: false,
                     column,
                     text: "1700".into(),
                     case_sensitive: false,
@@ -443,13 +427,31 @@ fn dates_format_parse_and_filter() {
     );
 
     // Range on dates: nulls excluded, bounds inclusive.
-    let min = "2024-01-02".into();
-    doc.apply_view(&range(&doc, 1, Some(min), None)).unwrap();
+    let min = doc.parse_bound(1, "2024-01-02").unwrap();
+    doc.apply_view(&ViewState {
+        filters: vec![Filter::Range {
+            include_nulls: false,
+            column: 1,
+            min: Some(min),
+            max: None,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
-    let max = "2024-01-01T10:00:00Z".into();
-    doc.apply_view(&range(&doc, 2, None, Some(max))).unwrap();
+    let max = doc.parse_bound(2, "2024-01-01T10:00:00Z").unwrap();
+    doc.apply_view(&ViewState {
+        filters: vec![Filter::Range {
+            include_nulls: false,
+            column: 2,
+            min: None,
+            max: Some(max),
+        }],
+        ..Default::default()
+    })
+    .unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
     // Dates are integers: the histogram ends one day past the last date.

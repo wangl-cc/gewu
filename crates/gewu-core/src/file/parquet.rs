@@ -2,10 +2,6 @@
 
 use std::{collections::BTreeSet, fs::File};
 
-use arrow::{
-    array::{RecordBatch, UInt32Array},
-    compute::take,
-};
 use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::Compression,
@@ -61,13 +57,7 @@ pub(super) fn write(
     let mut writer = ArrowWriter::try_new(file, data.schema.clone(), Some(properties))?;
     for chunk in data.rows.chunks(CHUNK_ROWS) {
         progress.check()?;
-        let indices = UInt32Array::from(chunk.to_vec());
-        let columns = data
-            .columns
-            .iter()
-            .map(|a| take(a.as_ref(), &indices, None))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        writer.write(&RecordBatch::try_new(data.schema.clone(), columns)?)?;
+        writer.write(&data.batch(chunk)?)?;
         progress.advance(chunk.len());
     }
     progress.check()?;

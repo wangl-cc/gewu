@@ -16,13 +16,6 @@ use crate::{
     Error, FileType, Result,
 };
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ExportOptions {
-    /// Encode nested CSV/TSV cells as JSON. Otherwise nested columns are
-    /// rejected. Parquet always preserves nested types and ignores this flag.
-    pub convert_nested_to_json: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
     /// Rows processed so far. Reaching `total_rows` does not imply the final
@@ -92,8 +85,8 @@ impl Export {
 
     /// Write on a background thread. Headers are included for CSV/TSV, nulls
     /// are empty fields, and scalar values use Arrow's full display precision.
-    /// Nested values are compact JSON, with explicit null children. Non-finite
-    /// floats inside JSON are strings ("NaN", "inf", "-inf"), not nulls.
+    /// CSV/TSV and XLSX reject nested columns. Empty strings and nulls both
+    /// use empty CSV/TSV fields under the standard Arrow CSV encoding.
     /// Parquet preserves Arrow types and nulls. A sibling temporary file is
     /// atomically renamed only after the complete output has been flushed.
     ///

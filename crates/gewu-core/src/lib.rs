@@ -21,9 +21,8 @@ mod view;
 
 pub use column::{bound::Bound, ColumnCapabilities};
 pub use document::Document;
-pub use engine::CancelToken;
 pub use error::{Error, Result};
-pub use export::{Export, ExportOptions, ExportProgress};
+pub use export::{Export, ExportProgress};
 pub use file::{FileMetadata, FileType, OpenOptions};
 pub use kind::DataKind;
 pub use view::{

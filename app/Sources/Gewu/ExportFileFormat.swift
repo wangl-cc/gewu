@@ -10,8 +10,6 @@ enum ExportFileFormat: String, CaseIterable {
         self = format
     }
 
-    var supportsJSONConversion: Bool { self == .csv || self == .tsv }
-
     var contentType: UTType {
         switch self {
         case .csv: return .commaSeparatedText

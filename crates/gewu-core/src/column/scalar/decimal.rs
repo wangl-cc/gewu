@@ -8,7 +8,7 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{predicate::Predicate, Error, Result};
+use crate::predicate::Predicate;
 
 /// Signed digits times 10^exponent. Trailing digits are retained because they
 /// specify search precision; leading zeros do not affect that precision.
@@ -20,6 +20,16 @@ pub(in crate::column) struct Literal {
 }
 
 impl Literal {
+    /// Integer and duration searches accept signed digits only, including
+    /// out-of-domain values, without decimal points or exponents.
+    pub(in crate::column) fn parse_integer(text: &str) -> Option<Self> {
+        let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Self::parse(text)
+    }
+
     /// Construct a parsed decimal directly from a native coefficient. Formatting
     /// its digits is lossless; this does not round-trip through a text parser.
     pub(in crate::column) fn from_coefficient(coefficient: i256, scale: i8) -> Self {
@@ -209,33 +219,6 @@ impl Endpoint {
             other => other,
         }
     }
-}
-
-pub(in crate::column) fn endpoints(
-    min: Option<&str>,
-    max: Option<&str>,
-    scale: i8,
-) -> Result<(Endpoint, Endpoint)> {
-    let parse = |text: &str| {
-        Literal::parse(text).ok_or_else(|| {
-            Error::InvalidArgument(format!("cannot read {text:?} as a decimal number"))
-        })
-    };
-    let min = min.map(parse).transpose()?;
-    let max = max.map(parse).transpose()?;
-    if min
-        .as_ref()
-        .zip(max.as_ref())
-        .is_some_and(|(a, b)| a.compare(b).is_gt())
-    {
-        return Err(Error::InvalidArgument(
-            "minimum must not exceed maximum".into(),
-        ));
-    }
-    Ok((
-        min.map_or(Endpoint::Below, |v| v.coefficient(scale, true)),
-        max.map_or(Endpoint::Above, |v| v.coefficient(scale, false)),
-    ))
 }
 
 pub(in crate::column) trait Coefficient:

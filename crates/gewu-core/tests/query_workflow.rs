@@ -29,6 +29,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     let keys = doc.keys_for_labels(1, &[Some("2".into())]).unwrap();
     let state = ViewState {
         filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
+            include_nulls: false,
             column: 0,
             min: Some(doc.parse_bound(0, "65530.5").unwrap()),
             max: Some(doc.parse_bound(0, "131080").unwrap()),
@@ -52,6 +53,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
 
     let invalid = ViewState {
         filters: vec![Filter::Range {
+            include_nulls: false,
             column: 0,
             min: Some(doc.parse_bound(0, "20").unwrap()),
             max: Some(doc.parse_bound(0, "10").unwrap()),

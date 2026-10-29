@@ -10,7 +10,7 @@ use arrow::{
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
-use super::decimal::{endpoints, native_range, Endpoint};
+use super::decimal::{native_range, Endpoint, Literal};
 use crate::{predicate::Predicate, DataKind, Error, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
@@ -24,12 +24,11 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
             (start, start + step)
         }),
         DataKind::Duration => {
-            let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
-            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            let Some(literal) = Literal::parse_integer(text) else {
                 return Ok(None);
-            }
-            let (lo, hi) = endpoints(Some(text), Some(text), 0)?;
-            return Ok(Some(bind(array, lo, hi)));
+            };
+            let value = literal.coefficient(0, true);
+            return Ok(Some(bind(array, value, value)));
         }
         _ => unreachable!("temporal dispatch"),
     };

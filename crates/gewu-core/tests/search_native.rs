@@ -23,23 +23,19 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let doc = Document::open(file.path()).unwrap();
 
     for (query, expected) in queries {
-        let states = [ViewState {
+        let state = ViewState {
             search: Some((*query).into()),
             ..Default::default()
-        }];
-        for state in states {
-            let view = doc.apply_view(&state).unwrap();
-            let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
-            assert_eq!(
-                &rows.source_rows,
-                expected,
-                "query {query:?}, type {:?}, state {state:?}",
-                batch.schema().field(0).data_type()
-            );
-            if state.search.is_some() {
-                assert_eq!(rows.matched, vec![true; expected.len()]);
-            }
-        }
+        };
+        let view = doc.apply_view(&state).unwrap();
+        let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
+        assert_eq!(
+            &rows.source_rows,
+            expected,
+            "query {query:?}, type {:?}",
+            batch.schema().field(0).data_type()
+        );
+        assert_eq!(rows.matched, vec![true; expected.len()]);
     }
 }
 
@@ -58,6 +54,9 @@ fn integer_search_keeps_native_bounds_and_nulls() {
                     (&((max as i128) + 1).to_string(), vec![]),
                     ("+1", vec![1]),
                     ("1.0", vec![]),
+                    ("1e0", vec![]),
+                    ("999999999999999999999999999999999999999999999999999999999999999999999999999999999", vec![]),
+                    ("-999999999999999999999999999999999999999999999999999999999999999999999999999999999", vec![]),
                     ("word", vec![]),
                 ],
             );
@@ -172,7 +171,22 @@ fn time_of_day_search_names_a_period() {
 fn duration_search_is_by_value() {
     let d: ArrayRef = Arc::new(Int64Array::from(vec![Some(5), Some(50), None]));
     let d = cast(&d, &DataType::Duration(TimeUnit::Second)).unwrap();
-    check_queries(d, &[("5", vec![0]), ("50", vec![1]), ("5s", vec![])]);
+    check_queries(d, &[
+        ("5", vec![0]),
+        ("+5", vec![0]),
+        ("50", vec![1]),
+        ("5s", vec![]),
+        ("5.0", vec![]),
+        ("5e0", vec![]),
+        (
+            "999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+            vec![],
+        ),
+        (
+            "-999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+            vec![],
+        ),
+    ]);
 }
 
 #[test]

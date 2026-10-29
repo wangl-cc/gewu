@@ -175,6 +175,7 @@ pub enum Filter {
         column: u32,
         text: String,
         case_sensitive: bool,
+        include_nulls: bool,
     },
     /// Exact typed equality; parsing is owned by the column's type.
     Equals {
@@ -186,6 +187,7 @@ pub enum Filter {
         column: u32,
         min: Option<Arc<Bound>>,
         max: Option<Arc<Bound>>,
+        include_nulls: bool,
     },
 }
 
@@ -228,8 +230,6 @@ pub struct RangeBounds {
 pub struct RangeHistogram {
     pub histogram: Histogram,
     pub ranges: Vec<RangeBounds>,
-    pub min_label: String,
-    pub max_label: String,
 }
 
 #[derive(uniffi::Enum)]
@@ -258,8 +258,6 @@ impl From<core::FilterSpec> for FilterSpec {
                 kind: kind.into(),
                 distribution: distribution.map(|distribution| RangeHistogram {
                     histogram: distribution.histogram.into(),
-                    min_label: distribution.min_label,
-                    max_label: distribution.max_label,
                     ranges: distribution
                         .ranges
                         .into_iter()
@@ -323,21 +321,14 @@ pub struct DistinctValue {
     pub count: u64,
 }
 
-#[derive(uniffi::Record)]
-pub struct DistinctResult {
-    pub values: Vec<DistinctValue>,
-    pub total: u64,
-    pub truncated: bool,
-    /// False when the column has too many values to index: the keys then
-    /// cannot be used in an `in_values` filter.
-    pub keyed: bool,
-}
-
-/// Distribution of a numeric column. Bins split `[lo, hi)` evenly.
+/// Distribution of a numeric column with an approximate display axis.
+/// Range filters use `RangeHistogram.ranges` for exact bin boundaries.
 #[derive(uniffi::Record)]
 pub struct Histogram {
     pub lo: Option<f64>,
     pub hi: Option<f64>,
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
     pub integer: bool,
     pub counts: Vec<u64>,
     pub null_count: u64,
@@ -371,16 +362,24 @@ impl From<Filter> for core::Filter {
                 column,
                 text,
                 case_sensitive,
+                include_nulls,
             } => Self::Contains {
                 column,
                 text,
                 case_sensitive,
+                include_nulls,
             },
             Filter::Equals { column, value } => Self::Equals { column, value },
-            Filter::Range { column, min, max } => Self::Range {
+            Filter::Range {
+                column,
+                min,
+                max,
+                include_nulls,
+            } => Self::Range {
                 column,
                 min: min.map(|bound| bound.inner.clone()),
                 max: max.map(|bound| bound.inner.clone()),
+                include_nulls,
             },
         }
     }
@@ -412,11 +411,6 @@ impl From<FileType> for core::FileType {
             FileType::Xlsx => Self::Xlsx,
         }
     }
-}
-
-#[derive(uniffi::Record)]
-pub struct ExportOptions {
-    pub convert_nested_to_json: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -456,6 +450,8 @@ impl From<core::Histogram> for Histogram {
         Self {
             lo: h.lo,
             hi: h.hi,
+            min_label: h.min_label,
+            max_label: h.max_label,
             integer: h.integer,
             counts: h.counts,
             null_count: h.null_count,
@@ -552,17 +548,11 @@ impl GewuDocument {
         version: u64,
         columns: Vec<u32>,
         format: FileType,
-        options: ExportOptions,
     ) -> Result<Arc<GewuExport>, GewuError> {
         Ok(Arc::new(GewuExport {
-            inner: self.inner.prepare_export(
-                version,
-                &columns,
-                format.into(),
-                core::ExportOptions {
-                    convert_nested_to_json: options.convert_nested_to_json,
-                },
-            )?,
+            inner: self
+                .inner
+                .prepare_export(version, &columns, format.into())?,
         }))
     }
 
@@ -598,45 +588,6 @@ impl GewuDocument {
             source_rows: b.source_rows,
             matched: b.matched,
         })
-    }
-
-    /// Distinct values with counts, for the checkbox filter. Pass the current
-    /// view state to count only rows that pass filters on other columns.
-    pub fn distinct_values(
-        &self,
-        column: u32,
-        state: Option<ViewState>,
-        limit: u32,
-    ) -> Result<DistinctResult, GewuError> {
-        let state: Option<core::ViewState> = state.map(Into::into);
-        let d = self.inner.distinct_values(column, state.as_ref(), limit)?;
-        Ok(DistinctResult {
-            values: d
-                .values
-                .into_iter()
-                .map(|v| DistinctValue {
-                    key: v.key,
-                    label: v.label,
-                    count: v.count,
-                })
-                .collect(),
-            total: d.total,
-            truncated: d.truncated,
-            keyed: d.keyed,
-        })
-    }
-
-    /// Distribution for the range filter. Pass the current view state to
-    /// count only rows that pass filters on other columns. Slow on big files:
-    /// call off the main thread.
-    pub fn histogram(
-        &self,
-        column: u32,
-        state: Option<ViewState>,
-        bins: u32,
-    ) -> Result<Histogram, GewuError> {
-        let state: Option<core::ViewState> = state.map(Into::into);
-        Ok(self.inner.histogram(column, state.as_ref(), bins)?.into())
     }
 
     /// Distribution over the current displayed rows, with all filters applied.
@@ -769,11 +720,13 @@ mod tests {
                 value: "9007199254740993".into(),
             },
             Filter::Range {
+                include_nulls: false,
                 column: 0,
                 min: Some(large),
                 max: None,
             },
             Filter::Range {
+                include_nulls: false,
                 column: 0,
                 min: Some(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()),
                 max: None,
@@ -858,8 +811,11 @@ mod tests {
         else {
             panic!("many distinct integers should offer a typed range histogram");
         };
-        assert_eq!(distribution.min_label, base.to_string());
-        assert_eq!(distribution.max_label, (base + 999).to_string());
+        assert_eq!(distribution.histogram.min_label, Some(base.to_string()));
+        assert_eq!(
+            distribution.histogram.max_label,
+            Some((base + 999).to_string())
+        );
         assert_eq!(
             distribution.ranges.len(),
             distribution.histogram.counts.len()
@@ -876,6 +832,7 @@ mod tests {
                 .apply_view(ViewState {
                     sort: vec![],
                     filters: vec![Filter::Range {
+                        include_nulls: false,
                         column: 0,
                         min: bounds.min.clone(),
                         max: bounds.max.clone(),
@@ -906,17 +863,10 @@ mod tests {
             (FileType::Parquet, "parquet", "Parquet"),
         ] {
             let destination = source.with_extension(extension);
-            doc.prepare_export(
-                doc.current_view().version,
-                vec![0, 1],
-                format,
-                ExportOptions {
-                    convert_nested_to_json: false,
-                },
-            )
-            .unwrap()
-            .write(destination.to_str().unwrap().to_owned())
-            .unwrap();
+            doc.prepare_export(doc.current_view().version, vec![0, 1], format)
+                .unwrap()
+                .write(destination.to_str().unwrap().to_owned())
+                .unwrap();
             let reopened = GewuDocument::open(destination.to_str().unwrap().to_owned()).unwrap();
             let info = reopened.info();
             assert_eq!(info.format, name);

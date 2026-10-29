@@ -13,7 +13,6 @@ struct HistogramChart: NSViewRepresentable {
     @Binding var selection: HistogramSelection
     var interactive = true
     var labelFormatter: ((Double) -> String)?
-    var axisLabels: (String, String)?
 
     final class Coordinator {
         var histogram: Histogram?
@@ -26,7 +25,11 @@ struct HistogramChart: NSViewRepresentable {
     func updateNSView(_ view: HistogramView, context: Context) {
         view.isInteractive = interactive
         view.labelFormatter = labelFormatter
-        view.axisLabels = axisLabels
+        if let min = histogram.minLabel, let max = histogram.maxLabel {
+            view.axisLabels = (min, max)
+        } else {
+            view.axisLabels = nil
+        }
         if context.coordinator.histogram != histogram {
             view.setData(counts: histogram.counts, lo: histogram.lo ?? 0,
                          hi: histogram.hi ?? 1, integer: histogram.integer)

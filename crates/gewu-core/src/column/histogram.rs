@@ -1,5 +1,5 @@
-//! Filter histograms retain exact typed bin bounds. Approximate axis values
-//! are display-only; counting and applying a selected bin use the same cuts.
+//! Shared native binning for statistics and filter charts. Approximate axis
+//! values are display-only; counting and selecting a bin use the same cuts.
 
 use arrow::{
     array::{
@@ -13,15 +13,111 @@ use crate::{scope::Selection, Bound, Error, Histogram, RangeBounds, RangeHistogr
 /// Range-filter charts have a bounded number of options, independent of row count.
 const MAX_BINS: u32 = 60;
 
+/// A missing finite domain is different from an unsupported physical type.
+enum Domain<H> {
+    Bins(H),
+    Empty,
+    InfiniteOnly,
+    Unsupported,
+}
+
+/// Counting and native cuts are shared; only callers needing selectable bins
+/// materialize typed bounds. The closure is never evaluated for statistics.
+trait Output: Sized {
+    fn finish(
+        histogram: Histogram,
+        ranges: impl FnOnce() -> Result<Vec<RangeBounds>>,
+    ) -> Result<Self>;
+}
+
+impl Output for Histogram {
+    fn finish(histogram: Histogram, _: impl FnOnce() -> Result<Vec<RangeBounds>>) -> Result<Self> {
+        Ok(histogram)
+    }
+}
+
+impl Output for RangeHistogram {
+    fn finish(
+        histogram: Histogram,
+        ranges: impl FnOnce() -> Result<Vec<RangeBounds>>,
+    ) -> Result<Self> {
+        Ok(Self {
+            histogram,
+            ranges: ranges()?,
+        })
+    }
+}
+
 pub(crate) fn build(
     array: &ArrayRef,
     rows: &Selection,
     bins: u32,
 ) -> Result<Option<RangeHistogram>> {
+    Ok(match build_bins(array, rows, bins.min(MAX_BINS))? {
+        Domain::Bins(histogram) => Some(histogram),
+        Domain::Empty | Domain::InfiniteOnly | Domain::Unsupported => None,
+    })
+}
+
+/// Statistics use the requested bin count and the caller's row scope, while
+/// sharing exact cuts with filter charts. Empty/all-NaN columns have no axis;
+/// an infinity-only column has no finite domain and is an explicit error.
+pub(crate) fn counts(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<Histogram> {
+    statistics(array, rows, bins)
+}
+
+pub(crate) fn ranges(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<RangeHistogram> {
+    statistics(array, rows, bins)
+}
+
+fn statistics<H: Output>(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<H> {
+    if !super::Column::new(array).capabilities().histogram {
+        return Err(Error::InvalidArgument(format!(
+            "{} does not support histograms",
+            array.data_type()
+        )));
+    }
+    match build_bins(array, rows, bins)? {
+        Domain::Bins(histogram) => return Ok(histogram),
+        Domain::Empty => {}
+        Domain::InfiniteOnly => {
+            return Err(Error::InvalidArgument(
+                "histogram needs at least one finite value".into(),
+            ))
+        }
+        Domain::Unsupported => {
+            return Err(Error::InvalidArgument(
+                "column has no representable histogram domain".into(),
+            ))
+        }
+    }
+    let total = rows.len() as u64;
+    let null_count = match rows {
+        Selection::All(_) => array.null_count() as u64,
+        Selection::Rows(_) if array.null_count() == 0 => 0,
+        Selection::Rows(_) => rows.iter().filter(|&row| array.is_null(row)).count() as u64,
+    };
+    H::finish(
+        Histogram {
+            lo: None,
+            hi: None,
+            min_label: None,
+            max_label: None,
+            integer: array.data_type().is_integer() || array.data_type().is_temporal(),
+            counts: Vec::new(),
+            null_count,
+            nan_count: total - null_count,
+            total,
+        },
+        || Ok(Vec::new()),
+    )
+}
+
+fn build_bins<H: Output>(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<Domain<H>> {
     if bins == 0 {
         return Err(Error::InvalidArgument("bins must be at least 1".into()));
     }
-    let bins = bins.min(MAX_BINS) as usize;
+    let bins = bins as usize;
     match array.data_type() {
         data_type if data_type.is_integer() => {
             downcast_integer_array!(array => integer(array, rows, bins), _ => unreachable!("integer dispatch"))
@@ -30,9 +126,20 @@ pub(crate) fn build(
         | DataType::Date64
         | DataType::Time32(_)
         | DataType::Time64(_)
-        | DataType::Timestamp(..)
-        | DataType::Duration(_) => {
-            downcast_temporal_array!(array => integer(array, rows, bins), _ => Ok(None))
+        | DataType::Timestamp(..) => {
+            downcast_temporal_array!(array => integer(array, rows, bins), _ => Ok(Domain::Unsupported))
+        }
+        DataType::Duration(TimeUnit::Second) => {
+            integer(array.as_primitive::<DurationSecondType>(), rows, bins)
+        }
+        DataType::Duration(TimeUnit::Millisecond) => {
+            integer(array.as_primitive::<DurationMillisecondType>(), rows, bins)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            integer(array.as_primitive::<DurationMicrosecondType>(), rows, bins)
+        }
+        DataType::Duration(TimeUnit::Nanosecond) => {
+            integer(array.as_primitive::<DurationNanosecondType>(), rows, bins)
         }
         DataType::Float16 => floating(array.as_primitive::<Float16Type>(), rows, bins),
         DataType::Float32 => floating(array.as_primitive::<Float32Type>(), rows, bins),
@@ -71,7 +178,7 @@ pub(crate) fn build(
         ),
         // Dictionaries still support typed text ranges, but have no chart until
         // their encoded values can be counted without decoding the source column.
-        _ => Ok(None),
+        _ => Ok(Domain::Unsupported),
     }
 }
 
@@ -86,16 +193,16 @@ where
     }))
 }
 
-fn integer<T: ArrowPrimitiveType>(
+fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
-) -> Result<Option<RangeHistogram>>
+) -> Result<Domain<H>>
 where
     T::Native: Into<i128> + Ord,
 {
     let Some((min, max)) = extrema(array) else {
-        return Ok(None);
+        return Ok(Domain::Empty);
     };
     let (min, max) = (min.into(), max.into());
     // Every supported integer/temporal array fits i64 or u64, so this inclusive
@@ -112,38 +219,38 @@ where
             Bound::from_i64(array.data_type(), value as i64)
         }
     };
-    let ranges = bin_ranges(&cuts, bound, |value| bound(value - 1))?;
-    let min_label = bound(min)?.display().to_owned();
-    let max_label = bound(max)?.display().to_owned();
-    let histogram = count(
-        array,
-        rows,
-        n,
-        true,
-        axis(min as f64, (max + 1) as f64, n),
-        |value| Some(cuts.partition_point(|&cut| cut <= value.into())),
-    );
-    Ok(Some(RangeHistogram {
-        histogram,
-        ranges,
-        min_label,
-        max_label,
-    }))
+    let mut lo = min as f64;
+    let mut hi = (max + 1) as f64;
+    if lo as i128 > min {
+        lo = lo.next_down();
+    }
+    if (hi as i128) < max + 1 {
+        hi = hi.next_up();
+    }
+    let mut histogram = count(array, rows, n, true, axis(lo, hi, n), |value| {
+        Some(cuts.partition_point(|&cut| cut <= value.into()))
+    });
+    histogram.min_label = Some(bound(min)?.display().to_owned());
+    histogram.max_label = Some(bound(max)?.display().to_owned());
+    H::finish(histogram, || {
+        bin_ranges(&cuts, bound, |value| bound(value - 1))
+    })
+    .map(Domain::Bins)
 }
 
-fn decimal<T: ArrowPrimitiveType>(
+fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
     narrow: impl Fn(i256) -> T::Native,
-) -> Result<Option<RangeHistogram>>
+) -> Result<Domain<H>>
 where
     T::Native: Ord,
 {
     let Some((min, max)) = extrema(array) else {
-        return Ok(None);
+        return Ok(Domain::Empty);
     };
     let (min, max) = (widen(min), widen(max));
     // Malformed arrays can hold coefficients outside their declared decimal
@@ -152,7 +259,7 @@ where
         .checked_sub(min)
         .and_then(|span| span.checked_add(i256::ONE))
     else {
-        return Ok(None);
+        return Ok(Domain::Unsupported);
     };
     let n = span
         .to_i128()
@@ -170,44 +277,44 @@ where
         })
         .collect::<Vec<_>>();
     let bound = |coefficient| Bound::from_decimal(array.data_type(), coefficient, scale);
-    let ranges = bin_ranges(&cuts, bound, |coefficient| bound(coefficient - i256::ONE))?;
     let (lower, upper) = (bound(min)?, bound(max)?);
     let (lo, hi) = (lower.axis_value(), upper.axis_value());
-    let min_label = lower.display().to_owned();
-    let max_label = upper.display().to_owned();
-    let native_cuts = cuts.into_iter().map(narrow).collect::<Vec<_>>();
-    let histogram = count(array, rows, n, false, axis(lo, hi, n), |value| {
+    let native_cuts = cuts.iter().copied().map(narrow).collect::<Vec<_>>();
+    let mut histogram = count(array, rows, n, false, axis(lo, hi, n), |value| {
         Some(native_cuts.partition_point(|&cut| cut <= value))
     });
-    Ok(Some(RangeHistogram {
-        histogram,
-        ranges,
-        min_label,
-        max_label,
-    }))
+    histogram.min_label = Some(lower.display().to_owned());
+    histogram.max_label = Some(upper.display().to_owned());
+    H::finish(histogram, || {
+        bin_ranges(&cuts, bound, |value| bound(value - i256::ONE))
+    })
+    .map(Domain::Bins)
 }
 
-fn floating<T: ArrowPrimitiveType>(
+fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
-) -> Result<Option<RangeHistogram>>
+) -> Result<Domain<H>>
 where
     T::Native: Into<f64>,
 {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
-    for value in array
-        .iter()
-        .flatten()
-        .map(Into::into)
-        .filter(|v: &f64| v.is_finite())
-    {
-        min = min.min(value);
-        max = max.max(value);
+    let mut has_infinite = false;
+    for value in array.iter().flatten().map(Into::into) {
+        has_infinite |= value.is_infinite();
+        if value.is_finite() {
+            min = min.min(value);
+            max = max.max(value);
+        }
     }
     if min > max {
-        return Ok(None);
+        return Ok(if has_infinite {
+            Domain::InfiniteOnly
+        } else {
+            Domain::Empty
+        });
     }
     let mut cuts = Vec::with_capacity(bins - 1);
     if min < max {
@@ -227,20 +334,17 @@ where
         }
     }
     let bound = |value| Bound::from_f64(array.data_type(), value);
-    let ranges = bin_ranges(&cuts, bound, |value: f64| bound(value.next_down()))?;
-    let n = ranges.len();
-    let min_label = bound(min)?.display().to_owned();
-    let max_label = bound(max)?.display().to_owned();
-    let histogram = count(array, rows, n, false, axis(min, max, n), |value| {
+    let n = cuts.len() + 1;
+    let mut histogram = count(array, rows, n, false, axis(min, max, n), |value| {
         let value: f64 = value.into();
         (!value.is_nan()).then(|| cuts.partition_point(|&cut| cut <= value))
     });
-    Ok(Some(RangeHistogram {
-        histogram,
-        ranges,
-        min_label,
-        max_label,
-    }))
+    histogram.min_label = Some(bound(min)?.display().to_owned());
+    histogram.max_label = Some(bound(max)?.display().to_owned());
+    H::finish(histogram, || {
+        bin_ranges(&cuts, bound, |value: f64| bound(value.next_down()))
+    })
+    .map(Domain::Bins)
 }
 
 fn bin_ranges<C: Copy>(
@@ -265,11 +369,15 @@ fn bin_ranges<C: Copy>(
 /// Keep the plotting axis finite and nonempty even when exact adjacent
 /// coefficients share a floating representation. Bin selection uses indices.
 fn axis(lo: f64, hi: f64, bins: usize) -> (f64, f64) {
-    if lo.is_finite() && hi.is_finite() && lo < hi {
+    if lo.is_finite() && hi.is_finite() && lo < hi && (hi - lo).is_finite() {
         return (lo, hi);
     }
     let expanded = (lo.next_down(), hi.next_up());
-    if expanded.0.is_finite() && expanded.1.is_finite() && expanded.0 < expanded.1 {
+    if expanded.0.is_finite()
+        && expanded.1.is_finite()
+        && expanded.0 < expanded.1
+        && (expanded.1 - expanded.0).is_finite()
+    {
         expanded
     } else {
         (0.0, bins as f64)
@@ -287,6 +395,8 @@ fn count<T: ArrowPrimitiveType>(
     let mut histogram = Histogram {
         lo: Some(axis.0),
         hi: Some(axis.1),
+        min_label: None,
+        max_label: None,
         integer,
         counts: vec![0; bins],
         null_count: 0,
@@ -319,6 +429,8 @@ mod tests {
 
     fn verify_bins(array: ArrayRef, rows: Selection, bins: u32) -> RangeHistogram {
         let result = build(&array, &rows, bins).unwrap().unwrap();
+        let statistics = counts(&array, &rows, bins.min(MAX_BINS)).unwrap();
+        assert_eq!(statistics, result.histogram);
         assert_eq!(result.ranges.len(), result.histogram.counts.len());
         assert!(result.ranges.first().unwrap().min.is_none());
         assert!(result.ranges.last().unwrap().max.is_none());
@@ -326,6 +438,7 @@ mod tests {
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
             let predicate = Column::new(&array)
                 .prepare_filter(&Filter::Range {
+                    include_nulls: false,
                     column: 0,
                     min: bounds.min.clone(),
                     max: bounds.max.clone(),
@@ -355,6 +468,88 @@ mod tests {
             result.histogram.total
         );
         result
+    }
+
+    #[test]
+    fn statistics_preserve_requested_bins_and_exact_decimal_membership() {
+        let base = 9_007_199_254_740_992_i128;
+        let array: ArrayRef = Arc::new(
+            Decimal128Array::from_iter_values(base..base + 100)
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+        );
+        let histogram = counts(&array, &Selection::All(100), 100).unwrap();
+        assert_eq!(histogram.counts, vec![1; 100]);
+        let selected = Selection::Rows(Arc::new(vec![1, 99]));
+        let histogram = counts(&array, &selected, 100).unwrap();
+        assert_eq!(histogram.total, 2);
+        assert_eq!(histogram.counts[0], 0);
+        assert_eq!(histogram.counts[1], 1);
+        assert_eq!(histogram.counts[99], 1);
+        assert_eq!(histogram.counts.iter().sum::<u64>(), 2);
+        let distribution = ranges(&array, &selected, 100).unwrap();
+        assert_eq!(distribution.histogram, histogram);
+        assert_eq!(distribution.ranges.len(), 100);
+    }
+
+    #[test]
+    fn duration_units_support_statistics_and_exact_ranges() {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            let array = arrow::compute::cast(
+                &Int64Array::from(vec![Some(-1), Some(0), Some(1), None]),
+                &DataType::Duration(unit),
+            )
+            .unwrap();
+            let result = verify_bins(array, Selection::All(4), 3);
+            assert_eq!(result.histogram.counts, [1, 1, 1]);
+            assert_eq!(result.histogram.null_count, 1);
+        }
+    }
+
+    #[test]
+    fn missing_finite_domain_preserves_nan_null_and_infinity_semantics() {
+        for values in [vec![], vec![None], vec![Some(f64::NAN), None]] {
+            let array: ArrayRef = Arc::new(Float64Array::from(values));
+            let rows = Selection::All(array.len());
+            let h = counts(&array, &rows, 3).unwrap();
+            assert!(h.counts.is_empty());
+            assert_eq!((h.lo, h.hi), (None, None));
+            assert_eq!(h.total, array.len() as u64);
+            assert_eq!(h.null_count, array.null_count() as u64);
+            assert_eq!(h.null_count + h.nan_count, h.total);
+            assert!(build(&array, &rows, 3).unwrap().is_none());
+        }
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(f64::NAN),
+            None,
+            Some(f64::NAN),
+        ]));
+        for (rows, total, nulls, nans) in [
+            (Selection::All(3), 3, 1, 2),
+            (Selection::Rows(Arc::new(vec![1, 2])), 2, 1, 1),
+            (Selection::Rows(Arc::new(vec![])), 0, 0, 0),
+        ] {
+            let h = counts(&array, &rows, 40).unwrap();
+            assert_eq!((h.total, h.null_count, h.nan_count), (total, nulls, nans));
+            assert!(h.counts.is_empty());
+            assert!(h.min_label.is_none() && h.max_label.is_none());
+            assert_eq!(ranges(&array, &rows, 40).unwrap().histogram, h);
+        }
+        for value in [f64::INFINITY, f64::NEG_INFINITY] {
+            let array: ArrayRef =
+                Arc::new(Float64Array::from(vec![Some(f64::NAN), None, Some(value)]));
+            assert!(matches!(
+                counts(&array, &Selection::All(3), 40),
+                Err(Error::InvalidArgument(_))
+            ));
+            assert!(ranges(&array, &Selection::All(3), 40).is_err());
+            assert!(build(&array, &Selection::All(3), 40).unwrap().is_none());
+        }
     }
 
     #[test]
@@ -406,12 +601,25 @@ mod tests {
         let result = verify_bins(adjacent, Selection::All(2), 60);
         assert_eq!(result.histogram.counts, [1, 1]);
         assert!(result.histogram.lo.unwrap() < result.histogram.hi.unwrap());
-        assert_eq!(result.min_label, "9007199254740992");
-        assert_eq!(result.max_label, "9007199254740993");
+        assert_eq!(
+            result.histogram.min_label.as_deref(),
+            Some("9007199254740992")
+        );
+        assert_eq!(
+            result.histogram.max_label.as_deref(),
+            Some("9007199254740993")
+        );
     }
 
     #[test]
     fn decimal_bins_preserve_large_coefficients_and_negative_scales() {
+        let tenths: ArrayRef = Arc::new(
+            Decimal128Array::from_iter_values(0..10)
+                .with_precision_and_scale(10, 1)
+                .unwrap(),
+        );
+        let result = verify_bins(tenths, Selection::All(10), 3);
+        assert_eq!(result.histogram.counts, [4, 3, 3]);
         let large: i256 = "123456789012345678901234567890123456789012345678901234567890"
             .parse()
             .unwrap();
@@ -470,22 +678,37 @@ mod tests {
             (result.histogram.null_count, result.histogram.nan_count),
             (1, 1)
         );
-        for values in [
-            vec![-f64::MAX, 0.0, f64::MAX],
-            vec![1.0, 1.0_f64.next_up()],
-            vec![0.0, 0.0_f64.next_up()],
-            vec![f64::MAX],
+        let infinities: ArrayRef = Arc::new(Float64Array::from(vec![
+            f64::NEG_INFINITY,
+            0.0,
+            1.0,
+            2.0,
+            f64::INFINITY,
+        ]));
+        let result = verify_bins(infinities, Selection::All(5), 2);
+        assert_eq!(
+            (result.histogram.lo, result.histogram.hi),
+            (Some(0.0), Some(2.0))
+        );
+        assert_eq!(result.histogram.counts, [2, 3]);
+        for (values, bins) in [
+            (vec![-f64::MAX, 0.0, f64::MAX], 3),
+            (vec![1.0, 1.0_f64.next_up()], 60),
+            (vec![0.0, 0.0_f64.next_up()], 60),
+            (vec![f64::MAX], 60),
         ] {
             let len = values.len();
             let single = values.len() == 1;
             let result = verify_bins(
                 Arc::new(Float64Array::from(values)),
                 Selection::All(len),
-                60,
+                bins,
             );
+            assert_eq!(result.histogram.counts, vec![1; len]);
+            assert!((result.histogram.hi.unwrap() - result.histogram.lo.unwrap()).is_finite());
             if single {
-                assert_eq!(result.min_label, f64::MAX.to_string());
-                assert_eq!(result.max_label, f64::MAX.to_string());
+                assert_eq!(result.histogram.min_label, Some(format!("{:.0}", f64::MAX)));
+                assert_eq!(result.histogram.max_label, Some(format!("{:.0}", f64::MAX)));
             }
         }
     }
@@ -494,8 +717,6 @@ mod tests {
     fn omitted_charts_and_empty_facets_are_explicit() {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![None])),
-            Arc::new(Float64Array::from(vec![f64::NAN])),
-            Arc::new(Float64Array::from(vec![f64::INFINITY])),
             Arc::new(
                 DictionaryArray::<Int8Type>::try_new(
                     Int8Array::from(vec![0]),

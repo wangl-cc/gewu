@@ -53,6 +53,7 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
     );
     let state = ViewState {
         filters: vec![Filter::Range {
+            include_nulls: false,
             column: 1,
             min: None,
             max: Some(doc.make_bound_i64(1, 0).unwrap()),
@@ -106,40 +107,39 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
     else {
         panic!("range chart")
     };
-    let mut all_rows = Vec::new();
-    for (bounds, count) in distribution
-        .ranges
-        .into_iter()
-        .zip(distribution.histogram.counts)
-    {
-        let view = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::Range {
-                    column: 0,
-                    min: bounds.min,
-                    max: bounds.max,
-                }],
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(view.row_count, count);
-        all_rows.extend(doc.rows(view.version, 0, 600, &[0]).unwrap().source_rows);
-    }
-    assert_eq!(all_rows, (0..600).collect::<Vec<u64>>());
-    let exact = doc.make_bound_u64(0, u64::MAX).unwrap();
+    // The unit tests cover all cuts; here exercise the editor -> view -> rows path.
+    let bin = distribution.ranges.len() / 2;
+    let bounds = &distribution.ranges[bin];
     let view = doc
         .apply_view(&ViewState {
             filters: vec![Filter::Range {
+                include_nulls: false,
                 column: 0,
-                min: Some(exact.clone()),
-                max: Some(exact),
+                min: bounds.min.clone(),
+                max: bounds.max.clone(),
             }],
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows, [
-        599
-    ]);
+    assert_eq!(view.row_count, distribution.histogram.counts[bin]);
+    let rows = doc.rows(view.version, 0, 600, &[0]).unwrap();
+    let first = bounds
+        .min
+        .as_ref()
+        .unwrap()
+        .display()
+        .parse::<u64>()
+        .unwrap()
+        - base;
+    let last = bounds
+        .max
+        .as_ref()
+        .unwrap()
+        .display()
+        .parse::<u64>()
+        .unwrap()
+        - base;
+    assert_eq!(rows.source_rows, (first..=last).collect::<Vec<_>>());
 }
 
 #[test]
@@ -150,6 +150,7 @@ fn typed_bounds_reject_mismatched_columns_without_replacing_view() {
     assert!(matches!(
         doc.apply_view(&ViewState {
             filters: vec![Filter::Range {
+                include_nulls: false,
                 column: 0,
                 min: Some(wrong),
                 max: None

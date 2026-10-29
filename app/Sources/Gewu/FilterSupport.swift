@@ -6,8 +6,14 @@ enum NullMode: Int {
 
     init(_ filters: [Filter]) {
         self = .include
-        for case let .isNull(_, negate) in filters {
-            self = negate ? .exclude : .only
+        for filter in filters {
+            switch filter {
+            case let .isNull(_, negate): self = negate ? .exclude : .only
+            case let .range(_, _, _, includeNulls), let .contains(_, _, _, includeNulls):
+                // An explicit null-only condition takes precedence if filters are combined.
+                if self != .only { self = includeNulls ? .include : .exclude }
+            default: break
+            }
         }
     }
 

@@ -5,7 +5,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
 use gewu_core::{Document, Error, Filter, ViewState};
 use parquet::arrow::ArrowWriter;
 
@@ -70,6 +70,7 @@ fn busy_state(doc: &Document) -> ViewState {
         .unwrap();
     ViewState {
         filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
+            include_nulls: false,
             column: 2,
             min: Some(doc.parse_bound(2, "2.0").unwrap()),
             max: None,
@@ -131,6 +132,7 @@ fn histogram_ignores_only_its_own_column() {
     let (path, doc) = sample("hist");
     let mut state = busy_state(&doc);
     state.filters.push(Filter::Range {
+        include_nulls: false,
         column: 3,
         min: Some(doc.parse_bound(3, "60").unwrap()),
         max: None,
@@ -175,6 +177,7 @@ fn failed_apply_keeps_the_old_view() {
     let before = doc.current_view();
     let bad = ViewState {
         filters: vec![Filter::Range {
+            include_nulls: false,
             column: 0,
             min: Some(doc.make_bound_i64(3, 1).unwrap()),
             max: None,
@@ -302,6 +305,78 @@ fn summary_of_text_counts_nulls_apart() {
     assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
     assert_eq!(s.min_label.as_deref(), Some("bird"));
     assert_eq!(s.max_label.as_deref(), Some("dog"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn summary_extrema_cover_single_values_nulls_and_filtered_views() {
+    let columns: Vec<(&str, ArrayRef)> = vec![
+        (
+            "text",
+            Arc::new(StringArray::from(vec![
+                Some("cat"),
+                Some("dog"),
+                Some("cat"),
+                None,
+            ])),
+        ),
+        (
+            "boolean",
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                None,
+            ])),
+        ),
+        ("null", Arc::new(StringArray::from(vec![None::<&str>; 4]))),
+    ];
+    let (path, doc) = write(
+        "summary-extrema",
+        &RecordBatch::try_from_iter(columns).unwrap(),
+    );
+    let cat = doc.keys_for_labels(0, &[Some("cat".into())]).unwrap();
+    // A source singleton, a filtered singleton, null-only and empty views all
+    // exercise the same summary contract, without separate files for each case.
+    for (filter, expected) in [
+        (None, [Some(("cat", "dog")), Some(("true", "true")), None]),
+        (
+            Some(Filter::InValues {
+                column: 0,
+                keys: cat,
+            }),
+            [Some(("cat", "cat")), Some(("true", "true")), None],
+        ),
+        (
+            Some(Filter::IsNull {
+                column: 0,
+                negate: false,
+            }),
+            [None; 3],
+        ),
+        (
+            Some(Filter::InValues {
+                column: 0,
+                keys: vec![],
+            }),
+            [None; 3],
+        ),
+    ] {
+        doc.apply_view(&ViewState {
+            filters: filter.into_iter().collect(),
+            ..Default::default()
+        })
+        .unwrap();
+        for (column, extremes) in expected.into_iter().enumerate() {
+            let summary = doc.column_summary(column as u32, 2).unwrap();
+            assert_eq!(
+                (summary.min_label.as_deref(), summary.max_label.as_deref()),
+                (extremes.map(|(min, _)| min), extremes.map(|(_, max)| max)),
+                "column {column}, view {:?}",
+                doc.current_view()
+            );
+        }
+    }
     std::fs::remove_file(path).ok();
 }
 

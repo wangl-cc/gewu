@@ -84,7 +84,7 @@ private struct DocumentScene: View {
                 ContentUnavailableView {
                     Label("Could Not Open File", systemImage: "exclamationmark.triangle")
                 } description: {
-                    Text(model.errorMessage ?? model.url.lastPathComponent)
+                    Text(model.errorMessage ?? model.url.lastPathComponent).textSelection(.enabled)
                 } actions: {
                     Button("Try Again") { Task { await model.open() } }
                 }
@@ -122,8 +122,8 @@ private struct DocumentScene: View {
         .onChange(of: model.searchFocusRequest) { _, _ in searchFocused = true }
         .task { await model.open() }
         .onDisappear { model.stop() }
-        .alert("Gewu", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
-            Button("OK", role: .cancel) { model.errorMessage = nil }
+        .alert("Gewu", isPresented: $model.isErrorPresented) {
+            Button("OK", role: .cancel) { model.isErrorPresented = false }
         } message: { Text(model.errorMessage ?? "") }
     }
 }

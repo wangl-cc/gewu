@@ -13,7 +13,7 @@ use crate::{Error, Result, ViewInfo};
 
 /// Tells a long-running operation that a newer one has replaced it.
 #[derive(Clone)]
-pub struct CancelToken {
+pub(crate) struct CancelToken {
     counter: Arc<AtomicU64>,
     mine: u64,
 }
@@ -27,7 +27,7 @@ impl CancelToken {
         }
     }
 
-    pub fn is_cancelled(&self) -> bool {
+    fn is_cancelled(&self) -> bool {
         self.counter.load(Ordering::SeqCst) != self.mine
     }
 

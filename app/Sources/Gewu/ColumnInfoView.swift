@@ -27,8 +27,7 @@ struct ColumnInfoView: View {
                     if let h = histogram, let lo = h.lo, let hi = h.hi {
                         HistogramChart(histogram: h,
                                        selection: .constant(.init(lower: lo, upper: hi)),
-                                       interactive: false,
-                                       labelFormatter: { value($0, column: column) })
+                                       interactive: false)
                             .frame(height: 100)
                             .accessibilityLabel("Distribution of \(info.columns[column].name)")
                     }
@@ -47,8 +46,8 @@ struct ColumnInfoView: View {
             detail("Nulls", countWithPercent(s.nullCount, total: s.rows))
             if s.nanCount > 0 { detail("NaN", countWithPercent(s.nanCount, total: s.rows)) }
             detail("Distinct", formatCount(s.distinctCount))
-            if let min = s.min { detail("Min", value(min, column: column)) }
-            if let max = s.max { detail("Max", value(max, column: column)) }
+            if let min = s.minLabel { detail("Min", min) }
+            if let max = s.maxLabel { detail("Max", max) }
             if let mean = s.mean { detail("Mean", value(mean, column: column)) }
             if model.kinds[column] == .number, let sd = s.stdDev { detail("Std dev", Self.decimal(sd)) }
         }
@@ -58,9 +57,9 @@ struct ColumnInfoView: View {
                 HStack {
                     Text(item.label ?? "(null)").lineLimit(1).help(item.label ?? "(null)")
                     Spacer(minLength: 6)
+                    Text(formatCount(item.count)).monospacedDigit().foregroundStyle(.secondary)
                     ProgressView(value: Double(item.count), total: Double(max(s.topValues.first?.count ?? 1, 1)))
                         .frame(width: 42)
-                    Text(formatCount(item.count)).monospacedDigit().foregroundStyle(.secondary)
                 }
                 .font(.caption)
             }

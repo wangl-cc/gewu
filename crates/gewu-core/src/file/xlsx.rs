@@ -228,7 +228,11 @@ pub(super) fn write(
             "XLSX supports at most 16384 columns".into(),
         ));
     }
-    if data.columns.iter().any(|column| nested(column.data_type())) {
+    if data
+        .columns
+        .iter()
+        .any(|column| column.data_type().is_nested())
+    {
         return Err(Error::Unsupported(
             "XLSX cannot export nested columns".into(),
         ));
@@ -285,13 +289,6 @@ pub(super) fn write(
     progress.check()?;
     workbook.save_to_writer(file)?;
     progress.check()
-}
-
-fn nested(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Dictionary(_, value) => nested(value),
-        _ => data_type.is_nested(),
-    }
 }
 
 fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {

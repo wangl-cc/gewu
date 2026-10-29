@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/wangl-cc/gewu"
 
 [workspace.dependencies]
-arrow = { version = "60", default-features = false, features = ["prettyprint", "chrono-tz"] }
+arrow = { version = "60", default-features = false, features = ["chrono-tz"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "brotli", "simdutf8"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }

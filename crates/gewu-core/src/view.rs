@@ -40,6 +40,8 @@ pub enum Filter {
         column: u32,
         min: Option<crate::Bound>,
         max: Option<crate::Bound>,
+        /// Also match nulls in this column, without bypassing other filters.
+        include_nulls: bool,
     },
     /// Keep rows whose value is one of `keys` (keys come from
     /// [`crate::Document::distinct_values`]). This is the Excel-style
@@ -55,6 +57,8 @@ pub enum Filter {
         column: u32,
         text: String,
         case_sensitive: bool,
+        /// Also match nulls in this column, without bypassing other filters.
+        include_nulls: bool,
     },
 }
 
@@ -139,16 +143,21 @@ pub struct DistinctResult {
     pub keyed: bool,
 }
 
-/// Distribution of a numeric column, for the range filter.
+/// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Histogram {
-    /// Axis of equally spaced bins over the whole source column, not just the
-    /// counted rows, so it stays put while filters change. Infinities count
-    /// in the end bins. `None` when the column has no finite values.
+    /// Approximate display axis over the whole source column, not just the
+    /// counted rows, so it stays put while filters change. Native values decide
+    /// bin membership; use [`RangeHistogram::ranges`] for exact filter bounds.
+    /// Infinities count in the end bins. `None` for empty/all-null/all-NaN data.
     pub lo: Option<f64>,
     pub hi: Option<f64>,
-    /// Integer column (including dates and times). Then `hi` is max + 1,
-    /// and when the span is small each bin is exactly one integer.
+    /// Exact finite source extrema for display, independent of plotting coordinates.
+    /// Absent when the source has no finite domain.
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
+    /// Integer column (including dates and times). The axis encloses
+    /// `min..max + 1`, and small spans have exactly one integer per bin.
     pub integer: bool,
     pub counts: Vec<u64>,
     pub null_count: u64,
@@ -209,9 +218,6 @@ pub enum FilterEditor {
 /// Coordinates can be approximate; submit `ranges` to filter by a bin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeHistogram {
-    /// Exact source extrema for display, independent of approximate axis coordinates.
-    pub min_label: String,
-    pub max_label: String,
     pub histogram: Histogram,
     pub ranges: Vec<RangeBounds>,
 }

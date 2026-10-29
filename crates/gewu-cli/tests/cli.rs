@@ -92,20 +92,15 @@ fn delimited_files_support_schema_and_queries() {
 
 #[test]
 fn xlsx_sheet_option_and_metadata() {
-    use gewu_core::{Document, ExportOptions, FileType};
+    use gewu_core::{Document, FileType};
 
     let source = sample("xlsx-source");
     let workbook = source.with_extension("xlsx");
     let doc = Document::open(&source).unwrap();
-    doc.prepare_export(
-        doc.current_view().version,
-        &[0, 1, 2],
-        FileType::Xlsx,
-        ExportOptions::default(),
-    )
-    .unwrap()
-    .write(&workbook)
-    .unwrap();
+    doc.prepare_export(doc.current_view().version, &[0, 1, 2], FileType::Xlsx)
+        .unwrap()
+        .write(&workbook)
+        .unwrap();
     let file = workbook.to_str().unwrap();
     let info = gewu(&["schema", file]);
     assert_eq!(info["format"], "XLSX");
@@ -152,6 +147,26 @@ fn rows_with_filters_and_sort() {
     let v = gewu(&["rows", f, "--search", "dog"]);
     assert_eq!(ids(&v), ["20"]);
     std::fs::remove_file(p).ok();
+}
+
+#[test]
+fn single_string_equality_does_not_require_a_value_index() {
+    use std::io::Write;
+
+    let path = std::env::temp_dir().join(format!(
+        "gewu-cli-high-cardinality-{}.csv",
+        std::process::id()
+    ));
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    writeln!(file, "code").unwrap();
+    for i in 0..=100_000 {
+        writeln!(file, "v{i}").unwrap();
+    }
+    file.flush().unwrap();
+    let result = gewu(&["rows", path.to_str().unwrap(), "--where", "code=v100000"]);
+    assert_eq!(result["matched_rows"], 1);
+    assert_eq!(result["rows"][0]["code"], "v100000");
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -224,6 +239,92 @@ fn distinct_hist_and_stats() {
     assert_eq!(v["null_count"], 1);
     assert_eq!(v["top_values"][0]["value"], "cat");
     std::fs::remove_file(p).ok();
+}
+
+#[test]
+fn histogram_bounds_are_exact_and_reproduce_each_count() {
+    let arrays: Vec<(&str, ArrayRef, u32)> = vec![
+        (
+            "decimal",
+            Arc::new(
+                Decimal128Array::from_iter_values(0..10)
+                    .with_precision_and_scale(10, 1)
+                    .unwrap(),
+            ),
+            3,
+        ),
+        (
+            "large-int",
+            Arc::new(Int64Array::from(vec![
+                9_007_199_254_740_992,
+                9_007_199_254_740_993,
+                9_007_199_254_740_994,
+            ])),
+            3,
+        ),
+        (
+            "max-float",
+            Arc::new(Float64Array::from(vec![f64::MAX])),
+            40,
+        ),
+        (
+            "large-float",
+            Arc::new(Float64Array::from(vec![
+                1e18,
+                1.0000000000000001e18,
+                1.0000000000000003e18,
+                1.0000000000000004e18,
+            ])),
+            3,
+        ),
+    ];
+    for (tag, array, bins) in arrays {
+        let path = std::env::temp_dir().join(format!(
+            "gewu-cli-hist-{tag}-{}.parquet",
+            std::process::id()
+        ));
+        let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), batch.schema(), None)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let file = path.to_str().unwrap();
+        let h = gewu(&["hist", file, "value", "--bins", &bins.to_string()]);
+        assert_eq!(h["bounds"], "inclusive");
+        let bins = h["bins"].as_array().unwrap();
+        assert!(bins.first().unwrap()["min"].is_null());
+        assert!(bins.last().unwrap()["max"].is_null());
+        for bin in bins {
+            let range = format!(
+                "value={}..{}",
+                bin["min"].as_str().unwrap_or(""),
+                bin["max"].as_str().unwrap_or("")
+            );
+            let filtered = gewu(&["stats", file, "value", "--range", &range]);
+            assert_eq!(filtered["rows"], bin["count"], "{tag}: {range}");
+        }
+        match tag {
+            "decimal" => {
+                assert_eq!(bins[0]["max"], "0.3");
+                assert_eq!(bins[1]["min"], "0.4");
+                assert_eq!(bins[1]["max"], "0.6");
+                assert_eq!(bins[2]["min"], "0.7");
+                let selected = gewu(&["hist", file, "value", "--bins", "3", "--search", "0.30"]);
+                assert_eq!(selected["bins"][0]["count"], 1);
+                assert_eq!(selected["bins"][1]["count"], 0);
+            }
+            "large-int" => assert_eq!(bins[1]["min"], "9007199254740993"),
+            "max-float" => {
+                assert_eq!(h["min"], format!("{:.0}", f64::MAX));
+                assert_eq!(h["max"], format!("{:.0}", f64::MAX));
+                assert_eq!(bins.len(), 1);
+            }
+            "large-float" => assert_eq!(bins[1]["min"], "1000000000000000128"),
+            _ => unreachable!(),
+        }
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[test]

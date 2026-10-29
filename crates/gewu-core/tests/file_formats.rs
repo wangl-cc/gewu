@@ -37,7 +37,7 @@ fn assert_disabled_exports(doc: &Document) {
     ] {
         if !format.is_enabled() {
             assert!(matches!(
-                doc.prepare_export(doc.current_view().version, &[0], format, Default::default()),
+                doc.prepare_export(doc.current_view().version, &[0], format),
                 Err(Error::Unsupported(_))
             ));
         }
@@ -47,7 +47,7 @@ fn assert_disabled_exports(doc: &Document) {
 #[cfg(feature = "csv")]
 mod delimited {
     use arrow::datatypes::DataType;
-    use gewu_core::{ExportOptions, FileMetadata, Filter, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, SortKey, ViewState};
 
     use super::*;
 
@@ -168,6 +168,7 @@ mod delimited {
         let version = doc
             .apply_view(&ViewState {
                 filters: vec![Filter::Range {
+                    include_nulls: false,
                     column: 0,
                     min: Some(doc.parse_bound(0, "2").unwrap()),
                     max: None,
@@ -182,9 +183,7 @@ mod delimited {
             .version;
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("selected.{extension}"));
-            let export = doc
-                .prepare_export(version, &[1, 0], format, ExportOptions::default())
-                .unwrap();
+            let export = doc.prepare_export(version, &[1, 0], format).unwrap();
             export.write(&path).unwrap();
             assert_eq!(export.progress().rows_written, 2);
             let reloaded = Document::open(path).unwrap();
@@ -207,7 +206,7 @@ mod delimited {
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
-            doc.prepare_export(empty.version, &[1, 0], format, ExportOptions::default())
+            doc.prepare_export(empty.version, &[1, 0], format)
                 .unwrap()
                 .write(&path)
                 .unwrap();
@@ -224,10 +223,35 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{ExportOptions, FileMetadata, SortKey, ViewState};
+    use gewu_core::{FileMetadata, SortKey, ViewState};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
+
+    #[test]
+    fn duration_cells_support_histograms_after_opening() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("durations.xlsx");
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        let format = rust_xlsxwriter::Format::new().set_num_format("[h]:mm:ss");
+        sheet.write_string(0, 0, "elapsed").unwrap();
+        sheet.write_number_with_format(1, 0, 0.5, &format).unwrap();
+        sheet.write_number_with_format(2, 0, 1.0, &format).unwrap();
+        workbook.save(&path).unwrap();
+        let doc = Document::open(path).unwrap();
+        assert_eq!(
+            doc.schema().field(0).data_type(),
+            &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
+        );
+        let h = doc.histogram(0, None, 3).unwrap();
+        assert_eq!(h.counts, [1, 0, 1]);
+        assert_eq!(
+            doc.view_histogram(doc.current_view().version, 0, 3)
+                .unwrap(),
+            h
+        );
+    }
 
     fn workbook(path: &Path) {
         let mut workbook = Workbook::new();
@@ -319,7 +343,7 @@ mod xlsx {
             .unwrap()
             .version;
         let destination = directory.path().join("export.xlsx");
-        doc.prepare_export(version, &[1, 2], FileType::Xlsx, ExportOptions::default())
+        doc.prepare_export(version, &[1, 2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
@@ -337,15 +361,10 @@ mod xlsx {
                 ..Default::default()
             })
             .unwrap();
-        doc.prepare_export(
-            empty.version,
-            &[1, 2],
-            FileType::Xlsx,
-            ExportOptions::default(),
-        )
-        .unwrap()
-        .write(&destination)
-        .unwrap();
+        doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
+            .unwrap()
+            .write(&destination)
+            .unwrap();
         let reloaded = Document::open(destination).unwrap();
         assert_eq!(reloaded.info().row_count, 0);
         assert_eq!(reloaded.schema().field(0).name(), "label");
@@ -361,12 +380,7 @@ mod xlsx {
         let destination = directory.path().join("existing.xlsx");
         fs::write(&destination, "keep me").unwrap();
         let export = doc
-            .prepare_export(
-                doc.current_view().version,
-                &[0],
-                FileType::Xlsx,
-                ExportOptions::default(),
-            )
+            .prepare_export(doc.current_view().version, &[0], FileType::Xlsx)
             .unwrap();
         export.cancel();
         assert!(matches!(export.write(&destination), Err(Error::Cancelled)));
@@ -375,12 +389,7 @@ mod xlsx {
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("keep"), "existing data").unwrap();
         let export = doc
-            .prepare_export(
-                doc.current_view().version,
-                &[0],
-                FileType::Xlsx,
-                ExportOptions::default(),
-            )
+            .prepare_export(doc.current_view().version, &[0], FileType::Xlsx)
             .unwrap();
         assert!(matches!(export.write(&destination), Err(Error::Io(_))));
         assert_eq!(

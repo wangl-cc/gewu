@@ -68,9 +68,8 @@ private struct ChoiceFilterView: View {
     private var shown: [DistinctValue] {
         values.filter { query.isEmpty || ($0.label ?? "(null)").localizedCaseInsensitiveContains(query) }
     }
-    private var mostCount: UInt64 { max(values.map(\.count).max() ?? 0, 1) }
-
     var body: some View {
+        let mostCount = max(values.lazy.map(\.count).max() ?? 0, 1)
         VStack(alignment: .leading, spacing: 10) {
             TextField("Find value", text: $query).textFieldStyle(.roundedBorder)
             List {
@@ -85,8 +84,8 @@ private struct ChoiceFilterView: View {
                         .toggleStyle(.checkbox)
                         .lineLimit(1)
                         Spacer(minLength: 6)
-                        ProgressView(value: Double(value.count), total: Double(mostCount)).frame(width: 42)
                         Text(formatCount(value.count)).monospacedDigit().foregroundStyle(.secondary)
+                        ProgressView(value: Double(value.count), total: Double(mostCount)).frame(width: 42)
                     }
                     .help(value.label ?? "(null)")
                 }
@@ -141,7 +140,7 @@ private struct ContainsFilterView: View {
         }
         .onAppear {
             nullMode = NullMode(current)
-            for case let .contains(_, text, sensitive) in current {
+            for case let .contains(_, text, sensitive, _) in current {
                 query = text
                 caseSensitive = sensitive
             }
@@ -152,7 +151,8 @@ private struct ContainsFilterView: View {
         if nullMode == .only, let filter = nullMode.filter(column: column) {
             onApply([filter])
         } else if !query.isEmpty {
-            onApply([.contains(column: column, text: query, caseSensitive: caseSensitive)])
+            onApply([.contains(column: column, text: query, caseSensitive: caseSensitive,
+                               includeNulls: nullMode == .include)])
         } else {
             onApply(nullMode.filter(column: column).map { [$0] } ?? [])
         }
@@ -203,9 +203,11 @@ private struct RangeFilterView: View {
     }
 
     private func plotHistogram(_ distribution: RangeHistogram) -> Histogram {
-        let h = distribution.histogram
-        return Histogram(lo: 0, hi: Double(distribution.ranges.count), integer: false,
-                         counts: h.counts, nullCount: h.nullCount, nanCount: h.nanCount, total: h.total)
+        var h = distribution.histogram
+        h.lo = 0
+        h.hi = Double(distribution.ranges.count)
+        h.integer = false
+        return h
     }
 
     var body: some View {
@@ -213,7 +215,7 @@ private struct RangeFilterView: View {
             if let chart {
                 HistogramChart(histogram: plotHistogram(chart), selection: Binding(
                     get: { selection }, set: selectBins
-                ), axisLabels: (chart.minLabel, chart.maxLabel))
+                ))
                     .frame(height: 140)
                     .accessibilityLabel("Distribution; edit the minimum and maximum fields to select a range")
                 Text("Drag to select a range · Double-click to reset").font(.caption).foregroundStyle(.secondary)
@@ -255,7 +257,7 @@ private struct RangeFilterView: View {
     private func restore() {
         reset()
         nullMode = NullMode(current)
-        for case let .range(_, min, max) in current {
+        for case let .range(_, min, max, _) in current {
             lowerBound = min
             upperBound = max
         }
@@ -358,7 +360,8 @@ private struct RangeFilterView: View {
             if min == nil && max == nil {
                 onApply(nullMode.filter(column: column).map { [$0] } ?? [])
             } else {
-                let filter = Filter.range(column: column, min: min, max: max)
+                let filter = Filter.range(column: column, min: min, max: max,
+                                          includeNulls: nullMode == .include)
                 try doc.validateFilter(filter: filter)
                 onApply([filter])
             }

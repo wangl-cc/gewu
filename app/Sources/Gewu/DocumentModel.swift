@@ -12,7 +12,8 @@ final class DocumentModel: ObservableObject {
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
     @Published private(set) var appliedState = ViewState(sort: [], filters: [], search: nil)
     @Published private(set) var isBusy = false
-    @Published var errorMessage: String?
+    @Published private(set) var errorMessage: String?
+    @Published var isErrorPresented = false
     @Published var searchText = ""
     @Published var selectedColumn: Int?
     @Published var selectedSourceRow: UInt64?
@@ -46,27 +47,25 @@ final class DocumentModel: ObservableObject {
         do {
             nestedColumns = try doc.nestedExportColumns(columns: columns)
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
             return
         }
+        let formats: [ExportFileFormat] = nestedColumns.isEmpty ? ExportFileFormat.allCases : [.parquet]
+        let defaultFormat: ExportFileFormat = nestedColumns.isEmpty ? .csv : .parquet
         let panel = NSSavePanel()
         panel.title = "Export"
         panel.prompt = "Export"
         panel.message = "Export all \(formatCount(current.rowCount)) rows in the current results, in the displayed row and column order."
-        panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + "-export.csv"
-        panel.allowedContentTypes = ExportFileFormat.allCases.map(\.contentType)
+        panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + "-export.\(defaultFormat.rawValue)"
+        panel.allowedContentTypes = formats.map(\.contentType)
         panel.showsContentTypes = true
-        panel.currentContentType = ExportFileFormat.csv.contentType
+        panel.currentContentType = defaultFormat.contentType
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.showsTagField = false
-        let panelOptions = ExportPanelOptions(nestedColumns: nestedColumns)
-        panelOptions.attach(to: panel)
         exportPanel = panel
         choosingExport = true
-        // NSSavePanel holds its delegate weakly. Keep the options alive through
-        // the completion handler, including after switching to Parquet.
-        panel.beginSheetModal(for: window) { [weak self, weak panel, panelOptions] response in
+        panel.beginSheetModal(for: window) { [weak self, weak panel] response in
             guard let self else { return }
             let destination = response == .OK ? panel?.url : nil
             let format = ExportFileFormat(contentType: panel?.currentContentType)
@@ -74,16 +73,15 @@ final class DocumentModel: ObservableObject {
             self.exportPanel = nil
             guard let destination else { return }
             guard let format else {
-                self.errorMessage = "Choose CSV, TSV, Parquet or XLSX as the export format."
+                self.reportError("Choose an available export format.")
                 return
             }
             do {
-                let options = ExportOptions(convertNestedToJson: format.supportsJSONConversion && panelOptions.convertNestedToJson)
                 let job = try doc.prepareExport(version: version, columns: columns,
-                                                format: format.coreFormat, options: options)
+                                                format: format.coreFormat)
                 self.startExport(job, to: destination)
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.reportError(error)
             }
         }
     }
@@ -108,7 +106,7 @@ final class DocumentModel: ObservableObject {
                 self?.exportMessage = "Export cancelled"
             } catch {
                 self?.exportMessage = nil
-                self?.errorMessage = "Could not export: \(error.localizedDescription)"
+                self?.reportError(error, prefix: "Could not export: ")
             }
             self?.exportProgress = nil
             self?.exportJob = nil
@@ -152,6 +150,8 @@ final class DocumentModel: ObservableObject {
 
     func open() async {
         guard doc == nil, !isBusy else { return }
+        errorMessage = nil
+        isErrorPresented = false
         isBusy = true
         do {
             let path = url.path
@@ -172,7 +172,7 @@ final class DocumentModel: ObservableObject {
         } catch is CancellationError {
             // The window disappeared before decoding finished.
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error)
         }
         isBusy = false
     }
@@ -228,7 +228,7 @@ final class DocumentModel: ObservableObject {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.isBusy = false
                 if case GewuError.Cancelled = error { return }
-                self.errorMessage = error.localizedDescription
+                self.reportError(error)
             }
         }
     }
@@ -244,6 +244,27 @@ final class DocumentModel: ObservableObject {
 
     func findNext(backwards: Bool = false) { table?.moveToMatch(by: backwards ? -1 : 1) }
     func focusSearch() { searchFocusRequest &+= 1 }
+
+    private func reportError(_ message: String) {
+        errorMessage = message
+        isErrorPresented = true
+    }
+
+    private func reportError(_ error: Error, prefix: String = "") {
+        let message: String
+        switch error {
+        case let GewuError.Io(reason), let GewuError.Unsupported(reason),
+             let GewuError.InvalidArgument(reason), let GewuError.Internal(reason):
+            message = reason
+        case GewuError.Cancelled:
+            message = "The operation was cancelled."
+        case GewuError.StaleVersion:
+            message = "The results changed. Please try again."
+        default:
+            message = error.localizedDescription
+        }
+        reportError(prefix + message)
+    }
 }
 
 /// The worker reads this before starting a queued synchronous FFI call.

@@ -23,12 +23,6 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a
     if value.is_infinite() {
         return Some(bound_range(array, value, value));
     }
-    let (lo, hi) = search_bounds(text)?;
-    Some(bound_range(array, lo, hi))
-}
-
-fn search_bounds(text: &str) -> Option<(f64, f64)> {
-    let value: f64 = text.parse().ok().filter(|v: &f64| v.is_finite())?;
     let (mantissa, exponent) = match text.split_once(['e', 'E']) {
         Some((m, e)) => (m, e.parse::<i64>().ok()?),
         None => (text, 0),
@@ -40,7 +34,8 @@ fn search_bounds(text: &str) -> Option<(f64, f64)> {
         .saturating_sub(decimals)
         .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let half = 0.5 * 10f64.powi(power);
-    Some((
+    Some(bound_range(
+        array,
         (value - half).min(value),
         (value + half).next_down().max(value),
     ))
@@ -148,15 +143,16 @@ fn parse(text: &str) -> Result<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{equals, search_bounds};
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, Float64Array};
+
+    use super::{equals, search};
+    use crate::engine::CancelToken;
 
     #[test]
     fn equality_parses_float32_without_double_rounding() {
-        use std::sync::Arc;
-
-        use arrow::array::{ArrayRef, Float32Array};
-
-        use crate::engine::CancelToken;
+        use arrow::array::Float32Array;
 
         // Just above the midpoint between 1.0_f32 and its successor. Parsing
         // through f64 rounds to the midpoint, then rounds the tie downward.
@@ -173,8 +169,13 @@ mod tests {
     }
 
     fn matches(query: &str, value: f64) -> bool {
-        let (lo, hi) = search_bounds(query).unwrap();
-        value >= lo && value <= hi
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![value]));
+        let mut matched = [false];
+        search(&array, query)
+            .unwrap()
+            .evaluate(0..1, &mut matched, &CancelToken::never())
+            .unwrap();
+        matched[0]
     }
 
     #[test]

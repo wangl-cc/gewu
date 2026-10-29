@@ -147,6 +147,15 @@ impl Bound {
         if !data_type.is_floating() || value.is_nan() {
             return Err(invalid_type(data_type));
         }
+        // Shortest float formatting can spell an integral value with rounded
+        // decimal digits (e.g. 1000000000000000128 as 1000000000000000100).
+        // Text range inputs treat integers exactly, so preserve those digits
+        // when restoring or exporting this native endpoint as text.
+        let display = if value.fract() == 0.0 {
+            format!("{value:.0}")
+        } else {
+            value.to_string()
+        };
         Ok(Self::new(BoundData {
             data_type: data_type.clone(),
             value: Value::Float {
@@ -155,7 +164,7 @@ impl Bound {
                 upper: value,
                 exact: None,
             },
-            display: value.to_string(),
+            display,
             axis: value,
         }))
     }
@@ -471,6 +480,30 @@ mod tests {
 
     use super::*;
     use crate::engine::CancelToken;
+
+    #[test]
+    fn native_float_labels_roundtrip_through_exact_integer_text_parsing() {
+        for value in [
+            1.0000000000000001e18,
+            -1.0000000000000001e18,
+            u64::MAX as f64,
+            f64::MAX,
+            -f64::MAX,
+            0.1,
+            f64::MIN_POSITIVE,
+        ] {
+            let array: ArrayRef = Arc::new(Float64Array::from(vec![
+                value.next_down(),
+                value,
+                value.next_up(),
+            ]));
+            let native = Bound::from_f64(array.data_type(), value).unwrap();
+            let parsed = Bound::parse(array.data_type(), native.display()).unwrap();
+            assert_eq!(matches(&array, Some(&parsed), Some(&parsed)), [
+                false, true, false
+            ]);
+        }
+    }
 
     fn matches(array: &ArrayRef, min: Option<&Bound>, max: Option<&Bound>) -> Vec<bool> {
         let mut out = vec![false; array.len()];

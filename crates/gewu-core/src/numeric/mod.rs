@@ -1,4 +1,4 @@
-//! Statistics and histograms borrow the original Arrow arrays. Type dispatch happens
+//! Statistics borrow the original Arrow arrays. Type dispatch happens
 //! once per operation; only individual values needed for floating-point results
 //! are converted. No widened column or numeric cache is built.
 
@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{ColumnSummary, DataKind, Error, Histogram, Result};
+use crate::{ColumnSummary, DataKind};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -54,7 +54,6 @@ macro_rules! dispatch {
     }};
 }
 
-mod histogram;
 mod summary;
 
 impl<'a> Numeric<'a> {
@@ -64,17 +63,6 @@ impl<'a> Numeric<'a> {
         DataKind::of(array.data_type())
             .is_ordered()
             .then_some(Self(array))
-    }
-
-    pub(crate) fn histogram(
-        self,
-        rows: impl Iterator<Item = usize>,
-        bins: u32,
-    ) -> Result<Histogram> {
-        if bins == 0 {
-            return Err(Error::InvalidArgument("bins must be at least 1".into()));
-        }
-        dispatch!(self.0, histogram(rows, bins))
     }
 
     /// Fill in the numeric parts of `summary`; returns the rows holding
