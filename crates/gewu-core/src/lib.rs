@@ -6,15 +6,18 @@
 //! new list of row numbers.
 
 mod document;
+mod engine;
 mod error;
 mod export;
 mod format;
 mod numeric;
+mod scope;
 mod search;
 mod value_index;
 mod view;
 
-pub use document::{CancelToken, Document};
+pub use document::Document;
+pub use engine::CancelToken;
 pub use error::{Error, Result};
 pub use export::{Export, ExportFormat, ExportOptions, ExportProgress};
 pub use view::{

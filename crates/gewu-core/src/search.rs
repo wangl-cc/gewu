@@ -31,7 +31,7 @@ use arrow::{
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 
-use crate::{document::CancelToken, format, numeric::Numeric, Bound, Result};
+use crate::{engine::CancelToken, format, numeric::Numeric, Bound, Result};
 
 /// How many rows to process between cancellation checks.
 const CHUNK: usize = 64 * 1024;

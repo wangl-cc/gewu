@@ -2,10 +2,7 @@ use std::{
     collections::BTreeSet,
     fs::File,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
-    },
+    sync::{Arc, OnceLock},
 };
 
 use arrow::{
@@ -16,42 +13,19 @@ use arrow::{
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::{
-    format, numeric::Numeric, search, value_index::ValueIndex, Bound, ColumnInfo, ColumnStats,
-    ColumnSummary, DistinctResult, DistinctValue, Error, Export, ExportFormat, ExportOptions,
-    FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
+    engine::{CancelToken, ViewEngine},
+    format,
+    numeric::Numeric,
+    scope::{RowScope, Selection},
+    search,
+    value_index::ValueIndex,
+    Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, Error, Export,
+    ExportFormat, ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo,
+    ViewState,
 };
 
 /// How many rows to process between cancellation checks.
 const CHUNK: usize = 64 * 1024;
-
-/// Tells a long-running operation that a newer one has replaced it.
-#[derive(Clone)]
-pub struct CancelToken {
-    counter: Arc<AtomicU64>,
-    mine: u64,
-}
-
-impl CancelToken {
-    pub fn is_cancelled(&self) -> bool {
-        self.counter.load(Ordering::SeqCst) != self.mine
-    }
-
-    pub(crate) fn check(&self) -> Result<()> {
-        if self.is_cancelled() {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-struct View {
-    version: u64,
-    /// Source row numbers in display order.
-    rows: Arc<Vec<u32>>,
-    /// The search that produced this view, for marking matched cells.
-    search: Option<String>,
-}
 
 /// One open file. Safe to share between threads.
 pub struct Document {
@@ -61,9 +35,7 @@ pub struct Document {
     columns: Vec<ArrayRef>,
     n_rows: usize,
     indexes: Vec<OnceLock<Arc<ValueIndex>>>,
-    current: Mutex<Arc<View>>,
-    generation: Arc<AtomicU64>,
-    next_version: AtomicU64,
+    views: ViewEngine,
 }
 
 impl Document {
@@ -130,7 +102,6 @@ impl Document {
 
         let columns = batch.columns().to_vec();
         let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
-        let all_rows = Arc::new((0..n_rows as u32).collect());
 
         Ok(Self {
             info,
@@ -139,13 +110,7 @@ impl Document {
             columns,
             n_rows,
             indexes,
-            current: Mutex::new(Arc::new(View {
-                version: 0,
-                rows: all_rows,
-                search: None,
-            })),
-            generation: Arc::new(AtomicU64::new(0)),
-            next_version: AtomicU64::new(1),
+            views: ViewEngine::new(n_rows),
         })
     }
 
@@ -167,11 +132,7 @@ impl Document {
     }
 
     pub fn current_view(&self) -> ViewInfo {
-        let v = self.current.lock().unwrap();
-        ViewInfo {
-            version: v.version,
-            row_count: v.rows.len() as u64,
-        }
+        self.views.current().info()
     }
 
     /// Capture a view and column order for export without copying its cells or
@@ -183,13 +144,7 @@ impl Document {
         format: ExportFormat,
         options: ExportOptions,
     ) -> Result<Export> {
-        let view = self.current.lock().unwrap().clone();
-        if view.version != version {
-            return Err(Error::StaleVersion {
-                requested: version,
-                current: view.version,
-            });
-        }
+        let view = self.views.snapshot(version)?;
         if columns.is_empty() {
             return Err(Error::InvalidArgument(
                 "select at least one column to export".into(),
@@ -239,50 +194,26 @@ impl Document {
 
     /// Cancel any `apply_view` still running.
     pub fn cancel_pending(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.views.cancel_pending();
     }
 
     /// Compute and switch to a new view. A newer call cancels this one, in
     /// which case it returns [`Error::Cancelled`] and the old view stays.
     pub fn apply_view(&self, state: &ViewState) -> Result<ViewInfo> {
-        let mine = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let token = CancelToken {
-            counter: self.generation.clone(),
-            mine,
-        };
-
+        let token = self.views.begin();
         let mut rows = self.select(&state.filters, state.search.as_deref(), None, &token)?;
         token.check()?;
         if !state.sort.is_empty() {
             rows = self.sort(rows, state)?;
         }
-
-        // Check and swap under the lock so a cancelled run never commits.
-        let mut current = self.current.lock().unwrap();
-        token.check()?;
-        let version = self.next_version.fetch_add(1, Ordering::SeqCst);
-        let info = ViewInfo {
-            version,
-            row_count: rows.len() as u64,
-        };
-        *current = Arc::new(View {
-            version,
-            rows: Arc::new(rows),
-            search: state.search.clone().filter(|s| !s.trim().is_empty()),
-        });
-        Ok(info)
+        let search = state.search.clone().filter(|s| !s.trim().is_empty());
+        self.views.commit(&token, rows, search)
     }
 
     /// Formatted cells for display rows `start..start+count` of view
     /// `version`. Rows past the end are left out.
     pub fn rows(&self, version: u64, start: u64, count: u32, columns: &[u32]) -> Result<RowBlock> {
-        let view = self.current.lock().unwrap().clone();
-        if view.version != version {
-            return Err(Error::StaleVersion {
-                requested: version,
-                current: view.version,
-            });
-        }
+        let view = self.views.snapshot(version)?;
         for &c in columns {
             self.column(c)?;
         }
@@ -313,7 +244,7 @@ impl Document {
         let mut matched = Vec::new();
         if let Some(text) = &view.search {
             let indices = UInt32Array::from(source_rows.to_vec());
-            let token = self.detached_token();
+            let token = CancelToken::never();
             let mut per_column = Vec::with_capacity(columns.len());
             for &c in columns {
                 let block = take(self.columns[c as usize].as_ref(), &indices, None)?;
@@ -348,37 +279,8 @@ impl Document {
         limit: u32,
     ) -> Result<DistinctResult> {
         let idx = self.index(column)?;
-        let mut counts = vec![0u64; idx.len()];
-        match filters {
-            Some(state) => {
-                let token = self.detached_token();
-                let rows = self.select(
-                    &state.filters,
-                    state.search.as_deref(),
-                    Some(column),
-                    &token,
-                )?;
-                for r in rows {
-                    counts[idx.codes[r as usize] as usize] += 1;
-                }
-            }
-            None => {
-                for &c in &idx.codes {
-                    counts[c as usize] += 1;
-                }
-            }
-        }
-
-        let present: Vec<DistinctValue> = counts
-            .iter()
-            .enumerate()
-            .filter(|(_, &n)| n > 0)
-            .map(|(code, &n)| DistinctValue {
-                key: code as u64,
-                label: idx.labels[code].clone(),
-                count: n,
-            })
-            .collect();
+        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        let present = value_counts(&idx, &rows);
         let total = present.len() as u64;
         let truncated = present.len() > limit as usize;
         let values = present.into_iter().take(limit as usize).collect();
@@ -399,33 +301,17 @@ impl Document {
         bins: u32,
     ) -> Result<Histogram> {
         let numeric = self.numeric(column)?;
-        match filters {
-            Some(state) => {
-                let token = self.detached_token();
-                let rows = self.select(
-                    &state.filters,
-                    state.search.as_deref(),
-                    Some(column),
-                    &token,
-                )?;
-                numeric.histogram(rows.into_iter().map(|r| r as usize), bins)
-            }
-            None => numeric.histogram(0..self.n_rows, bins),
-        }
+        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        numeric.histogram(rows.iter(), bins)
     }
 
     /// Distribution over the displayed rows, including this column's own
     /// filters and the text search. The axis still spans the source column.
     pub fn view_histogram(&self, version: u64, column: u32, bins: u32) -> Result<Histogram> {
-        let view = self.current.lock().unwrap().clone();
-        if view.version != version {
-            return Err(Error::StaleVersion {
-                requested: version,
-                current: view.version,
-            });
-        }
-        self.numeric(column)?
-            .histogram(view.rows.iter().map(|&r| r as usize), bins)
+        let numeric = self.numeric(column)?;
+        let view = self.views.snapshot(version)?;
+        let rows = self.rows_in(RowScope::Rows(view.rows.clone()))?;
+        numeric.histogram(rows.iter(), bins)
     }
 
     /// Display text for a raw value of a date, time, timestamp or duration
@@ -473,7 +359,7 @@ impl Document {
     /// `top` most common values for non-numeric columns.
     pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary> {
         let array = self.column(column)?.clone();
-        let rows = self.current.lock().unwrap().rows.clone();
+        let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()))?;
         let mut s = ColumnSummary {
             rows: rows.len() as u64,
             null_count: 0,
@@ -486,23 +372,10 @@ impl Document {
             top_values: Vec::new(),
         };
         match Numeric::new(&array) {
-            Some(numeric) => numeric.summarize(&rows, &mut s),
+            Some(numeric) => numeric.summarize(rows.iter(), &mut s),
             None => {
                 let idx = self.index(column)?;
-                let mut counts = vec![0u64; idx.len()];
-                for &r in rows.iter() {
-                    counts[idx.codes[r as usize] as usize] += 1;
-                }
-                let mut values: Vec<DistinctValue> = counts
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &c)| c > 0)
-                    .map(|(code, &count)| DistinctValue {
-                        key: code as u64,
-                        label: idx.labels[code].clone(),
-                        count,
-                    })
-                    .collect();
+                let mut values = value_counts(&idx, &rows);
                 s.null_count = values
                     .iter()
                     .filter(|v| v.label.is_none())
@@ -558,10 +431,22 @@ impl Document {
         })
     }
 
-    /// A token that is never cancelled, for short read-only work.
-    fn detached_token(&self) -> CancelToken {
-        let counter = Arc::new(AtomicU64::new(0));
-        CancelToken { counter, mine: 0 }
+    /// Resolve which rows a facet counts.
+    fn rows_in(&self, scope: RowScope<'_>) -> Result<Selection> {
+        Ok(match scope {
+            RowScope::All => Selection::All(self.n_rows),
+            RowScope::Rows(rows) => Selection::Rows(rows),
+            RowScope::Facet { state, except } => {
+                self.column(except)?;
+                let rows = self.select(
+                    &state.filters,
+                    state.search.as_deref(),
+                    Some(except),
+                    &CancelToken::never(),
+                )?;
+                Selection::Rows(Arc::new(rows))
+            }
+        })
     }
 
     /// Source rows that pass all filters (except those on `skip`).
@@ -663,4 +548,26 @@ impl Document {
             .map(|&i| selected[i as usize])
             .collect())
     }
+}
+
+/// Count each distinct value over `rows`, in value order, leaving out
+/// values with no rows.
+fn value_counts(idx: &ValueIndex, rows: &Selection) -> Vec<DistinctValue> {
+    let mut counts = vec![0u64; idx.len()];
+    match rows {
+        Selection::All(_) => idx.codes.iter().for_each(|&c| counts[c as usize] += 1),
+        Selection::Rows(rows) => rows
+            .iter()
+            .for_each(|&r| counts[idx.codes[r as usize] as usize] += 1),
+    }
+    counts
+        .into_iter()
+        .enumerate()
+        .filter(|&(_, n)| n > 0)
+        .map(|(code, count)| DistinctValue {
+            key: code as u64,
+            label: idx.labels[code].clone(),
+            count,
+        })
+        .collect()
 }

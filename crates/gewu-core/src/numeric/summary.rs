@@ -14,13 +14,13 @@ impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
     T::Native: Into<i128> + TryFrom<i128> + Eq + Hash,
 {
-    pub(super) fn summarize(self, rows: &[u32], summary: &mut ColumnSummary) {
+    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>, summary: &mut ColumnSummary) {
         summarize(self.0, rows, |v| v.into() as f64, |v| v, summary);
     }
 }
 
 impl<'a, T: RealType> RealColumn<'a, T> {
-    pub(super) fn summarize(self, rows: &[u32], summary: &mut ColumnSummary) {
+    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>, summary: &mut ColumnSummary) {
         summarize(
             self.array,
             rows,
@@ -33,7 +33,7 @@ impl<'a, T: RealType> RealColumn<'a, T> {
 
 fn summarize<T, F, K, H>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: impl Iterator<Item = usize>,
     as_float: F,
     key: K,
     summary: &mut ColumnSummary,
@@ -46,8 +46,7 @@ fn summarize<T, F, K, H>(
     let mut distinct = HashSet::new();
     let (mut n, mut mean, mut m2) = (0u64, 0.0, 0.0);
     let (mut min, mut max): (Option<T::Native>, Option<T::Native>) = (None, None);
-    for &row in rows {
-        let row = row as usize;
+    for row in rows {
         if array.is_null(row) {
             summary.null_count += 1;
             continue;

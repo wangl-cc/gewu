@@ -104,7 +104,7 @@ impl<'a> Numeric<'a> {
         dispatch!(self.0, histogram(rows, bins))
     }
 
-    pub(crate) fn summarize(self, rows: &[u32], summary: &mut ColumnSummary) {
+    pub(crate) fn summarize(self, rows: impl Iterator<Item = usize>, summary: &mut ColumnSummary) {
         dispatch!(self.0, summarize(rows, summary))
     }
 }
