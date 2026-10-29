@@ -1,8 +1,11 @@
-//! Row tests on one column, evaluated into a mask of rows.
+//! Row tests on one column.
 //!
-//! Every filter and every column of a search becomes a [`ColumnTest`]. A test
-//! marks the rows it accepts in a `&mut [bool]`; filters are combined with
-//! AND, the columns of a search with OR. Nothing is cached after a call.
+//! Every filter and every column of a search becomes a [`ColumnTest`].
+//! Filters are combined with AND, row by row, so later filters only look at
+//! rows the earlier ones kept ([`ColumnTest::row_test`]). The columns of a
+//! search are combined with OR into one mask ([`ColumnTest::mark`]). Text
+//! tests always scan the whole column once, with Arrow's string kernels.
+//! Nothing is cached after a call.
 
 use std::{fmt::Write, sync::Arc};
 
@@ -16,7 +19,11 @@ use arrow::{
 };
 
 use crate::{
-    engine::CancelToken, format, numeric::Numeric, value_index::ValueIndex, Bound, Error, Result,
+    engine::CancelToken,
+    format,
+    numeric::{Numeric, RowTest},
+    value_index::ValueIndex,
+    Bound, Error, Result,
 };
 
 /// How many rows to process between cancellation checks.
@@ -51,45 +58,62 @@ impl ColumnTest {
     pub fn mark(&self, array: &ArrayRef, hits: &mut [bool], token: &CancelToken) -> Result<()> {
         debug_assert_eq!(array.len(), hits.len());
         match self {
+            Self::Text {
+                text,
+                case_sensitive,
+            } => mark_text(array, text, *case_sensitive, hits, token),
+            _ => mark(hits, token, self.row_test(array, token)?),
+        }
+    }
+
+    /// Whether a row of `array` passes. A text test first scans the column
+    /// into a mask; the others test the row itself.
+    pub fn row_test<'a>(&self, array: &'a ArrayRef, token: &CancelToken) -> Result<RowTest<'a>> {
+        Ok(match self {
             Self::Codes { index, allowed } => {
                 if index.codes.len() != array.len() {
                     return Err(Error::InvalidArgument(
                         "a value filter needs the whole column".into(),
                     ));
                 }
-                mark(hits, token, |r| allowed[index.codes[r] as usize])
+                let (index, allowed) = (index.clone(), allowed.clone());
+                Box::new(move |r| allowed[index.codes[r] as usize])
             }
-            Self::Null { negate } => mark(hits, token, |r| array.is_null(r) != *negate),
-            Self::Text {
-                text,
-                case_sensitive,
-            } => mark_text(array, text, *case_sensitive, hits, token),
-            Self::Range { min, max } => {
-                let test = Numeric::new(array)
-                    .ok_or_else(|| {
-                        Error::InvalidArgument(format!(
-                            "a range needs numbers, dates or times, not {}",
-                            array.data_type()
-                        ))
-                    })?
-                    .range_test(*min, *max);
-                mark(hits, token, test)
+            Self::Null { negate } => {
+                let negate = *negate;
+                Box::new(move |r| array.is_null(r) != negate)
             }
+            Self::Text { .. } => {
+                let mut hits = vec![false; array.len()];
+                self.mark(array, &mut hits, token)?;
+                Box::new(move |r| hits[r])
+            }
+            Self::Range { min, max } => Numeric::new(array)
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "a range needs numbers, dates or times, not {}",
+                        array.data_type()
+                    ))
+                })?
+                .range_test(*min, *max),
             Self::Bool(target) => {
                 let a = array.as_boolean_opt().ok_or_else(|| {
                     Error::InvalidArgument(format!("{} is not boolean", array.data_type()))
                 })?;
-                mark(hits, token, |r| a.is_valid(r) && a.value(r) == *target)
+                let target = *target;
+                Box::new(move |r| a.is_valid(r) && a.value(r) == target)
             }
             Self::NaN => {
                 if !array.data_type().is_floating() {
-                    return Ok(());
+                    return Ok(Box::new(|_| false));
                 }
                 let values = cast(array, &DataType::Float64)?;
-                let a = values.as_primitive::<Float64Type>();
-                mark(hits, token, |r| a.is_valid(r) && a.value(r).is_nan())
+                Box::new(move |r| {
+                    let a = values.as_primitive::<Float64Type>();
+                    a.is_valid(r) && a.value(r).is_nan()
+                })
             }
-        }
+        })
     }
 }
 

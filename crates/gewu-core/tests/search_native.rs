@@ -172,3 +172,44 @@ fn duration_search_is_by_value() {
     let d = cast(&d, &DataType::Duration(TimeUnit::Second)).unwrap();
     check_queries(d, &[("5", vec![0]), ("50", vec![1]), ("5s", vec![])]);
 }
+
+#[test]
+fn nested_columns_are_searched_by_their_values() {
+    use arrow::{
+        array::{BinaryArray, DictionaryArray, Float64Array, ListArray, StructArray},
+        datatypes::{Field, Int32Type},
+    };
+
+    let dict: DictionaryArray<Int32Type> = vec![Some("Paris"), Some("Lyon"), None, Some("paris")]
+        .into_iter()
+        .collect();
+    check_queries(Arc::new(dict), &[
+        ("par", vec![0, 3]),
+        ("ly", vec![1]),
+        ("x", vec![]),
+    ]);
+
+    let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(25)]),
+        Some(vec![]),
+        None,
+        Some(vec![Some(2)]),
+    ]);
+    // Elements are integers: matched by value, not as text.
+    check_queries(Arc::new(list), &[
+        ("2", vec![3]),
+        ("25", vec![0]),
+        ("5", vec![]),
+    ]);
+
+    let lat: ArrayRef = Arc::new(Float64Array::from(vec![31.23, 48.85, 0.0]));
+    let name: ArrayRef = Arc::new(StringArray::from(vec!["sh", "paris", "null island"]));
+    let point = StructArray::from(vec![
+        (Arc::new(Field::new("lat", DataType::Float64, false)), lat),
+        (Arc::new(Field::new("name", DataType::Utf8, false)), name),
+    ]);
+    check_queries(Arc::new(point), &[("31.2", vec![0]), ("is", vec![1, 2])]);
+
+    let blob = BinaryArray::from(vec![&b"abc"[..], b"xyz"]);
+    check_queries(Arc::new(blob), &[("ab", vec![]), ("616263", vec![])]);
+}

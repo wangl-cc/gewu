@@ -12,6 +12,9 @@
 //!   Date columns accept only the date parts.
 //! - Times of day: `10`, `10:30` or `10:30:15`, as the period it names.
 //! - Booleans: `true` or `false`.
+//! - Dictionaries, lists and structs: whatever the query means for their values, elements or fields
+//!   (a list matches when any element does). Dictionary values are searched once, not once per row.
+//! - Binary: not searched.
 //!
 //! A column the query cannot mean anything for (a word in a number column)
 //! gets no test and is skipped.
@@ -19,13 +22,99 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, StringArray},
+    array::{Array, ArrayRef, AsArray, StringArray},
     compute::cast,
     datatypes::DataType,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
-use crate::{numeric::Numeric, predicate::ColumnTest, Bound, DataKind, Result};
+use crate::{
+    engine::CancelToken, numeric::Numeric, predicate::ColumnTest, Bound, DataKind, Result,
+};
+
+/// Mark the rows of `array` the search `query` matches (ORed into `hits`).
+pub(crate) fn mark_search(
+    array: &ArrayRef,
+    query: &str,
+    hits: &mut [bool],
+    token: &CancelToken,
+) -> Result<()> {
+    match array.data_type() {
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => Ok(()),
+        DataType::Dictionary(..) => {
+            let dict = array.as_any_dictionary();
+            let values = dict.values();
+            let mut matched = vec![false; values.len()];
+            mark_search(values, query, &mut matched, token)?;
+            if !matched.contains(&true) {
+                return Ok(());
+            }
+            for (r, key) in dict.normalized_keys().into_iter().enumerate() {
+                hits[r] |= array.is_valid(r) && matched[key];
+            }
+            Ok(())
+        }
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            mark_elements(
+                array,
+                list.values(),
+                list.value_offsets(),
+                query,
+                hits,
+                token,
+            )
+        }
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            mark_elements(
+                array,
+                list.values(),
+                list.value_offsets(),
+                query,
+                hits,
+                token,
+            )
+        }
+        DataType::Struct(_) => {
+            let mut matched = vec![false; array.len()];
+            for field in array.as_struct().columns() {
+                mark_search(field, query, &mut matched, token)?;
+            }
+            for (r, (hit, m)) in hits.iter_mut().zip(matched).enumerate() {
+                *hit |= m && array.is_valid(r);
+            }
+            Ok(())
+        }
+        data_type => match search_test(data_type, query)? {
+            Some(test) => test.mark(array, hits, token),
+            None => Ok(()),
+        },
+    }
+}
+
+/// A list row matches when any of its elements does.
+fn mark_elements<O: arrow::array::OffsetSizeTrait>(
+    array: &ArrayRef,
+    values: &ArrayRef,
+    offsets: &[O],
+    query: &str,
+    hits: &mut [bool],
+    token: &CancelToken,
+) -> Result<()> {
+    let mut matched = vec![false; values.len()];
+    mark_search(values, query, &mut matched, token)?;
+    for (r, hit) in hits.iter_mut().enumerate() {
+        if !*hit && array.is_valid(r) {
+            let (lo, hi) = (offsets[r].as_usize(), offsets[r + 1].as_usize());
+            *hit = matched[lo..hi].contains(&true);
+        }
+    }
+    Ok(())
+}
 
 /// The test the search `query` means for a column of `data_type`, if any.
 pub(crate) fn search_test(data_type: &DataType, query: &str) -> Result<Option<ColumnTest>> {

@@ -6,9 +6,9 @@ use std::{
 };
 
 use arrow::{
-    array::{make_comparator, Array, ArrayRef, AsArray, Int64Array, UInt32Array},
+    array::{make_comparator, Array, ArrayRef, Int64Array, UInt32Array},
     compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions},
-    datatypes::{DataType, Float16Type, Float32Type, Float64Type, SchemaRef},
+    datatypes::{DataType, SchemaRef},
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -18,11 +18,14 @@ use crate::{
     numeric::Numeric,
     predicate::ColumnTest,
     query,
-    scope::{RowScope, Selection},
+    scope::{for_rows, RowScope, Selection},
     value_index::{count_values, ValueIndex, INDEX_LIMIT},
     Bound, ColumnInfo, ColumnSummary, DataKind, DistinctResult, Error, Export, ExportFormat,
     ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
+
+/// Rows tested between cancellation checks.
+const CHUNK: usize = 64 * 1024;
 
 /// One open file. Safe to share between threads.
 pub struct Document {
@@ -254,10 +257,8 @@ impl Document {
             for &c in columns {
                 let column = &self.columns[c as usize];
                 let mut hits = vec![false; source_rows.len()];
-                if let Some(test) = query::search_test(column.data_type(), text)? {
-                    let block = take(column.as_ref(), &indices, None)?;
-                    test.mark(&block, &mut hits, &token)?;
-                }
+                let block = take(column.as_ref(), &indices, None)?;
+                query::mark_search(&block, text, &mut hits, &token)?;
                 per_column.push(hits);
             }
             matched = (0..source_rows.len())
@@ -328,7 +329,7 @@ impl Document {
     ) -> Result<Histogram> {
         let numeric = self.numeric(column)?;
         let rows = self.rows_in(RowScope::facet(filters, column))?;
-        numeric.histogram(rows.iter(), bins)
+        for_rows!(&rows, |it| numeric.histogram(it, bins))
     }
 
     /// Distribution over the displayed rows, including this column's own
@@ -337,7 +338,7 @@ impl Document {
         let numeric = self.numeric(column)?;
         let view = self.views.snapshot(version)?;
         let rows = self.rows_in(RowScope::Rows(view.rows.clone()))?;
-        numeric.histogram(rows.iter(), bins)
+        for_rows!(&rows, |it| numeric.histogram(it, bins))
     }
 
     /// Display text for a raw value of a date, time, timestamp or duration
@@ -399,38 +400,46 @@ impl Document {
             std_dev: None,
             top_values: Vec::new(),
         };
-        match Numeric::new(array) {
-            Some(numeric) => numeric.summarize(rows.iter(), &mut s),
-            None => {
-                let top = top as usize;
-                s.null_count = rows.iter().filter(|&r| array.is_null(r)).count() as u64;
-                let mut values = match self.index(column)? {
-                    Some(idx) => {
-                        let values = idx.counts(&rows);
-                        s.distinct_count = values.len() as u64;
-                        values
-                    }
-                    None => {
-                        // One spare in case null is among the most common.
-                        let counted = count_values(array, &rows, top + 1)?;
-                        s.distinct_count = counted.distinct;
-                        counted.top
-                    }
-                };
-                if s.null_count > 0 {
-                    s.distinct_count -= 1;
-                }
-                values.retain(|v| v.label.is_some());
-                // Stable: ties stay in value order.
-                values.sort_by_key(|v| std::cmp::Reverse(v.count));
-                values.truncate(top);
-                s.top_values = values;
-            }
-        }
-        let (lo, hi) = extremes(array, &rows)?;
         let f = format::formatter(array.as_ref())?;
-        s.min_label = lo.and_then(|r| format::cell(array.as_ref(), &f, r));
-        s.max_label = hi.and_then(|r| format::cell(array.as_ref(), &f, r));
+        let label = |row: Option<usize>| row.and_then(|r| format::cell(array.as_ref(), &f, r));
+        if let Some(numeric) = Numeric::new(array) {
+            let (lo, hi) = for_rows!(&rows, |it| numeric.summarize(it, &mut s));
+            (s.min_label, s.max_label) = (label(lo), label(hi));
+            return Ok(s);
+        }
+
+        let top = top as usize;
+        s.null_count = match &rows {
+            Selection::All(_) => array.null_count() as u64,
+            Selection::Rows(_) => rows.iter().filter(|&r| array.is_null(r)).count() as u64,
+        };
+        let mut values = match self.index(column)? {
+            Some(idx) => {
+                let values = idx.counts(&rows);
+                s.distinct_count = values.len() as u64;
+                // Value order: the first and last non-null are the extremes.
+                let mut present = values.iter().filter_map(|v| v.label.as_ref());
+                s.min_label = present.next().cloned();
+                s.max_label = present.next_back().cloned();
+                values
+            }
+            None => {
+                // One spare in case null is among the most common.
+                let counted = count_values(array, &rows, top + 1)?;
+                s.distinct_count = counted.distinct;
+                let (lo, hi) = extremes(array, &rows)?;
+                (s.min_label, s.max_label) = (label(lo), label(hi));
+                counted.top
+            }
+        };
+        if s.null_count > 0 {
+            s.distinct_count -= 1;
+        }
+        values.retain(|v| v.label.is_some());
+        // Stable: ties stay in value order.
+        values.sort_by_key(|v| std::cmp::Reverse(v.count));
+        values.truncate(top);
+        s.top_values = values;
         Ok(s)
     }
 
@@ -486,6 +495,9 @@ impl Document {
     fn rows_in(&self, scope: RowScope<'_>) -> Result<Selection> {
         Ok(match scope {
             RowScope::All => Selection::All(self.n_rows),
+            // A view keeps each row at most once, so a full-length view is
+            // every row, and counting in file order is faster.
+            RowScope::Rows(rows) if rows.len() == self.n_rows => Selection::All(self.n_rows),
             RowScope::Rows(rows) => Selection::Rows(rows),
             RowScope::Facet { state, except } => {
                 self.column(except)?;
@@ -501,7 +513,8 @@ impl Document {
     }
 
     /// Source rows that pass all filters (except those on `skip`) and the
-    /// search, in file order. Each filter marks a mask; masks are ANDed.
+    /// search, in file order. Filters are ANDed row by row, stopping at the
+    /// first that fails; the search is one mask ORed over the columns.
     fn select(
         &self,
         filters: &[Filter],
@@ -509,38 +522,37 @@ impl Document {
         skip: Option<u32>,
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
-        let mut keep: Option<Vec<bool>> = None;
+        let mut tests = Vec::new();
         for f in filters {
             if Some(f.column()) == skip {
                 continue;
             }
             let test = self.filter_test(f)?;
-            let mut mask = vec![false; self.n_rows];
-            test.mark(self.column(f.column())?, &mut mask, token)?;
-            and_into(&mut keep, mask);
+            tests.push(test.row_test(self.column(f.column())?, token)?);
         }
 
         if let Some(text) = search.filter(|s| !s.trim().is_empty()) {
-            // Any column may match: OR the columns into one mask.
             let mut mask = vec![false; self.n_rows];
             for column in &self.columns {
-                if let Some(test) = query::search_test(column.data_type(), text)? {
-                    test.mark(column, &mut mask, token)?;
-                }
+                query::mark_search(column, text, &mut mask, token)?;
             }
-            and_into(&mut keep, mask);
+            tests.push(Box::new(move |r| mask[r]));
         }
 
-        token.check()?;
-        Ok(match keep {
-            None => (0..self.n_rows as u32).collect(),
-            Some(keep) => keep
-                .iter()
-                .enumerate()
-                .filter(|&(_, &k)| k)
-                .map(|(r, _)| r as u32)
-                .collect(),
-        })
+        if tests.is_empty() {
+            return Ok((0..self.n_rows as u32).collect());
+        }
+        let mut rows = Vec::new();
+        for start in (0..self.n_rows).step_by(CHUNK) {
+            token.check()?;
+            let end = (start + CHUNK).min(self.n_rows);
+            rows.extend(
+                (start..end)
+                    .filter(|&r| tests.iter().all(|t| t(r)))
+                    .map(|r| r as u32),
+            );
+        }
+        Ok(rows)
     }
 
     /// The test a filter means, after checking it fits the column.
@@ -619,20 +631,14 @@ impl Document {
 }
 
 /// Rows holding the smallest and largest non-null values among `rows`, in
-/// the column's own order, leaving out NaN like the numeric summary does.
-/// `None` for types Arrow cannot compare.
+/// the column's own order. `None` for types Arrow cannot compare. (Numeric
+/// columns get theirs from the summary, which also leaves out NaN.)
 fn extremes(array: &ArrayRef, rows: &Selection) -> Result<(Option<usize>, Option<usize>)> {
     let Ok(cmp) = make_comparator(array.as_ref(), array.as_ref(), SortOptions::default()) else {
         return Ok((None, None));
     };
-    let nan = |r: usize| match array.data_type() {
-        DataType::Float16 => array.as_primitive::<Float16Type>().value(r).is_nan(),
-        DataType::Float32 => array.as_primitive::<Float32Type>().value(r).is_nan(),
-        DataType::Float64 => array.as_primitive::<Float64Type>().value(r).is_nan(),
-        _ => false,
-    };
     let (mut lo, mut hi) = (None::<usize>, None::<usize>);
-    for r in rows.iter().filter(|&r| array.is_valid(r) && !nan(r)) {
+    for r in rows.iter().filter(|&r| array.is_valid(r)) {
         if lo.is_none_or(|l| cmp(r, l).is_lt()) {
             lo = Some(r);
         }
@@ -641,12 +647,4 @@ fn extremes(array: &ArrayRef, rows: &Selection) -> Result<(Option<usize>, Option
         }
     }
     Ok((lo, hi))
-}
-
-/// AND `mask` into `keep` (which starts as "everything").
-fn and_into(keep: &mut Option<Vec<bool>>, mask: Vec<bool>) {
-    match keep {
-        None => *keep = Some(mask),
-        Some(keep) => keep.iter_mut().zip(mask).for_each(|(k, m)| *k &= m),
-    }
 }

@@ -88,7 +88,13 @@ impl<'a> Numeric<'a> {
         dispatch!(self.0, histogram(rows, bins))
     }
 
-    pub(crate) fn summarize(self, rows: impl Iterator<Item = usize>, summary: &mut ColumnSummary) {
+    /// Fill in the numeric parts of `summary`; returns the rows holding
+    /// the smallest and largest values.
+    pub(crate) fn summarize(
+        self,
+        rows: impl Iterator<Item = usize>,
+        summary: &mut ColumnSummary,
+    ) -> (Option<usize>, Option<usize>) {
         dispatch!(self.0, summarize(rows, summary))
     }
 }
