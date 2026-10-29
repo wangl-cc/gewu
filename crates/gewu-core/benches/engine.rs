@@ -1,43 +1,33 @@
-//! Speed of the operations the app waits on, over the synthetic sample
-//! (`examples/sample`: 20 columns of every kind; 2,000,000 rows by default,
-//! set `GEWU_BENCH_ROWS` to change it).
+//! Benchmarks for the data engine on a generated 2M-row file.
 //!
-//!     cargo bench -p gewu-core --bench engine
-//!     cargo bench -p gewu-core --bench engine -- --save-baseline before
-//!     cargo bench -p gewu-core --bench engine -- --baseline before
+//! Run with `scripts/bench.sh`, which creates the file (fixed seed, every
+//! kind of column; see `examples/gen_sample.rs`) and runs `cargo bench`. To
+//! use another file, set `GEWU_BENCH_FILE`.
 //!
-//! The file is written and opened once; each benchmark times only its own
-//! call. Peak memory is measured separately by `scripts/bench-memory.py`.
+//! "cold" benchmarks open a fresh document for every iteration, so they
+//! include one-time work such as building a column's value index; "hot"
+//! ones reuse a document where that work is already cached.
 
-#[path = "../examples/sample/mod.rs"]
-mod sample;
+use std::{hint::black_box, path::PathBuf, time::Duration};
 
-use std::{hint::black_box, time::Duration};
-
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use gewu_core::{Bound, Document, Filter, SortKey, ViewState};
 
-struct Fixture {
-    doc: Document,
-    _dir: tempfile::TempDir,
-}
-
-fn fixture() -> Fixture {
-    let rows = std::env::var("GEWU_BENCH_ROWS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2_000_000);
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("sample.parquet");
-    sample::write(&path, rows);
-    Fixture {
-        doc: Document::open(&path).unwrap(),
-        _dir: dir,
-    }
+fn bench_file() -> PathBuf {
+    let path = std::env::var_os("GEWU_BENCH_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("gewu-bench-v2.parquet"));
+    assert!(
+        path.exists(),
+        "{} not found: run scripts/bench.sh, or set GEWU_BENCH_FILE",
+        path.display()
+    );
+    path
 }
 
 fn col(doc: &Document, name: &str) -> u32 {
-    doc.column_index(name).unwrap()
+    doc.column_index(name)
+        .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
 fn range(column: u32, min: f64, max: f64) -> Filter {
@@ -55,52 +45,49 @@ fn search(text: &str) -> ViewState {
     }
 }
 
-fn benches(c: &mut Criterion) {
-    let f = fixture();
-    let doc = &f.doc;
-    let [id, uuid, label, city, country, price, score, amount, day, updated, tags, note] = [
-        "id", "uuid", "label", "city", "country", "price", "score", "amount", "day", "updated",
-        "tags", "note",
+fn open(c: &mut Criterion) {
+    let path = bench_file();
+    let mut g = c.benchmark_group("open");
+    g.sample_size(10);
+    g.bench_function("parquet_2m", |b| b.iter(|| Document::open(&path).unwrap()));
+    g.finish();
+}
+
+fn apply_view(c: &mut Criterion) {
+    let doc = Document::open(bench_file()).unwrap();
+    let [price, score, rating, label, city, uuid, updated, tags] = [
+        "price", "score", "rating", "label", "city", "uuid", "updated", "tags",
     ]
-    .map(|name| col(doc, name));
+    .map(|name| col(&doc, name));
+    // Build the label index once, so InValues measures filtering only.
+    let cat = doc.keys_for_labels(label, &[Some("cat".into())]).unwrap();
 
-    let path = doc.info().path.clone();
-    c.bench_function("open", |b| {
-        b.iter(|| Document::open(black_box(&path)).unwrap())
-    });
-
-    let cat_owl = doc
-        .keys_for_labels(label, &[Some("cat".into()), Some("owl".into())])
-        .unwrap();
-    let views: Vec<(&str, ViewState)> = vec![
-        ("all", ViewState::default()),
-        ("range", ViewState {
-            filters: vec![range(price, 1000.0, 5000.0)],
+    let cases: Vec<(&str, ViewState)> = vec![
+        ("no_filter", ViewState::default()),
+        ("range_1", ViewState {
+            filters: vec![range(price, 100.0, 5000.0)],
             ..Default::default()
         }),
-        ("range_x2", ViewState {
-            filters: vec![range(price, 1000.0, 5000.0), range(score, 85.0, 115.0)],
+        ("range_3", ViewState {
+            filters: vec![
+                range(price, 100.0, 5000.0),
+                range(score, 80.0, 120.0),
+                range(rating, 20.0, 40.0),
+            ],
             ..Default::default()
         }),
-        ("checkbox", ViewState {
+        ("in_values_label", ViewState {
             filters: vec![Filter::InValues {
                 column: label,
-                keys: cat_owl.clone(),
+                keys: cat,
             }],
             ..Default::default()
         }),
-        ("contains", ViewState {
+        ("contains_city", ViewState {
             filters: vec![Filter::Contains {
                 column: city,
-                text: "-012".into(),
+                text: "city-12".into(),
                 case_sensitive: false,
-            }],
-            ..Default::default()
-        }),
-        ("is_null", ViewState {
-            filters: vec![Filter::IsNull {
-                column: day,
-                negate: false,
             }],
             ..Default::default()
         }),
@@ -112,13 +99,23 @@ fn benches(c: &mut Criterion) {
             }],
             ..Default::default()
         }),
-        ("search_text", search("owl")),
-        ("search_number", search("1373.03")),
+        ("is_null_label", ViewState {
+            filters: vec![Filter::IsNull {
+                column: label,
+                negate: false,
+            }],
+            ..Default::default()
+        }),
+        ("search_text", search("city-12")),
+        ("search_int", search("123456")),
+        ("search_float", search("3089.62")),
         ("search_date", search("2024-03")),
-        ("sort_float", ViewState {
+        ("search_time", search("12:30")),
+        ("search_bool", search("true")),
+        ("sort_price", ViewState {
             sort: vec![SortKey {
                 column: price,
-                descending: false,
+                descending: true,
             }],
             ..Default::default()
         }),
@@ -136,10 +133,10 @@ fn benches(c: &mut Criterion) {
             }],
             ..Default::default()
         }),
-        ("sort_text_then_float", ViewState {
+        ("sort_city_price", ViewState {
             sort: vec![
                 SortKey {
-                    column: label,
+                    column: city,
                     descending: false,
                 },
                 SortKey {
@@ -149,98 +146,130 @@ fn benches(c: &mut Criterion) {
             ],
             ..Default::default()
         }),
-        ("filter_and_sort", ViewState {
-            filters: vec![range(price, 1000.0, 5000.0), Filter::InValues {
-                column: label,
-                keys: cat_owl,
-            }],
+        ("range_then_sort", ViewState {
+            filters: vec![range(price, 100.0, 5000.0)],
             sort: vec![SortKey {
                 column: score,
-                descending: true,
+                descending: false,
             }],
             ..Default::default()
         }),
     ];
+
     let mut g = c.benchmark_group("apply_view");
-    for (name, state) in &views {
+    g.sample_size(20).measurement_time(Duration::from_secs(5));
+    for (name, state) in &cases {
         g.bench_function(*name, |b| {
             b.iter(|| doc.apply_view(black_box(state)).unwrap())
         });
     }
     g.finish();
+}
 
-    // Facets for an open filter popover: count with the other filters.
-    let facet_state = &views[2].1;
-    let mut g = c.benchmark_group("distinct");
+fn rows(c: &mut Criterion) {
+    let doc = Document::open(bench_file()).unwrap();
+    let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
+    let mut g = c.benchmark_group("rows");
+
+    let plain = doc.apply_view(&ViewState::default()).unwrap();
+    g.bench_function("block_256_all_columns", |b| {
+        b.iter(|| doc.rows(plain.version, 1_000_000, 256, &columns).unwrap())
+    });
+
+    // With a search, rows() also marks which cells match.
+    let searched = doc.apply_view(&search("2024-03")).unwrap();
+    g.bench_function("block_256_with_highlight", |b| {
+        b.iter(|| doc.rows(searched.version, 1_000, 256, &columns).unwrap())
+    });
+    g.finish();
+}
+
+fn facets(c: &mut Criterion) {
+    let path = bench_file();
+    let doc = Document::open(&path).unwrap();
+    let [label, city, country, tags, note, id, uuid, price, amount, updated] = [
+        "label", "city", "country", "tags", "note", "id", "uuid", "price", "amount", "updated",
+    ]
+    .map(|name| col(&doc, name));
+    let other_filter = ViewState {
+        filters: vec![range(price, 100.0, 5000.0)],
+        ..Default::default()
+    };
+
+    let mut g = c.benchmark_group("facets");
+    g.sample_size(10).measurement_time(Duration::from_secs(8));
+
+    // Cold: includes building the column's value index.
     for (name, column) in [
         ("label", label),
         ("city", city),
         ("country_dictionary", country),
         ("tags_list", tags),
-        ("note", note),
-        ("id", id),
-        ("uuid", uuid),
+        ("note_text", note),
+        ("id_high_card", id),
+        ("uuid_high_card", uuid),
     ] {
-        g.bench_function(name, |b| {
-            b.iter(|| doc.distinct_values(column, None, 10_000).unwrap())
+        g.bench_function(format!("distinct_cold_{name}"), |b| {
+            b.iter_batched(
+                || Document::open(&path).unwrap(),
+                |doc| doc.distinct_values(column, None, 10_000).unwrap(),
+                BatchSize::PerIteration,
+            )
         });
     }
-    g.bench_function("city_with_filters", |b| {
+    // Hot: index cached; counts only rows passing the other columns' filters.
+    doc.distinct_values(city, None, 1).unwrap();
+    g.bench_function("distinct_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.distinct_values(city, Some(facet_state), 10_000)
+            doc.distinct_values(city, Some(&other_filter), 10_000)
                 .unwrap()
         })
     });
-    g.finish();
 
-    let mut g = c.benchmark_group("histogram");
-    for (name, column) in [
-        ("price", price),
-        ("decimal", amount),
-        ("day", day),
-        ("timestamp", updated),
-    ] {
-        g.bench_function(name, |b| {
-            b.iter(|| doc.histogram(column, None, 100).unwrap())
+    g.bench_function("histogram_price", |b| {
+        b.iter(|| doc.histogram(price, None, 60).unwrap())
+    });
+    let label_filter = ViewState {
+        filters: vec![Filter::IsNull {
+            column: label,
+            negate: true,
+        }],
+        ..Default::default()
+    };
+    g.bench_function("histogram_price_filtered", |b| {
+        b.iter(|| doc.histogram(price, Some(&label_filter), 60).unwrap())
+    });
+    g.bench_function("histogram_decimal", |b| {
+        b.iter(|| doc.histogram(amount, None, 60).unwrap())
+    });
+    g.bench_function("histogram_timestamp", |b| {
+        b.iter(|| doc.histogram(updated, None, 60).unwrap())
+    });
+
+    doc.apply_view(&ViewState::default()).unwrap();
+    g.bench_function("summary_price", |b| {
+        b.iter(|| doc.column_summary(price, 8).unwrap())
+    });
+    g.bench_function("summary_label_hot", |b| {
+        doc.column_summary(label, 8).unwrap();
+        b.iter(|| doc.column_summary(label, 8).unwrap())
+    });
+    // Cold: the first summary of a column, on a freshly opened file.
+    for (name, column) in [("price", price), ("note", note), ("uuid", uuid)] {
+        g.bench_function(format!("summary_cold_{name}"), |b| {
+            b.iter_batched(
+                || {
+                    let doc = Document::open(&path).unwrap();
+                    doc.apply_view(&ViewState::default()).unwrap();
+                    doc
+                },
+                |doc| doc.column_summary(column, 8).unwrap(),
+                BatchSize::PerIteration,
+            )
         });
     }
-    g.bench_function("score_with_filters", |b| {
-        b.iter(|| doc.histogram(score, Some(facet_state), 100).unwrap())
-    });
     g.finish();
-
-    // The inspector, over the whole file.
-    doc.apply_view(&ViewState::default()).unwrap();
-    let mut g = c.benchmark_group("column_summary");
-    for (name, column) in [
-        ("price", price),
-        ("label", label),
-        ("city", city),
-        ("note", note),
-        ("id", id),
-        ("uuid", uuid),
-    ] {
-        g.bench_function(name, |b| b.iter(|| doc.column_summary(column, 10).unwrap()));
-    }
-    g.finish();
-
-    // Scrolling: one block of rows, all columns, from a sorted view.
-    let sorted = doc
-        .apply_view(&views.iter().find(|(n, _)| *n == "sort_float").unwrap().1)
-        .unwrap();
-    let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
-    let middle = sorted.row_count / 2;
-    c.bench_function("rows_256", |b| {
-        b.iter(|| doc.rows(sorted.version, middle, 256, &columns).unwrap())
-    });
 }
 
-criterion_group! {
-    name = engine;
-    config = Criterion::default()
-        .sample_size(10)
-        .warm_up_time(Duration::from_secs(1))
-        .measurement_time(Duration::from_secs(3));
-    targets = benches
-}
-criterion_main!(engine);
+criterion_group!(benches, open, apply_view, rows, facets);
+criterion_main!(benches);

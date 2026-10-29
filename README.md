@@ -93,18 +93,14 @@ cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
 ## Benchmarks
 
 ```sh
-# Speed of each core operation over 2,000,000 generated rows
-cargo bench -p gewu-core --bench engine
-# Save a baseline before a change, then compare against it
-cargo bench -p gewu-core --bench engine -- --save-baseline before
-cargo bench -p gewu-core --bench engine -- --baseline before
-
-# Peak memory and wall time of whole CLI runs; pass two binaries to compare
-cargo build --release -p gewu-cli
-scripts/bench-memory.py target/release/gewu
+scripts/bench.sh                              # engine benchmarks (criterion), 2M generated rows
+scripts/bench.sh -- --save-baseline before    # save a baseline ...
+scripts/bench.sh -- --baseline before         # ... and compare against it later
+scripts/bench-mem.sh                          # peak memory per operation, via the CLI
 ```
 
-`GEWU_BENCH_ROWS` changes the row count of `cargo bench`.
+Both scripts generate the same fixed-seed file on first use. Reports land in
+`target/criterion/`.
 
 ## Current limits
 
