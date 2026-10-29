@@ -5,8 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FILE="${GEWU_BENCH_FILE:-${TMPDIR:-/tmp}/gewu-bench-v2.parquet}"
-if [[ ! -f "$FILE" ]]; then
+FILE="${GEWU_BENCH_FILE:-${TMPDIR:-/tmp}/gewu-bench.parquet}"
+# Regenerate when missing or when the generator changed.
+if [[ ! -f "$FILE" || crates/gewu-core/examples/gen_sample.rs -nt "$FILE" ]]; then
   cargo run --release -q -p gewu-core --example gen_sample -- "$FILE" 2000000
 fi
 cargo build --release -q -p gewu-cli
@@ -36,8 +37,6 @@ measure search_text          "$GEWU" rows "$FILE" --search city-12 --limit 1
 measure search_date          "$GEWU" rows "$FILE" --search 2024-03 --limit 1
 measure distinct_city        "$GEWU" distinct "$FILE" city --limit 5
 measure distinct_id_highcard "$GEWU" distinct "$FILE" id --limit 5
+measure distinct_uuid        "$GEWU" distinct "$FILE" uuid --limit 5
 measure hist_price           "$GEWU" hist "$FILE" price --bins 60
 measure stats_price          "$GEWU" stats "$FILE" price
-measure distinct_uuid        "$GEWU" distinct "$FILE" uuid --limit 5
-measure stats_uuid           "$GEWU" stats "$FILE" uuid
-measure sort_uuid            "$GEWU" rows "$FILE" --sort uuid --limit 1

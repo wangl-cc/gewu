@@ -1,234 +1,332 @@
-//! Write a synthetic Parquet file for manual and performance testing. The
-//! generator has a fixed seed, so the same `n` always gives the same file.
+//! Write a synthetic Parquet file for manual and performance testing.
 //!
-//!     cargo run --release -p gewu-core --example gen_sample -- out.parquet 5000000
+//!     cargo run --release -p gewu-core --example gen_sample -- out.parquet 5000000 [seed]
 //!
-//! It covers every kind of column the viewer treats differently, with
-//! distributions whose shape is easy to recognise in a histogram:
-//!
-//! | column    | type                    | values                                    |
-//! |-----------|-------------------------|-------------------------------------------|
-//! | id        | Int64                   | 0..n, unique                              |
-//! | uuid      | Utf8                    | random hex, unique (too many to index)    |
-//! | label     | Utf8                    | 8 animals, Zipf-skewed, 2% null           |
-//! | city      | Utf8                    | 2,000 cities, uniform                     |
-//! | country   | Dictionary(Int32, Utf8) | 40 codes, Zipf-skewed                     |
-//! | active    | Boolean                 | 30% true, 1% null                         |
-//! | price     | Float64                 | uniform 0–10,000, cents                   |
-//! | score     | Float64                 | normal(100, 15), 1% null                  |
-//! | bimodal   | Float64                 | normal(40, 5) and normal(120, 10)         |
-//! | lognormal | Float64                 | log-normal, median 50                     |
-//! | wait      | Float32                 | exponential, mean 2; a few NaN            |
-//! | rating    | Int32                   | normal(30, 5), rounded                    |
-//! | visits    | UInt64                  | Pareto heavy tail                         |
-//! | amount    | Decimal128(12, 2)       | log-normal, median 120.00                 |
-//! | day       | Date32                  | 2020–2025 uniform, 2.5% null              |
-//! | updated   | Timestamp(µs, UTC)      | 2024, weighted towards working hours      |
-//! | clock     | Time64(µs)              | normal around 12:30                       |
-//! | elapsed   | Duration(ms)            | exponential, mean 90 s                    |
-//! | tags      | List(Utf8)              | 0–3 animals                               |
-//! | note      | LargeUtf8               | a few words, 10% null                     |
+//! Values come from a seeded RNG, so the same row count and seed always give
+//! the same file. Columns cover the types and shapes the viewer has to
+//! handle (see `columns()`): integers and floats of several widths and
+//! distributions, decimals, low- and high-cardinality text, dictionary text,
+//! booleans, dates, times, timestamps with a time zone, durations, binary,
+//! lists and a struct, with nulls, NaN and infinities where they matter.
 
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
     array::{
-        ArrayRef, BooleanArray, Date32Array, Decimal128Array, DurationMillisecondArray,
-        Float32Array, Float64Array, Int32Array, Int64Array, LargeStringArray, ListBuilder,
-        RecordBatch, StringArray, StringBuilder, StringDictionaryBuilder, Time64MicrosecondArray,
-        TimestampMicrosecondArray, UInt64Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, DictionaryArray,
+        DurationMillisecondArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, ListBuilder, RecordBatch, StringArray, StringBuilder, StructArray,
+        Time64MicrosecondArray, TimestampMicrosecondArray, UInt32Array, UInt64Array,
     },
-    datatypes::Int32Type,
+    datatypes::{DataType, Field, Int32Type},
 };
 use parquet::{
     arrow::ArrowWriter,
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use rand::{rngs::Xoshiro256PlusPlus, Rng, RngExt, SeedableRng};
-use rand_distr::{Distribution, Exp, LogNormal, Normal, Pareto, Zipf};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand_distr::{Distribution, Exp, LogNormal, Normal, Poisson, Zipf};
 
-const ANIMALS: [&str; 8] = [
+const LABELS: [&str; 8] = [
     "cat", "dog", "bird", "fish", "horse", "lizard", "frog", "owl",
 ];
 const WORDS: [&str; 16] = [
-    "red", "quick", "late", "early", "big", "small", "new", "old", "box", "order", "return",
-    "gift", "sale", "repair", "visit", "note",
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet",
+    "kilo", "lima", "mike", "november", "oscar", "papa",
 ];
+const COUNTRIES: [&str; 6] = ["CN", "US", "DE", "JP", "BR", "IN"];
+/// 2020-01-01 as days since the epoch.
+const DAY_2020: i32 = 18_262;
+/// 2024-01-01T00:00:00Z in seconds.
+const SECS_2024: i64 = 1_704_067_200;
 
-/// Write `n` rows to `path`.
-fn write(path: &Path, n: usize) {
-    let mut rng = Xoshiro256PlusPlus::seed_from_u64(0x6765_7775);
-    let file = std::fs::File::create(path).unwrap();
-    let props = WriterProperties::builder()
-        .set_compression(Compression::ZSTD(ZstdLevel::default()))
-        .build();
-    let mut writer: Option<ArrowWriter<std::fs::File>> = None;
-    let mut file = Some(file);
+/// One batch of one column.
+type Gen = fn(&mut StdRng, usize, usize) -> ArrayRef;
 
-    let batch_size = 256 * 1024;
-    for start in (0..n).step_by(batch_size) {
-        let len = batch_size.min(n - start);
-        let batch = batch(&mut rng, start, len);
-        let w = writer.get_or_insert_with(|| {
-            ArrowWriter::try_new(file.take().unwrap(), batch.schema(), Some(props.clone())).unwrap()
-        });
-        w.write(&batch).unwrap();
-    }
-    writer.unwrap().close().unwrap();
+/// `Some(v)` except for about `rate` of rows.
+fn maybe<T>(rng: &mut StdRng, rate: f64, v: T) -> Option<T> {
+    (!rng.random_bool(rate)).then_some(v)
 }
 
-fn batch(rng: &mut Xoshiro256PlusPlus, start: usize, len: usize) -> RecordBatch {
-    let animal = Zipf::new(ANIMALS.len() as f64, 1.0).unwrap();
-    let country = Zipf::new(40.0, 1.2).unwrap();
-    let score = Normal::new(100.0, 15.0).unwrap();
-    let low = Normal::new(40.0, 5.0).unwrap();
-    let high = Normal::new(120.0, 10.0).unwrap();
-    let lognormal = LogNormal::new(50f64.ln(), 0.6).unwrap();
-    let wait = Exp::new(0.5).unwrap();
-    let rating = Normal::<f64>::new(30.0, 5.0).unwrap();
-    let visits = Pareto::<f64>::new(1.0, 1.5).unwrap();
-    let amount = LogNormal::new(120f64.ln(), 0.8).unwrap();
-    let clock = Normal::<f64>::new(12.5 * 3600.0, 3.0 * 3600.0).unwrap();
-    let elapsed = Exp::new(1.0 / 90_000.0).unwrap();
-    let pick = |rng: &mut Xoshiro256PlusPlus| ANIMALS[animal.sample(rng) as usize - 1];
-    let rows = start..start + len;
-    // Fixed 1-in-97 nulls, independent of the random stream.
-    let sometimes = |i: usize| !i.is_multiple_of(97);
-
-    let id: ArrayRef = Arc::new(Int64Array::from_iter_values(rows.clone().map(|i| i as i64)));
-    let uuid: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..len).map(|_| format!("{:016x}", rng.next_u64())),
-    ));
-    let label: ArrayRef = Arc::new(StringArray::from_iter(
-        (0..len).map(|_| (!rng.random_bool(0.02)).then(|| pick(rng))),
-    ));
-    let city: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..len).map(|_| format!("city-{:04}", rng.random_range(0..2000))),
-    ));
-    let mut countries = StringDictionaryBuilder::<Int32Type>::new();
-    for _ in 0..len {
-        let c = country.sample(rng) as u8 - 1;
-        countries.append_value(format!(
-            "{}{}",
-            (b'A' + c / 8) as char,
-            (b'A' + c % 8) as char
-        ));
-    }
-    let country: ArrayRef = Arc::new(countries.finish());
-    let active: ArrayRef = Arc::new(BooleanArray::from_iter(
-        rows.clone()
-            .map(|i| (!i.is_multiple_of(100)).then(|| rng.random_bool(0.3))),
-    ));
-    let price: ArrayRef = Arc::new(Float64Array::from_iter_values(
-        (0..len).map(|_| rng.random_range(0..1_000_000) as f64 / 100.0),
-    ));
-    let cents = |v: f64| (v * 100.0).round() / 100.0;
-    let score: ArrayRef = Arc::new(Float64Array::from_iter(
-        rows.clone()
-            .map(|i| sometimes(i).then(|| cents(score.sample(rng)))),
-    ));
-    let bimodal: ArrayRef = Arc::new(Float64Array::from_iter(rows.clone().map(|i| {
-        let v = if rng.random_bool(0.5) {
-            low.sample(rng)
-        } else {
-            high.sample(rng)
-        };
-        sometimes(i).then(|| cents(v))
-    })));
-    let lognormal: ArrayRef = Arc::new(Float64Array::from_iter(
-        rows.clone()
-            .map(|i| sometimes(i).then(|| cents(lognormal.sample(rng)))),
-    ));
-    let wait: ArrayRef = Arc::new(Float32Array::from_iter_values(rows.clone().map(|i| {
-        if i.is_multiple_of(5_000) {
-            f32::NAN
-        } else {
-            wait.sample(rng) as f32
-        }
-    })));
-    let rating: ArrayRef = Arc::new(Int32Array::from_iter_values(
-        (0..len).map(|_| rating.sample(rng).round() as i32),
-    ));
-    let visits: ArrayRef = Arc::new(UInt64Array::from_iter_values(
-        (0..len).map(|_| visits.sample(rng).min(1e12) as u64),
-    ));
-    let amount: ArrayRef = Arc::new(
-        Decimal128Array::from_iter_values(
-            (0..len).map(|_| (amount.sample(rng) * 100.0).round() as i128),
-        )
-        .with_precision_and_scale(12, 2)
-        .unwrap(),
-    );
-    // Days from 2020-01-01 (18262) over six years, some missing.
-    let day: ArrayRef =
-        Arc::new(Date32Array::from_iter((0..len).map(|_| {
-            (!rng.random_bool(0.025)).then(|| 18_262 + rng.random_range(0..2_192))
-        })));
-    let updated: ArrayRef = Arc::new(
-        TimestampMicrosecondArray::from_iter_values((0..len).map(|_| {
-            let day = rng.random_range(0..366i64);
-            let hour = [9, 10, 11, 13, 14, 15, 16, 20, 2][rng.random_range(0..9)];
-            let second = rng.random_range(0..3_600i64);
-            (1_704_067_200 + day * 86_400 + hour * 3_600 + second) * 1_000_000
-        }))
-        .with_timezone("UTC"),
-    );
-    let clock: ArrayRef = Arc::new(Time64MicrosecondArray::from_iter_values((0..len).map(
-        |_| {
-            let s = clock.sample(rng).clamp(0.0, 86_399.0);
-            (s * 1e6) as i64
-        },
-    )));
-    let elapsed: ArrayRef = Arc::new(DurationMillisecondArray::from_iter_values(
-        (0..len).map(|_| elapsed.sample(rng) as i64),
-    ));
-    let mut tags = ListBuilder::new(StringBuilder::new());
-    for _ in 0..len {
-        for _ in 0..rng.random_range(0..4) {
-            tags.values().append_value(pick(rng));
-        }
-        tags.append(true);
-    }
-    let tags: ArrayRef = Arc::new(tags.finish());
-    let note: ArrayRef = Arc::new(LargeStringArray::from_iter((0..len).map(|_| {
-        (!rng.random_bool(0.1)).then(|| {
-            let words: Vec<&str> = (0..rng.random_range(1..6))
-                .map(|_| WORDS[rng.random_range(0..WORDS.len())])
+fn columns() -> Vec<(&'static str, Gen)> {
+    vec![
+        // --- Columns the benchmarks and earlier tests rely on; keep their meaning.
+        // Unique, sequential.
+        ("id", |_, start, len| {
+            Arc::new(Int64Array::from_iter_values(
+                (start..start + len).map(|i| i as i64),
+            ))
+        }),
+        // 8 values, uniform, 2% null.
+        ("label", |rng, _, len| {
+            Arc::new(StringArray::from_iter((0..len).map(|_| {
+                let v = LABELS[rng.random_range(0..LABELS.len())];
+                maybe(rng, 0.02, v)
+            })))
+        }),
+        // Uniform 0..10000 with cents.
+        ("price", |rng, _, len| {
+            Arc::new(Float64Array::from_iter_values(
+                (0..len).map(|_| (rng.random_range(0..1_000_000) as f64) / 100.0),
+            ))
+        }),
+        // 2000 values, uniform.
+        ("city", |rng, _, len| {
+            Arc::new(StringArray::from_iter_values(
+                (0..len).map(|_| format!("city-{:04}", rng.random_range(0..2000))),
+            ))
+        }),
+        // Uniform over 2020..2025, 2.5% null.
+        ("day", |rng, _, len| {
+            Arc::new(Date32Array::from_iter((0..len).map(|_| {
+                let d = DAY_2020 + rng.random_range(0..2_192);
+                maybe(rng, 0.025, d)
+            })))
+        }),
+        // UTC timestamps across 2024, more during working hours.
+        ("updated", |rng, _, len| {
+            let hours = [9, 10, 11, 13, 14, 15, 16, 20, 2];
+            Arc::new(
+                TimestampMicrosecondArray::from_iter_values((0..len).map(|_| {
+                    let day = rng.random_range(0..366i64);
+                    let hour = hours[rng.random_range(0..hours.len())];
+                    let second = rng.random_range(0..3_600i64);
+                    (SECS_2024 + day * 86_400 + hour * 3_600 + second) * 1_000_000
+                }))
+                .with_timezone("UTC"),
+            )
+        }),
+        // Normal(100, 15), 1% null.
+        ("score", |rng, _, len| {
+            let d = Normal::new(100.0, 15.0).unwrap();
+            Arc::new(Float64Array::from_iter((0..len).map(|_| {
+                let v = (d.sample(rng) * 100.0f64).round() / 100.0;
+                maybe(rng, 0.01, v)
+            })))
+        }),
+        // Integer Normal(30, 5): narrow, one histogram bar per value.
+        ("rating", |rng, _, len| {
+            let d = Normal::new(30.0f64, 5.0).unwrap();
+            Arc::new(Int32Array::from_iter_values(
+                (0..len).map(|_| d.sample(rng).round() as i32),
+            ))
+        }),
+        // Mix of N(40, 5) and N(120, 10), 1% null.
+        ("bimodal", |rng, _, len| {
+            let (a, b) = (
+                Normal::new(40.0, 5.0).unwrap(),
+                Normal::new(120.0, 10.0).unwrap(),
+            );
+            Arc::new(Float64Array::from_iter((0..len).map(|_| {
+                let v: f64 = if rng.random_bool(0.5) {
+                    a.sample(rng)
+                } else {
+                    b.sample(rng)
+                };
+                maybe(rng, 0.01, (v * 100.0).round() / 100.0)
+            })))
+        }),
+        // Right-skewed, median 50, 1% null.
+        ("lognormal", |rng, _, len| {
+            let d = LogNormal::new(50f64.ln(), 0.6).unwrap();
+            Arc::new(Float64Array::from_iter((0..len).map(|_| {
+                let v = (d.sample(rng) * 100.0f64).round() / 100.0;
+                maybe(rng, 0.01, v)
+            })))
+        }),
+        // --- More types and shapes.
+        // Exponential waiting times in seconds, f32.
+        ("wait_s", |rng, _, len| {
+            let d = Exp::new(1.0 / 30.0).unwrap();
+            Arc::new(Float32Array::from_iter_values(
+                (0..len).map(|_| d.sample(rng) as f32),
+            ))
+        }),
+        // Small counts, Poisson(3), u32.
+        ("visits", |rng, _, len| {
+            let d = Poisson::new(3.0).unwrap();
+            Arc::new(UInt32Array::from_iter_values(
+                (0..len).map(|_| d.sample(rng) as u32),
+            ))
+        }),
+        // Heavy-tailed popularity: Zipf over 1000 product ids, int16.
+        ("product", |rng, _, len| {
+            let d = Zipf::new(1000.0, 1.2).unwrap();
+            Arc::new(Int16Array::from_iter_values(
+                (0..len).map(|_| d.sample(rng) as i16),
+            ))
+        }),
+        // Tiny signed range, int8, including negatives.
+        ("delta", |rng, _, len| {
+            Arc::new(Int8Array::from_iter_values(
+                (0..len).map(|_| rng.random_range(-5..=5)),
+            ))
+        }),
+        // Large unsigned values above i64::MAX.
+        ("hash", |rng, _, len| {
+            Arc::new(UInt64Array::from_iter_values(
+                (0..len).map(|_| rng.random()),
+            ))
+        }),
+        // Money as decimal(12, 2), log-normal amounts, 3% null.
+        ("amount", |rng, _, len| {
+            let d = LogNormal::new(4.0, 1.0).unwrap();
+            Arc::new(
+                Decimal128Array::from_iter((0..len).map(|_| {
+                    let cents = (d.sample(rng) * 100.0) as i128;
+                    maybe(rng, 0.03, cents)
+                }))
+                .with_precision_and_scale(12, 2)
+                .unwrap(),
+            )
+        }),
+        // Sensor readings with NaN and infinities mixed in.
+        ("sensor", |rng, _, len| {
+            let d = Normal::new(0.0, 1.0).unwrap();
+            Arc::new(Float64Array::from_iter_values((0..len).map(
+                |_| match rng.random_range(0..1000) {
+                    0 => f64::NAN,
+                    1 => f64::INFINITY,
+                    2 => f64::NEG_INFINITY,
+                    _ => d.sample(rng),
+                },
+            )))
+        }),
+        // True about 30% of the time, 5% null.
+        ("active", |rng, _, len| {
+            Arc::new(BooleanArray::from_iter((0..len).map(|_| {
+                let v = rng.random_bool(0.3);
+                maybe(rng, 0.05, v)
+            })))
+        }),
+        // Dictionary-encoded text, as Parquet writers often produce.
+        ("country", |rng, _, len| {
+            let keys = Int32Array::from_iter_values(
+                (0..len).map(|_| rng.random_range(0..COUNTRIES.len() as i32)),
+            );
+            let values = Arc::new(StringArray::from(COUNTRIES.to_vec()));
+            Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+        }),
+        // Unique, UUID-like text: high cardinality.
+        ("uuid", |rng, _, len| {
+            Arc::new(StringArray::from_iter_values((0..len).map(|_| {
+                let v: u128 = rng.random();
+                format!(
+                    "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                    (v >> 96) as u32,
+                    (v >> 80) as u16,
+                    (v >> 64) as u16,
+                    (v >> 48) as u16,
+                    v & 0xffff_ffff_ffff
+                )
+            })))
+        }),
+        // Free text of varying length, 5% null.
+        ("note", |rng, _, len| {
+            Arc::new(StringArray::from_iter((0..len).map(|_| {
+                let words = rng.random_range(1..12);
+                let text = (0..words)
+                    .map(|_| WORDS[rng.random_range(0..WORDS.len())])
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                maybe(rng, 0.05, text)
+            })))
+        }),
+        // Time of day, microseconds.
+        ("start_time", |rng, _, len| {
+            Arc::new(Time64MicrosecondArray::from_iter_values(
+                (0..len).map(|_| rng.random_range(0..86_400_000_000i64)),
+            ))
+        }),
+        // Durations in milliseconds, exponential.
+        ("latency", |rng, _, len| {
+            let d = Exp::new(1.0 / 250.0).unwrap();
+            Arc::new(DurationMillisecondArray::from_iter_values(
+                (0..len).map(|_| d.sample(rng) as i64),
+            ))
+        }),
+        // Short binary blobs.
+        ("blob", |rng, _, len| {
+            let values: Vec<Vec<u8>> = (0..len)
+                .map(|_| (0..rng.random_range(0..16)).map(|_| rng.random()).collect())
                 .collect();
-            words.join(" ")
-        })
-    })));
-
-    RecordBatch::try_from_iter(vec![
-        ("id", id),
-        ("uuid", uuid),
-        ("label", label),
-        ("city", city),
-        ("country", country),
-        ("active", active),
-        ("price", price),
-        ("score", score),
-        ("bimodal", bimodal),
-        ("lognormal", lognormal),
-        ("wait", wait),
-        ("rating", rating),
-        ("visits", visits),
-        ("amount", amount),
-        ("day", day),
-        ("updated", updated),
-        ("clock", clock),
-        ("elapsed", elapsed),
-        ("tags", tags),
-        ("note", note),
-    ])
-    .unwrap()
+            Arc::new(BinaryArray::from_iter_values(values.iter()))
+        }),
+        // Lists of 0..4 tags, 2% null lists.
+        ("tags", |rng, _, len| {
+            let mut b = ListBuilder::new(StringBuilder::new());
+            for _ in 0..len {
+                if rng.random_bool(0.02) {
+                    b.append(false);
+                    continue;
+                }
+                for _ in 0..rng.random_range(0..4) {
+                    b.values()
+                        .append_value(WORDS[rng.random_range(0..WORDS.len())]);
+                }
+                b.append(true);
+            }
+            Arc::new(b.finish())
+        }),
+        // A nested struct.
+        ("location", |rng, _, len| {
+            let lat: ArrayRef = Arc::new(Float64Array::from_iter_values(
+                (0..len).map(|_| rng.random_range(-90.0..90.0)),
+            ));
+            let lon: ArrayRef = Arc::new(Float64Array::from_iter_values(
+                (0..len).map(|_| rng.random_range(-180.0..180.0)),
+            ));
+            Arc::new(StructArray::from(vec![
+                (Arc::new(Field::new("lat", DataType::Float64, false)), lat),
+                (Arc::new(Field::new("lon", DataType::Float64, false)), lon),
+            ]))
+        }),
+        // Edge cases: one value, and no values at all.
+        ("constant", |_, _, len| {
+            Arc::new(Int32Array::from_iter_values(std::iter::repeat_n(7, len)))
+        }),
+        ("empty", |_, _, len| {
+            Arc::new(Float64Array::from(vec![None::<f64>; len]))
+        }),
+    ]
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "sample.parquet".into());
     let n: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(1_000_000);
-    write(path.as_ref(), n);
-    println!("wrote {n} rows to {path}");
+    let seed: u64 = args.next().map(|s| s.parse().unwrap()).unwrap_or(42);
+
+    let columns = columns();
+    // One RNG per column, so adding a column never changes the others.
+    let mut rngs: Vec<StdRng> = (0..columns.len() as u64)
+        .map(|i| StdRng::seed_from_u64(seed.wrapping_mul(1_000_003).wrapping_add(i)))
+        .collect();
+
+    let props = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .build();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut writer: Option<ArrowWriter<std::fs::File>> = None;
+    let mut file = Some(file);
+
+    let batch_size = 256 * 1024;
+    for start in (0..n).step_by(batch_size) {
+        let len = batch_size.min(n - start);
+        let arrays = columns
+            .iter()
+            .zip(rngs.iter_mut())
+            .map(|((name, gen), rng)| (*name, gen(rng, start, len)));
+        let batch = RecordBatch::try_from_iter(arrays).unwrap();
+        let w = writer.get_or_insert_with(|| {
+            ArrowWriter::try_new(file.take().unwrap(), batch.schema(), Some(props.clone())).unwrap()
+        });
+        w.write(&batch).unwrap();
+    }
+    writer.unwrap().close().unwrap();
+    println!(
+        "wrote {n} rows × {} columns to {path} (seed {seed})",
+        columns.len()
+    );
 }

@@ -84,7 +84,7 @@ gewu hist data.parquet price --bins 20
 gewu stats data.parquet price --where label=cat
 ```
 
-Generate a large test file (20 columns of every kind, fixed seed):
+Generate a large test file (28 columns of every kind, fixed seed):
 
 ```sh
 cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
