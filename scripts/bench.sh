@@ -10,7 +10,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export GEWU_BENCH_FILE="${GEWU_BENCH_FILE:-${TMPDIR:-/tmp}/gewu-bench.parquet}"
-if [[ ! -f "$GEWU_BENCH_FILE" ]]; then
+# Regenerate when missing or when the generator changed.
+if [[ ! -f "$GEWU_BENCH_FILE" || crates/gewu-core/examples/gen_sample.rs -nt "$GEWU_BENCH_FILE" ]]; then
   cargo run --release -q -p gewu-core --example gen_sample -- "$GEWU_BENCH_FILE" 2000000
 fi
 cargo bench -p gewu-core --bench engine -- "$@"

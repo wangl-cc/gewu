@@ -61,6 +61,7 @@ fn apply_view(c: &mut Criterion) {
         col(&doc, "label"),
         col(&doc, "city"),
     );
+    let (amount, uuid) = (col(&doc, "amount"), col(&doc, "uuid"));
     // Build the label index once, so InValues measures filtering only.
     let cat = doc.keys_for_labels(label, &[Some("cat".into())]).unwrap();
 
@@ -104,6 +105,8 @@ fn apply_view(c: &mut Criterion) {
         ("search_int", search("123456")),
         ("search_float", search("3089.62")),
         ("search_date", search("2024-03")),
+        ("search_uuid_prefix", search("0000a")),
+        ("search_bool", search("true")),
         ("sort_price", ViewState {
             sort: vec![SortKey {
                 column: price,
@@ -122,6 +125,17 @@ fn apply_view(c: &mut Criterion) {
                     descending: true,
                 },
             ],
+            ..Default::default()
+        }),
+        ("range_decimal", ViewState {
+            filters: vec![range(amount, 50.0, 500.0)],
+            ..Default::default()
+        }),
+        ("sort_uuid", ViewState {
+            sort: vec![SortKey {
+                column: uuid,
+                descending: false,
+            }],
             ..Default::default()
         }),
         ("range_then_sort", ViewState {
@@ -180,7 +194,13 @@ fn facets(c: &mut Criterion) {
     g.sample_size(10).measurement_time(Duration::from_secs(8));
 
     // Cold: includes building the column's value index.
-    for (name, column) in [("label", label), ("city", city), ("id_high_card", id)] {
+    let uuid = col(&doc, "uuid");
+    for (name, column) in [
+        ("label", label),
+        ("city", city),
+        ("id_high_card", id),
+        ("uuid_high_card", uuid),
+    ] {
         g.bench_function(format!("distinct_cold_{name}"), |b| {
             b.iter_batched(
                 || Document::open(&path).unwrap(),
