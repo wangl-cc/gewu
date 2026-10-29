@@ -6,9 +6,9 @@ use std::{
 };
 
 use arrow::{
-    array::{make_comparator, Array, ArrayRef, Int64Array, UInt32Array},
+    array::{make_comparator, Array, ArrayRef, AsArray, Int64Array, UInt32Array},
     compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions},
-    datatypes::{DataType, SchemaRef},
+    datatypes::{DataType, Float16Type, Float32Type, Float64Type, SchemaRef},
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -619,13 +619,20 @@ impl Document {
 }
 
 /// Rows holding the smallest and largest non-null values among `rows`, in
-/// the column's own order. `None` for types Arrow cannot compare.
+/// the column's own order, leaving out NaN like the numeric summary does.
+/// `None` for types Arrow cannot compare.
 fn extremes(array: &ArrayRef, rows: &Selection) -> Result<(Option<usize>, Option<usize>)> {
     let Ok(cmp) = make_comparator(array.as_ref(), array.as_ref(), SortOptions::default()) else {
         return Ok((None, None));
     };
+    let nan = |r: usize| match array.data_type() {
+        DataType::Float16 => array.as_primitive::<Float16Type>().value(r).is_nan(),
+        DataType::Float32 => array.as_primitive::<Float32Type>().value(r).is_nan(),
+        DataType::Float64 => array.as_primitive::<Float64Type>().value(r).is_nan(),
+        _ => false,
+    };
     let (mut lo, mut hi) = (None::<usize>, None::<usize>);
-    for r in rows.iter().filter(|&r| array.is_valid(r)) {
+    for r in rows.iter().filter(|&r| array.is_valid(r) && !nan(r)) {
         if lo.is_none_or(|l| cmp(r, l).is_lt()) {
             lo = Some(r);
         }

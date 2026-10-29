@@ -81,14 +81,30 @@ gewu rows data.parquet --sort price:desc --where label=cat --where label=dog --l
 gewu rows data.parquet --range price=10..99.5 --range id=1000..
 gewu distinct data.parquet label
 gewu hist data.parquet price --bins 20
-gewu stats data.parquet price
+gewu stats data.parquet price --where label=cat
 ```
 
-Generate a large test file:
+Generate a large test file (20 columns of every kind, fixed seed):
 
 ```sh
 cargo run --release -p gewu-core --example gen_sample -- sample.parquet 5000000
 ```
+
+## Benchmarks
+
+```sh
+# Speed of each core operation over 2,000,000 generated rows
+cargo bench -p gewu-core --bench engine
+# Save a baseline before a change, then compare against it
+cargo bench -p gewu-core --bench engine -- --save-baseline before
+cargo bench -p gewu-core --bench engine -- --baseline before
+
+# Peak memory and wall time of whole CLI runs; pass two binaries to compare
+cargo build --release -p gewu-cli
+scripts/bench-memory.py target/release/gewu
+```
+
+`GEWU_BENCH_ROWS` changes the row count of `cargo bench`.
 
 ## Current limits
 

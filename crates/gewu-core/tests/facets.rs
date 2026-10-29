@@ -302,3 +302,20 @@ fn summary_of_text_counts_nulls_apart() {
     assert_eq!(s.max_label.as_deref(), Some("dog"));
     std::fs::remove_file(path).ok();
 }
+
+#[test]
+fn min_and_max_leave_out_nan() {
+    let v: ArrayRef = Arc::new(Float64Array::from(vec![
+        Some(2.0),
+        Some(f64::NAN),
+        None,
+        Some(-1.5),
+    ]));
+    let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
+    let (path, doc) = write("nan", &batch);
+    let s = doc.column_summary(0, 5).unwrap();
+    assert_eq!(s.nan_count, 1);
+    assert_eq!(s.min_label.as_deref(), Some("-1.5"));
+    assert_eq!(s.max_label.as_deref(), Some("2.0"));
+    std::fs::remove_file(path).ok();
+}
