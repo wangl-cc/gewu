@@ -15,6 +15,8 @@ tempfile = "3"
 num-traits = "0.2"
 serde_json = "1"
 rapidhash = "4"
+# Same version as arrow uses; for viewing id slices as bytes.
+arrow-buffer = "60"
 
 [dev-dependencies]
 csv = "1"

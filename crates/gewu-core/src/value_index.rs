@@ -9,12 +9,14 @@
 //! [`INDEX_LIMIT`] distinct values; a column of ids or UUIDs would cost
 //! hundreds of megabytes.
 //!
-//! Values are told apart by their bytes: the native value of a number, date
-//! or time (bitwise, so `-0.0`, `0.0` and each NaN differ, like Arrow's sort
-//! order), the UTF-8 of a string, the value a dictionary key points to.
-//! Other types (lists, structs, ...) are converted to Arrow's row format
-//! first, a chunk at a time. Only the distinct values are then sorted, with
-//! Arrow's own comparator.
+//! Values are told apart without converting them: a number, date or time
+//! by its native bytes (bitwise, so `-0.0`, `0.0` and each NaN differ, like
+//! Arrow's sort order), a string by its UTF-8. Nested values get ids from
+//! the inside out: each element or field value first gets an id, then a
+//! list is the sequence of its elements' ids, a struct the ids of its
+//! fields, a dictionary entry the id of the value it points to. Only types
+//! with no such rule (unions, ...) are converted to Arrow's row format. The
+//! distinct values are then sorted with Arrow's comparator.
 
 use arrow::{
     array::{downcast_primitive_array, make_comparator, Array, ArrayRef, AsArray, UInt32Array},
@@ -22,6 +24,7 @@ use arrow::{
     datatypes::DataType,
     row::{RowConverter, SortField},
 };
+use arrow_buffer::ToByteSlice;
 
 use crate::{
     format, hash,
@@ -38,8 +41,7 @@ const CHUNK: usize = 64 * 1024;
 /// The bytes that identify row `r`'s value, `None` for null.
 type ValueBytes<'a> = Box<dyn Fn(usize) -> Option<&'a [u8]> + 'a>;
 
-/// Direct access to each row's identifying bytes, for the types that have
-/// them without conversion.
+/// Direct access to each row's identifying bytes, for flat types.
 fn value_bytes(array: &dyn Array) -> Option<ValueBytes<'_>> {
     let data_type = array.data_type();
     if data_type.is_primitive() {
@@ -75,19 +77,152 @@ fn value_bytes(array: &dyn Array) -> Option<ValueBytes<'_>> {
             let a = array.as_binary::<i64>();
             Box::new(move |r| a.is_valid(r).then(|| a.value(r)))
         }
+        _ => return None,
+    })
+}
+
+/// Each row's value as a dense id: equal values share an id, null has its
+/// own, and ids count up in order of first appearance.
+struct ValueIds {
+    ids: Vec<u32>,
+    /// First row of each id.
+    first_row: Vec<usize>,
+    /// The id of null, if there are nulls.
+    null: Option<u32>,
+}
+
+enum Ids {
+    Done(ValueIds),
+    /// More than the limit of distinct values.
+    TooMany,
+    /// A type with no rule here; use the row format.
+    Unsupported,
+}
+
+/// Give every row of `array` an id, or stop past `limit` distinct values.
+fn value_ids(array: &dyn Array, limit: usize) -> Ids {
+    if let Some(bytes) = value_bytes(array) {
+        return intern(array.len(), limit, bytes);
+    }
+    // Ids of the values inside; nested values are never limited.
+    let inner = |child: &dyn Array| match value_ids(child, usize::MAX) {
+        Ids::Done(ids) => Some(ids),
+        _ => None,
+    };
+    let valid = |r: usize| array.is_valid(r);
+    match array.data_type() {
         DataType::Dictionary(..) => {
             let dict = array.as_any_dictionary();
+            let Some(values) = inner(dict.values().as_ref()) else {
+                return Ids::Unsupported;
+            };
             let keys = dict.normalized_keys();
-            let values = value_bytes(dict.values().as_ref())?;
-            Box::new(move |r| {
-                if array.is_valid(r) {
-                    values(keys[r])
-                } else {
-                    None
-                }
+            intern(array.len(), limit, |r| {
+                let id = values.ids[keys[r]];
+                (valid(r) && Some(id) != values.null)
+                    .then(|| values.ids[keys[r]..keys[r] + 1].to_byte_slice())
             })
         }
-        _ => return None,
+        DataType::List(_) | DataType::Map(..) => {
+            let (values, offsets) = match array.data_type() {
+                DataType::Map(..) => {
+                    let m = array.as_map();
+                    (m.entries() as &dyn Array, m.value_offsets())
+                }
+                _ => {
+                    let l = array.as_list::<i32>();
+                    (l.values().as_ref(), l.value_offsets())
+                }
+            };
+            let Some(values) = inner(values) else {
+                return Ids::Unsupported;
+            };
+            intern(array.len(), limit, |r| {
+                let (lo, hi) = (offsets[r] as usize, offsets[r + 1] as usize);
+                valid(r).then(|| values.ids[lo..hi].to_byte_slice())
+            })
+        }
+        DataType::LargeList(_) => {
+            let l = array.as_list::<i64>();
+            let offsets = l.value_offsets();
+            let Some(values) = inner(l.values().as_ref()) else {
+                return Ids::Unsupported;
+            };
+            intern(array.len(), limit, |r| {
+                let (lo, hi) = (offsets[r] as usize, offsets[r + 1] as usize);
+                valid(r).then(|| values.ids[lo..hi].to_byte_slice())
+            })
+        }
+        DataType::FixedSizeList(_, size) => {
+            let l = array.as_fixed_size_list();
+            let Some(values) = inner(l.values().as_ref()) else {
+                return Ids::Unsupported;
+            };
+            let (size, offset) = (*size as usize, l.offset());
+            intern(array.len(), limit, |r| {
+                let lo = (offset + r) * size;
+                valid(r).then(|| values.ids[lo..lo + size].to_byte_slice())
+            })
+        }
+        DataType::Struct(_) => {
+            let s = array.as_struct();
+            let mut fields = Vec::with_capacity(s.num_columns());
+            for column in s.columns() {
+                match inner(column.as_ref()) {
+                    Some(ids) => fields.push(ids.ids),
+                    None => return Ids::Unsupported,
+                }
+            }
+            // Row r's key: the ids of its fields, side by side.
+            let k = fields.len();
+            let mut flat = vec![0u32; array.len() * k];
+            for (f, ids) in fields.iter().enumerate() {
+                for (r, &id) in ids.iter().enumerate() {
+                    flat[r * k + f] = id;
+                }
+            }
+            intern(array.len(), limit, |r| {
+                valid(r).then(|| flat[r * k..(r + 1) * k].to_byte_slice())
+            })
+        }
+        _ => Ids::Unsupported,
+    }
+}
+
+/// Dense ids for `n` rows whose values are identified by `key` (`None` for
+/// null).
+fn intern<'a>(n: usize, limit: usize, key: impl Fn(usize) -> Option<&'a [u8]>) -> Ids {
+    let mut seen: hash::Map<&[u8], u32> = hash::Map::default();
+    let mut null = None;
+    let mut new = Codes {
+        first_row: Vec::new(),
+        limit,
+    };
+    let mut ids = Vec::with_capacity(n);
+    for r in 0..n {
+        let slot = match key(r) {
+            Some(b) => seen.get(b).copied().ok_or(Some(b)),
+            None => null.ok_or(None),
+        };
+        let id = match slot {
+            Ok(id) => id,
+            Err(b) => {
+                let Some(id) = new.next(r) else {
+                    return Ids::TooMany;
+                };
+                match b {
+                    Some(b) => seen.insert(b, id),
+                    None => null.replace(id),
+                };
+                id
+            }
+        };
+        ids.push(id);
+    }
+    Ids::Done(ValueIds {
+        ids,
+        first_row: new.first_row,
+        null,
     })
 }
 
@@ -120,50 +255,22 @@ impl ValueIndex {
     /// Index `array`, or `None` if it has more than `limit` distinct values
     /// (null counts as one).
     pub fn build(array: &ArrayRef, limit: usize) -> Result<Option<Self>> {
-        let Some(bytes) = value_bytes(array.as_ref()) else {
-            return Self::build_from_rows(array, limit);
+        let ids = match value_ids(array.as_ref(), limit) {
+            Ids::Done(ids) => ids,
+            Ids::TooMany => return Ok(None),
+            Ids::Unsupported => return Self::build_from_rows(array, limit),
         };
-        let mut seen: hash::Map<&[u8], u32> = hash::Map::default();
-        let mut null = None;
-        let mut new = Codes {
-            first_row: Vec::new(),
-            limit,
-        };
-        let mut codes = Vec::with_capacity(array.len());
-        for r in 0..array.len() {
-            let code = match bytes(r) {
-                Some(b) => match seen.get(b) {
-                    Some(&c) => c,
-                    None => {
-                        let Some(c) = new.next(r) else {
-                            return Ok(None);
-                        };
-                        seen.insert(b, c);
-                        c
-                    }
-                },
-                None => match null {
-                    Some(c) => c,
-                    None => {
-                        let Some(c) = new.next(r) else {
-                            return Ok(None);
-                        };
-                        *null.insert(c)
-                    }
-                },
-            };
-            codes.push(code);
-        }
-
         // Only the distinct values are sorted, by their first rows.
-        let first_row = new.first_row;
-        let cmp = make_comparator(array.as_ref(), array.as_ref(), SortOptions {
+        let Ok(cmp) = make_comparator(array.as_ref(), array.as_ref(), SortOptions {
             descending: false,
             nulls_first: true,
-        })?;
+        }) else {
+            return Self::build_from_rows(array, limit);
+        };
+        let first_row = ids.first_row;
         let mut order: Vec<u32> = (0..first_row.len() as u32).collect();
         order.sort_unstable_by(|&a, &b| cmp(first_row[a as usize], first_row[b as usize]));
-        Self::finish(array, codes, &first_row, &order).map(Some)
+        Self::finish(array, ids.ids, &first_row, &order).map(Some)
     }
 
     /// The general path: tell values apart by their Arrow row format,
@@ -261,56 +368,59 @@ pub(crate) struct ValueCounts {
     pub top: Vec<DistinctValue>,
 }
 
-/// Count the distinct values of `array` over `rows`, keeping the `keep`
-/// most common. Values are told apart by a 64-bit fingerprint, so memory is
-/// a few words per distinct value; a collision (unlikely below billions of
-/// values) would merge two values.
-pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> Result<ValueCounts> {
-    // fingerprint -> (count, first row); nulls counted apart.
+/// (count, first row) of each distinct value among `rows`, told apart by a
+/// 64-bit fingerprint of the row format: for types with no direct rule. A
+/// collision (unlikely below billions of values) would merge two values.
+fn count_by_fingerprint(array: &ArrayRef, rows: &Selection) -> Result<Vec<(u64, u32)>> {
+    let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
     let mut counts: hash::Map<u64, (u64, u32)> = hash::Map::default();
-    let mut nulls: Option<(u64, u32)> = None;
-    match value_bytes(array.as_ref()) {
-        Some(bytes) => for_rows!(rows, |it| {
-            for r in it {
-                let slot = match bytes(r) {
-                    Some(b) => counts.entry(hash::fingerprint(b)).or_insert((0, r as u32)),
-                    None => nulls.get_or_insert((0, r as u32)),
-                };
-                slot.0 += 1;
+    let mut tally = |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
+        let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
+        for (row, r) in converted.iter().zip(source) {
+            counts
+                .entry(hash::fingerprint(row.as_ref()))
+                .or_insert((0, r as u32))
+                .0 += 1;
+        }
+        Ok(())
+    };
+    match rows {
+        Selection::All(n) => {
+            for start in (0..*n).step_by(CHUNK) {
+                let len = CHUNK.min(n - start);
+                tally(&array.slice(start, len), &mut (start..start + len))?;
             }
-        }),
-        None => {
-            // Row format, a chunk at a time; nulls get their own bytes.
-            let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
-            let mut tally =
-                |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
-                    let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
-                    for (row, r) in converted.iter().zip(source) {
-                        counts
-                            .entry(hash::fingerprint(row.as_ref()))
-                            .or_insert((0, r as u32))
-                            .0 += 1;
-                    }
-                    Ok(())
-                };
-            match rows {
-                Selection::All(n) => {
-                    for start in (0..*n).step_by(CHUNK) {
-                        let len = CHUNK.min(n - start);
-                        tally(&array.slice(start, len), &mut (start..start + len))?;
-                    }
-                }
-                Selection::Rows(rows) => {
-                    for chunk in rows.chunks(CHUNK) {
-                        let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
-                        tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
-                    }
-                }
+        }
+        Selection::Rows(rows) => {
+            for chunk in rows.chunks(CHUNK) {
+                let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
+                tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
             }
         }
     }
+    Ok(counts.into_values().collect())
+}
 
-    let mut top: Vec<(u64, u32)> = counts.into_values().chain(nulls).collect();
+/// Count the distinct values of `array` over `rows`, keeping the `keep`
+/// most common. Memory is a few words per row and per distinct value, and
+/// nothing is kept afterwards.
+pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> Result<ValueCounts> {
+    let mut top: Vec<(u64, u32)> = match value_ids(array.as_ref(), usize::MAX) {
+        Ids::Done(ids) => {
+            // (count, first counted row) per id.
+            let mut counts = vec![(0u64, u32::MAX); ids.first_row.len()];
+            for_rows!(rows, |it| {
+                for r in it {
+                    let slot = &mut counts[ids.ids[r] as usize];
+                    slot.0 += 1;
+                    slot.1 = slot.1.min(r as u32);
+                }
+            });
+            counts.retain(|c| c.0 > 0);
+            counts
+        }
+        _ => count_by_fingerprint(array, rows)?,
+    };
     let distinct = top.len() as u64;
     top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     top.truncate(keep);
@@ -415,13 +525,13 @@ mod tests {
     /// The direct path must agree with the row-format path on every type
     /// it handles, including sliced arrays and odd floats.
     #[test]
-    fn direct_bytes_match_row_format() {
+    fn direct_ids_match_row_format() {
         use arrow::{
             array::{
-                Date32Array, DictionaryArray, Float64Array, LargeStringArray, StringViewArray,
-                UInt8Array,
+                Date32Array, DictionaryArray, FixedSizeListArray, Float64Array, LargeStringArray,
+                ListArray, StringViewArray, StructArray, UInt8Array,
             },
-            datatypes::Int8Type,
+            datatypes::{Field, Int32Type, Int8Type},
         };
         let floats: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(1.5),
@@ -441,6 +551,57 @@ mod tests {
         let dup = DictionaryArray::<Int8Type>::try_new(
             vec![Some(0i8), Some(1), None, Some(2), Some(0)].into(),
             Arc::new(StringArray::from(vec!["x", "y", "x"])),
+        )
+        .unwrap();
+        // [1, 2], [], null, [1, 2], [2, 1], [null]
+        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![]),
+            None,
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(2), Some(1)]),
+            Some(vec![None]),
+        ]));
+        let fixed = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(0), None]),
+            ],
+            2,
+        );
+        let point = StructArray::try_new(
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    Some(1),
+                    None,
+                    Some(1),
+                    Some(2),
+                ])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("a"),
+                    Some("b"),
+                    Some("b"),
+                    None,
+                ])),
+            ],
+            Some(vec![true, true, true, false, true].into()),
+        )
+        .unwrap();
+        // A list of structs.
+        let nested = ListArray::try_new(
+            Arc::new(Field::new("item", point.data_type().clone(), true)),
+            arrow::buffer::OffsetBuffer::new(vec![0, 2, 2, 4, 5].into()),
+            Arc::new(point.clone()),
+            None,
         )
         .unwrap();
         let arrays: Vec<ArrayRef> = vec![
@@ -463,9 +624,27 @@ mod tests {
             Arc::new(dict),
             Arc::new(dup),
             Arc::new(StringArray::from(vec!["q", "p", "q", "r"]).slice(1, 3)),
+            // A null value behind a valid key is null.
+            Arc::new(
+                DictionaryArray::<Int8Type>::try_new(
+                    vec![Some(0i8), Some(1), None, Some(0)].into(),
+                    Arc::new(StringArray::from(vec![None, Some("v")])),
+                )
+                .unwrap(),
+            ),
+            list.clone(),
+            list.slice(1, 4),
+            Arc::new(fixed),
+            Arc::new(point.clone()),
+            Arc::new(point.slice(1, 3)),
+            Arc::new(nested),
         ];
         for a in arrays {
-            assert!(value_bytes(a.as_ref()).is_some(), "{}", a.data_type());
+            assert!(
+                matches!(value_ids(a.as_ref(), usize::MAX), Ids::Done(_)),
+                "{}",
+                a.data_type()
+            );
             let direct = ValueIndex::build(&a, INDEX_LIMIT).unwrap().unwrap();
             let rows = ValueIndex::build_from_rows(&a, INDEX_LIMIT)
                 .unwrap()
