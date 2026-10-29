@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{Bound, ColumnSummary, Error, Histogram, Result};
+use crate::{Bound, ColumnSummary, DataKind, Error, Histogram, Result};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -45,6 +45,8 @@ macro_rules! dispatch {
             Float16 => RealColumn::new(a.as_primitive::<Float16Type>()).$method($($arg),*),
             Float32 => RealColumn::new(a.as_primitive::<Float32Type>()).$method($($arg),*),
             Float64 => RealColumn::new(a.as_primitive::<Float64Type>()).$method($($arg),*),
+            Decimal32(..) => RealColumn::new(a.as_primitive::<Decimal32Type>()).$method($($arg),*),
+            Decimal64(..) => RealColumn::new(a.as_primitive::<Decimal64Type>()).$method($($arg),*),
             Decimal128(..) => RealColumn::new(a.as_primitive::<Decimal128Type>()).$method($($arg),*),
             Decimal256(..) => RealColumn::new(a.as_primitive::<Decimal256Type>()).$method($($arg),*),
             _ => unreachable!("Numeric validates supported types"),
@@ -60,29 +62,11 @@ pub(crate) use range::RowTest;
 
 impl<'a> Numeric<'a> {
     pub(crate) fn new(array: &'a ArrayRef) -> Option<Self> {
-        use DataType::*;
-        matches!(
-            array.data_type(),
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float16
-                | Float32
-                | Float64
-                | Decimal128(..)
-                | Decimal256(..)
-                | Date32
-                | Date64
-                | Time32(TimeUnit::Second | TimeUnit::Millisecond)
-                | Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
-                | Timestamp(..)
-                | Duration(_)
-        )
-        .then_some(Self(array))
+        // `DataKind` decides; the dispatch table above must cover every
+        // ordered kind (checked by a test in kind.rs).
+        DataKind::of(array.data_type())
+            .is_ordered()
+            .then_some(Self(array))
     }
 
     pub(crate) fn bound(self, row: usize) -> Option<Bound> {
@@ -160,7 +144,7 @@ macro_rules! decimal_type {
         }
     )*};
 }
-decimal_type!(Decimal128Type, Decimal256Type);
+decimal_type!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 /// Borrowed native values plus the decimal scale, with no owned array buffers.
 struct RealColumn<'a, T: RealType> {
@@ -171,7 +155,10 @@ struct RealColumn<'a, T: RealType> {
 impl<'a, T: RealType> RealColumn<'a, T> {
     fn new(array: &'a PrimitiveArray<T>) -> Self {
         let scale = match array.data_type() {
-            DataType::Decimal128(_, scale) | DataType::Decimal256(_, scale) => i32::from(*scale),
+            DataType::Decimal32(_, scale)
+            | DataType::Decimal64(_, scale)
+            | DataType::Decimal128(_, scale)
+            | DataType::Decimal256(_, scale) => i32::from(*scale),
             _ => 0,
         };
         Self { array, scale }

@@ -19,8 +19,8 @@ use crate::{
     scope::{RowScope, Selection},
     search,
     value_index::ValueIndex,
-    Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, Error, Export,
-    ExportFormat, ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo,
+    Bound, ColumnInfo, ColumnStats, ColumnSummary, DataKind, DistinctResult, DistinctValue, Error,
+    Export, ExportFormat, ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo,
     ViewState,
 };
 
@@ -78,6 +78,7 @@ impl Document {
             .map(|f| ColumnInfo {
                 name: f.name().clone(),
                 type_name: f.data_type().to_string(),
+                kind: DataKind::of(f.data_type()),
                 nullable: f.is_nullable(),
             })
             .collect();

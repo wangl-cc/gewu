@@ -15,7 +15,7 @@ struct ColumnFilterView: View {
                 Text(info.name).font(.headline)
                 Text(shortTypeName(info.typeName)).font(.caption).foregroundStyle(.secondary)
             }
-            if kind != .text, !info.typeName.hasPrefix("Interval") {
+            if info.ordered {
                 RangeFilterView(doc: doc, column: column, temporal: kind == .temporal,
                                 state: state, current: current, onApply: onApply)
             } else {

@@ -3,7 +3,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
     pub name: String,
+    /// The Arrow type, e.g. `Timestamp(Microsecond, Some("UTC"))`.
     pub type_name: String,
+    /// How gewu treats the values; decides which filters apply.
+    pub kind: crate::DataKind,
     pub nullable: bool,
 }
 

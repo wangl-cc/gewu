@@ -1,17 +1,14 @@
 import AppKit
 
-/// How a column's values are displayed, derived from its Arrow type name.
+/// How a column's values are displayed, from the kind the core reports.
 enum ColumnKind {
     case number, temporal, text
 
-    init(typeName: String) {
-        let t = typeName
-        if ["Int", "UInt", "Float", "Decimal"].contains(where: t.hasPrefix) {
-            self = .number
-        } else if ["Date", "Time", "Duration", "Interval"].contains(where: t.hasPrefix) {
-            self = .temporal
-        } else {
-            self = .text
+    init(_ kind: DataKind) {
+        switch kind {
+        case .integer, .float, .decimal: self = .number
+        case .date, .time, .timestamp, .duration, .interval: self = .temporal
+        default: self = .text
         }
     }
 

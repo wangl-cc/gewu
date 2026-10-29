@@ -81,7 +81,7 @@ pub(crate) fn mark_matches(
                 _ => unreachable!("float types were matched above"),
             }
         }
-        Decimal128(..) | Decimal256(..) => {
+        Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => {
             // Keep Arrow's scale-aware decimal conversion and rounding semantics.
             let Some(test) = float_test(query) else {
                 return Ok(());

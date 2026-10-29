@@ -102,7 +102,7 @@ struct ColumnInfoView: View {
         error = nil
         guard let doc = model.doc, let info = model.info, info.columns.indices.contains(column) else { return }
         loading = true
-        let numeric = model.kinds[column] != .text && !info.columns[column].typeName.hasPrefix("Interval")
+        let numeric = info.columns[column].ordered
         let revision = model.current.version
         do {
             let result = try await Task.detached { () -> (ColumnSummary, Histogram?) in

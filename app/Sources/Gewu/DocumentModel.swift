@@ -159,7 +159,7 @@ final class DocumentModel: ObservableObject {
             }.value
             try Task.checkCancellation()
             info = opened.info()
-            kinds = info?.columns.map { ColumnKind(typeName: $0.typeName) } ?? []
+            kinds = info?.columns.map { ColumnKind($0.kind) } ?? []
             current = opened.currentView()
             selectedColumn = info?.columns.isEmpty == false ? 0 : nil
             doc = opened

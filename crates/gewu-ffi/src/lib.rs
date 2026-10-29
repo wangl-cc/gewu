@@ -47,10 +47,52 @@ impl From<core::Error> for GewuError {
     }
 }
 
+/// How gewu treats a column's values; mirrors `gewu_core::DataKind`.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum DataKind {
+    Text,
+    Integer,
+    Float,
+    Decimal,
+    Boolean,
+    Date,
+    Time,
+    Timestamp,
+    Duration,
+    Interval,
+    Binary,
+    List,
+    Other,
+}
+
+impl From<core::DataKind> for DataKind {
+    fn from(k: core::DataKind) -> Self {
+        use core::DataKind as K;
+        match k {
+            K::Text => Self::Text,
+            K::Integer => Self::Integer,
+            K::Float => Self::Float,
+            K::Decimal => Self::Decimal,
+            K::Boolean => Self::Boolean,
+            K::Date => Self::Date,
+            K::Time => Self::Time,
+            K::Timestamp => Self::Timestamp,
+            K::Duration => Self::Duration,
+            K::Interval => Self::Interval,
+            K::Binary => Self::Binary,
+            K::List => Self::List,
+            K::Other => Self::Other,
+        }
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct ColumnInfo {
     pub name: String,
     pub type_name: String,
+    pub kind: DataKind,
+    /// Range filter and histogram apply (numbers, dates, times).
+    pub ordered: bool,
     pub nullable: bool,
 }
 
@@ -338,6 +380,8 @@ impl GewuDocument {
                 .map(|c| ColumnInfo {
                     name: c.name.clone(),
                     type_name: c.type_name.clone(),
+                    kind: c.kind.into(),
+                    ordered: c.kind.is_ordered(),
                     nullable: c.nullable,
                 })
                 .collect(),

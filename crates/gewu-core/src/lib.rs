@@ -10,6 +10,7 @@ mod engine;
 mod error;
 mod export;
 mod format;
+mod kind;
 mod numeric;
 mod scope;
 mod search;
@@ -20,6 +21,7 @@ pub use document::Document;
 pub use engine::CancelToken;
 pub use error::{Error, Result};
 pub use export::{Export, ExportFormat, ExportOptions, ExportProgress};
+pub use kind::DataKind;
 pub use view::{
     Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter,
     Histogram, RowBlock, SortKey, ViewInfo, ViewState,
