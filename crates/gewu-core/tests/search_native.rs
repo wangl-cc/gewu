@@ -86,19 +86,16 @@ fn float_search_keeps_precision_and_special_values_at_every_width() {
         Some(0.0),
     ]));
     for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
-        check_queries(
-            cast(&values, &data_type).unwrap(),
-            &[
-                ("1.2", vec![1, 2]),
-                ("1.20", vec![]),
-                ("-1.2", vec![0]),
-                ("nan", vec![5]),
-                ("inf", vec![6]),
-                ("-inf", vec![7]),
-                ("0.0000", vec![8, 9]),
-                ("word", vec![]),
-            ],
-        );
+        check_queries(cast(&values, &data_type).unwrap(), &[
+            ("1.2", vec![1, 2]),
+            ("1.20", vec![]),
+            ("-1.2", vec![0]),
+            ("nan", vec![5]),
+            ("inf", vec![6]),
+            ("-inf", vec![7]),
+            ("0.0000", vec![8, 9]),
+            ("word", vec![]),
+        ]);
     }
 }
 
@@ -111,14 +108,11 @@ fn temporal_search_keeps_native_units_and_pre_epoch_values() {
         None,
     ]));
     for data_type in [DataType::Date32, DataType::Date64] {
-        check_queries(
-            cast(&dates, &data_type).unwrap(),
-            &[
-                ("1969", vec![0]),
-                ("1970-01-01", vec![1]),
-                ("2024-03", vec![2]),
-            ],
-        );
+        check_queries(cast(&dates, &data_type).unwrap(), &[
+            ("1969", vec![0]),
+            ("1970-01-01", vec![1]),
+            ("2024-03", vec![2]),
+        ]);
     }
     let timestamps: ArrayRef = Arc::new(StringArray::from(vec![
         Some("1969-12-31T23:59:59"),
@@ -159,19 +153,16 @@ fn time_of_day_search_names_a_period() {
         DataType::Time64(TimeUnit::Microsecond),
         DataType::Time64(TimeUnit::Nanosecond),
     ] {
-        check_queries(
-            cast(&times, &data_type).unwrap(),
-            &[
-                ("10", vec![1, 2]),
-                ("10:30", vec![1]),
-                ("10:30:15", vec![1]),
-                ("00", vec![0]),
-                // The last hour ends at midnight, past the column's range.
-                ("23", vec![3]),
-                ("24", vec![]),
-                ("lunch", vec![]),
-            ],
-        );
+        check_queries(cast(&times, &data_type).unwrap(), &[
+            ("10", vec![1, 2]),
+            ("10:30", vec![1]),
+            ("10:30:15", vec![1]),
+            ("00", vec![0]),
+            // The last hour ends at midnight, past the column's range.
+            ("23", vec![3]),
+            ("24", vec![]),
+            ("lunch", vec![]),
+        ]);
     }
 }
 

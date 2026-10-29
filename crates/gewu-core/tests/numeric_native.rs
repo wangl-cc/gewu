@@ -51,12 +51,9 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
                 None,
             ])));
             check_range(&doc, None, None, &[0, 1, 2, 3, 4, 5, 6]);
-            check_range(
-                &doc,
-                Some(Bound::Float(-1.2)),
-                Some(Bound::Float(1.2)),
-                &[2, 3, 4],
-            );
+            check_range(&doc, Some(Bound::Float(-1.2)), Some(Bound::Float(1.2)), &[
+                2, 3, 4,
+            ]);
             check_range(&doc, Some(Bound::Float(1.2)), Some(Bound::Float(1.8)), &[]);
             check_range(&doc, Some(Bound::Int(<$native>::MAX as i64)), None, &[6]);
             check_range(&doc, None, Some(Bound::Int(<$native>::MIN as i64)), &[0]);
@@ -92,12 +89,9 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
                 None,
             ])));
             check_range(&doc, None, None, &[0, 1, 2, 3]);
-            check_range(
-                &doc,
-                Some(Bound::Float(0.2)),
-                Some(Bound::Float(2.8)),
-                &[1, 2],
-            );
+            check_range(&doc, Some(Bound::Float(0.2)), Some(Bound::Float(2.8)), &[
+                1, 2,
+            ]);
             check_range(&doc, Some(Bound::UInt(<$native>::MAX as u64)), None, &[3]);
             check_range(&doc, None, Some(Bound::Int(-1)), &[]);
             check_range(&doc, None, Some(Bound::Float(-0.1)), &[]);
@@ -156,12 +150,9 @@ fn large_integer_ranges_keep_exact_values_and_float_domain_edges() {
         &[2],
     );
     check_range(&unsigned, Some(Bound::Float(2_f64.powi(64))), None, &[]);
-    check_range(
-        &unsigned,
-        None,
-        Some(Bound::Float(2_f64.powi(64))),
-        &[0, 1, 2, 3],
-    );
+    check_range(&unsigned, None, Some(Bound::Float(2_f64.powi(64))), &[
+        0, 1, 2, 3,
+    ]);
 
     signed.apply_view(&ViewState::default()).unwrap();
     unsigned.apply_view(&ViewState::default()).unwrap();

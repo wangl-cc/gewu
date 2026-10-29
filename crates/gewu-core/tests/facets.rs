@@ -67,14 +67,11 @@ fn busy_state(doc: &Document) -> ViewState {
         .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
         .unwrap();
     ViewState {
-        filters: vec![
-            Filter::InValues { column: 1, keys },
-            Filter::Range {
-                column: 2,
-                min: Some(Bound::Float(2.0)),
-                max: None,
-            },
-        ],
+        filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
+            column: 2,
+            min: Some(Bound::Float(2.0)),
+            max: None,
+        }],
         search: None,
         ..Default::default()
     }
@@ -86,15 +83,12 @@ fn distinct_ignores_only_its_own_column() {
     let state = busy_state(&doc);
 
     // label: only the price filter applies -> rows a, c, e, f
-    assert_eq!(
-        labels_of(&doc, 1, Some(&state)),
-        [
-            ("<null>".into(), 1),
-            ("bird".into(), 1),
-            ("cat".into(), 1),
-            ("dog".into(), 1),
-        ]
-    );
+    assert_eq!(labels_of(&doc, 1, Some(&state)), [
+        ("<null>".into(), 1),
+        ("bird".into(), 1),
+        ("cat".into(), 1),
+        ("dog".into(), 1),
+    ]);
     // price: only the label filter applies -> rows a, b, d, f
     let prices: Vec<String> = labels_of(&doc, 2, Some(&state))
         .into_iter()

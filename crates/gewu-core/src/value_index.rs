@@ -91,10 +91,11 @@ mod tests {
             Some("dog"),
         ]));
         let idx = ValueIndex::build(&a).unwrap();
-        assert_eq!(
-            idx.labels,
-            vec![None, Some("cat".into()), Some("dog".into())]
-        );
+        assert_eq!(idx.labels, vec![
+            None,
+            Some("cat".into()),
+            Some("dog".into())
+        ]);
         assert_eq!(idx.codes, vec![2, 0, 1, 2]);
     }
 
@@ -102,9 +103,10 @@ mod tests {
     fn numbers_sort_numerically() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![10, -3, 2, 10]));
         let idx = ValueIndex::build(&a).unwrap();
-        assert_eq!(
-            idx.labels,
-            vec![Some("-3".into()), Some("2".into()), Some("10".into())]
-        );
+        assert_eq!(idx.labels, vec![
+            Some("-3".into()),
+            Some("2".into()),
+            Some("10".into())
+        ]);
     }
 }

@@ -5,11 +5,11 @@
 //!
 //! - Text, lists, binary and other values: case-insensitive substring of the displayed text.
 //! - Integers and durations: the query read as an integer, as a one-value range.
-//! - Floats and decimals: the query read as a number, as the range its precision implies: `3.14`
-//!   is [3.135, 3.145), `3` is [2.5, 3.5), `1e3` is [500, 1500). `nan` and `inf` match those.
-//! - Dates and timestamps: a date prefix (`2024`, `2024-03`, `2024-03-15`, optionally with ` 10`,
-//!   ` 10:30` or ` 10:30:15`) is the whole period it names, in the column's own unit and time
-//!   zone. Date columns accept only the date parts.
+//! - Floats and decimals: the query read as a number, as the range its precision implies: `3.14` is
+//!   [3.135, 3.145), `3` is [2.5, 3.5), `1e3` is [500, 1500). `nan` and `inf` match those.
+//! - Dates and timestamps: a date prefix (`2024`, `2024-03`, `2024-03-15`, optionally with ` 10`, `
+//!   10:30` or ` 10:30:15`) is the whole period it names, in the column's own unit and time zone.
+//!   Date columns accept only the date parts.
 //! - Times of day: `10`, `10:30` or `10:30:15`, as the period it names.
 //! - Booleans: `true` or `false`.
 //!
