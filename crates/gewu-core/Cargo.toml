@@ -6,14 +6,25 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["parquet", "csv", "xlsx"]
+parquet = ["dep:parquet"]
+csv = ["dep:arrow-csv", "dep:csv", "dep:serde_json", "arrow/json"]
+xlsx = ["dep:calamine", "dep:rust_xlsxwriter"]
+
 [dependencies]
-arrow = { workspace = true, features = ["json"] }
-parquet.workspace = true
+arrow.workspace = true
+parquet = { workspace = true, optional = true }
+arrow-csv = { version = "60", optional = true }
+csv = { version = "1", optional = true }
+calamine = { version = "0.37", features = ["chrono"], optional = true }
+rust_xlsxwriter = { version = "0.96", features = ["constant_memory"], optional = true }
 thiserror.workspace = true
 chrono.workspace = true
 tempfile = "3"
 num-traits = "0.2"
-serde_json = "1"
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 csv = "1"
@@ -24,3 +35,8 @@ rand_distr = "0.5"
 [[bench]]
 name = "engine"
 harness = false
+required-features = ["parquet"]
+
+[[example]]
+name = "gen_sample"
+required-features = ["parquet"]

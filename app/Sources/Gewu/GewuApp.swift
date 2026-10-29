@@ -46,7 +46,7 @@ private struct WelcomeView: View {
         VStack(spacing: 20) {
             Image(systemName: "tablecells").font(.system(size: 48)).foregroundStyle(.secondary)
             Text("Gewu 格物").font(.largeTitle)
-            Text("Open a Parquet file to explore its data.").foregroundStyle(.secondary)
+            Text("Open a Parquet, CSV, TSV or XLSX file to explore its data.").foregroundStyle(.secondary)
             Button("Open…", systemImage: "folder") { files.chooseFiles() }.buttonStyle(.borderedProminent)
             if !files.recentURLs.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {

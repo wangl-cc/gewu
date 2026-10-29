@@ -1,10 +1,12 @@
+#![cfg(feature = "parquet")]
+
 //! Behaviour the refactor must keep: which rows facets count, versioning
 //! and cancellation.
 
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Bound, Document, Error, Filter, ViewState};
+use gewu_core::{Document, Error, Filter, ViewState};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -69,7 +71,7 @@ fn busy_state(doc: &Document) -> ViewState {
     ViewState {
         filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
             column: 2,
-            min: Some(Bound::Float(2.0)),
+            min: Some(doc.parse_bound(2, "2.0").unwrap()),
             max: None,
         }],
         search: None,
@@ -130,7 +132,7 @@ fn histogram_ignores_only_its_own_column() {
     let mut state = busy_state(&doc);
     state.filters.push(Filter::Range {
         column: 3,
-        min: Some(Bound::Int(60)),
+        min: Some(doc.parse_bound(3, "60").unwrap()),
         max: None,
     });
     // id: label and price filters apply -> rows a, f; its own range does not.
@@ -174,7 +176,7 @@ fn failed_apply_keeps_the_old_view() {
     let bad = ViewState {
         filters: vec![Filter::Range {
             column: 0,
-            min: Some(Bound::Int(1)),
+            min: Some(doc.make_bound_i64(3, 1).unwrap()),
             max: None,
         }],
         ..Default::default()

@@ -1,4 +1,4 @@
-//! Numeric operations borrow the original Arrow arrays. Type dispatch happens
+//! Statistics and histograms borrow the original Arrow arrays. Type dispatch happens
 //! once per operation; only individual values needed for floating-point results
 //! are converted. No widened column or numeric cache is built.
 
@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{Bound, ColumnSummary, DataKind, Error, Histogram, Result};
+use crate::{ColumnSummary, DataKind, Error, Histogram, Result};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -55,10 +55,7 @@ macro_rules! dispatch {
 }
 
 mod histogram;
-mod range;
 mod summary;
-
-pub(crate) use range::RowTest;
 
 impl<'a> Numeric<'a> {
     pub(crate) fn new(array: &'a ArrayRef) -> Option<Self> {
@@ -67,14 +64,6 @@ impl<'a> Numeric<'a> {
         DataKind::of(array.data_type())
             .is_ordered()
             .then_some(Self(array))
-    }
-
-    pub(crate) fn bound(self, row: usize) -> Option<Bound> {
-        dispatch!(self.0, bound(row))
-    }
-
-    pub(crate) fn range_test(self, min: Option<Bound>, max: Option<Bound>) -> RowTest<'a> {
-        dispatch!(self.0, range_test(min, max))
     }
 
     pub(crate) fn histogram(
@@ -100,23 +89,6 @@ impl<'a> Numeric<'a> {
 }
 
 struct IntegerColumn<'a, T: ArrowPrimitiveType>(&'a PrimitiveArray<T>);
-
-impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
-where
-    T::Native: Into<i128> + TryFrom<i128> + Eq + Hash,
-{
-    fn bound(self, row: usize) -> Option<Bound> {
-        if self.0.is_null(row) {
-            return None;
-        }
-        let value = self.0.value(row).into();
-        Some(if self.0.data_type().is_unsigned_integer() {
-            Bound::UInt(value as u64)
-        } else {
-            Bound::Int(value as i64)
-        })
-    }
-}
 
 /// Operations that differ between native floating values and decimal coefficients.
 trait RealType: ArrowPrimitiveType {
@@ -169,12 +141,6 @@ impl<'a, T: RealType> RealColumn<'a, T> {
         };
         Self { array, scale }
     }
-
-    fn bound(self, row: usize) -> Option<Bound> {
-        self.array
-            .is_valid(row)
-            .then(|| Bound::Float(T::as_float(self.array.value(row), self.scale)))
-    }
 }
 
 #[cfg(test)]
@@ -224,24 +190,29 @@ mod tests {
     }
 
     fn check_decimal_conversion(array: ArrayRef) {
-        let numeric = Numeric::new(&array).unwrap();
         let converted = cast(&array, &DataType::Float64).unwrap();
         let expected = converted.as_primitive::<Float64Type>();
         for row in 0..array.len() {
-            let actual = numeric.bound(row);
-            if expected.is_null(row) {
-                assert_eq!(actual, None);
-            } else {
-                let Some(Bound::Float(actual)) = actual else {
-                    panic!("expected a float bound")
-                };
-                assert_eq!(
-                    actual.to_bits(),
-                    expected.value(row).to_bits(),
-                    "{:?} row {row}",
-                    array.data_type()
-                );
+            if array.is_null(row) {
+                continue;
             }
+            let actual = match array.data_type() {
+                DataType::Decimal128(_, scale) => Decimal128Type::as_float(
+                    array.as_primitive::<Decimal128Type>().value(row),
+                    i32::from(*scale),
+                ),
+                DataType::Decimal256(_, scale) => Decimal256Type::as_float(
+                    array.as_primitive::<Decimal256Type>().value(row),
+                    i32::from(*scale),
+                ),
+                _ => unreachable!("test decimal types"),
+            };
+            assert_eq!(
+                actual.to_bits(),
+                expected.value(row).to_bits(),
+                "{:?} row {row}",
+                array.data_type()
+            );
         }
     }
 }

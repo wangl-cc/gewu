@@ -5,25 +5,28 @@
 //! display order. Sorting and filtering never move data; they only produce a
 //! new list of row numbers.
 
+mod column;
 mod document;
 mod engine;
 mod error;
 mod export;
+mod file;
 mod format;
 mod kind;
 mod numeric;
 mod predicate;
-mod query;
 mod scope;
 mod value_index;
 mod view;
 
+pub use column::{bound::Bound, ColumnCapabilities};
 pub use document::Document;
 pub use engine::CancelToken;
 pub use error::{Error, Result};
-pub use export::{Export, ExportFormat, ExportOptions, ExportProgress};
+pub use export::{Export, ExportOptions, ExportProgress};
+pub use file::{FileMetadata, FileType, OpenOptions};
 pub use kind::DataKind;
 pub use view::{
-    Bound, ColumnInfo, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter, Histogram,
-    RowBlock, SortKey, ViewInfo, ViewState,
+    ColumnInfo, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter, FilterEditor,
+    FilterSpec, Histogram, RangeBounds, RangeHistogram, RowBlock, SortKey, ViewInfo, ViewState,
 };

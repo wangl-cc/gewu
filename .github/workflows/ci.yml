@@ -24,6 +24,14 @@ jobs:
       - run: cargo +nightly fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Core codec feature combinations
+        run: |
+          cargo test -p gewu-core --no-default-features
+          cargo clippy -p gewu-core --all-targets --no-default-features -- -D warnings
+          for codec in parquet csv xlsx; do
+            cargo test -p gewu-core --no-default-features --features "$codec"
+            cargo clippy -p gewu-core --all-targets --no-default-features --features "$codec" -- -D warnings
+          done
 
   macos-app:
     runs-on: macos-15

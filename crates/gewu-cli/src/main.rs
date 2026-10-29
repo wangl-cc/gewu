@@ -5,12 +5,19 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use gewu_core::{Bound, Document, Filter, SortKey, ViewState};
+use gewu_core::{Document, FileMetadata, Filter, OpenOptions, SortKey, ViewState};
 use serde_json::{json, Value};
 
 #[derive(Parser)]
-#[command(name = "gewu", version, about = "Look inside Parquet files")]
+#[command(
+    name = "gewu",
+    version,
+    about = "Look inside Parquet, CSV, TSV and XLSX files"
+)]
 struct Cli {
+    /// XLSX worksheet to read (default: the first worksheet).
+    #[arg(long, global = true)]
+    sheet: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -100,22 +107,26 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let options = OpenOptions {
+        sheet: cli.sheet,
+        ..Default::default()
+    };
     let out = match cli.command {
-        Command::Schema { file } => schema(&open(&file)?),
+        Command::Schema { file } => schema(&open(&file, &options)?),
         Command::Rows {
             file,
             view,
             columns,
             offset,
             limit,
-        } => rows(&open(&file)?, &view, &columns, offset, limit)?,
+        } => rows(&open(&file, &options)?, &view, &columns, offset, limit)?,
         Command::Distinct {
             file,
             column,
             view,
             limit,
         } => {
-            let doc = open(&file)?;
+            let doc = open(&file, &options)?;
             let col = column_index(&doc, &column)?;
             let state = view_state(&doc, &view)?;
             let d = doc.distinct_values(col, Some(&state), limit)?;
@@ -137,7 +148,7 @@ fn run(cli: Cli) -> Result<()> {
             view,
             bins,
         } => {
-            let doc = open(&file)?;
+            let doc = open(&file, &options)?;
             let col = column_index(&doc, &column)?;
             let state = view_state(&doc, &view)?;
             let h = doc.histogram(col, Some(&state), bins)?;
@@ -170,7 +181,7 @@ fn run(cli: Cli) -> Result<()> {
             view,
             top,
         } => {
-            let doc = open(&file)?;
+            let doc = open(&file, &options)?;
             let col = column_index(&doc, &column)?;
             doc.apply_view(&view_state(&doc, &view)?)?;
             let s = doc.column_summary(col, top)?;
@@ -183,7 +194,7 @@ fn run(cli: Cli) -> Result<()> {
                 "min": s.min_label,
                 "max": s.max_label,
             });
-            if doc.info().columns[col as usize].kind.is_ordered() {
+            if doc.column_capabilities(col)?.histogram {
                 out["nan_count"] = json!(s.nan_count);
                 out["mean"] = json!(s.mean);
                 out["std_dev"] = json!(s.std_dev);
@@ -201,8 +212,9 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-fn open(file: &PathBuf) -> Result<Document> {
-    Document::open(file).with_context(|| format!("cannot open {}", file.display()))
+fn open(file: &PathBuf, options: &OpenOptions) -> Result<Document> {
+    Document::open_with_options(file, options)
+        .with_context(|| format!("cannot open {}", file.display()))
 }
 
 fn column_index(doc: &Document, name: &str) -> Result<u32> {
@@ -241,14 +253,12 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
             .push(Some(value.to_string()));
     }
     for (column, labels) in eq {
-        let ordered = doc.info().columns[column as usize].kind.is_ordered();
+        let ordered = doc.column_capabilities(column)?.range;
         if let (true, [Some(value)]) = (ordered, labels.as_slice()) {
             // One value of a number, date or time: no value index needed.
-            let v = doc.parse_value(column, value)?;
-            state.filters.push(Filter::Range {
+            state.filters.push(Filter::Equals {
                 column,
-                min: Some(v),
-                max: Some(v),
+                value: value.clone(),
             });
         } else {
             let keys = doc.keys_for_labels(column, &labels)?;
@@ -284,37 +294,52 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
         let column = column_index(doc, name)?;
         state.filters.push(Filter::Range {
             column,
-            min: parse_bound(doc, column, lo)?,
-            max: parse_bound(doc, column, hi)?,
+            min: bound_text(lo)
+                .map(|text| doc.parse_bound(column, text))
+                .transpose()?,
+            max: bound_text(hi)
+                .map(|text| doc.parse_bound(column, text))
+                .transpose()?,
         });
     }
     Ok(state)
 }
 
-/// Empty is an open end; anything else is read by the core, in the
-/// column's own type.
-fn parse_bound(doc: &Document, column: u32, s: &str) -> Result<Option<Bound>> {
+/// Empty is an open end; preserve other inputs for the column's parser.
+fn bound_text(s: &str) -> Option<&str> {
     let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(doc.parse_value(column, s)?))
+    (!s.is_empty()).then_some(s)
 }
 
 fn schema(doc: &Document) -> Value {
     let info = doc.info();
-    json!({
+    let mut out = json!({
         "path": info.path,
+        "format": info.format.to_string(),
         "rows": info.row_count,
-        "row_groups": info.row_groups,
         "file_size": info.file_size,
-        "compression": info.compression,
         "columns": info.columns.iter().map(|c| json!({
             "name": c.name,
             "type": c.type_name,
             "nullable": c.nullable,
         })).collect::<Vec<_>>(),
-    })
+    });
+    match &info.metadata {
+        FileMetadata::Parquet {
+            row_groups,
+            compression,
+            ..
+        } => {
+            out["row_groups"] = json!(row_groups);
+            out["compression"] = json!(compression);
+        }
+        FileMetadata::Delimited => {}
+        FileMetadata::Xlsx { sheet, sheets } => {
+            out["sheet"] = json!(sheet);
+            out["sheets"] = json!(sheets);
+        }
+    }
+    out
 }
 
 fn rows(

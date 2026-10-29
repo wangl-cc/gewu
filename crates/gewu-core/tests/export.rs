@@ -1,3 +1,5 @@
+#![cfg(all(feature = "parquet", feature = "csv"))]
+
 use std::{fs, sync::Arc};
 
 use arrow::{
@@ -8,7 +10,7 @@ use arrow::{
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, Schema},
 };
-use gewu_core::{Bound, Document, Error, ExportFormat, ExportOptions, Filter, SortKey, ViewState};
+use gewu_core::{Document, Error, ExportOptions, FileType, Filter, SortKey, ViewState};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
@@ -130,7 +132,7 @@ fn nested_delimited_cells_are_parseable_json_in_snapshot_order() {
             filters: vec![Filter::Range {
                 column: 0,
                 min: None,
-                max: Some(Bound::Int(3)),
+                max: Some(doc.parse_bound(0, "3").unwrap()),
             }],
             search: None,
         })
@@ -139,7 +141,7 @@ fn nested_delimited_cells_are_parseable_json_in_snapshot_order() {
     let first = json!({"na\"me\n": "Alice\r\n雪", "number": 9_007_199_254_740_993i64,
         "tags": ["a,\"雪\"\t\n\\tail", null, ""]});
     let last = json!({"na\"me\n": "", "number": null, "tags": []});
-    for (format, delimiter) in [(ExportFormat::Csv, b','), (ExportFormat::Tsv, b'\t')] {
+    for (format, delimiter) in [(FileType::Csv, b','), (FileType::Tsv, b'\t')] {
         let path = directory.path().join(format!("nested.{format:?}"));
         let export = doc
             .prepare_export(version, &[3, 2, 1, 0], format, ExportOptions {
@@ -196,7 +198,7 @@ fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
         "items", "tags"
     ]);
     assert!(doc.nested_export_columns(&[99]).is_err());
-    for format in [ExportFormat::Csv, ExportFormat::Tsv] {
+    for format in [FileType::Csv, FileType::Tsv] {
         let result = doc.prepare_export(version, &[0, 2], format, ExportOptions::default());
         assert!(matches!(result, Err(Error::Unsupported(message))
             if message.contains("profile") && message.contains("Parquet")));
@@ -208,7 +210,7 @@ fn nested_conversion_requires_opt_in_but_parquet_preserves_native_values() {
     doc.prepare_export(
         version,
         &[0, 1, 2, 3],
-        ExportFormat::Parquet,
+        FileType::Parquet,
         ExportOptions::default(),
     )
     .unwrap()
@@ -241,7 +243,7 @@ fn nested_json_preserves_non_finite_values_separately_from_nulls() {
     doc.prepare_export(
         doc.current_view().version,
         &[0],
-        ExportFormat::Csv,
+        FileType::Csv,
         ExportOptions {
             convert_nested_to_json: true,
         },
@@ -275,7 +277,7 @@ fn unsupported_json_conversion_preserves_the_existing_destination() {
         .prepare_export(
             doc.current_view().version,
             &[0],
-            ExportFormat::Csv,
+            FileType::Csv,
             ExportOptions {
                 convert_nested_to_json: true,
             },
@@ -300,7 +302,7 @@ fn nested_date_formatting_failure_does_not_become_json_data() {
         .prepare_export(
             doc.current_view().version,
             &[0],
-            ExportFormat::Csv,
+            FileType::Csv,
             ExportOptions {
                 convert_nested_to_json: true,
             },
@@ -319,7 +321,7 @@ fn filtered(doc: &Document) -> u64 {
         }],
         filters: vec![Filter::Range {
             column: 0,
-            min: Some(Bound::Int(2)),
+            min: Some(doc.parse_bound(0, "2").unwrap()),
             max: None,
         }],
         search: None,
@@ -334,7 +336,7 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
     let version = filtered(&doc);
     for (format, expected) in [
         (
-            ExportFormat::Csv,
+            FileType::Csv,
             concat!(
                 "\"text,\"\"name\",id,value,date\r\n",
                 ",9007199254740993,2.2250738585072014e-308,1969-12-31\r\n",
@@ -344,7 +346,7 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
             ),
         ),
         (
-            ExportFormat::Tsv,
+            FileType::Tsv,
             concat!(
                 "\"text,\"\"name\"\tid\tvalue\tdate\r\n",
                 "\t9007199254740993\t2.2250738585072014e-308\t1969-12-31\r\n",
@@ -373,7 +375,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
         .prepare_export(
             version,
             &[1, 0, 2, 3],
-            ExportFormat::Parquet,
+            FileType::Parquet,
             ExportOptions::default(),
         )
         .unwrap();
@@ -434,13 +436,13 @@ fn empty_results_keep_headers_and_parquet_schema() {
         })
         .unwrap()
         .version;
-    for format in [ExportFormat::Csv, ExportFormat::Tsv, ExportFormat::Parquet] {
+    for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
         let path = directory.path().join(format!("empty.{format:?}"));
         doc.prepare_export(version, &[0], format, ExportOptions::default())
             .unwrap()
             .write(&path)
             .unwrap();
-        if format == ExportFormat::Parquet {
+        if format == FileType::Parquet {
             let reader =
                 ParquetRecordBatchReaderBuilder::try_new(fs::File::open(path).unwrap()).unwrap();
             assert_eq!(reader.metadata().file_metadata().num_rows(), 0);
@@ -457,17 +459,12 @@ fn stale_and_invalid_exports_are_rejected_before_writing() {
     let old = doc.current_view().version;
     let version = filtered(&doc);
     assert!(matches!(
-        doc.prepare_export(old, &[0], ExportFormat::Csv, ExportOptions::default()),
+        doc.prepare_export(old, &[0], FileType::Csv, ExportOptions::default()),
         Err(Error::StaleVersion { .. })
     ));
     for columns in [vec![], vec![0, 0], vec![99]] {
         assert!(matches!(
-            doc.prepare_export(
-                version,
-                &columns,
-                ExportFormat::Csv,
-                ExportOptions::default()
-            ),
+            doc.prepare_export(version, &columns, FileType::Csv, ExportOptions::default()),
             Err(Error::InvalidArgument(_))
         ));
     }
@@ -480,7 +477,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
     let path = directory.path().join("existing.csv");
     fs::write(&path, "keep me").unwrap();
     let export = doc
-        .prepare_export(version, &[0], ExportFormat::Csv, ExportOptions::default())
+        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
         .unwrap();
     export.cancel();
     assert!(matches!(export.write(&path), Err(Error::Cancelled)));
@@ -493,7 +490,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
     let target_directory = directory.path().join("directory.csv");
     fs::create_dir(&target_directory).unwrap();
     let export = doc
-        .prepare_export(version, &[0], ExportFormat::Csv, ExportOptions::default())
+        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
         .unwrap();
     assert!(matches!(export.write(&target_directory), Err(Error::Io(_))));
     assert!(target_directory.is_dir());
@@ -504,7 +501,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
         .starts_with(".gewu-export-")));
     // Successful export can replace a destination once, after all rows exist.
     let export = doc
-        .prepare_export(version, &[0], ExportFormat::Csv, ExportOptions::default())
+        .prepare_export(version, &[0], FileType::Csv, ExportOptions::default())
         .unwrap();
     export.write(&path).unwrap();
     assert!(fs::read_to_string(&path)
@@ -536,7 +533,7 @@ fn formatting_failure_does_not_publish_a_partial_file() {
         .prepare_export(
             doc.current_view().version,
             &[0],
-            ExportFormat::Csv,
+            FileType::Csv,
             ExportOptions::default(),
         )
         .unwrap();
@@ -568,7 +565,7 @@ fn source_file_and_aliases_cannot_be_overwritten() {
             .prepare_export(
                 doc.current_view().version,
                 &[0],
-                ExportFormat::Parquet,
+                FileType::Parquet,
                 ExportOptions::default(),
             )
             .unwrap();
@@ -583,8 +580,8 @@ fn view_histogram_includes_the_columns_own_filter() {
     let state = ViewState {
         filters: vec![Filter::Range {
             column: 0,
-            min: Some(Bound::Int(2)),
-            max: Some(Bound::Int(4)),
+            min: Some(doc.parse_bound(0, "2").unwrap()),
+            max: Some(doc.parse_bound(0, "4").unwrap()),
         }],
         ..Default::default()
     };

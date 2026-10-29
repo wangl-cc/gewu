@@ -74,11 +74,11 @@ final class DocumentModel: ObservableObject {
             self.exportPanel = nil
             guard let destination else { return }
             guard let format else {
-                self.errorMessage = "Choose CSV, TSV or Parquet as the export format."
+                self.errorMessage = "Choose CSV, TSV, Parquet or XLSX as the export format."
                 return
             }
             do {
-                let options = ExportOptions(convertNestedToJson: panelOptions.convertNestedToJson)
+                let options = ExportOptions(convertNestedToJson: format.supportsJSONConversion && panelOptions.convertNestedToJson)
                 let job = try doc.prepareExport(version: version, columns: columns,
                                                 format: format.coreFormat, options: options)
                 self.startExport(job, to: destination)
@@ -127,7 +127,8 @@ final class DocumentModel: ObservableObject {
 
     var subtitle: String {
         guard let info else { return "" }
-        return "\(formatCount(info.rowCount)) rows · \(info.columns.count) columns · "
+        let source = info.sheet.map { "\(info.format) · \($0)" } ?? info.format
+        return "\(source) · \(formatCount(info.rowCount)) rows · \(info.columns.count) columns · "
             + ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)
     }
 

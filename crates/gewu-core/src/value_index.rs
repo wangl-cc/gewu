@@ -10,7 +10,7 @@
 //! hundreds of megabytes.
 
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     hash::{Hash, Hasher},
 };
 
@@ -27,6 +27,30 @@ pub(crate) const INDEX_LIMIT: usize = 100_000;
 
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
+
+/// Whether the whole column has at most `limit` distinct values, null included.
+///
+/// Only one row-conversion batch and at most `limit` distinct encoded values
+/// are retained. Unlike building an index, this does not allocate source-row
+/// codes or format labels. The first new value beyond the limit stops the scan.
+pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
+    let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+    let mut seen: HashSet<Box<[u8]>> = HashSet::new();
+    for start in (0..array.len()).step_by(CHUNK) {
+        let len = CHUNK.min(array.len() - start);
+        let rows = converter.convert_columns(&[array.slice(start, len)])?;
+        for row in rows.iter() {
+            let bytes: &[u8] = row.as_ref();
+            if !seen.contains(bytes) {
+                if seen.len() == limit {
+                    return Ok(false);
+                }
+                seen.insert(bytes.into());
+            }
+        }
+    }
+    Ok(true)
+}
 
 pub(crate) struct ValueIndex {
     /// Code of each source row.
@@ -92,6 +116,16 @@ impl ValueIndex {
     /// Each distinct value with its count over `rows`, in value order,
     /// leaving out values with no rows.
     pub fn counts(&self, rows: &Selection) -> Vec<DistinctValue> {
+        self.counts_with_zero(rows, false)
+    }
+
+    /// Every source-column value in value order, including those absent from
+    /// `rows`. Stable options remain selectable as other filters change.
+    pub fn counts_all(&self, rows: &Selection) -> Vec<DistinctValue> {
+        self.counts_with_zero(rows, true)
+    }
+
+    fn counts_with_zero(&self, rows: &Selection, include_zero: bool) -> Vec<DistinctValue> {
         let mut counts = vec![0u64; self.len()];
         match rows {
             Selection::All(_) => self.codes.iter().for_each(|&c| counts[c as usize] += 1),
@@ -102,7 +136,7 @@ impl ValueIndex {
         counts
             .into_iter()
             .enumerate()
-            .filter(|&(_, n)| n > 0)
+            .filter(|&(_, n)| include_zero || n > 0)
             .map(|(code, count)| DistinctValue {
                 key: code as u64,
                 label: self.labels[code].clone(),
@@ -220,6 +254,79 @@ mod tests {
         let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000));
         assert!(ValueIndex::build(&a, 999).unwrap().is_none());
         assert!(ValueIndex::build(&a, 1000).unwrap().is_some());
+    }
+
+    #[test]
+    fn cardinality_probe_counts_null_and_duplicates_at_the_limit() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("b"),
+            None,
+            Some("a"),
+            Some("b"),
+            None,
+        ]));
+        assert!(!has_at_most(&a, 2).unwrap());
+        assert!(has_at_most(&a, 3).unwrap());
+        assert!(has_at_most(&a, 4).unwrap());
+
+        let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
+        assert!(has_at_most(&empty, 0).unwrap());
+        let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
+        assert!(!has_at_most(&nulls, 0).unwrap());
+        assert!(has_at_most(&nulls, 1).unwrap());
+    }
+
+    #[test]
+    fn cardinality_probe_visits_later_batches() {
+        let a: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..CHUNK * 2 + 1).map(|row| i64::from(row == CHUNK * 2)),
+        ));
+        assert!(!has_at_most(&a, 1).unwrap());
+        assert!(has_at_most(&a, 2).unwrap());
+
+        let many: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000));
+        assert!(!has_at_most(&many, 999).unwrap());
+        assert!(has_at_most(&many, 1000).unwrap());
+    }
+
+    #[test]
+    fn all_counts_keep_zero_count_options_and_stable_keys() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("b"),
+            Some("a"),
+            None,
+            Some("b"),
+        ]));
+        let index = ValueIndex::build(&a, 3).unwrap().unwrap();
+        let selection = Selection::Rows(Arc::new(vec![0, 3]));
+        let all = index.counts_all(&selection);
+        assert_eq!(all, vec![
+            DistinctValue {
+                key: 0,
+                label: None,
+                count: 0
+            },
+            DistinctValue {
+                key: 1,
+                label: Some("a".into()),
+                count: 0
+            },
+            DistinctValue {
+                key: 2,
+                label: Some("b".into()),
+                count: 2
+            },
+        ]);
+        assert_eq!(index.counts(&selection), vec![all[2].clone()]);
+        let empty = index.counts_all(&Selection::Rows(Arc::new(vec![])));
+        assert_eq!(empty.iter().map(|value| value.key).collect::<Vec<_>>(), [
+            0, 1, 2
+        ]);
+        assert!(empty.iter().all(|value| value.count == 0));
+        assert_eq!(
+            index.counts_all(&Selection::All(a.len())),
+            index.counts(&Selection::All(a.len()))
+        );
     }
 
     #[test]

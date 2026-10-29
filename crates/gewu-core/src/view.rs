@@ -5,7 +5,8 @@ pub struct ColumnInfo {
     pub name: String,
     /// The Arrow type, e.g. `Timestamp(Microsecond, Some("UTC"))`.
     pub type_name: String,
-    /// How gewu treats the values; decides which filters apply.
+    /// How gewu displays the values. Query supported operations through
+    /// `Document::column_capabilities`.
     pub kind: crate::DataKind,
     pub nullable: bool,
 }
@@ -15,14 +16,9 @@ pub struct FileInfo {
     pub path: String,
     pub row_count: u64,
     pub columns: Vec<ColumnInfo>,
-    pub row_groups: u32,
     pub file_size: u64,
-    /// Compression codecs used in the file, e.g. `["SNAPPY"]`.
-    pub compression: Vec<String>,
-    /// The program that wrote the file, if recorded.
-    pub created_by: Option<String>,
-    /// Key-value metadata from the file footer, except Arrow's own schema.
-    pub metadata: Vec<(String, String)>,
+    pub format: crate::FileType,
+    pub metadata: crate::FileMetadata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,17 +27,20 @@ pub struct SortKey {
     pub descending: bool,
 }
 
-/// One end of a [`Filter::Range`]. Integers stay exact so large ids
-/// compare correctly; any bound works on any numeric column.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Bound {
-    Int(i64),
-    UInt(u64),
-    Float(f64),
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
+    /// Equal to text parsed in this column's own type. Strings compare
+    /// literally (case-sensitive); floats parse to their native width;
+    /// decimal coefficients remain exact. Invalid input is an error.
+    Equals { column: u32, value: String },
+    /// Inclusive range with endpoints already parsed for the column's type.
+    /// Unlike search, the number of typed decimal places does not widen
+    /// these bounds. Missing ends are open; invalid or reversed bounds error.
+    Range {
+        column: u32,
+        min: Option<crate::Bound>,
+        max: Option<crate::Bound>,
+    },
     /// Keep rows whose value is one of `keys` (keys come from
     /// [`crate::Document::distinct_values`]). This is the Excel-style
     /// checkbox filter.
@@ -57,13 +56,6 @@ pub enum Filter {
         text: String,
         case_sensitive: bool,
     },
-    /// Keep rows with `min <= value <= max` (inclusive; a missing bound is
-    /// open). Numeric, date and time columns only. Nulls and NaN never pass.
-    Range {
-        column: u32,
-        min: Option<Bound>,
-        max: Option<Bound>,
-    },
 }
 
 impl Filter {
@@ -72,6 +64,7 @@ impl Filter {
             Filter::InValues { column, .. }
             | Filter::IsNull { column, .. }
             | Filter::Contains { column, .. }
+            | Filter::Equals { column, .. }
             | Filter::Range { column, .. } => *column,
         }
     }
@@ -84,7 +77,7 @@ pub struct ViewState {
     pub filters: Vec<Filter>,
     /// Keep rows where any column matches. What "matches" means depends on
     /// the column: substring for text, value or period for numbers, dates
-    /// and times (see the `query` module).
+    /// and times (see the `column` module).
     pub search: Option<String>,
 }
 
@@ -187,4 +180,44 @@ pub struct ColumnSummary {
     pub std_dev: Option<f64>,
     /// Other columns: the most common values, most common first.
     pub top_values: Vec<DistinctValue>,
+}
+
+/// The editor and data a frontend needs for one column's filter.
+/// The editor is chosen from the whole source column and stays stable as
+/// other filters change. Counts exclude this column's own filters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterSpec {
+    pub nullable: bool,
+    pub editor: FilterEditor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterEditor {
+    Range {
+        kind: crate::DataKind,
+        distribution: Option<RangeHistogram>,
+    },
+    /// All source values, including values with zero rows in the current facet.
+    Choices {
+        values: Vec<DistinctValue>,
+    },
+    Contains,
+    NullOnly,
+}
+
+/// Drawing coordinates and exact filter endpoints for the same bins.
+/// Coordinates can be approximate; submit `ranges` to filter by a bin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeHistogram {
+    /// Exact source extrema for display, independent of approximate axis coordinates.
+    pub min_label: String,
+    pub max_label: String,
+    pub histogram: Histogram,
+    pub ranges: Vec<RangeBounds>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBounds {
+    pub min: Option<crate::Bound>,
+    pub max: Option<crate::Bound>,
 }

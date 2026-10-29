@@ -1,31 +1,27 @@
 use std::{
     collections::BTreeSet,
-    fs::File,
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
 
 use arrow::{
     array::{make_comparator, Array, ArrayRef, Int64Array, UInt32Array},
-    compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions},
+    compute::{cast, lexsort_to_indices, take, SortColumn, SortOptions},
     datatypes::{DataType, SchemaRef},
 };
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::{
+    column::{range_histogram, Column, FilterEditorKind, CHOICE_LIMIT},
     engine::{CancelToken, ViewEngine},
-    format,
+    file, format,
     numeric::Numeric,
-    predicate::ColumnTest,
-    query,
+    predicate::{Predicate, CHUNK},
     scope::{for_rows, RowScope, Selection},
     value_index::{count_values, ValueIndex, INDEX_LIMIT},
-    Bound, ColumnInfo, ColumnSummary, DataKind, DistinctResult, Error, Export, ExportFormat,
-    ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
+    ColumnCapabilities, ColumnInfo, ColumnSummary, DataKind, DistinctResult, Error, Export,
+    ExportOptions, FileInfo, FileType, Filter, Histogram, OpenOptions, Result, RowBlock, ViewInfo,
+    ViewState,
 };
-
-/// Rows tested between cancellation checks.
-const CHUNK: usize = 64 * 1024;
 
 /// One open file. Safe to share between threads.
 pub struct Document {
@@ -35,6 +31,7 @@ pub struct Document {
     columns: Vec<ArrayRef>,
     n_rows: usize,
     indexes: Vec<OnceLock<Indexed>>,
+    filter_editors: Vec<OnceLock<FilterEditorKind>>,
     views: ViewEngine,
 }
 
@@ -46,30 +43,20 @@ enum Indexed {
 }
 
 impl Document {
-    /// Open a Parquet file and decode it into memory.
+    /// Open a supported file using its format's default options.
+    /// CSV/TSV and XLSX use the first record as headers; XLSX opens its first sheet.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_options(path, &OpenOptions::default())
+    }
+
+    /// Open a file with an explicit format, header policy or XLSX sheet name.
+    pub fn open_with_options(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Self> {
         let path = path.as_ref();
-        let file = File::open(path)?;
         let source_path = path.canonicalize()?;
-        let file_size = file.metadata()?.len();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-
-        let meta = builder.metadata().clone();
-        let schema = builder.schema().clone();
-        let compression: BTreeSet<String> = meta
-            .row_groups()
-            .iter()
-            .flat_map(|rg| rg.columns().iter())
-            .map(|c| {
-                let s = c.compression().to_string();
-                s.split('(').next().unwrap_or(&s).to_string()
-            })
-            .collect();
-
-        let reader = builder.with_batch_size(64 * 1024).build()?;
-        let batches = reader.collect::<Result<Vec<_>, _>>()?;
-        let batch = concat_batches(&schema, &batches)?;
-        drop(batches);
+        let file_size = std::fs::metadata(path)?.len();
+        let (format, loaded) = file::read(path, options)?;
+        let batch = loaded.batch;
+        let schema = batch.schema();
 
         let n_rows = batch.num_rows();
         if n_rows > u32::MAX as usize {
@@ -94,22 +81,15 @@ impl Document {
             path: path.display().to_string(),
             row_count: n_rows as u64,
             columns: columns_info,
-            row_groups: meta.num_row_groups() as u32,
             file_size,
-            compression: compression.into_iter().collect(),
-            created_by: meta.file_metadata().created_by().map(str::to_string),
-            metadata: meta
-                .file_metadata()
-                .key_value_metadata()
-                .into_iter()
-                .flatten()
-                .filter(|kv| kv.key != "ARROW:schema")
-                .map(|kv| (kv.key.clone(), kv.value.clone().unwrap_or_default()))
-                .collect(),
+            format,
+            metadata: loaded.metadata,
         };
 
         let columns = batch.columns().to_vec();
         let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
+
+        let filter_editors = (0..columns.len()).map(|_| OnceLock::new()).collect();
 
         Ok(Self {
             info,
@@ -118,6 +98,7 @@ impl Document {
             columns,
             n_rows,
             indexes,
+            filter_editors,
             views: ViewEngine::new(n_rows),
         })
     }
@@ -128,6 +109,89 @@ impl Document {
 
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    /// Parse text once at the input boundary, retaining the column's full type.
+    pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
+        crate::Bound::parse(Column::new(self.column(column)?).logical_data_type(), text)
+    }
+
+    pub fn make_bound_i64(&self, column: u32, value: i64) -> Result<crate::Bound> {
+        crate::Bound::from_i64(Column::new(self.column(column)?).logical_data_type(), value)
+    }
+
+    pub fn make_bound_u64(&self, column: u32, value: u64) -> Result<crate::Bound> {
+        crate::Bound::from_u64(Column::new(self.column(column)?).logical_data_type(), value)
+    }
+
+    pub fn make_bound_f64(&self, column: u32, value: f64) -> Result<crate::Bound> {
+        crate::Bound::from_f64(Column::new(self.column(column)?).logical_data_type(), value)
+    }
+
+    /// Decimal coefficient is transported as text to accommodate 256-bit values.
+    pub fn make_bound_decimal(
+        &self,
+        column: u32,
+        coefficient: &str,
+        scale: i8,
+    ) -> Result<crate::Bound> {
+        let coefficient = coefficient
+            .parse::<arrow::datatypes::i256>()
+            .map_err(|_| Error::InvalidArgument("invalid decimal coefficient".into()))?;
+        crate::Bound::from_decimal(
+            Column::new(self.column(column)?).logical_data_type(),
+            coefficient,
+            scale,
+        )
+    }
+
+    /// Describe the filter editor using whole-column cardinality. Facet counts
+    /// respect other columns' filters and search without changing the editor.
+    pub fn filter_spec(&self, column: u32, state: Option<&ViewState>) -> Result<crate::FilterSpec> {
+        use crate::{FilterEditor, FilterSpec};
+        let array = self.column(column)?;
+        let typed = Column::new(array);
+        let cell = &self.filter_editors[column as usize];
+        let editor_kind = match cell.get() {
+            Some(kind) => *kind,
+            None => {
+                let supported =
+                    arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
+                        array.data_type().clone(),
+                    )]);
+                let low_cardinality = if !supported {
+                    false
+                } else {
+                    match self.indexes[column as usize].get() {
+                        Some(Indexed::Built(index)) => index.len() <= CHOICE_LIMIT,
+                        Some(Indexed::TooMany) => false,
+                        None => crate::value_index::has_at_most(array, CHOICE_LIMIT)?,
+                    }
+                };
+                *cell.get_or_init(|| typed.filter_editor(low_cardinality))
+            }
+        };
+        let editor = match editor_kind {
+            FilterEditorKind::Choices => {
+                let rows = self.rows_in(RowScope::facet(state, column))?;
+                FilterEditor::Choices {
+                    values: self.keyed_index(column)?.counts_all(&rows),
+                }
+            }
+            FilterEditorKind::Range => {
+                let rows = self.rows_in(RowScope::facet(state, column))?;
+                FilterEditor::Range {
+                    kind: DataKind::of(typed.logical_data_type()),
+                    distribution: range_histogram::build(array, &rows, 60)?,
+                }
+            }
+            FilterEditorKind::Contains => FilterEditor::Contains,
+            FilterEditorKind::NullOnly => FilterEditor::NullOnly,
+        };
+        Ok(FilterSpec {
+            nullable: self.info.columns[column as usize].nullable,
+            editor,
+        })
     }
 
     /// Index of the column with this name.
@@ -149,9 +213,10 @@ impl Document {
         &self,
         version: u64,
         columns: &[u32],
-        format: ExportFormat,
+        format: FileType,
         options: ExportOptions,
     ) -> Result<Export> {
+        format.require_enabled()?;
         let view = self.views.snapshot(version)?;
         if columns.is_empty() {
             return Err(Error::InvalidArgument(
@@ -170,7 +235,10 @@ impl Document {
             .collect::<Result<Vec<_>>>()?;
         let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
         let schema = Arc::new(self.schema.project(&indices)?);
-        if format != ExportFormat::Parquet && !options.convert_nested_to_json {
+        if format == FileType::Xlsx && !self.nested_export_columns(columns)?.is_empty() {
+            return Err(Error::Unsupported("XLSX export does not support nested columns; use Parquet or CSV/TSV with JSON conversion".into()));
+        }
+        if matches!(format, FileType::Csv | FileType::Tsv) && !options.convert_nested_to_json {
             let nested = self.nested_export_columns(columns)?;
             if !nested.is_empty() {
                 return Err(Error::Unsupported(format!(
@@ -231,19 +299,16 @@ impl Document {
         let end = start.saturating_add(count as u64).min(len);
         let source_rows = &view.rows[start as usize..end as usize];
 
-        let arrays: Vec<&dyn Array> = columns
-            .iter()
-            .map(|&c| self.columns[c as usize].as_ref())
-            .collect();
+        let arrays: Vec<&ArrayRef> = columns.iter().map(|&c| &self.columns[c as usize]).collect();
         let formatters = arrays
             .iter()
-            .map(|a| format::formatter(*a))
+            .map(|a| Column::new(a).formatter())
             .collect::<Result<Vec<_>>>()?;
 
         let mut cells = Vec::with_capacity(source_rows.len() * columns.len());
         for &r in source_rows {
             for (a, f) in arrays.iter().zip(&formatters) {
-                cells.push(format::cell(*a, f, r as usize));
+                cells.push(format::cell(a.as_ref(), f, r as usize));
             }
         }
 
@@ -258,7 +323,9 @@ impl Document {
                 let column = &self.columns[c as usize];
                 let mut hits = vec![false; source_rows.len()];
                 let block = take(column.as_ref(), &indices, None)?;
-                query::mark_search(&block, text, &mut hits, &token)?;
+                if let Some(predicate) = Column::new(&block).prepare_search(text)? {
+                    predicate.evaluate(0..block.len(), &mut hits, &token)?;
+                }
                 per_column.push(hits);
             }
             matched = (0..source_rows.len())
@@ -342,8 +409,8 @@ impl Document {
     }
 
     /// Display text for a raw value of a date, time, timestamp or duration
-    /// column (its integer physical value, as used by histograms and range
-    /// bounds), formatted exactly like the table's cells. Also works for
+    /// column (its integer physical value, as used by histograms), formatted
+    /// exactly like the table's cells. Also works for
     /// integer columns.
     pub fn format_value(&self, column: u32, value: i64) -> Result<String> {
         let data_type = self.column(column)?.data_type().clone();
@@ -359,14 +426,15 @@ impl Document {
         Ok(f.value(0).to_string())
     }
 
-    /// Read text typed by the user (a number, or a date/time in the
-    /// column's own format such as `2024-03-01` or `2024-03-01T12:00:00`)
-    /// as a range bound for a numeric, date or time column.
-    /// Integer literals use exact Int/UInt bounds when representable. Fractional
-    /// and float inputs use f64 without first narrowing to the column's type.
-    /// Range preparation handles fractions and bounds outside the column's domain.
-    pub fn parse_value(&self, column: u32, text: &str) -> Result<Bound> {
-        self.numeric(column)?.parse_bound(text)
+    /// Operations supported by this column's logical type.
+    pub fn column_capabilities(&self, column: u32) -> Result<ColumnCapabilities> {
+        Ok(Column::new(self.column(column)?).capabilities())
+    }
+
+    /// Validate and prepare an explicit filter without scanning data. Value-list
+    /// filters may build the column's lazy index; other filters only parse scalars.
+    pub fn validate_filter(&self, filter: &Filter) -> Result<()> {
+        self.prepare_filter(filter).map(|_| ())
     }
 
     /// Keys for the given displayed labels (`None` = null). Unknown labels
@@ -512,9 +580,8 @@ impl Document {
         })
     }
 
-    /// Source rows that pass all filters (except those on `skip`) and the
-    /// search, in file order. Filters are ANDed row by row, stopping at the
-    /// first that fails; the search is one mask ORed over the columns.
+    /// Prepare column predicates once, then combine AND/OR in bounded batches.
+    /// Masks are reused across columns and batches, not retained per column.
     fn select(
         &self,
         filters: &[Filter],
@@ -522,85 +589,81 @@ impl Document {
         skip: Option<u32>,
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
-        let mut tests = Vec::new();
-        for f in filters {
-            if Some(f.column()) == skip {
-                continue;
-            }
-            let test = self.filter_test(f)?;
-            tests.push(test.row_test(self.column(f.column())?, token)?);
+        token.check()?;
+        let filters = filters
+            .iter()
+            .filter(|f| Some(f.column()) != skip)
+            .map(|f| self.prepare_filter(f))
+            .collect::<Result<Vec<_>>>()?;
+        let search = search.filter(|s| !s.trim().is_empty());
+        let search_tests = match search {
+            Some(text) => self
+                .columns
+                .iter()
+                .map(|a| Column::new(a).prepare_search(text))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        if filters.is_empty() && search.is_none() {
+            let rows = (0..self.n_rows as u32).collect();
+            token.check()?;
+            return Ok(rows);
         }
-
-        if let Some(text) = search.filter(|s| !s.trim().is_empty()) {
-            let mut mask = vec![false; self.n_rows];
-            for column in &self.columns {
-                query::mark_search(column, text, &mut mask, token)?;
-            }
-            tests.push(Box::new(move |r| mask[r]));
-        }
-
-        if tests.is_empty() {
-            return Ok((0..self.n_rows as u32).collect());
-        }
+        let batch_len = self.n_rows.min(CHUNK);
+        let mut selected = vec![true; batch_len];
+        let mut scratch = vec![false; batch_len];
+        let mut searched = vec![false; if search.is_some() { batch_len } else { 0 }];
         let mut rows = Vec::new();
         for start in (0..self.n_rows).step_by(CHUNK) {
             token.check()?;
             let end = (start + CHUNK).min(self.n_rows);
+            let range = start..end;
+            let selected = &mut selected[..range.len()];
+            let scratch = &mut scratch[..range.len()];
+            selected.fill(true);
+            for test in &filters {
+                test.intersect(range.clone(), selected, scratch, token)?;
+                if !selected.contains(&true) {
+                    break;
+                }
+            }
+            if !selected.contains(&true) {
+                continue;
+            }
+            if search.is_some() {
+                let searched = &mut searched[..range.len()];
+                searched.fill(false);
+                for test in &search_tests {
+                    test.evaluate(range.clone(), scratch, token)?;
+                    for (hit, other) in searched.iter_mut().zip(scratch.iter()) {
+                        *hit |= *other;
+                    }
+                }
+                for (hit, other) in selected.iter_mut().zip(searched) {
+                    *hit &= *other;
+                }
+            }
             rows.extend(
-                (start..end)
-                    .filter(|&r| tests.iter().all(|t| t(r)))
-                    .map(|r| r as u32),
+                range
+                    .zip(selected)
+                    .filter_map(|(r, hit)| (*hit).then_some(r as u32)),
             );
         }
+        token.check()?;
         Ok(rows)
     }
 
-    /// The test a filter means, after checking it fits the column.
-    fn filter_test(&self, filter: &Filter) -> Result<ColumnTest> {
-        let column = filter.column();
-        self.column(column)?;
-        let info = &self.info.columns[column as usize];
-        Ok(match filter {
+    fn prepare_filter(&self, filter: &Filter) -> Result<Predicate<'_>> {
+        let column = Column::new(self.column(filter.column())?);
+        match filter {
             Filter::InValues { keys, .. } => {
-                let index = self.keyed_index(column)?;
-                let mut allowed = vec![false; index.len()];
-                for &k in keys {
-                    if let Some(slot) = allowed.get_mut(k as usize) {
-                        *slot = true;
-                    }
-                }
-                ColumnTest::Codes { index, allowed }
+                Ok(column.prepare_values(self.keyed_index(filter.column())?, keys))
             }
-            Filter::IsNull { negate, .. } => ColumnTest::Null { negate: *negate },
-            Filter::Contains {
-                text,
-                case_sensitive,
-                ..
-            } => {
-                if info.kind.is_ordered() || info.kind == DataKind::Boolean {
-                    return Err(Error::InvalidArgument(format!(
-                        "\"contains\" is for text; column {} holds {:?} values, filter it by range or value",
-                        info.name, info.kind
-                    )));
-                }
-                ColumnTest::Text {
-                    text: text.clone(),
-                    case_sensitive: *case_sensitive,
-                }
-            }
-            Filter::Range { min, max, .. } => {
-                if !info.kind.is_ordered() {
-                    return Err(Error::InvalidArgument(format!(
-                        "column {} ({}) is not numeric",
-                        info.name, info.type_name
-                    )));
-                }
-                ColumnTest::Range {
-                    min: *min,
-                    max: *max,
-                }
-            }
-        })
+            _ => column.prepare_filter(filter),
+        }
     }
 
     fn sort(&self, rows: Vec<u32>, state: &ViewState) -> Result<Vec<u32>> {

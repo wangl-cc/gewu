@@ -25,10 +25,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleDocumentTypes</key><array><dict>
-    <key>CFBundleTypeName</key><string>Parquet table</string>
+    <key>CFBundleTypeName</key><string>Data table</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string>
-    <key>LSItemContentTypes</key><array><string>io.github.wangl-cc.gewu.parquet</string></array>
+    <key>LSItemContentTypes</key><array>
+      <string>io.github.wangl-cc.gewu.parquet</string>
+      <string>public.comma-separated-values-text</string>
+      <string>public.tab-separated-values-text</string>
+      <string>org.openxmlformats.spreadsheetml.sheet</string>
+    </array>
   </dict></array>
   <key>UTImportedTypeDeclarations</key><array><dict>
     <key>UTTypeIdentifier</key><string>io.github.wangl-cc.gewu.parquet</string>

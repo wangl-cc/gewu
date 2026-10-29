@@ -1,7 +1,9 @@
+#![cfg(feature = "parquet")]
+
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Bound, Document, Error, Filter, SortKey, ViewState};
+use gewu_core::{Document, Error, Filter, SortKey, ViewState};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
@@ -183,9 +185,13 @@ fn stats() {
     std::fs::remove_file(path).ok();
 }
 
-fn range(column: u32, min: Option<Bound>, max: Option<Bound>) -> ViewState {
+fn range(doc: &Document, column: u32, min: Option<String>, max: Option<String>) -> ViewState {
     ViewState {
-        filters: vec![Filter::Range { column, min, max }],
+        filters: vec![Filter::Range {
+            column,
+            min: min.map(|s| doc.parse_bound(column, &s).unwrap()),
+            max: max.map(|s| doc.parse_bound(column, &s).unwrap()),
+        }],
         ..Default::default()
     }
 }
@@ -194,19 +200,19 @@ fn range(column: u32, min: Option<Bound>, max: Option<Bound>) -> ViewState {
 fn range_filter_on_floats_skips_nulls() {
     let (path, doc) = sample();
     // price: a 3.5, b 1.0, c 9.0, d null, e 2.25, f 7.0
-    doc.apply_view(&range(2, Some(Bound::Float(2.25)), Some(Bound::Int(7))))
+    doc.apply_view(&range(&doc, 2, Some("2.25".into()), Some("7".into())))
         .unwrap();
     assert_eq!(names(&doc), ["a", "e", "f"]);
 
     // Open-ended bounds.
-    doc.apply_view(&range(2, Some(Bound::Float(7.0)), None))
+    doc.apply_view(&range(&doc, 2, Some("7.0".into()), None))
         .unwrap();
     assert_eq!(names(&doc), ["c", "f"]);
-    doc.apply_view(&range(2, None, Some(Bound::Float(1.0))))
+    doc.apply_view(&range(&doc, 2, None, Some("1.0".into())))
         .unwrap();
     assert_eq!(names(&doc), ["b"]);
     // No bounds keeps every non-null value.
-    doc.apply_view(&range(2, None, None)).unwrap();
+    doc.apply_view(&range(&doc, 2, None, None)).unwrap();
     assert_eq!(names(&doc), ["a", "b", "c", "e", "f"]);
     std::fs::remove_file(path).ok();
 }
@@ -215,17 +221,13 @@ fn range_filter_on_floats_skips_nulls() {
 fn range_filter_on_integers() {
     let (path, doc) = sample();
     // id: 10, 20, 30, 40, 50, 60. Float bounds round inward.
-    doc.apply_view(&range(
-        3,
-        Some(Bound::Float(19.5)),
-        Some(Bound::Float(40.9)),
-    ))
-    .unwrap();
+    doc.apply_view(&range(&doc, 3, Some("19.5".into()), Some("40.9".into())))
+        .unwrap();
     assert_eq!(names(&doc), ["b", "c", "d"]);
-    doc.apply_view(&range(3, Some(Bound::UInt(u64::MAX)), None))
+    doc.apply_view(&range(&doc, 3, Some(u64::MAX.to_string()), None))
         .unwrap();
     assert_eq!(names(&doc), Vec::<String>::new());
-    doc.apply_view(&range(3, Some(Bound::Int(60)), Some(Bound::Int(60))))
+    doc.apply_view(&range(&doc, 3, Some("60".into()), Some("60".into())))
         .unwrap();
     assert_eq!(names(&doc), ["f"]);
     std::fs::remove_file(path).ok();
@@ -235,7 +237,7 @@ fn range_filter_on_integers() {
 fn range_filter_rejects_text_columns() {
     let (path, doc) = sample();
     assert!(matches!(
-        doc.apply_view(&range(1, Some(Bound::Int(0)), None)),
+        doc.parse_bound(1, "0"),
         Err(Error::InvalidArgument(_))
     ));
     std::fs::remove_file(path).ok();
@@ -275,7 +277,7 @@ fn histogram_counts() {
     let state = ViewState {
         filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
             column: 2,
-            min: Some(Bound::Float(100.0)),
+            min: Some(doc.parse_bound(2, "100.0").unwrap()),
             max: None,
         }],
         ..Default::default()
@@ -426,26 +428,28 @@ fn dates_format_parse_and_filter() {
     let (path, doc) = temporal_sample();
     assert_eq!(doc.format_value(1, 19_724).unwrap(), "2024-01-02");
     assert_eq!(
-        doc.parse_value(1, "2024-01-02").unwrap(),
-        Bound::Int(19_724)
+        doc.parse_bound(1, "2024-01-02").unwrap().axis_value(),
+        19_724.0
     );
-    assert!(doc.parse_value(1, "not a date").is_err());
+    assert!(doc.parse_bound(1, "not a date").is_err());
 
     let base = 1_704_099_600_000_000i64;
     assert_eq!(doc.format_value(2, base).unwrap(), "2024-01-01T09:00:00Z");
     assert_eq!(
-        doc.parse_value(2, "2024-01-01T10:00:00Z").unwrap(),
-        Bound::Int(base + 3_600_000_000)
+        doc.parse_bound(2, "2024-01-01T10:00:00Z")
+            .unwrap()
+            .axis_value(),
+        (base + 3_600_000_000) as f64
     );
 
     // Range on dates: nulls excluded, bounds inclusive.
-    let min = doc.parse_value(1, "2024-01-02").unwrap();
-    doc.apply_view(&range(1, Some(min), None)).unwrap();
+    let min = "2024-01-02".into();
+    doc.apply_view(&range(&doc, 1, Some(min), None)).unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
-    let max = doc.parse_value(2, "2024-01-01T10:00:00Z").unwrap();
-    doc.apply_view(&range(2, None, Some(max))).unwrap();
+    let max = "2024-01-01T10:00:00Z".into();
+    doc.apply_view(&range(&doc, 2, None, Some(max))).unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
     // Dates are integers: the histogram ends one day past the last date.

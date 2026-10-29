@@ -13,6 +13,7 @@ struct HistogramChart: NSViewRepresentable {
     @Binding var selection: HistogramSelection
     var interactive = true
     var labelFormatter: ((Double) -> String)?
+    var axisLabels: (String, String)?
 
     final class Coordinator {
         var histogram: Histogram?
@@ -25,6 +26,7 @@ struct HistogramChart: NSViewRepresentable {
     func updateNSView(_ view: HistogramView, context: Context) {
         view.isInteractive = interactive
         view.labelFormatter = labelFormatter
+        view.axisLabels = axisLabels
         if context.coordinator.histogram != histogram {
             view.setData(counts: histogram.counts, lo: histogram.lo ?? 0,
                          hi: histogram.hi ?? 1, integer: histogram.integer)
@@ -42,6 +44,7 @@ struct HistogramChart: NSViewRepresentable {
     static func dismantleNSView(_ view: HistogramView, coordinator: Coordinator) {
         view.onChange = nil
         view.labelFormatter = nil
+        view.axisLabels = nil
     }
 }
 
@@ -56,6 +59,8 @@ final class HistogramView: NSView {
     var isInteractive = true
     /// Text for axis values; numbers by default.
     var labelFormatter: ((Double) -> String)?
+    /// Exact source extrema supplied by a typed range histogram.
+    var axisLabels: (String, String)?
     private(set) var selection: (Double, Double) = (0, 1)
     /// Whether the selection sits on bin edges (counts are then exact).
     private(set) var isSnapped = true
@@ -185,8 +190,8 @@ final class HistogramView: NSView {
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]
-        let left = NSAttributedString(string: axisLabel(lo), attributes: attrs)
-        let right = NSAttributedString(string: axisLabel(integer ? hi - 1 : hi), attributes: attrs)
+        let left = NSAttributedString(string: axisLabels?.0 ?? axisLabel(lo), attributes: attrs)
+        let right = NSAttributedString(string: axisLabels?.1 ?? axisLabel(integer ? hi - 1 : hi), attributes: attrs)
         left.draw(at: NSPoint(x: p.minX, y: p.maxY + 4))
         right.draw(at: NSPoint(x: p.maxX - right.size().width, y: p.maxY + 4))
     }

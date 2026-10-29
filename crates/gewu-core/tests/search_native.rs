@@ -1,3 +1,5 @@
+#![cfg(feature = "parquet")]
+
 use std::sync::Arc;
 
 use arrow::{

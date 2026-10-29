@@ -87,12 +87,30 @@ impl From<core::DataKind> for DataKind {
 }
 
 #[derive(uniffi::Record)]
+pub struct ColumnCapabilities {
+    pub contains: bool,
+    pub range: bool,
+    pub equals: bool,
+    pub histogram: bool,
+}
+
+impl From<core::ColumnCapabilities> for ColumnCapabilities {
+    fn from(capabilities: core::ColumnCapabilities) -> Self {
+        Self {
+            contains: capabilities.contains,
+            range: capabilities.range,
+            equals: capabilities.equals,
+            histogram: capabilities.histogram,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
 pub struct ColumnInfo {
     pub name: String,
     pub type_name: String,
     pub kind: DataKind,
-    /// Range filter and histogram apply (numbers, dates, times).
-    pub ordered: bool,
+    pub capabilities: ColumnCapabilities,
     pub nullable: bool,
 }
 
@@ -101,12 +119,15 @@ pub struct FileInfo {
     pub path: String,
     pub row_count: u64,
     pub columns: Vec<ColumnInfo>,
-    pub row_groups: u32,
+    pub format: String,
+    pub row_groups: Option<u32>,
     pub file_size: u64,
     pub compression: Vec<String>,
     pub created_by: Option<String>,
     /// Footer key-value metadata (Arrow's own schema left out).
     pub metadata: Vec<KeyValue>,
+    pub sheet: Option<String>,
+    pub sheets: Vec<String>,
 }
 
 #[derive(uniffi::Record)]
@@ -140,14 +161,6 @@ pub struct SortKey {
     pub descending: bool,
 }
 
-/// One end of a range filter. Integers stay exact.
-#[derive(uniffi::Enum, Clone, Copy)]
-pub enum Bound {
-    Int { value: i64 },
-    UInt { value: u64 },
-    Float { value: f64 },
-}
-
 #[derive(uniffi::Enum)]
 pub enum Filter {
     InValues {
@@ -163,12 +176,118 @@ pub enum Filter {
         text: String,
         case_sensitive: bool,
     },
-    /// Inclusive; a `nil` bound is open. Numeric, date and time columns.
+    /// Exact typed equality; parsing is owned by the column's type.
+    Equals {
+        column: u32,
+        value: String,
+    },
+    /// Inclusive typed bounds. A missing endpoint is open.
     Range {
         column: u32,
-        min: Option<Bound>,
-        max: Option<Bound>,
+        min: Option<Arc<Bound>>,
+        max: Option<Arc<Bound>>,
     },
+}
+
+/// An immutable, type-checked range endpoint owned by the core.
+#[derive(uniffi::Object)]
+pub struct Bound {
+    inner: core::Bound,
+}
+
+impl From<core::Bound> for Bound {
+    fn from(inner: core::Bound) -> Self {
+        Self { inner }
+    }
+}
+
+#[uniffi::export]
+impl Bound {
+    pub fn display(&self) -> String {
+        self.inner.display().to_owned()
+    }
+
+    /// Approximate coordinate for a chart; never use it to rebuild a filter.
+    pub fn axis_value(&self) -> f64 {
+        self.inner.axis_value()
+    }
+
+    /// Compare typed endpoints exactly, independently of their display text.
+    pub fn same_value(&self, other: Arc<Bound>) -> bool {
+        self.inner.same_value(&other.inner)
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct RangeBounds {
+    pub min: Option<Arc<Bound>>,
+    pub max: Option<Arc<Bound>>,
+}
+
+#[derive(uniffi::Record)]
+pub struct RangeHistogram {
+    pub histogram: Histogram,
+    pub ranges: Vec<RangeBounds>,
+    pub min_label: String,
+    pub max_label: String,
+}
+
+#[derive(uniffi::Enum)]
+pub enum FilterEditor {
+    Range {
+        kind: DataKind,
+        distribution: Option<RangeHistogram>,
+    },
+    Choices {
+        values: Vec<DistinctValue>,
+    },
+    Contains,
+    NullOnly,
+}
+
+#[derive(uniffi::Record)]
+pub struct FilterSpec {
+    pub nullable: bool,
+    pub editor: FilterEditor,
+}
+
+impl From<core::FilterSpec> for FilterSpec {
+    fn from(spec: core::FilterSpec) -> Self {
+        let editor = match spec.editor {
+            core::FilterEditor::Range { kind, distribution } => FilterEditor::Range {
+                kind: kind.into(),
+                distribution: distribution.map(|distribution| RangeHistogram {
+                    histogram: distribution.histogram.into(),
+                    min_label: distribution.min_label,
+                    max_label: distribution.max_label,
+                    ranges: distribution
+                        .ranges
+                        .into_iter()
+                        .map(|bounds| RangeBounds {
+                            min: bounds.min.map(|bound| Arc::new(bound.into())),
+                            max: bounds.max.map(|bound| Arc::new(bound.into())),
+                        })
+                        .collect(),
+                }),
+            },
+            core::FilterEditor::Choices { values } => FilterEditor::Choices {
+                values: values
+                    .into_iter()
+                    .map(|value| DistinctValue {
+                        key: value.key,
+                        label: value.label,
+                        count: value.count,
+                    })
+                    .collect(),
+            },
+            core::FilterEditor::Contains => FilterEditor::Contains,
+            core::FilterEditor::NullOnly => FilterEditor::NullOnly,
+        };
+        Self {
+            nullable: spec.nullable,
+            editor,
+        }
+    }
 }
 
 #[derive(uniffi::Record)]
@@ -237,39 +356,32 @@ impl From<ViewState> for core::ViewState {
                     descending: k.descending,
                 })
                 .collect(),
-            filters: s
-                .filters
-                .into_iter()
-                .map(|f| match f {
-                    Filter::InValues { column, keys } => core::Filter::InValues { column, keys },
-                    Filter::IsNull { column, negate } => core::Filter::IsNull { column, negate },
-                    Filter::Contains {
-                        column,
-                        text,
-                        case_sensitive,
-                    } => core::Filter::Contains {
-                        column,
-                        text,
-                        case_sensitive,
-                    },
-                    Filter::Range { column, min, max } => core::Filter::Range {
-                        column,
-                        min: min.map(Into::into),
-                        max: max.map(Into::into),
-                    },
-                })
-                .collect(),
+            filters: s.filters.into_iter().map(Into::into).collect(),
             search: s.search,
         }
     }
 }
 
-impl From<Bound> for core::Bound {
-    fn from(b: Bound) -> Self {
-        match b {
-            Bound::Int { value } => core::Bound::Int(value),
-            Bound::UInt { value } => core::Bound::UInt(value),
-            Bound::Float { value } => core::Bound::Float(value),
+impl From<Filter> for core::Filter {
+    fn from(filter: Filter) -> Self {
+        match filter {
+            Filter::InValues { column, keys } => Self::InValues { column, keys },
+            Filter::IsNull { column, negate } => Self::IsNull { column, negate },
+            Filter::Contains {
+                column,
+                text,
+                case_sensitive,
+            } => Self::Contains {
+                column,
+                text,
+                case_sensitive,
+            },
+            Filter::Equals { column, value } => Self::Equals { column, value },
+            Filter::Range { column, min, max } => Self::Range {
+                column,
+                min: min.map(|bound| bound.inner.clone()),
+                max: max.map(|bound| bound.inner.clone()),
+            },
         }
     }
 }
@@ -284,18 +396,20 @@ impl From<core::ViewInfo> for ViewInfo {
 }
 
 #[derive(uniffi::Enum)]
-pub enum ExportFormat {
+pub enum FileType {
     Csv,
     Tsv,
     Parquet,
+    Xlsx,
 }
 
-impl From<ExportFormat> for core::ExportFormat {
-    fn from(value: ExportFormat) -> Self {
+impl From<FileType> for core::FileType {
+    fn from(value: FileType) -> Self {
         match value {
-            ExportFormat::Csv => Self::Csv,
-            ExportFormat::Tsv => Self::Tsv,
-            ExportFormat::Parquet => Self::Parquet,
+            FileType::Csv => Self::Csv,
+            FileType::Tsv => Self::Tsv,
+            FileType::Parquet => Self::Parquet,
+            FileType::Xlsx => Self::Xlsx,
         }
     }
 }
@@ -359,7 +473,8 @@ pub struct GewuDocument {
 
 #[uniffi::export]
 impl GewuDocument {
-    /// Open and decode a Parquet file. Slow: call off the main thread.
+    /// Open a supported table file; XLSX defaults to its first worksheet.
+    /// Slow: call off the main thread.
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, GewuError> {
         Ok(Arc::new(Self {
@@ -369,33 +484,61 @@ impl GewuDocument {
 
     pub fn info(&self) -> FileInfo {
         let i = self.inner.info();
-        FileInfo {
+        let mut info = FileInfo {
             path: i.path.clone(),
             row_count: i.row_count,
             columns: i
                 .columns
                 .iter()
-                .map(|c| ColumnInfo {
-                    name: c.name.clone(),
-                    type_name: c.type_name.clone(),
-                    kind: c.kind.into(),
-                    ordered: c.kind.is_ordered(),
-                    nullable: c.nullable,
+                .enumerate()
+                .map(|(column, c)| {
+                    let capabilities = self
+                        .inner
+                        .column_capabilities(column as u32)
+                        .expect("column came from this document's schema");
+                    ColumnInfo {
+                        name: c.name.clone(),
+                        type_name: c.type_name.clone(),
+                        kind: c.kind.into(),
+                        capabilities: capabilities.into(),
+                        nullable: c.nullable,
+                    }
                 })
                 .collect(),
-            row_groups: i.row_groups,
+            format: i.format.to_string(),
+            row_groups: None,
             file_size: i.file_size,
-            compression: i.compression.clone(),
-            created_by: i.created_by.clone(),
-            metadata: i
-                .metadata
-                .iter()
-                .map(|(key, value)| KeyValue {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .collect(),
+            compression: Vec::new(),
+            created_by: None,
+            metadata: Vec::new(),
+            sheet: None,
+            sheets: Vec::new(),
+        };
+        match &i.metadata {
+            core::FileMetadata::Parquet {
+                row_groups,
+                compression,
+                created_by,
+                key_values,
+            } => {
+                info.row_groups = Some(*row_groups);
+                info.compression = compression.clone();
+                info.created_by = created_by.clone();
+                info.metadata = key_values
+                    .iter()
+                    .map(|(key, value)| KeyValue {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect();
+            }
+            core::FileMetadata::Delimited => {}
+            core::FileMetadata::Xlsx { sheet, sheets } => {
+                info.sheet = Some(sheet.clone());
+                info.sheets = sheets.clone();
+            }
         }
+        info
     }
 
     pub fn current_view(&self) -> ViewInfo {
@@ -408,7 +551,7 @@ impl GewuDocument {
         &self,
         version: u64,
         columns: Vec<u32>,
-        format: ExportFormat,
+        format: FileType,
         options: ExportOptions,
     ) -> Result<Arc<GewuExport>, GewuError> {
         Ok(Arc::new(GewuExport {
@@ -513,13 +656,50 @@ impl GewuDocument {
         Ok(self.inner.format_value(column, value)?)
     }
 
-    /// Read user-typed text (a number or a date/time) as a range bound.
-    pub fn parse_value(&self, column: u32, text: String) -> Result<Bound, GewuError> {
-        Ok(match self.inner.parse_value(column, &text)? {
-            core::Bound::Int(value) => Bound::Int { value },
-            core::Bound::UInt(value) => Bound::UInt { value },
-            core::Bound::Float(value) => Bound::Float { value },
-        })
+    /// The core selects the editor and supplies its values or typed histogram bins.
+    /// Slow: call off the main thread.
+    pub fn filter_spec(
+        &self,
+        column: u32,
+        state: Option<ViewState>,
+    ) -> Result<FilterSpec, GewuError> {
+        let state = state.map(Into::into);
+        Ok(self.inner.filter_spec(column, state.as_ref())?.into())
+    }
+
+    pub fn parse_bound(&self, column: u32, text: String) -> Result<Arc<Bound>, GewuError> {
+        Ok(Arc::new(self.inner.parse_bound(column, &text)?.into()))
+    }
+
+    pub fn make_bound_int(&self, column: u32, value: i64) -> Result<Arc<Bound>, GewuError> {
+        Ok(Arc::new(self.inner.make_bound_i64(column, value)?.into()))
+    }
+
+    pub fn make_bound_uint(&self, column: u32, value: u64) -> Result<Arc<Bound>, GewuError> {
+        Ok(Arc::new(self.inner.make_bound_u64(column, value)?.into()))
+    }
+
+    pub fn make_bound_float(&self, column: u32, value: f64) -> Result<Arc<Bound>, GewuError> {
+        Ok(Arc::new(self.inner.make_bound_f64(column, value)?.into()))
+    }
+
+    /// Decimal coefficient transported as an integer string to preserve all digits.
+    pub fn make_bound_decimal(
+        &self,
+        column: u32,
+        coefficient: String,
+        scale: i8,
+    ) -> Result<Arc<Bound>, GewuError> {
+        Ok(Arc::new(
+            self.inner
+                .make_bound_decimal(column, &coefficient, scale)?
+                .into(),
+        ))
+    }
+
+    /// Validate a filter without changing the current view.
+    pub fn validate_filter(&self, filter: Filter) -> Result<(), GewuError> {
+        Ok(self.inner.validate_filter(&filter.into())?)
     }
 
     /// Summary of a column over the current view (filters and search apply).
@@ -547,5 +727,210 @@ impl GewuDocument {
                 })
                 .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_filters_validate_and_execute_across_ffi() {
+        let source =
+            std::env::temp_dir().join(format!("gewu-ffi-typed-{}.csv", std::process::id()));
+        std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
+        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        assert!(doc.info().columns[0].capabilities.histogram);
+        assert!(!doc.info().columns[0].capabilities.contains);
+        // Chart coordinates may round a large ID; typed filters below must not.
+        let large = doc.parse_bound(0, "9007199254740993".into()).unwrap();
+        assert_eq!(large.display(), "9007199254740993");
+        assert_eq!(large.axis_value(), 9_007_199_254_740_992.0);
+        assert!(large.same_value(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()));
+        assert!(!large.same_value(doc.make_bound_int(0, 9_007_199_254_740_992).unwrap()));
+        assert!(matches!(
+            doc.parse_bound(0, "NaN".into()),
+            Err(GewuError::InvalidArgument { .. })
+        ));
+        let before = doc.current_view();
+        assert!(matches!(
+            doc.parse_bound(0, "not a number".into()),
+            Err(GewuError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            doc.filter_spec(0, None).unwrap().editor,
+            FilterEditor::Choices { .. }
+        ));
+        assert_eq!(doc.current_view().version, before.version);
+
+        for filter in [
+            Filter::Equals {
+                column: 0,
+                value: "9007199254740993".into(),
+            },
+            Filter::Range {
+                column: 0,
+                min: Some(large),
+                max: None,
+            },
+            Filter::Range {
+                column: 0,
+                min: Some(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()),
+                max: None,
+            },
+        ] {
+            let view = doc
+                .apply_view(ViewState {
+                    sort: Vec::new(),
+                    filters: vec![filter],
+                    search: None,
+                })
+                .unwrap();
+            let rows = doc.rows(view.version, 0, 10, vec![0]).unwrap();
+            assert_eq!(rows.source_rows, [1]);
+            assert_eq!(rows.cells, [Some("9007199254740993".into())]);
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[test]
+    fn filter_spec_keeps_zero_count_choices_across_ffi() {
+        let source =
+            std::env::temp_dir().join(format!("gewu-ffi-filter-spec-{}.csv", std::process::id()));
+        std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
+        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let state = ViewState {
+            sort: vec![],
+            filters: vec![Filter::Equals {
+                column: 1,
+                value: "10".into(),
+            }],
+            search: None,
+        };
+        let FilterEditor::Choices { values } = doc.filter_spec(0, Some(state)).unwrap().editor
+        else {
+            panic!("small string columns should offer choices");
+        };
+        assert_eq!(values.len(), 2);
+        let cat = values
+            .iter()
+            .find(|v| v.label.as_deref() == Some("cat"))
+            .unwrap();
+        let dog = values
+            .iter()
+            .find(|v| v.label.as_deref() == Some("dog"))
+            .unwrap();
+        assert_eq!(cat.count, 1);
+        assert_eq!(dog.count, 0);
+        let view = doc
+            .apply_view(ViewState {
+                sort: vec![],
+                filters: vec![Filter::InValues {
+                    column: 0,
+                    keys: vec![dog.key],
+                }],
+                search: None,
+            })
+            .unwrap();
+        assert_eq!(doc.rows(view.version, 0, 10, vec![0]).unwrap().cells, [
+            Some("dog".into())
+        ]);
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[test]
+    fn histogram_bounds_cross_ffi_without_losing_large_ids() {
+        use std::fmt::Write;
+
+        let source =
+            std::env::temp_dir().join(format!("gewu-ffi-range-spec-{}.csv", std::process::id()));
+        let base = 9_007_199_254_740_993_i64;
+        let mut csv = String::from("id\n");
+        for offset in 0..1_000 {
+            writeln!(csv, "{}", base + offset).unwrap();
+        }
+        std::fs::write(&source, csv).unwrap();
+        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let FilterEditor::Range {
+            distribution: Some(distribution),
+            ..
+        } = doc.filter_spec(0, None).unwrap().editor
+        else {
+            panic!("many distinct integers should offer a typed range histogram");
+        };
+        assert_eq!(distribution.min_label, base.to_string());
+        assert_eq!(distribution.max_label, (base + 999).to_string());
+        assert_eq!(
+            distribution.ranges.len(),
+            distribution.histogram.counts.len()
+        );
+        assert!(distribution.ranges.first().unwrap().min.is_none());
+        assert!(distribution.ranges.last().unwrap().max.is_none());
+        for bin in [
+            0,
+            distribution.ranges.len() / 2,
+            distribution.ranges.len() - 1,
+        ] {
+            let bounds = &distribution.ranges[bin];
+            let view = doc
+                .apply_view(ViewState {
+                    sort: vec![],
+                    filters: vec![Filter::Range {
+                        column: 0,
+                        min: bounds.min.clone(),
+                        max: bounds.max.clone(),
+                    }],
+                    search: None,
+                })
+                .unwrap();
+            assert_eq!(view.row_count, distribution.histogram.counts[bin]);
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[test]
+    fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
+        let source =
+            std::env::temp_dir().join(format!("gewu-ffi-formats-{}.csv", std::process::id()));
+        std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
+        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let info = doc.info();
+        assert_eq!(info.format, "CSV");
+        assert_eq!(info.row_count, 2);
+        assert_eq!(info.row_groups, None);
+        assert!(info.compression.is_empty());
+        assert!(info.sheet.is_none());
+
+        for (format, extension, name) in [
+            (FileType::Xlsx, "xlsx", "XLSX"),
+            (FileType::Parquet, "parquet", "Parquet"),
+        ] {
+            let destination = source.with_extension(extension);
+            doc.prepare_export(
+                doc.current_view().version,
+                vec![0, 1],
+                format,
+                ExportOptions {
+                    convert_nested_to_json: false,
+                },
+            )
+            .unwrap()
+            .write(destination.to_str().unwrap().to_owned())
+            .unwrap();
+            let reopened = GewuDocument::open(destination.to_str().unwrap().to_owned()).unwrap();
+            let info = reopened.info();
+            assert_eq!(info.format, name);
+            assert_eq!(info.row_count, 2);
+            if extension == "xlsx" {
+                assert_eq!(info.row_groups, None);
+                assert_eq!(info.sheets, vec![info.sheet.unwrap()]);
+            } else {
+                assert_eq!(info.row_groups, Some(1));
+                assert!(!info.compression.is_empty());
+                assert!(info.sheet.is_none());
+            }
+            std::fs::remove_file(destination).unwrap();
+        }
+        std::fs::remove_file(source).unwrap();
     }
 }

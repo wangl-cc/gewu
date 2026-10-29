@@ -22,8 +22,19 @@ pub enum Error {
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
 
+    #[cfg(feature = "csv")]
+    #[error("CSV/TSV error: {0}")]
+    Csv(#[from] csv::Error),
+
+    #[cfg(feature = "parquet")]
     #[error("parquet error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
+    #[cfg(feature = "xlsx")]
+    #[error("XLSX read error: {0}")]
+    XlsxRead(#[from] calamine::XlsxError),
+    #[cfg(feature = "xlsx")]
+    #[error("XLSX write error: {0}")]
+    XlsxWrite(#[from] rust_xlsxwriter::XlsxError),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

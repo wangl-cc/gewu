@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{Bound, Document, Filter, SortKey, ViewState};
+use gewu_core::{Document, Filter, SortKey, ViewState};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -29,11 +29,11 @@ fn col(doc: &Document, name: &str) -> u32 {
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
-fn range(column: u32, min: f64, max: f64) -> Filter {
+fn range(doc: &Document, column: u32, min: i64, max: i64) -> Filter {
     Filter::Range {
         column,
-        min: Some(Bound::Float(min)),
-        max: Some(Bound::Float(max)),
+        min: Some(doc.make_bound_i64(column, min).unwrap()),
+        max: Some(doc.make_bound_i64(column, max).unwrap()),
     }
 }
 
@@ -68,14 +68,14 @@ fn apply_view(c: &mut Criterion) {
     let cases: Vec<(&str, ViewState)> = vec![
         ("no_filter", ViewState::default()),
         ("range_1", ViewState {
-            filters: vec![range(price, 100.0, 5000.0)],
+            filters: vec![range(&doc, price, 100, 5000)],
             ..Default::default()
         }),
         ("range_3", ViewState {
             filters: vec![
-                range(price, 100.0, 5000.0),
-                range(score, 80.0, 120.0),
-                range(rating, 20.0, 40.0),
+                range(&doc, price, 100, 5000),
+                range(&doc, score, 80, 120),
+                range(&doc, rating, 20, 40),
             ],
             ..Default::default()
         }),
@@ -128,7 +128,7 @@ fn apply_view(c: &mut Criterion) {
             ..Default::default()
         }),
         ("range_decimal", ViewState {
-            filters: vec![range(amount, 50.0, 500.0)],
+            filters: vec![range(&doc, amount, 50, 500)],
             ..Default::default()
         }),
         ("sort_uuid", ViewState {
@@ -139,7 +139,7 @@ fn apply_view(c: &mut Criterion) {
             ..Default::default()
         }),
         ("range_then_sort", ViewState {
-            filters: vec![range(price, 100.0, 5000.0)],
+            filters: vec![range(&doc, price, 100, 5000)],
             sort: vec![SortKey {
                 column: score,
                 descending: false,
@@ -186,7 +186,7 @@ fn facets(c: &mut Criterion) {
         col(&doc, "price"),
     );
     let other_filter = ViewState {
-        filters: vec![range(price, 100.0, 5000.0)],
+        filters: vec![range(&doc, price, 100, 5000)],
         ..Default::default()
     };
 

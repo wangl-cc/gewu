@@ -329,7 +329,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
               index >= 0, index < table.tableColumns.count, let col = columnIndex(table.tableColumns[index]) else { return }
         closePopover()
         let column = UInt32(col)
-        let content = ColumnFilterView(doc: doc, column: column, info: info.columns[col], kind: model.kinds[col],
+        let content = ColumnFilterView(doc: doc, column: column, info: info.columns[col],
                                        state: model.state, current: model.columnFilters[column] ?? []) { [weak self] filters in
             self?.closePopover()
             self?.model.setFilters(filters, column: column)

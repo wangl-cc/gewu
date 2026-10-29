@@ -154,9 +154,6 @@ mod tests {
                 "{t} is {:?}",
                 DataKind::of(&t)
             );
-            if let Some(n) = numeric {
-                assert_eq!(n.bound(0), None, "{t}");
-            }
         }
     }
 

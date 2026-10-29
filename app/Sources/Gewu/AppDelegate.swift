@@ -55,7 +55,7 @@ final class FileCoordinator: ObservableObject {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "parquet") ?? .data]
+        panel.allowedContentTypes = ExportFileFormat.allCases.map(\.contentType)
         if panel.runModal() == .OK { panel.urls.forEach(open) }
     }
 
