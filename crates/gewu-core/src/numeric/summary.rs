@@ -1,6 +1,6 @@
 //! Native distinct values and extrema, with scalar conversion for mean and variance.
 
-use std::{collections::HashSet, hash::Hash};
+use std::hash::Hash;
 
 use arrow::{
     array::{Array, PrimitiveArray},
@@ -8,7 +8,7 @@ use arrow::{
 };
 
 use super::{IntegerColumn, RealColumn, RealType};
-use crate::ColumnSummary;
+use crate::{hash, ColumnSummary};
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
@@ -55,7 +55,7 @@ where
     K: Fn(T::Native) -> H,
     H: Eq + Hash,
 {
-    let mut distinct = HashSet::new();
+    let mut distinct = hash::Set::default();
     let (mut n, mut mean, mut m2) = (0u64, 0.0, 0.0);
     // (value, row) of the smallest and largest so far.
     let mut min: Option<(T::Native, usize)> = None;

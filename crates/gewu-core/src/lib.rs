@@ -10,6 +10,7 @@ mod engine;
 mod error;
 mod export;
 mod format;
+mod hash;
 mod kind;
 mod numeric;
 mod predicate;

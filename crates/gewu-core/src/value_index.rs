@@ -8,25 +8,88 @@
 //! the document, so it is only built for columns with at most
 //! [`INDEX_LIMIT`] distinct values; a column of ids or UUIDs would cost
 //! hundreds of megabytes.
-
-use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
-    hash::{Hash, Hasher},
-};
+//!
+//! Values are told apart by their bytes: the native value of a number, date
+//! or time (bitwise, so `-0.0`, `0.0` and each NaN differ, like Arrow's sort
+//! order), the UTF-8 of a string, the value a dictionary key points to.
+//! Other types (lists, structs, ...) are converted to Arrow's row format
+//! first, a chunk at a time. Only the distinct values are then sorted, with
+//! Arrow's own comparator.
 
 use arrow::{
-    array::{Array, ArrayRef, UInt32Array},
-    compute::take,
+    array::{downcast_primitive_array, make_comparator, Array, ArrayRef, AsArray, UInt32Array},
+    compute::{take, SortOptions},
+    datatypes::DataType,
     row::{RowConverter, SortField},
 };
 
-use crate::{format, scope::Selection, DistinctValue, Result};
+use crate::{
+    format, hash,
+    scope::{for_rows, Selection},
+    DistinctValue, Result,
+};
 
 /// Most distinct values a column may have and still be indexed.
 pub(crate) const INDEX_LIMIT: usize = 100_000;
 
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
+
+/// The bytes that identify row `r`'s value, `None` for null.
+type ValueBytes<'a> = Box<dyn Fn(usize) -> Option<&'a [u8]> + 'a>;
+
+/// Direct access to each row's identifying bytes, for the types that have
+/// them without conversion.
+fn value_bytes(array: &dyn Array) -> Option<ValueBytes<'_>> {
+    let data_type = array.data_type();
+    if data_type.is_primitive() {
+        let width = data_type.primitive_width()?;
+        let bytes: &[u8] = downcast_primitive_array!(
+            array => array.values().inner().as_slice(),
+            _ => return None
+        );
+        return Some(Box::new(move |r| {
+            array
+                .is_valid(r)
+                .then(|| &bytes[r * width..(r + 1) * width])
+        }));
+    }
+    Some(match data_type {
+        DataType::Utf8 => {
+            let a = array.as_string::<i32>();
+            Box::new(move |r| a.is_valid(r).then(|| a.value(r).as_bytes()))
+        }
+        DataType::LargeUtf8 => {
+            let a = array.as_string::<i64>();
+            Box::new(move |r| a.is_valid(r).then(|| a.value(r).as_bytes()))
+        }
+        DataType::Utf8View => {
+            let a = array.as_string_view();
+            Box::new(move |r| a.is_valid(r).then(|| a.value(r).as_bytes()))
+        }
+        DataType::Binary => {
+            let a = array.as_binary::<i32>();
+            Box::new(move |r| a.is_valid(r).then(|| a.value(r)))
+        }
+        DataType::LargeBinary => {
+            let a = array.as_binary::<i64>();
+            Box::new(move |r| a.is_valid(r).then(|| a.value(r)))
+        }
+        DataType::Dictionary(..) => {
+            let dict = array.as_any_dictionary();
+            let keys = dict.normalized_keys();
+            let values = value_bytes(dict.values().as_ref())?;
+            Box::new(move |r| {
+                if array.is_valid(r) {
+                    values(keys[r])
+                } else {
+                    None
+                }
+            })
+        }
+        _ => return None,
+    })
+}
 
 pub(crate) struct ValueIndex {
     /// Code of each source row.
@@ -35,15 +98,83 @@ pub(crate) struct ValueIndex {
     pub labels: Vec<Option<String>>,
 }
 
-impl ValueIndex {
-    /// Index `array`, or `None` if it has more than `limit` distinct values.
-    pub fn build(array: &ArrayRef, limit: usize) -> Result<Option<Self>> {
-        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+/// Hands out codes in order of first appearance, up to a limit.
+struct Codes {
+    /// First row of each code.
+    first_row: Vec<usize>,
+    limit: usize,
+}
 
-        // Codes in order of first appearance; each distinct value's row-format
-        // bytes (which sort like the values, nulls first) and first row.
-        let mut seen: HashMap<Box<[u8]>, u32> = HashMap::new();
-        let mut first_row: Vec<usize> = Vec::new();
+impl Codes {
+    /// A code for a value first seen at `row`; `None` past the limit.
+    fn next(&mut self, row: usize) -> Option<u32> {
+        if self.first_row.len() == self.limit {
+            return None;
+        }
+        self.first_row.push(row);
+        Some(self.first_row.len() as u32 - 1)
+    }
+}
+
+impl ValueIndex {
+    /// Index `array`, or `None` if it has more than `limit` distinct values
+    /// (null counts as one).
+    pub fn build(array: &ArrayRef, limit: usize) -> Result<Option<Self>> {
+        let Some(bytes) = value_bytes(array.as_ref()) else {
+            return Self::build_from_rows(array, limit);
+        };
+        let mut seen: hash::Map<&[u8], u32> = hash::Map::default();
+        let mut null = None;
+        let mut new = Codes {
+            first_row: Vec::new(),
+            limit,
+        };
+        let mut codes = Vec::with_capacity(array.len());
+        for r in 0..array.len() {
+            let code = match bytes(r) {
+                Some(b) => match seen.get(b) {
+                    Some(&c) => c,
+                    None => {
+                        let Some(c) = new.next(r) else {
+                            return Ok(None);
+                        };
+                        seen.insert(b, c);
+                        c
+                    }
+                },
+                None => match null {
+                    Some(c) => c,
+                    None => {
+                        let Some(c) = new.next(r) else {
+                            return Ok(None);
+                        };
+                        *null.insert(c)
+                    }
+                },
+            };
+            codes.push(code);
+        }
+
+        // Only the distinct values are sorted, by their first rows.
+        let first_row = new.first_row;
+        let cmp = make_comparator(array.as_ref(), array.as_ref(), SortOptions {
+            descending: false,
+            nulls_first: true,
+        })?;
+        let mut order: Vec<u32> = (0..first_row.len() as u32).collect();
+        order.sort_unstable_by(|&a, &b| cmp(first_row[a as usize], first_row[b as usize]));
+        Self::finish(array, codes, &first_row, &order).map(Some)
+    }
+
+    /// The general path: tell values apart by their Arrow row format,
+    /// converted a chunk at a time.
+    fn build_from_rows(array: &ArrayRef, limit: usize) -> Result<Option<Self>> {
+        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+        let mut seen: hash::Map<Box<[u8]>, u32> = hash::Map::default();
+        let mut new = Codes {
+            first_row: Vec::new(),
+            limit,
+        };
         let mut codes = Vec::with_capacity(array.len());
         for start in (0..array.len()).step_by(CHUNK) {
             let len = CHUNK.min(array.len() - start);
@@ -53,36 +184,44 @@ impl ValueIndex {
                 let code = match seen.get(bytes) {
                     Some(&c) => c,
                     None => {
-                        if first_row.len() == limit {
+                        let Some(c) = new.next(start + i) else {
                             return Ok(None);
-                        }
-                        let c = first_row.len() as u32;
+                        };
                         seen.insert(bytes.into(), c);
-                        first_row.push(start + i);
                         c
                     }
                 };
                 codes.push(code);
             }
         }
+        // Row-format bytes sort like the values, nulls first.
+        let mut by_bytes: Vec<(&[u8], u32)> = seen.iter().map(|(b, &c)| (&b[..], c)).collect();
+        by_bytes.sort_unstable();
+        let order: Vec<u32> = by_bytes.into_iter().map(|(_, c)| c).collect();
+        Self::finish(array, codes, &new.first_row, &order).map(Some)
+    }
 
-        let mut by_code: Vec<(&[u8], u32)> = seen.iter().map(|(b, &c)| (&b[..], c)).collect();
-        by_code.sort_unstable();
-        let mut remap = vec![0u32; by_code.len()];
-        for (new, &(_, old)) in by_code.iter().enumerate() {
+    /// Renumber codes so that `order` (codes in value order) becomes
+    /// 0, 1, 2, ..., and label them.
+    fn finish(
+        array: &ArrayRef,
+        mut codes: Vec<u32>,
+        first_row: &[usize],
+        order: &[u32],
+    ) -> Result<Self> {
+        let mut remap = vec![0u32; order.len()];
+        for (new, &old) in order.iter().enumerate() {
             remap[old as usize] = new as u32;
         }
         for c in codes.iter_mut() {
             *c = remap[*c as usize];
         }
-
         let f = format::formatter(array.as_ref())?;
-        let labels = by_code
+        let labels = order
             .iter()
-            .map(|&(_, old)| format::cell(array.as_ref(), &f, first_row[old as usize]))
+            .map(|&old| format::cell(array.as_ref(), &f, first_row[old as usize]))
             .collect();
-
-        Ok(Some(Self { codes, labels }))
+        Ok(Self { codes, labels })
     }
 
     pub fn len(&self) -> usize {
@@ -123,57 +262,83 @@ pub(crate) struct ValueCounts {
 }
 
 /// Count the distinct values of `array` over `rows`, keeping the `keep`
-/// most common. Values are told apart by a 64-bit hash, so memory is a few
-/// words per distinct value; a collision (unlikely below billions of
+/// most common. Values are told apart by a 64-bit fingerprint, so memory is
+/// a few words per distinct value; a collision (unlikely below billions of
 /// values) would merge two values.
 pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> Result<ValueCounts> {
-    let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
-    // hash -> (count, first row)
-    let mut counts: HashMap<u64, (u64, u32)> = HashMap::new();
-    let mut tally = |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
-        let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
-        for (row, r) in converted.iter().zip(source) {
-            let mut h = DefaultHasher::new();
-            row.as_ref().hash(&mut h);
-            counts.entry(h.finish()).or_insert((0, r as u32)).0 += 1;
-        }
-        Ok(())
-    };
-    match rows {
-        Selection::All(n) => {
-            for start in (0..*n).step_by(CHUNK) {
-                let len = CHUNK.min(n - start);
-                tally(&array.slice(start, len), &mut (start..start + len))?;
+    // fingerprint -> (count, first row); nulls counted apart.
+    let mut counts: hash::Map<u64, (u64, u32)> = hash::Map::default();
+    let mut nulls: Option<(u64, u32)> = None;
+    match value_bytes(array.as_ref()) {
+        Some(bytes) => for_rows!(rows, |it| {
+            for r in it {
+                let slot = match bytes(r) {
+                    Some(b) => counts.entry(hash::fingerprint(b)).or_insert((0, r as u32)),
+                    None => nulls.get_or_insert((0, r as u32)),
+                };
+                slot.0 += 1;
             }
-        }
-        Selection::Rows(rows) => {
-            for chunk in rows.chunks(CHUNK) {
-                let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
-                tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
+        }),
+        None => {
+            // Row format, a chunk at a time; nulls get their own bytes.
+            let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+            let mut tally =
+                |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
+                    let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
+                    for (row, r) in converted.iter().zip(source) {
+                        counts
+                            .entry(hash::fingerprint(row.as_ref()))
+                            .or_insert((0, r as u32))
+                            .0 += 1;
+                    }
+                    Ok(())
+                };
+            match rows {
+                Selection::All(n) => {
+                    for start in (0..*n).step_by(CHUNK) {
+                        let len = CHUNK.min(n - start);
+                        tally(&array.slice(start, len), &mut (start..start + len))?;
+                    }
+                }
+                Selection::Rows(rows) => {
+                    for chunk in rows.chunks(CHUNK) {
+                        let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
+                        tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
+                    }
+                }
             }
         }
     }
 
-    let distinct = counts.len() as u64;
-    let mut top: Vec<(u64, u32)> = counts.into_values().collect();
+    let mut top: Vec<(u64, u32)> = counts.into_values().chain(nulls).collect();
+    let distinct = top.len() as u64;
     top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     top.truncate(keep);
 
-    // Back into value order.
-    let first_rows = UInt32Array::from(top.iter().map(|&(_, r)| r).collect::<Vec<_>>());
-    let taken = take(array.as_ref(), &first_rows, None)?;
-    let converted = converter.convert_columns(&[taken])?;
-    let mut order: Vec<usize> = (0..top.len()).collect();
-    order.sort_by(|&a, &b| converted.row(a).cmp(&converted.row(b)));
+    // Back into value order, nulls first.
+    let cmp = make_comparator(array.as_ref(), array.as_ref(), SortOptions {
+        descending: false,
+        nulls_first: true,
+    });
+    if let Ok(cmp) = cmp {
+        top.sort_by(|a, b| cmp(a.1 as usize, b.1 as usize));
+    } else {
+        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+        let first_rows = UInt32Array::from(top.iter().map(|&(_, r)| r).collect::<Vec<_>>());
+        let converted = converter.convert_columns(&[take(array.as_ref(), &first_rows, None)?])?;
+        let mut order: Vec<usize> = (0..top.len()).collect();
+        order.sort_by(|&a, &b| converted.row(a).cmp(&converted.row(b)));
+        top = order.into_iter().map(|i| top[i]).collect();
+    }
 
     let f = format::formatter(array.as_ref())?;
-    let top = order
+    let top = top
         .into_iter()
         .enumerate()
-        .map(|(key, i)| DistinctValue {
+        .map(|(key, (count, row))| DistinctValue {
             key: key as u64,
-            label: format::cell(array.as_ref(), &f, top[i].1 as usize),
-            count: top[i].0,
+            label: format::cell(array.as_ref(), &f, row as usize),
+            count,
         })
         .collect();
     Ok(ValueCounts { distinct, top })
@@ -245,5 +410,73 @@ mod tests {
         let some = count_values(&a, &Selection::Rows(Arc::new(vec![2, 4])), 10).unwrap();
         assert_eq!(some.distinct, 2);
         assert_eq!(some.top[0].label, None);
+    }
+
+    /// The direct path must agree with the row-format path on every type
+    /// it handles, including sliced arrays and odd floats.
+    #[test]
+    fn direct_bytes_match_row_format() {
+        use arrow::{
+            array::{
+                Date32Array, DictionaryArray, Float64Array, LargeStringArray, StringViewArray,
+                UInt8Array,
+            },
+            datatypes::Int8Type,
+        };
+        let floats: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.5),
+            Some(-0.0),
+            None,
+            Some(0.0),
+            Some(f64::NAN),
+            Some(-2.0),
+            Some(1.5),
+            Some(f64::INFINITY),
+        ]));
+        let dict: DictionaryArray<Int8Type> =
+            vec![Some("b"), None, Some("a"), Some("b"), Some("c")]
+                .into_iter()
+                .collect();
+        // Duplicate values behind different keys must still be one value.
+        let dup = DictionaryArray::<Int8Type>::try_new(
+            vec![Some(0i8), Some(1), None, Some(2), Some(0)].into(),
+            Arc::new(StringArray::from(vec!["x", "y", "x"])),
+        )
+        .unwrap();
+        let arrays: Vec<ArrayRef> = vec![
+            floats.clone(),
+            floats.slice(2, 5),
+            Arc::new(Int64Array::from(vec![Some(-1), Some(3), None, Some(-1)])),
+            Arc::new(UInt8Array::from(vec![255, 0, 7, 0])),
+            Arc::new(Date32Array::from(vec![Some(19000), None, Some(1)])),
+            Arc::new(LargeStringArray::from(vec![
+                Some("z"),
+                Some(""),
+                None,
+                Some("z"),
+            ])),
+            Arc::new(StringViewArray::from(vec![
+                Some("a long string beyond twelve bytes"),
+                Some("a"),
+                Some("a long string beyond twelve bytes"),
+            ])),
+            Arc::new(dict),
+            Arc::new(dup),
+            Arc::new(StringArray::from(vec!["q", "p", "q", "r"]).slice(1, 3)),
+        ];
+        for a in arrays {
+            assert!(value_bytes(a.as_ref()).is_some(), "{}", a.data_type());
+            let direct = ValueIndex::build(&a, INDEX_LIMIT).unwrap().unwrap();
+            let rows = ValueIndex::build_from_rows(&a, INDEX_LIMIT)
+                .unwrap()
+                .unwrap();
+            assert_eq!(direct.labels, rows.labels, "{}", a.data_type());
+            assert_eq!(direct.codes, rows.codes, "{}", a.data_type());
+
+            let counted = count_values(&a, &Selection::All(a.len()), usize::MAX).unwrap();
+            assert_eq!(counted.distinct as usize, direct.len(), "{}", a.data_type());
+            let labels: Vec<_> = counted.top.iter().map(|v| v.label.clone()).collect();
+            assert_eq!(labels, direct.labels, "{}", a.data_type());
+        }
     }
 }
