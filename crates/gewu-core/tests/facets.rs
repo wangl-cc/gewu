@@ -234,3 +234,71 @@ fn cancelled_apply_never_replaces_the_view() {
     }
     std::fs::remove_file(path).ok();
 }
+
+#[test]
+fn columns_with_too_many_values_are_counted_not_indexed() {
+    // 150,000 distinct names, with "x" also on every 1000th row.
+    let n = 150_000i64;
+    let names: ArrayRef = Arc::new(StringArray::from_iter_values((0..n).map(|i| {
+        if i % 1000 == 0 {
+            "x".to_string()
+        } else {
+            format!("n{i:06}")
+        }
+    })));
+    let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
+    let (path, doc) = write("many", &batch);
+
+    let d = doc.distinct_values(0, None, 3).unwrap();
+    assert!(!d.keyed);
+    assert!(d.truncated);
+    assert_eq!(d.total, (n - n / 1000 + 1) as u64);
+    // The most common value comes first by count, but the list is in value
+    // order: "x" sorts after every "n…".
+    assert_eq!(d.values.len(), 3);
+    assert_eq!(d.values[2].label.as_deref(), Some("x"));
+    assert_eq!(d.values[2].count, (n / 1000) as u64);
+
+    assert!(matches!(
+        doc.keys_for_labels(0, &[Some("x".into())]),
+        Err(Error::InvalidArgument(_))
+    ));
+    let by_key = ViewState {
+        filters: vec![Filter::InValues {
+            column: 0,
+            keys: vec![0],
+        }],
+        ..Default::default()
+    };
+    assert!(matches!(
+        doc.apply_view(&by_key),
+        Err(Error::InvalidArgument(_))
+    ));
+
+    let s = doc.column_summary(0, 2).unwrap();
+    assert_eq!(s.rows, n as u64);
+    assert_eq!(s.null_count, 0);
+    assert_eq!(s.distinct_count, d.total);
+    assert_eq!(s.top_values[0].label.as_deref(), Some("x"));
+    assert_eq!(s.min_label.as_deref(), Some("n000001"));
+    assert_eq!(s.max_label.as_deref(), Some("x"));
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn summary_of_text_counts_nulls_apart() {
+    let (path, doc) = sample("summary");
+    let s = doc.column_summary(1, 2).unwrap();
+    assert_eq!(s.null_count, 1);
+    assert_eq!(s.distinct_count, 3);
+    let top: Vec<_> = s
+        .top_values
+        .iter()
+        .map(|v| (v.label.clone().unwrap(), v.count))
+        .collect();
+    // Ties stay in value order.
+    assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
+    assert_eq!(s.min_label.as_deref(), Some("bird"));
+    assert_eq!(s.max_label.as_deref(), Some("dog"));
+    std::fs::remove_file(path).ok();
+}

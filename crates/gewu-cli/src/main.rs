@@ -41,8 +41,17 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         limit: u32,
     },
-    /// Null count, distinct count, min and max of a column.
-    Stats { file: PathBuf, column: String },
+    /// Null count, distinct count, min, max and more for a column, over the
+    /// rows the view keeps.
+    Stats {
+        file: PathBuf,
+        column: String,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Most common values to list (text and other non-numeric columns).
+        #[arg(long, default_value_t = 10)]
+        top: u32,
+    },
     /// Distribution of a numeric, date or time column.
     Hist {
         file: PathBuf,
@@ -114,6 +123,8 @@ fn run(cli: Cli) -> Result<()> {
                 "column": column,
                 "total": d.total,
                 "truncated": d.truncated,
+                // Too many values to list them all: these are the most common.
+                "most_common_only": !d.keyed,
                 "values": d.values.iter().map(|v| json!({
                     "value": v.label,
                     "count": v.count,
@@ -153,19 +164,37 @@ fn run(cli: Cli) -> Result<()> {
                 }).collect::<Vec<_>>(),
             })
         }
-        Command::Stats { file, column } => {
+        Command::Stats {
+            file,
+            column,
+            view,
+            top,
+        } => {
             let doc = open(&file)?;
             let col = column_index(&doc, &column)?;
-            let s = doc.column_stats(col)?;
-            json!({
+            doc.apply_view(&view_state(&doc, &view)?)?;
+            let s = doc.column_summary(col, top)?;
+            let mut out = json!({
                 "column": column,
                 "type": doc.info().columns[col as usize].type_name,
-                "rows": doc.info().row_count,
+                "rows": s.rows,
                 "null_count": s.null_count,
                 "distinct_count": s.distinct_count,
-                "min": s.min,
-                "max": s.max,
-            })
+                "min": s.min_label,
+                "max": s.max_label,
+            });
+            if doc.info().columns[col as usize].kind.is_ordered() {
+                out["nan_count"] = json!(s.nan_count);
+                out["mean"] = json!(s.mean);
+                out["std_dev"] = json!(s.std_dev);
+            } else {
+                out["top_values"] = s
+                    .top_values
+                    .iter()
+                    .map(|v| json!({ "value": v.label, "count": v.count }))
+                    .collect();
+            }
+            out
         }
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
@@ -212,8 +241,19 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
             .push(Some(value.to_string()));
     }
     for (column, labels) in eq {
-        let keys = doc.keys_for_labels(column, &labels)?;
-        state.filters.push(Filter::InValues { column, keys });
+        let ordered = doc.info().columns[column as usize].kind.is_ordered();
+        if let (true, [Some(value)]) = (ordered, labels.as_slice()) {
+            // One value of a number, date or time: no value index needed.
+            let v = doc.parse_value(column, value)?;
+            state.filters.push(Filter::Range {
+                column,
+                min: Some(v),
+                max: Some(v),
+            });
+        } else {
+            let keys = doc.keys_for_labels(column, &labels)?;
+            state.filters.push(Filter::InValues { column, keys });
+        }
     }
 
     for name in &args.null {
@@ -251,21 +291,12 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
     Ok(state)
 }
 
-/// Empty is an open end. Integers stay exact; other numbers are floats;
-/// anything else is read in the column's own format (dates, times).
+/// Empty is an open end; anything else is read by the core, in the
+/// column's own type.
 fn parse_bound(doc: &Document, column: u32, s: &str) -> Result<Option<Bound>> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(None);
-    }
-    if let Ok(v) = s.parse::<i64>() {
-        return Ok(Some(Bound::Int(v)));
-    }
-    if let Ok(v) = s.parse::<u64>() {
-        return Ok(Some(Bound::UInt(v)));
-    }
-    if let Ok(v) = s.parse::<f64>() {
-        return Ok(Some(Bound::Float(v)));
     }
     Ok(Some(doc.parse_value(column, s)?))
 }

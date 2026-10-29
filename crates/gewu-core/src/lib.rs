@@ -24,6 +24,6 @@ pub use error::{Error, Result};
 pub use export::{Export, ExportFormat, ExportOptions, ExportProgress};
 pub use kind::DataKind;
 pub use view::{
-    Bound, ColumnInfo, ColumnStats, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter,
-    Histogram, RowBlock, SortKey, ViewInfo, ViewState,
+    Bound, ColumnInfo, ColumnSummary, DistinctResult, DistinctValue, FileInfo, Filter, Histogram,
+    RowBlock, SortKey, ViewInfo, ViewState,
 };

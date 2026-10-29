@@ -1,7 +1,7 @@
 //! UniFFI bindings of gewu-core for the macOS app.
 //!
 //! All methods are synchronous. The app calls the slow ones (`open`,
-//! `apply_view`, `distinct_values`, `column_stats`) from a background task;
+//! `apply_view`, `distinct_values`, `column_summary`) from a background task;
 //! a newer `apply_view` cancels an older one inside the core, so the app does
 //! not need to manage cancellation itself. `rows` is fast and is called from
 //! the main thread.
@@ -125,6 +125,9 @@ pub struct ColumnSummary {
     /// Numbers, dates and times (dates and times as raw integer values).
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// Smallest and largest values of any comparable column, as displayed.
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
     pub mean: Option<f64>,
     pub std_dev: Option<f64>,
     /// Other columns: most common values first.
@@ -206,6 +209,9 @@ pub struct DistinctResult {
     pub values: Vec<DistinctValue>,
     pub total: u64,
     pub truncated: bool,
+    /// False when the column has too many values to index: the keys then
+    /// cannot be used in an `in_values` filter.
+    pub keyed: bool,
 }
 
 /// Distribution of a numeric column. Bins split `[lo, hi)` evenly.
@@ -218,14 +224,6 @@ pub struct Histogram {
     pub null_count: u64,
     pub nan_count: u64,
     pub total: u64,
-}
-
-#[derive(uniffi::Record)]
-pub struct ColumnStats {
-    pub null_count: u64,
-    pub distinct_count: u64,
-    pub min: Option<String>,
-    pub max: Option<String>,
 }
 
 impl From<ViewState> for core::ViewState {
@@ -481,6 +479,7 @@ impl GewuDocument {
                 .collect(),
             total: d.total,
             truncated: d.truncated,
+            keyed: d.keyed,
         })
     }
 
@@ -534,6 +533,8 @@ impl GewuDocument {
             distinct_count: s.distinct_count,
             min: s.min,
             max: s.max,
+            min_label: s.min_label,
+            max_label: s.max_label,
             mean: s.mean,
             std_dev: s.std_dev,
             top_values: s
@@ -545,16 +546,6 @@ impl GewuDocument {
                     count: v.count,
                 })
                 .collect(),
-        })
-    }
-
-    pub fn column_stats(&self, column: u32) -> Result<ColumnStats, GewuError> {
-        let s = self.inner.column_stats(column)?;
-        Ok(ColumnStats {
-            null_count: s.null_count,
-            distinct_count: s.distinct_count,
-            min: s.min,
-            max: s.max,
         })
     }
 }

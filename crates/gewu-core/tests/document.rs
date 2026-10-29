@@ -175,11 +175,11 @@ fn stale_version_is_rejected() {
 #[test]
 fn stats() {
     let (path, doc) = sample();
-    let s = doc.column_stats(2).unwrap();
+    let s = doc.column_summary(2, 5).unwrap();
     assert_eq!(s.null_count, 1);
     assert_eq!(s.distinct_count, 5);
-    assert_eq!(s.min.as_deref(), Some("1.0"));
-    assert_eq!(s.max.as_deref(), Some("9.0"));
+    assert_eq!(s.min_label.as_deref(), Some("1.0"));
+    assert_eq!(s.max_label.as_deref(), Some("9.0"));
     std::fs::remove_file(path).ok();
 }
 

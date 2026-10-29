@@ -72,6 +72,12 @@ fn rows_with_filters_and_sort() {
     let v = gewu(&["rows", f, "--range", "price=2..", "--sort", "id"]);
     assert_eq!(ids(&v), ["10", "30"]);
 
+    // One value of a number column, and bounds read in the column's type.
+    let v = gewu(&["rows", f, "--where", "id=30"]);
+    assert_eq!(ids(&v), ["30"]);
+    let v = gewu(&["rows", f, "--range", "id=15..30.5", "--sort", "id"]);
+    assert_eq!(ids(&v), ["20", "30"]);
+
     let v = gewu(&["rows", f, "--null", "label"]);
     assert_eq!(ids(&v), ["30"]);
 
@@ -99,6 +105,14 @@ fn distinct_hist_and_stats() {
 
     let v = gewu(&["stats", f, "price"]);
     assert_eq!(v["null_count"], 1);
+    assert_eq!(v["min"], "1.0");
+    assert_eq!(v["max"], "9.0");
+
+    // Stats follow the view; text columns list their most common values.
+    let v = gewu(&["stats", f, "label", "--range", "id=..30"]);
+    assert_eq!(v["rows"], 3);
+    assert_eq!(v["null_count"], 1);
+    assert_eq!(v["top_values"][0]["value"], "cat");
     std::fs::remove_file(p).ok();
 }
 

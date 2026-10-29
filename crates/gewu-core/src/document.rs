@@ -6,7 +6,7 @@ use std::{
 };
 
 use arrow::{
-    array::{Array, ArrayRef, Int64Array, UInt32Array},
+    array::{make_comparator, Array, ArrayRef, Int64Array, UInt32Array},
     compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions},
     datatypes::{DataType, SchemaRef},
 };
@@ -19,10 +19,9 @@ use crate::{
     predicate::ColumnTest,
     query,
     scope::{RowScope, Selection},
-    value_index::ValueIndex,
-    Bound, ColumnInfo, ColumnStats, ColumnSummary, DataKind, DistinctResult, DistinctValue, Error,
-    Export, ExportFormat, ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo,
-    ViewState,
+    value_index::{count_values, ValueIndex, INDEX_LIMIT},
+    Bound, ColumnInfo, ColumnSummary, DataKind, DistinctResult, Error, Export, ExportFormat,
+    ExportOptions, FileInfo, Filter, Histogram, Result, RowBlock, ViewInfo, ViewState,
 };
 
 /// One open file. Safe to share between threads.
@@ -32,8 +31,15 @@ pub struct Document {
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
     n_rows: usize,
-    indexes: Vec<OnceLock<Arc<ValueIndex>>>,
+    indexes: Vec<OnceLock<Indexed>>,
     views: ViewEngine,
+}
+
+/// A column's value index, built on first use.
+enum Indexed {
+    Built(Arc<ValueIndex>),
+    /// More than [`INDEX_LIMIT`] distinct values: counted on demand instead.
+    TooMany,
 }
 
 impl Document {
@@ -274,22 +280,40 @@ impl Document {
     ///
     /// With `filters`, counts only rows that pass the filters on *other*
     /// columns (like Excel), and leaves out values with no such rows.
+    ///
+    /// A column with at most 100,000 distinct values is indexed: the result
+    /// is the first `limit` values in value order, and their keys work in
+    /// [`Filter::InValues`]. A column with more is counted without an index:
+    /// the result is the `limit` most common values (still in value order),
+    /// `keyed` is false and the keys only number them.
     pub fn distinct_values(
         &self,
         column: u32,
         filters: Option<&ViewState>,
         limit: u32,
     ) -> Result<DistinctResult> {
-        let idx = self.index(column)?;
+        let index = self.index(column)?;
         let rows = self.rows_in(RowScope::facet(filters, column))?;
-        let present = value_counts(&idx, &rows);
-        let total = present.len() as u64;
-        let truncated = present.len() > limit as usize;
-        let values = present.into_iter().take(limit as usize).collect();
-        Ok(DistinctResult {
-            values,
-            total,
-            truncated,
+        let limit = limit as usize;
+        Ok(match index {
+            Some(idx) => {
+                let present = idx.counts(&rows);
+                DistinctResult {
+                    total: present.len() as u64,
+                    truncated: present.len() > limit,
+                    values: present.into_iter().take(limit).collect(),
+                    keyed: true,
+                }
+            }
+            None => {
+                let counted = count_values(self.column(column)?, &rows, limit)?;
+                DistinctResult {
+                    total: counted.distinct,
+                    truncated: counted.distinct > limit as u64,
+                    values: counted.top,
+                    keyed: false,
+                }
+            }
         })
     }
 
@@ -347,7 +371,7 @@ impl Document {
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used by the CLI and MCP, which filter by value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        let idx = self.index(column)?;
+        let idx = self.keyed_index(column)?;
         Ok(idx
             .labels
             .iter()
@@ -360,7 +384,7 @@ impl Document {
     /// Summary of one column over the current view's rows, with up to
     /// `top` most common values for non-numeric columns.
     pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary> {
-        let array = self.column(column)?.clone();
+        let array = self.column(column)?;
         let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()))?;
         let mut s = ColumnSummary {
             rows: rows.len() as u64,
@@ -369,40 +393,45 @@ impl Document {
             distinct_count: 0,
             min: None,
             max: None,
+            min_label: None,
+            max_label: None,
             mean: None,
             std_dev: None,
             top_values: Vec::new(),
         };
-        match Numeric::new(&array) {
+        match Numeric::new(array) {
             Some(numeric) => numeric.summarize(rows.iter(), &mut s),
             None => {
-                let idx = self.index(column)?;
-                let mut values = value_counts(&idx, &rows);
-                s.null_count = values
-                    .iter()
-                    .filter(|v| v.label.is_none())
-                    .map(|v| v.count)
-                    .sum();
+                let top = top as usize;
+                s.null_count = rows.iter().filter(|&r| array.is_null(r)).count() as u64;
+                let mut values = match self.index(column)? {
+                    Some(idx) => {
+                        let values = idx.counts(&rows);
+                        s.distinct_count = values.len() as u64;
+                        values
+                    }
+                    None => {
+                        // One spare in case null is among the most common.
+                        let counted = count_values(array, &rows, top + 1)?;
+                        s.distinct_count = counted.distinct;
+                        counted.top
+                    }
+                };
+                if s.null_count > 0 {
+                    s.distinct_count -= 1;
+                }
                 values.retain(|v| v.label.is_some());
-                s.distinct_count = values.len() as u64;
-                values.sort_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
-                values.truncate(top as usize);
+                // Stable: ties stay in value order.
+                values.sort_by_key(|v| std::cmp::Reverse(v.count));
+                values.truncate(top);
                 s.top_values = values;
             }
         }
+        let (lo, hi) = extremes(array, &rows)?;
+        let f = format::formatter(array.as_ref())?;
+        s.min_label = lo.and_then(|r| format::cell(array.as_ref(), &f, r));
+        s.max_label = hi.and_then(|r| format::cell(array.as_ref(), &f, r));
         Ok(s)
-    }
-
-    pub fn column_stats(&self, column: u32) -> Result<ColumnStats> {
-        let array = self.column(column)?;
-        let idx = self.index(column)?;
-        let non_null: Vec<&String> = idx.labels.iter().flatten().collect();
-        Ok(ColumnStats {
-            null_count: array.null_count() as u64,
-            distinct_count: non_null.len() as u64,
-            min: non_null.first().map(|s| s.to_string()),
-            max: non_null.last().map(|s| s.to_string()),
-        })
     }
 
     // ---- internals ----
@@ -413,14 +442,34 @@ impl Document {
             .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
     }
 
-    fn index(&self, c: u32) -> Result<Arc<ValueIndex>> {
+    /// The column's value index, or `None` if it has too many values.
+    fn index(&self, c: u32) -> Result<Option<Arc<ValueIndex>>> {
         let array = self.column(c)?;
         let cell = &self.indexes[c as usize];
-        if let Some(idx) = cell.get() {
-            return Ok(idx.clone());
-        }
-        let built = Arc::new(ValueIndex::build(array)?);
-        Ok(cell.get_or_init(|| built).clone())
+        let found = match cell.get() {
+            Some(found) => found,
+            None => {
+                let built = match ValueIndex::build(array, INDEX_LIMIT)? {
+                    Some(idx) => Indexed::Built(Arc::new(idx)),
+                    None => Indexed::TooMany,
+                };
+                cell.get_or_init(|| built)
+            }
+        };
+        Ok(match found {
+            Indexed::Built(idx) => Some(idx.clone()),
+            Indexed::TooMany => None,
+        })
+    }
+
+    /// The column's value index, for filtering by key.
+    fn keyed_index(&self, c: u32) -> Result<Arc<ValueIndex>> {
+        self.index(c)?.ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "column {} has more than {INDEX_LIMIT} distinct values; filter it with contains or a range",
+                self.info.columns[c as usize].name
+            ))
+        })
     }
 
     fn numeric(&self, c: u32) -> Result<Numeric<'_>> {
@@ -501,7 +550,7 @@ impl Document {
         let info = &self.info.columns[column as usize];
         Ok(match filter {
             Filter::InValues { keys, .. } => {
-                let index = self.index(column)?;
+                let index = self.keyed_index(column)?;
                 let mut allowed = vec![false; index.len()];
                 for &k in keys {
                     if let Some(slot) = allowed.get_mut(k as usize) {
@@ -569,26 +618,22 @@ impl Document {
     }
 }
 
-/// Count each distinct value over `rows`, in value order, leaving out
-/// values with no rows.
-fn value_counts(idx: &ValueIndex, rows: &Selection) -> Vec<DistinctValue> {
-    let mut counts = vec![0u64; idx.len()];
-    match rows {
-        Selection::All(_) => idx.codes.iter().for_each(|&c| counts[c as usize] += 1),
-        Selection::Rows(rows) => rows
-            .iter()
-            .for_each(|&r| counts[idx.codes[r as usize] as usize] += 1),
+/// Rows holding the smallest and largest non-null values among `rows`, in
+/// the column's own order. `None` for types Arrow cannot compare.
+fn extremes(array: &ArrayRef, rows: &Selection) -> Result<(Option<usize>, Option<usize>)> {
+    let Ok(cmp) = make_comparator(array.as_ref(), array.as_ref(), SortOptions::default()) else {
+        return Ok((None, None));
+    };
+    let (mut lo, mut hi) = (None::<usize>, None::<usize>);
+    for r in rows.iter().filter(|&r| array.is_valid(r)) {
+        if lo.is_none_or(|l| cmp(r, l).is_lt()) {
+            lo = Some(r);
+        }
+        if hi.is_none_or(|h| cmp(r, h).is_gt()) {
+            hi = Some(r);
+        }
     }
-    counts
-        .into_iter()
-        .enumerate()
-        .filter(|&(_, n)| n > 0)
-        .map(|(code, count)| DistinctValue {
-            key: code as u64,
-            label: idx.labels[code].clone(),
-            count,
-        })
-        .collect()
+    Ok((lo, hi))
 }
 
 /// AND `mask` into `keep` (which starts as "everything").

@@ -140,6 +140,10 @@ pub struct DistinctResult {
     /// Number of distinct values before `limit` was applied.
     pub total: u64,
     pub truncated: bool,
+    /// Whether the keys name values for [`Filter::InValues`]. False for
+    /// columns with too many distinct values to index; `values` then holds
+    /// the most common ones.
+    pub keyed: bool,
 }
 
 /// Distribution of a numeric column, for the range filter.
@@ -175,17 +179,12 @@ pub struct ColumnSummary {
     /// large integers and decimals; distinct counts use the native values.
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// Smallest and largest non-null values of any comparable column, as
+    /// the table displays them.
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
     pub mean: Option<f64>,
     pub std_dev: Option<f64>,
     /// Other columns: the most common values, most common first.
     pub top_values: Vec<DistinctValue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnStats {
-    pub null_count: u64,
-    /// Distinct non-null values.
-    pub distinct_count: u64,
-    pub min: Option<String>,
-    pub max: Option<String>,
 }
