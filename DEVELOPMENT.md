@@ -65,13 +65,15 @@ Keep appearance variants in `image-name-specializations`; do not add a plain `im
 | [data-gen](tools/data-gen) | Standalone synthetic Parquet generator for benchmarks and manual testing; independent of Core. |
 | [app](app) | SwiftUI windows and forms, with an AppKit table that requests blocks of visible rows. |
 
+Start with Core's [Document](crates/gewu-core/src/document.rs) for data ownership and public operations, the FFI [document handle](crates/gewu-ffi/src/document.rs) for the Swift-facing boundary, and [GewuApp](app/Sources/Gewu/App/GewuApp.swift) for native scenes and commands. FFI modules group each feature's exported types with its Core conversions; [lib.rs](crates/gewu-ffi/src/lib.rs) declares those modules, reexports the API and initializes UniFFI. [uniffi-bindgen.rs](crates/gewu-ffi/uniffi-bindgen.rs) is the binding-generator entry point, enabled by the `bindgen` feature.
+
 ### Swift app code
 
 The app groups each feature's views and state together under [app/Sources/Gewu](app/Sources/Gewu). `project.yml` includes Swift files recursively; regenerate the Xcode project after moving or adding files.
 
 | Directory | Responsibility |
 | --- | --- |
-| `App/` | App entry point, file opening, welcome screen, commands and shared display formatting. |
+| `App/` | App entry point, file opening, settings, commands and shared display formatting. |
 | `Document/` | Workbook window, sheet loading, per-table query state and file information. |
 | `Table/` | AppKit table, cells and row gutter. |
 | `Filter/` | Filter editor selection, individual editors and candidate paging. |

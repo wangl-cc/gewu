@@ -143,35 +143,18 @@ Cancellation before the final commit leaves the destination unchanged; cancellat
 
 Use structured error cases and their message payloads rather than parsing generated debug descriptions. Swift task cancellation can also produce `CancellationError` before or after a Rust call; it is separate from `GewuError::Cancelled`.
 
-## Bindings and source map
+## Bindings
 
-| Name or path | Role |
+| Name | Role |
 | --- | --- |
 | `gewu-ffi` | Cargo package name, used by `cargo build -p gewu-ffi`. |
 | `gewu` | Rust library name; produces `libgewu.a` and `libgewu.dylib` on macOS. |
 | `gewu.swift` | Generated Swift API in Xcode's `DERIVED_FILE_DIR`, compiled into the app. |
 | `gewuFFI.h`, `gewuFFI.modulemap` | Generated C bridge and module declaration in `DERIVED_FILE_DIR`. |
 | `libgewu.a` | Rust static library in `BUILT_PRODUCTS_DIR`, linked directly by the native app target. |
-| [src/lib.rs](src/lib.rs) | Document, filter, bound, row and export interfaces; metadata and error conversion. |
-| [src/analysis.rs](src/analysis.rs) | Analysis sections, result records and job handles. |
-| [uniffi-bindgen.rs](uniffi-bindgen.rs) | Binding generator entry point, enabled by the `bindgen` feature. |
 
 Run `xcodegen generate --use-cache` from the repository root and open `Gewu.xcodeproj`, or use the `xcodebuild` commands in the [development guide](../../DEVELOPMENT.md). The App’s Rust build phase runs [scripts/build-rust.sh](../../scripts/build-rust.sh) before Swift compilation: it builds Rust for the current architecture, generates bindings from `libgewu.dylib`, and supplies `libgewu.a` for direct linking. Xcode’s Debug configuration selects the Rust development profile; Release-LTO selects fat LTO. The build phase consults Cargo on every build and preserves unchanged generated files. Edit the Rust interface rather than generated Swift or C files. The App compiles generated Swift into its own target and imports the generated `gewuFFI` bridge module.
 
 For focused boundary tests, run `cargo test --locked -p gewu-ffi` from the repository root. These Rust tests exercise conversion and wrapper behavior; they do not verify generated Swift compilation or app interaction. Follow the [build instructions](../../DEVELOPMENT.md#build-and-run) to regenerate bindings and build the Swift consumer.
 
-## Code map
-
-`src/lib.rs` declares the modules, reexports the binding API and initializes UniFFI. Each private module keeps its exported types and Core conversions together:
-
-| Module | Responsibility |
-| --- | --- |
-| [document](src/document.rs) | Document handle and operations forwarded to Core. |
-| [file](src/file.rs) | File and column metadata, data kinds and format identifiers. |
-| [view](src/view.rs) | Query state, view versions and formatted row blocks. |
-| [filter](src/filter.rs) | Filter inputs, typed bounds and editor descriptions. |
-| [analysis](src/analysis.rs) | Analysis jobs, summaries, value counts and histograms. |
-| [scatter](src/scatter.rs) | Bounded scatter result records and independently cancellable jobs. |
-| [text_choices](src/text_choices.rs) | Candidate sessions, cursors and pages. |
-| [export](src/export.rs) | Export handles and progress. |
-| [error](src/error.rs) | Structured Core error conversion. |
+For implementation entry points and component responsibilities, see the [repository layout](../../DEVELOPMENT.md#repository-layout).
