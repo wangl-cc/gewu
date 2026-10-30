@@ -1,8 +1,8 @@
-# gewu-ffi
+# gewu-uniffi
 
 The UniFFI boundary between [gewu-core](../gewu-core/README.md) and the macOS app. It exposes Rust objects, records and enums to Swift, converts arguments and results, and maps Core errors to `GewuError`. Query execution and file codecs remain in Core.
 
-This document describes the calling contract. See [data types](../../docs/data-types.md), [search and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for builds and repository-wide checks. Method names below use Rust spelling; generated Swift methods use camel case, such as `apply_view` → `applyView`.
+This document describes the calling contract. See [data types](../../docs/data-types.md), [search and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for Rust and Swift builds and tests. Method names below use Rust spelling; generated Swift methods use camel case, such as `apply_view` → `applyView`.
 
 ## Objects and ownership
 
@@ -147,14 +147,14 @@ Use structured error cases and their message payloads rather than parsing genera
 
 | Name | Role |
 | --- | --- |
-| `gewu-ffi` | Cargo package name, used by `cargo build -p gewu-ffi`. |
+| `gewu-uniffi` | Cargo package name, used by `cargo build -p gewu-uniffi`. |
 | `gewu` | Rust library name; produces `libgewu.a` and `libgewu.dylib` on macOS. |
 | `gewu.swift` | Generated Swift API in Xcode's `DERIVED_FILE_DIR`, compiled into the app. |
 | `gewuFFI.h`, `gewuFFI.modulemap` | Generated C bridge and module declaration in `DERIVED_FILE_DIR`. |
 | `libgewu.a` | Rust static library in `BUILT_PRODUCTS_DIR`, linked directly by the native app target. |
 
-Run `xcodegen generate --use-cache` from the repository root and open `Gewu.xcodeproj`, or use the `xcodebuild` commands in the [development guide](../../DEVELOPMENT.md). The App’s Rust build phase runs [scripts/build-rust.sh](../../scripts/build-rust.sh) before Swift compilation: it builds Rust for the current architecture, generates bindings from `libgewu.dylib`, and supplies `libgewu.a` for direct linking. Xcode’s Debug configuration selects the Rust development profile; Release-LTO selects fat LTO. The build phase consults Cargo on every build and preserves unchanged generated files. Edit the Rust interface rather than generated Swift or C files. The App compiles generated Swift into its own target and imports the generated `gewuFFI` bridge module.
+Edit the Rust interface rather than generated Swift or C files. The App compiles generated Swift into its target and imports the `gewuFFI` bridge module. Follow the [development guide](../../DEVELOPMENT.md) for Rust boundary tests and the Swift build that generates and checks the bindings.
 
-For focused boundary tests, run `cargo test --locked -p gewu-ffi` from the repository root. These Rust tests exercise conversion and wrapper behavior; they do not verify generated Swift compilation or app interaction. Follow the [build instructions](../../DEVELOPMENT.md#build-and-run) to regenerate bindings and build the Swift consumer.
+## Implementation
 
-For implementation entry points and component responsibilities, see the [repository layout](../../DEVELOPMENT.md#repository-layout).
+Start with the [document handle](src/document.rs) for Swift-facing operations. Feature modules group exported types with their Core conversions; [lib.rs](src/lib.rs) declares the public interface and initializes UniFFI. [uniffi-bindgen.rs](uniffi-bindgen.rs) is the binding-generator entry point, enabled by the `bindgen` feature.

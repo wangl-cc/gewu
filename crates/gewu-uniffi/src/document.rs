@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn typed_filters_validate_and_execute_across_ffi() {
         let source =
-            std::env::temp_dir().join(format!("gewu-ffi-typed-{}.csv", std::process::id()));
+            std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
         std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
         let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
         assert!(doc.info().columns[0].capabilities.histogram);
@@ -349,8 +349,10 @@ mod tests {
 
     #[test]
     fn text_filter_modes_and_paged_choices_cross_ffi() {
-        let source =
-            std::env::temp_dir().join(format!("gewu-ffi-filter-spec-{}.csv", std::process::id()));
+        let source = std::env::temp_dir().join(format!(
+            "gewu-uniffi-filter-spec-{}.csv",
+            std::process::id()
+        ));
         std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
         let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
         let FilterEditor::Text { modes, recommended } = doc.filter_spec(0, None).unwrap().editor
@@ -407,7 +409,7 @@ mod tests {
         use std::fmt::Write;
 
         let source =
-            std::env::temp_dir().join(format!("gewu-ffi-range-spec-{}.csv", std::process::id()));
+            std::env::temp_dir().join(format!("gewu-uniffi-range-spec-{}.csv", std::process::id()));
         let base = 9_007_199_254_740_993_i64;
         let mut csv = String::from("id\n");
         for offset in 0..1_000 {
@@ -472,7 +474,7 @@ mod tests {
     #[test]
     fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
         let source =
-            std::env::temp_dir().join(format!("gewu-ffi-formats-{}.csv", std::process::id()));
+            std::env::temp_dir().join(format!("gewu-uniffi-formats-{}.csv", std::process::id()));
         std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
         let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
         let info = doc.info();

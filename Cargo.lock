@@ -933,7 +933,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gewu-ffi"
+name = "gewu-uniffi"
 version = "0.1.0"
 dependencies = [
  "gewu-core",

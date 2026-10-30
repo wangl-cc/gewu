@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'app/**'
-      - 'crates/gewu-ffi/**'
+      - 'crates/gewu-uniffi/**'
       - 'project.yml'
       - '.swift-format'
       - 'scripts/build-rust.sh'
@@ -14,7 +14,7 @@ on:
     branches: [main]
     paths:
       - 'app/**'
-      - 'crates/gewu-ffi/**'
+      - 'crates/gewu-uniffi/**'
       - 'project.yml'
       - '.swift-format'
       - 'scripts/build-rust.sh'

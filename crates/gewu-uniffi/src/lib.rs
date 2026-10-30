@@ -1,4 +1,4 @@
-//! UniFFI bindings of gewu-core for the macOS app.
+//! UniFFI bindings for gewu-core.
 //!
 //! All methods are synchronous. The app calls scans and I/O from background
 //! tasks. A newer `apply_view` cancels an older view request inside the core;

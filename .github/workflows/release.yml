@@ -32,7 +32,7 @@ jobs:
             exit 1
           fi
           version="$(cargo metadata --locked --no-deps --format-version 1 |
-            jq -er '.packages[] | select(.name == "gewu-ffi") | .version')"
+            jq -er '.packages[] | select(.name == "gewu-uniffi") | .version')"
           if [[ "$RELEASE_TAG" != "v$version" ]]; then
             echo "::error::Tag $RELEASE_TAG does not match Cargo version $version"
             exit 1

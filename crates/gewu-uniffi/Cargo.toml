@@ -1,6 +1,6 @@
 [package]
-name = "gewu-ffi"
-description = "UniFFI bindings of gewu-core for the macOS app"
+name = "gewu-uniffi"
+description = "UniFFI bindings for gewu-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

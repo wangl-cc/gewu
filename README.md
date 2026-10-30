@@ -45,7 +45,7 @@ Use **Gewu → Settings…** (`⌘,`) for display and copy preferences. Adjust h
 
 For files without column headers, use **File → Import Options…**. Save the current results with **File → Export…** (`⇧⌘E`); the initial default is Parquet with Zstd compression. See [file formats](docs/file-formats.md) for import and export details.
 
-To build from source, follow the [development guide](DEVELOPMENT.md#build-and-run).
+To build from source, follow the [App build instructions](DEVELOPMENT.md#swift-macos-ui).
 
 ## File formats and limits
 
@@ -65,7 +65,7 @@ See [format details](docs/file-formats.md) for type inference, date handling and
 ## Documentation
 
 - [Command line](crates/gewu-cli/README.md) — JSON output for scripts and agents.
-- [Development](DEVELOPMENT.md) — building, contributing and code organization.
+- [Development](DEVELOPMENT.md) — Rust and macOS UI build, run and test workflows.
 - [Data types](docs/data-types.md) — values, precision and typed input.
 - [Search and filtering](docs/search-and-filter.md) — conditions and result counts.
 - [File formats](docs/file-formats.md) — reading, exporting and format limits.

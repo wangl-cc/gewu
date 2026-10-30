@@ -2,10 +2,14 @@
 
 The `gewu` CLI provides JSON output for scripts and AI agents. It also supports selecting an XLSX worksheet by name.
 
-Run from the repository root:
+For development builds and tests, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core--cli).
+
+## Install and use
+
+From the repository root:
 
 ```sh
-cargo install --path crates/gewu-cli
+cargo install --locked --path crates/gewu-cli
 gewu schema data.parquet
 gewu rows data.csv --search example --limit 20
 gewu rows workbook.xlsx --sheet Data --limit 20

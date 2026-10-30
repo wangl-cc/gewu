@@ -9,13 +9,13 @@ case "$ARCHS" in
   *) echo "Unsupported build architecture: $ARCHS" >&2; exit 1 ;;
 esac
 release_config=(--config profile.release.lto=false --config profile.release.codegen-units=16)
-cargo build --locked --profile "$RUST_PROFILE" --lib -p gewu-ffi --target "$target" \
-  "${release_config[@]}" --config "target.$target.rustflags=[\"-Ctarget-cpu=generic\"]"
+cargo build --locked --profile "$RUST_PROFILE" --lib -p gewu-uniffi --target "$target" \
+  "${release_config[@]}"
 target_dir="$(cargo metadata --locked --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)"
 library="$target_dir/$target/${RUST_PROFILE/dev/debug}/libgewu"
 generated="$DERIVED_FILE_DIR/uniffi"
 mkdir -p "$generated" "$BUILT_PRODUCTS_DIR"
-cargo run --locked --profile dev -p gewu-ffi --features bindgen --bin uniffi-bindgen -- \
+cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
   generate --library "$library.dylib" --language swift --out-dir "$generated"
 for file in gewu.swift gewuFFI.h gewuFFI.modulemap; do
   if ! cmp -s "$generated/$file" "$DERIVED_FILE_DIR/$file"; then
@@ -26,7 +26,7 @@ if ! cmp -s "$library.a" "$BUILT_PRODUCTS_DIR/libgewu.a"; then
   cp "$library.a" "$BUILT_PRODUCTS_DIR/libgewu.a"
 fi
 # Keep Cargo's package version as the single source for the app version.
-package_id="$(cargo pkgid --locked -p gewu-ffi)"
+package_id="$(cargo pkgid --locked -p gewu-uniffi)"
 version="${package_id##*#}"; version="${version##*@}"
 cp app/Info.plist "$generated/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$generated/Info.plist"

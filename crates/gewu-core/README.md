@@ -4,6 +4,8 @@ The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core
 
 Behavior references: [data types](../../docs/data-types.md), [search and filtering](../../docs/search-and-filter.md), and [file formats](../../docs/file-formats.md). This document covers engine ownership, APIs and implementation.
 
+For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core--cli).
+
 ## Document and views
 
 `Document` is the public entry point. It retains immutable Arrow columns and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
@@ -105,7 +107,7 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 ## Benchmarks
 
-For builds, tests, linting and codec feature checks, see the [development guide](../../DEVELOPMENT.md). Run the commands below from the repository root.
+Run the commands below from the repository root.
 
 The standalone [data generator](../../tools/data-gen) creates fixed-seed test files with 28 columns spanning supported data kinds. It depends directly on Arrow and Parquet, so generating samples does not build Core:
 
