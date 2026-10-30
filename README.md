@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app/Icons/Gewu.icon/Assets/dark.png">
-    <img src="app/Icons/Gewu.icon/Assets/light.png" width="128" height="128" alt="Gewu app icon">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/icon-dark.png">
+    <img src="assets/icon-light.png" width="112" height="112" alt="Gewu app icon">
   </picture>
 </p>
 
