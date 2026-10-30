@@ -1,0 +1,85 @@
+name: App CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'crates/gewu-uniffi/**'
+      - 'project.yml'
+      - '.swift-format'
+      - 'scripts/build-rust.sh'
+      - '.github/workflows/ci-app.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'crates/gewu-uniffi/**'
+      - 'project.yml'
+      - '.swift-format'
+      - 'scripts/build-rust.sh'
+      - '.github/workflows/ci-app.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-app-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: Lint (swift-format)
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
+
+  test:
+    name: Build and test (arm64)
+    runs-on: xcode-27
+    env:
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate Xcode project
+        run: xcodegen generate --use-cache
+      - name: Build and test (Debug)
+        run: |
+          xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
+            -destination 'platform=macOS' -derivedDataPath build/xcode \
+            -resultBundlePath build/Tests.xcresult test
+      - name: Package Debug app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/xcode/Build/Products/Debug/Gewu.app build/Gewu-macos-arm64.zip
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-arm64
+          path: build/Tests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Gewu-macos-arm64
+          path: build/Gewu-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,36 @@
+name: Docs CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.markdownlint.yaml'
+      - '.github/workflows/ci-docs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.markdownlint.yaml'
+      - '.github/workflows/ci-docs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-docs-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  markdownlint:
+    name: Lint (markdownlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DavidAnson/markdownlint-cli2-action@v25
+        with:
+          config: .markdownlint.yaml
+          globs: |
+            **/*.md
+            !target/**
+            !build/**
