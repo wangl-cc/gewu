@@ -45,28 +45,18 @@ jobs:
       - run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
 
   test:
-    name: Build and test (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    name: Build and test (arm64)
+    runs-on: xcode-27
     env:
-      CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
       MACOSX_DEPLOYMENT_TARGET: '15.0'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            runner: xcode-27
-            rust-target: aarch64-apple-darwin
-          - arch: x86_64
-            runner: macos-26-intel
-            rust-target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-target }}
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Generate Xcode project
         run: xcodegen generate --use-cache
@@ -76,22 +66,20 @@ jobs:
             -destination 'platform=macOS' -derivedDataPath build/xcode \
             -resultBundlePath build/Tests.xcresult test
       - name: Package Debug app
-        env:
-          ARCH: ${{ matrix.arch }}
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
-            build/xcode/Build/Products/Debug/Gewu.app "build/Gewu-macos-$ARCH.zip"
+            build/xcode/Build/Products/Debug/Gewu.app build/Gewu-macos-arm64.zip
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: tests-${{ matrix.arch }}
+          name: tests-arm64
           path: build/Tests.xcresult
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
-          name: Gewu-macos-${{ matrix.arch }}
-          path: build/Gewu-macos-${{ matrix.arch }}.zip
+          name: Gewu-macos-arm64
+          path: build/Gewu-macos-arm64.zip
           if-no-files-found: error
           retention-days: 14
