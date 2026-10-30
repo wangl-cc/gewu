@@ -90,7 +90,7 @@ jobs:
           lipo "$app/Contents/MacOS/Gewu" -verify_arch "$ARCH"
           codesign --verify --deep --strict "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "build/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.arch }}
           path: build/Gewu-*.zip
@@ -108,7 +108,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
