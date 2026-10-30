@@ -1,0 +1,24 @@
+[package]
+name = "gewu-uniffi"
+description = "UniFFI bindings for gewu-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "gewu"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+gewu-core.workspace = true
+thiserror.workspace = true
+uniffi = "0.32"

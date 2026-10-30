@@ -1,0 +1,89 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'tools/data-gen/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - 'rustfmt.toml'
+      - 'deny.toml'
+      - '.github/workflows/ci-rust.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'tools/data-gen/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - 'rustfmt.toml'
+      - 'deny.toml'
+      - '.github/workflows/ci-rust.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-rust-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  format:
+    name: Lint (format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo +nightly fmt --all --check
+
+  clippy:
+    name: Lint (clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  deny:
+    name: Lint (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny --locked check
+
+  test:
+    name: Test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --workspace

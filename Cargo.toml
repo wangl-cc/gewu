@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/gewu-core", "crates/gewu-uniffi", "crates/gewu-cli", "tools/data-gen"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/wangl-cc/gewu"
+
+[workspace.dependencies]
+arrow = { version = "60", default-features = false, features = ["chrono-tz"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "brotli", "simdutf8"] }
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+gewu-core = { path = "crates/gewu-core" }
+
+[profile.release-lto]
+inherits = "release"
+lto = true
+codegen-units = 1

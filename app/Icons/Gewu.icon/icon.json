@@ -1,0 +1,27 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:0.7,0.8,0.9,1"
+  },
+  "groups": [
+    {
+      "name": "Artwork",
+      "layers": [
+        {
+          "name": "Artwork",
+          "image-name-specializations": [
+            { "value": "light.png" },
+            { "appearance": "dark", "value": "dark.png" }
+          ],
+          "glass": false
+        }
+      ],
+      "shadow": { "kind": "neutral", "opacity": 0 },
+      "translucency": { "enabled": false, "value": 0 },
+      "specular": false,
+      "refractivity": { "enabled": false, "strength": 0, "depth": 0 }
+    }
+  ],
+  "supported-platforms": {
+    "squares": ["macOS"]
+  }
+}
