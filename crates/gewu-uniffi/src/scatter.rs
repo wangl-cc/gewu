@@ -20,6 +20,7 @@ pub struct ScatterResult {
     pub y_column: u32,
     pub total_rows: u64,
     pub eligible_rows: u64,
+    pub non_positive_rows: u64,
     pub sampled: bool,
     pub points: Vec<ScatterPoint>,
 }
@@ -32,7 +33,8 @@ pub struct ScatterAnalysis {
 #[uniffi::export]
 impl ScatterAnalysis {
     /// Run off the UI thread. Coordinates may round; labels retain native
-    /// precision. Filtering applies, null and non-finite pairs are excluded.
+    /// precision. Filtering applies; null, non-finite and values outside the
+    /// selected logarithmic domains are excluded before sampling.
     pub fn run(&self) -> Result<ScatterResult, GewuError> {
         let result = self.inner.run()?;
         Ok(ScatterResult {
@@ -41,6 +43,7 @@ impl ScatterAnalysis {
             y_column: result.y_column,
             total_rows: result.total_rows,
             eligible_rows: result.eligible_rows,
+            non_positive_rows: result.non_positive_rows,
             sampled: result.sampled,
             points: result
                 .points

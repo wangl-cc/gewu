@@ -57,6 +57,7 @@ pub struct ColumnCapabilities {
     pub equals: bool,
     pub histogram: bool,
     pub scatter: bool,
+    pub logarithmic: bool,
 }
 
 impl From<core::ColumnCapabilities> for ColumnCapabilities {
@@ -67,6 +68,7 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
             equals: capabilities.equals,
             histogram: capabilities.histogram,
             scatter: capabilities.scatter,
+            logarithmic: capabilities.logarithmic,
         }
     }
 }

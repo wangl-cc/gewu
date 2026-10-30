@@ -53,6 +53,10 @@ Analysis has two reporting contracts. `prepare_analysis(version, column, section
 
 Histograms use native values for bin membership. Null and NaN counts are separate; infinities belong to the outer bins. Exact range results expose source extrema as text. Unbounded outer edges preserve infinity handling, and empty/all-NaN inputs have no ranges.
 
+Numeric distributions support `ColumnAnalysis::with_histogram_scale(AxisScale::Log10)`; range editors use `filter_spec_with_scale`. Geometric cuts are converted to native bounds once, then the same cuts drive counting and range filtering without widening the source array. Logarithmic bins include only positive finite values, expose `non_positive_count` and `infinite_count` omissions, and have finite outer bounds. Their `lo`/`hi` and `bin_edges` are log10 display coordinates; labels and typed bounds remain original values. Nonempty logarithmic histograms supply `counts.len() + 1` strictly increasing display edges matching the rounded native cuts; linear histograms leave `bin_edges` empty and use uniform spacing. Empty positive domains retain omission counts with no bins. The domain spans positive finite source values so filtering does not move it.
+
+Scatter jobs support `with_scales(x_scale, y_scale)` with independent `AxisScale::Linear` or `Log10` domains. Logarithmic axes require `ColumnCapabilities.logarithmic`; temporal columns and the source-row axis remain linear. Missing/non-finite pairs are excluded first, followed by pairs with nonpositive coordinates on logarithmic axes. `non_positive_rows` reports the latter separately. Sampling considers only eligible pairs, while returned coordinates and labels stay in original units for the UI's scale and tooltip rendering.
+
 The CLI's `gewu hist` exposes inclusive `min`/`max` text bounds per bin, with `null` meaning an unbounded edge. Top-level `min`/`max` labels describe finite source extrema. These bounds can be passed to typed range filters; plotting coordinates must not be used to reconstruct them.
 
 ## File adapters

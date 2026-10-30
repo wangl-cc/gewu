@@ -57,6 +57,17 @@ impl Document {
         state: Option<&ViewState>,
         bins: u32,
     ) -> Result<crate::FilterSpec> {
+        self.filter_spec_with_scale(column, state, bins, crate::AxisScale::Linear)
+    }
+
+    /// Like `filter_spec_with_bins`, with an explicit numeric binning scale.
+    pub fn filter_spec_with_scale(
+        &self,
+        column: u32,
+        state: Option<&ViewState>,
+        bins: u32,
+        scale: crate::AxisScale,
+    ) -> Result<crate::FilterSpec> {
         if !(1..=60).contains(&bins) {
             return Err(Error::InvalidArgument(
                 "filter histogram bins must be between 1 and 60".into(),
@@ -65,6 +76,11 @@ impl Document {
         use crate::{FilterEditor, FilterSpec};
         let array = self.column(column)?;
         let typed = Column::new(array);
+        if scale == crate::AxisScale::Log10 && !typed.capabilities().logarithmic {
+            return Err(Error::InvalidArgument(
+                "logarithmic binning requires a numeric column".into(),
+            ));
+        }
         let cell = &self.filter_editors[column as usize];
         let editor_kind = match cell.get() {
             Some(kind) => *kind,
@@ -112,7 +128,7 @@ impl Document {
                 let rows = self.rows_in(RowScope::facet(state, column))?;
                 FilterEditor::Range {
                     kind: DataKind::of(typed.logical_data_type()),
-                    distribution: histogram::build(array, &rows, bins)?,
+                    distribution: histogram::build_scaled(array, &rows, bins, scale)?,
                 }
             }
             FilterEditorKind::Contains => FilterEditor::Contains,

@@ -107,14 +107,18 @@ fn summarize(
     let total = rows.len() as u64;
     let non_null = total - null_count;
     let mut histogram = Histogram {
+        scale: crate::AxisScale::Linear,
         lo: None,
         hi: None,
         min_label: None,
         max_label: None,
         integer: true,
         counts: Vec::new(),
+        bin_edges: Vec::new(),
         null_count,
         nan_count: 0,
+        non_positive_count: 0,
+        infinite_count: 0,
         total,
     };
     if non_null == 0 {

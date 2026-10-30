@@ -1,13 +1,15 @@
 import Charts
 import SwiftUI
 
-/// Charts owns scales, ticks and layout. Core's original labels remain the
+/// Charts owns scales and layout. Core's original labels remain the
 /// source of truth for hover details; plotting coordinates are approximate.
 struct ScatterChart: View {
     let points: [ScatterPoint]
     let xDates: [Date]?
     let yDates: [Date]?
     let rowNumberBase: Int
+    let xScale: AxisScale
+    let yScale: AxisScale
     @Binding var hovered: ScatterPoint?
 
     var body: some View {
@@ -18,10 +20,28 @@ struct ScatterChart: View {
                 .accessibilityLabel("Row \(formatRowNumber(points[index].sourceRow, base: rowNumberBase))")
                 .accessibilityValue("X: \(points[index].xLabel), Y: \(points[index].yLabel)")
         }
-        .chartXScale(domain: .automatic(includesZero: false), range: .plotDimension(padding: 8))
-        .chartYScale(domain: .automatic(includesZero: false), range: .plotDimension(padding: 8))
-        .chartXAxis { AxisMarks(position: .bottom, values: .automatic(desiredCount: 3)) }
-        .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) }
+        .chartXScale(
+            domain: .automatic(includesZero: false), range: .plotDimension(padding: 8),
+            type: xScale == .log10 ? .log : nil
+        )
+        .chartYScale(
+            domain: .automatic(includesZero: false), range: .plotDimension(padding: 8),
+            type: yScale == .log10 ? .log : nil
+        )
+        .chartXAxis {
+            if xScale == .log10 {
+                logAxis(position: .bottom, values: ScatterLogTicks.values(points.lazy.map(\.x), maximumCount: 3))
+            } else {
+                AxisMarks(position: .bottom, values: .automatic(desiredCount: 3))
+            }
+        }
+        .chartYAxis {
+            if yScale == .log10 {
+                logAxis(position: .leading, values: ScatterLogTicks.values(points.lazy.map(\.y), maximumCount: 4))
+            } else {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 4))
+            }
+        }
         .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
         .environment(\.calendar, Self.calendar)
         .chartOverlay { proxy in
@@ -50,6 +70,18 @@ struct ScatterChart: View {
                 ?? "Point to a dot to see its values"
         )
         .onDisappear { hovered = nil }
+    }
+
+    private func logAxis(position: AxisMarkPosition, values: [Double]) -> some AxisContent {
+        AxisMarks(position: position, values: values) { value in
+            AxisGridLine()
+            AxisTick()
+            AxisValueLabel {
+                if let number = value.as(Double.self) {
+                    Text(ScatterLogTicks.label(number)).font(.caption2)
+                }
+            }
+        }
     }
 
     @ChartContentBuilder
@@ -87,6 +119,39 @@ struct ScatterChart: View {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         return calendar
+    }
+}
+
+/// Native log axes otherwise label every decade, regardless of desiredCount.
+/// Tick values stay in source units; only their labels use compact notation.
+enum ScatterLogTicks {
+    static func values<S: Sequence>(_ values: S, maximumCount: Int) -> [Double] where S.Element == Double {
+        guard maximumCount > 0 else { return [] }
+        var lower = Double.infinity
+        var upper = -Double.infinity
+        for value in values where value.isFinite && value > 0 {
+            lower = min(lower, value)
+            upper = max(upper, value)
+        }
+        guard lower <= upper else { return [] }
+        guard lower < upper, maximumCount > 1 else { return [lower] }
+        let first = ceil(log10(lower))
+        let last = floor(log10(upper))
+        guard first < last else { return [lower, upper] }
+        let count = min(maximumCount, Int(last - first) + 1)
+        let ticks = (0..<count).compactMap { index -> Double? in
+            let exponent = (first + (last - first) * Double(index) / Double(count - 1)).rounded()
+            let value = pow(10, exponent)
+            return value.isFinite && value > 0 && value >= lower && value <= upper ? value : nil
+        }
+        return ticks.isEmpty ? [lower, upper] : ticks
+    }
+
+    static func label(_ value: Double) -> String {
+        value.formatted(
+            .number.notation(.scientific).precision(.significantDigits(1...3))
+                .locale(Locale(identifier: "en_US_POSIX"))
+        ).lowercased()
     }
 }
 

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    AnalysisSection, Bound, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter, FilterSpec,
-    GewuError, GewuExport, Histogram, RowBlock, TextChoices, ViewInfo, ViewState,
+    AnalysisSection, AxisScale, Bound, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
+    FilterSpec, GewuError, GewuExport, Histogram, RowBlock, TextChoices, ViewInfo, ViewState,
 };
 
 /// One open file.
@@ -25,11 +25,14 @@ impl GewuDocument {
         x_column: Option<u32>,
         y_column: u32,
         limit: u32,
+        x_scale: AxisScale,
+        y_scale: AxisScale,
     ) -> Result<Arc<crate::ScatterAnalysis>, GewuError> {
         Ok(Arc::new(crate::ScatterAnalysis {
             inner: self
                 .inner
-                .prepare_scatter(version, x_column, y_column, limit)?,
+                .prepare_scatter(version, x_column, y_column, limit)?
+                .with_scales(x_scale.into(), y_scale.into())?,
         }))
     }
 
@@ -154,12 +157,14 @@ impl GewuDocument {
         column: u32,
         section: AnalysisSection,
         bins: u32,
+        scale: AxisScale,
     ) -> Result<Arc<ColumnAnalysis>, GewuError> {
         Ok(Arc::new(ColumnAnalysis {
             inner: self
                 .inner
                 .prepare_analysis(version, column, section.into())?
-                .with_histogram_bins(bins)?,
+                .with_histogram_bins(bins)?
+                .with_histogram_scale(scale.into())?,
         }))
     }
 
@@ -197,11 +202,12 @@ impl GewuDocument {
         column: u32,
         state: Option<ViewState>,
         bins: u32,
+        scale: AxisScale,
     ) -> Result<FilterSpec, GewuError> {
         let state = state.map(Into::into);
         Ok(self
             .inner
-            .filter_spec_with_bins(column, state.as_ref(), bins)?
+            .filter_spec_with_scale(column, state.as_ref(), bins, scale.into())?
             .into())
     }
 
@@ -273,7 +279,9 @@ mod tests {
         let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
         assert!(doc.info().columns[0].capabilities.histogram);
         assert!(doc.info().columns[0].capabilities.scatter);
-        let scatter = doc.prepare_scatter(0, None, 0, 4).unwrap();
+        let scatter = doc
+            .prepare_scatter(0, None, 0, 4, AxisScale::Linear, AxisScale::Linear)
+            .unwrap();
         let points = scatter.run().unwrap();
         assert_eq!(points.eligible_rows, 2);
         assert!(!points.sampled);
@@ -420,14 +428,17 @@ mod tests {
         let FilterEditor::Range {
             distribution: Some(custom),
             ..
-        } = doc.filter_spec_with_bins(0, None, 10).unwrap().editor
+        } = doc
+            .filter_spec_with_bins(0, None, 10, AxisScale::Linear)
+            .unwrap()
+            .editor
         else {
             panic!("custom histogram");
         };
         assert_eq!(custom.histogram.counts.len(), 10);
         assert_eq!(custom.histogram.counts.iter().sum::<u64>(), 1_000);
         assert!(matches!(
-            doc.filter_spec_with_bins(0, None, 0),
+            doc.filter_spec_with_bins(0, None, 0, AxisScale::Linear),
             Err(GewuError::InvalidArgument { .. })
         ));
         let FilterEditor::Range {

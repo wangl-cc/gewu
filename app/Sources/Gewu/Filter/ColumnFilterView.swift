@@ -11,6 +11,7 @@ struct ColumnFilterView: View {
     @State private var spec: FilterSpec?
     @State private var error: String?
     @State private var histogramBins: UInt32 = 60
+    @State private var histogramScale: AxisScale = .linear
     @State private var loading = false
 
     var body: some View {
@@ -31,7 +32,12 @@ struct ColumnFilterView: View {
         }
         .padding(14)
         .frame(width: 420)
-        .task(id: histogramBins) { await load() }
+        .task(id: HistogramRequest(bins: histogramBins, scale: histogramScale)) { await load() }
+    }
+
+    private struct HistogramRequest: Equatable {
+        let bins: UInt32
+        let scale: AxisScale
     }
 
     @ViewBuilder private func editor(_ spec: FilterSpec) -> some View {
@@ -43,7 +49,8 @@ struct ColumnFilterView: View {
         case .range(_, let distribution):
             RangeFilterView(
                 doc: doc, column: column, nullable: spec.nullable,
-                distribution: distribution, bins: $histogramBins, current: current, onApply: onApply)
+                distribution: distribution, bins: $histogramBins, scale: $histogramScale,
+                supportsLog: info.capabilities.logarithmic, current: current, onApply: onApply)
         case .choices(let values):
             ChoiceFilterView(column: column, values: values, current: current, onApply: onApply)
         case .contains:
@@ -57,12 +64,15 @@ struct ColumnFilterView: View {
         loading = true
         error = nil
         let bins = histogramBins
+        let scale = histogramScale
         do {
             let doc = doc
             let column = column
             let state = state
-            let spec = try await Task.detached { try doc.filterSpecWithBins(column: column, state: state, bins: bins) }
-                .value
+            let spec = try await Task.detached {
+                try doc.filterSpecWithBins(column: column, state: state, bins: bins, scale: scale)
+            }
+            .value
             guard !Task.isCancelled else { return }
             self.spec = spec
         } catch {

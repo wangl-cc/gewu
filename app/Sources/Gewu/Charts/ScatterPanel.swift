@@ -6,6 +6,8 @@ struct ScatterPanel: View {
     @State private var hovered: ScatterPoint?
     @State private var retry = 0
     @State private var pointLimit: UInt32 = 2048
+    @State private var xScale: AxisScale = .linear
+    @State private var yScale: AxisScale = .linear
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
 
     private var columns: [Int] {
@@ -20,12 +22,16 @@ struct ScatterPanel: View {
         let retry: Int
         let pointLimit: UInt32
         let rowNumberBase: Int
+        let xScale: AxisScale
+        let yScale: AxisScale
     }
 
     private var request: Request {
         Request(
             document: ObjectIdentifier(model.doc), version: model.current.version,
-            x: model.chartX, y: model.chartY, retry: retry, pointLimit: pointLimit, rowNumberBase: rowNumberBase)
+            x: model.chartX, y: model.chartY, retry: retry, pointLimit: pointLimit, rowNumberBase: rowNumberBase,
+            xScale: supportsLog(model.chartX) ? xScale : .linear,
+            yScale: supportsLog(model.chartY) ? yScale : .linear)
     }
 
     var body: some View {
@@ -38,9 +44,15 @@ struct ScatterPanel: View {
                         Text("Source row").tag(Optional<Int>.none)
                         columnOptions
                     }
+                    if supportsLog(model.chartX) {
+                        ScalePicker(title: "X scale", selection: $xScale)
+                    }
                     Picker("Y", selection: $model.chartY) {
                         if model.chartY == nil { Text("Select column").tag(Optional<Int>.none) }
                         columnOptions
+                    }
+                    if supportsLog(model.chartY) {
+                        ScalePicker(title: "Y scale", selection: $yScale)
                     }
                     Picker("Maximum points", selection: $pointLimit) {
                         ForEach([512, 1024, 2048, 4096] as [UInt32], id: \.self) { limit in
@@ -55,11 +67,15 @@ struct ScatterPanel: View {
                     }
                     if let result = chart.result {
                         if result.points.isEmpty {
-                            Text("No finite pairs to plot").foregroundStyle(.secondary)
+                            Text(
+                                chart.xScale == .log10 || chart.yScale == .log10
+                                    ? "No finite pairs in the selected log domain" : "No finite pairs to plot"
+                            ).foregroundStyle(.secondary)
                         } else {
                             ScatterChart(
                                 points: result.points, xDates: chart.xDates, yDates: chart.yDates,
-                                rowNumberBase: rowNumberBase, hovered: $hovered
+                                rowNumberBase: rowNumberBase, xScale: chart.xScale, yScale: chart.yScale,
+                                hovered: $hovered
                             )
                             .frame(height: 220)
                             .accessibilityLabel("Scatter plot, \(result.points.count) points")
@@ -79,12 +95,6 @@ struct ScatterPanel: View {
                                     : "\(formatCount(result.eligibleRows)) pairs"
                             )
                             .font(.caption).foregroundStyle(.secondary)
-                            if result.totalRows > result.eligibleRows {
-                                Text(
-                                    "\(formatCount(result.totalRows - result.eligibleRows)) rows omitted: missing or non-finite values"
-                                )
-                                .font(.caption2).foregroundStyle(.secondary)
-                            }
                             if let point = hovered {
                                 StatisticRow(
                                     title: "Source row",
@@ -96,6 +106,15 @@ struct ScatterPanel: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
+                        let invalidRows = result.totalRows - result.eligibleRows - result.nonPositiveRows
+                        if invalidRows > 0 {
+                            Text("\(formatCount(invalidRows)) rows omitted: missing or non-finite values")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if result.nonPositiveRows > 0 {
+                            Text("\(formatCount(result.nonPositiveRows)) rows omitted: zero or negative on a log axis")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -104,13 +123,20 @@ struct ScatterPanel: View {
         .onAppear {
             if model.chartY == nil { model.chartY = columns.first }
         }
+        .onChange(of: model.chartX) { _, column in
+            if !supportsLog(column) { xScale = .linear }
+        }
+        .onChange(of: model.chartY) { _, column in
+            if !supportsLog(column) { yScale = .linear }
+        }
         .task(id: request) {
             hovered = nil
             guard let y = model.chartY else { return }
             await chart.load(
                 document: model.doc, version: model.current.version, x: model.chartX, y: y,
                 xKind: model.chartX.map { model.info.columns[$0].kind }, yKind: model.info.columns[y].kind,
-                limit: pointLimit, rowNumberBase: rowNumberBase)
+                limit: pointLimit, rowNumberBase: rowNumberBase,
+                xScale: request.xScale, yScale: request.yScale)
         }
         .onDisappear { chart.cancel() }
     }
@@ -121,6 +147,11 @@ struct ScatterPanel: View {
         }
     }
 
+    private func supportsLog(_ column: Int?) -> Bool {
+        guard let column, model.info.columns.indices.contains(column) else { return false }
+        return model.info.columns[column].capabilities.logarithmic
+    }
+
 }
 
 @MainActor
@@ -128,6 +159,8 @@ final class ScatterModel: ObservableObject {
     @Published private(set) var result: ScatterResult?
     private(set) var xDates: [Date]?
     private(set) var yDates: [Date]?
+    private(set) var xScale: AxisScale = .linear
+    private(set) var yScale: AxisScale = .linear
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var request: UInt64 = 0
@@ -143,7 +176,9 @@ final class ScatterModel: ObservableObject {
     func load(
         document: GewuDocument, version: UInt64, x: Int?, y: Int, xKind: DataKind?, yKind: DataKind?,
         limit: UInt32 = 2048,
-        rowNumberBase: Int = 0
+        rowNumberBase: Int = 0,
+        xScale: AxisScale = .linear,
+        yScale: AxisScale = .linear
     ) async {
         cancel()
         let ticket = request
@@ -153,7 +188,8 @@ final class ScatterModel: ObservableObject {
         do {
             try Task.checkCancellation()
             let work = try document.prepareScatter(
-                version: version, xColumn: x.map(UInt32.init), yColumn: UInt32(y), limit: limit)
+                version: version, xColumn: x.map(UInt32.init), yColumn: UInt32(y), limit: limit,
+                xScale: xScale, yScale: yScale)
             job = work
             let loaded = try await withTaskCancellationHandler {
                 try await Task.detached(priority: .userInitiated) {
@@ -178,6 +214,8 @@ final class ScatterModel: ObservableObject {
             guard !Task.isCancelled, ticket == request else { return }
             xDates = loaded.1
             yDates = loaded.2
+            self.xScale = xScale
+            self.yScale = yScale
             result = loaded.0
         } catch {
             guard !Task.isCancelled, ticket == request else { return }

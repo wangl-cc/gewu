@@ -16,6 +16,7 @@ mod filter;
 mod format;
 mod kind;
 mod predicate;
+mod scale;
 mod scatter;
 mod scope;
 mod text_choices;
@@ -40,6 +41,7 @@ pub use file::{
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
 pub use kind::DataKind;
+pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use value_index::{DistinctResult, DistinctValue};

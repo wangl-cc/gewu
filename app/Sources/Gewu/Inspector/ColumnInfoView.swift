@@ -67,6 +67,8 @@ struct ColumnAnalysisView: View {
     @State private var expanded: Int
     @State private var retry = 0
     @State private var histogramBins: UInt32 = 40
+    @State private var histogramScale: AxisScale = .linear
+    @State private var frequencyScale: AxisScale = .linear
     @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
 
     init(model: DocumentModel, column: Int) {
@@ -83,12 +85,14 @@ struct ColumnAnalysisView: View {
         let expanded: Int
         let retry: Int
         let histogramBins: UInt32
+        let histogramScale: AxisScale
     }
 
     private var request: Request {
         Request(
             document: ObjectIdentifier(model.doc), version: model.current.version,
-            column: column, expanded: expanded, retry: retry, histogramBins: histogramBins)
+            column: column, expanded: expanded, retry: retry, histogramBins: histogramBins,
+            histogramScale: histogramScale)
     }
 
     var body: some View {
@@ -108,6 +112,13 @@ struct ColumnAnalysisView: View {
                         DisclosureGroup(isExpanded: expansion(section)) {
                             VStack(alignment: .leading, spacing: 8) {
                                 if section == .distribution || section == .lengths {
+                                    if section == .distribution, model.info.columns[column].capabilities.logarithmic {
+                                        ScalePicker(title: "Binning", selection: $histogramScale)
+                                            .help(
+                                                "Log10 bins include only finite positive values. Source values remain unchanged."
+                                            )
+                                    }
+                                    ScalePicker(title: "Frequency", selection: $frequencyScale)
                                     Picker("Maximum bins", selection: $histogramBins) {
                                         ForEach([10, 20, 40, 60, 100] as [UInt32], id: \.self) { bins in
                                             Text(bins.formatted()).tag(bins)
@@ -138,7 +149,7 @@ struct ColumnAnalysisView: View {
         .task(id: request) {
             await analysis.load(
                 document: model.doc, version: model.current.version,
-                column: UInt32(column), expanded: expanded, bins: histogramBins)
+                column: UInt32(column), expanded: expanded, bins: histogramBins, scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
     }
@@ -211,7 +222,8 @@ struct ColumnAnalysisView: View {
         if let lo = histogram.lo, let hi = histogram.hi {
             HistogramChart(
                 histogram: histogram,
-                selection: .constant(.init(lower: lo, upper: hi)), interactive: false
+                selection: .constant(.init(lower: lo, upper: hi)), interactive: false,
+                frequencyScale: frequencyScale
             )
             .frame(height: 110).accessibilityLabel("Distribution")
             if let min = histogram.minLabel, let max = histogram.maxLabel,
@@ -220,8 +232,10 @@ struct ColumnAnalysisView: View {
                 Text(context).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
             }
         } else {
-            Text("No values to plot").font(.caption).foregroundStyle(.secondary)
+            Text(histogram.scale == .log10 ? "No positive finite values to plot" : "No values to plot")
+                .font(.caption).foregroundStyle(.secondary)
         }
+        HistogramOmissions(histogram: histogram)
     }
 
     private func detail(_ title: String, _ text: String) -> some View {

@@ -44,6 +44,8 @@ pub struct ColumnCapabilities {
     pub histogram: bool,
     /// Direct numeric and temporal arrays support approximate plot coordinates.
     pub scatter: bool,
+    /// Direct numeric values support positive-only logarithmic charts.
+    pub logarithmic: bool,
 }
 
 /// Maximum source cardinality offered as a checkbox list.
@@ -73,6 +75,7 @@ impl<'a> Column<'a> {
                 return ColumnCapabilities {
                     histogram: false,
                     scatter: false,
+                    logarithmic: false,
                     ..of(values)
                 };
             }
@@ -82,6 +85,7 @@ impl<'a> Column<'a> {
                 range: kind.is_ordered(),
                 histogram: kind.is_ordered(),
                 scatter: kind.is_ordered(),
+                logarithmic: kind.supports_log(),
                 equals: kind.is_ordered() || matches!(kind, DataKind::Boolean | DataKind::Text),
             }
         }
@@ -491,6 +495,7 @@ mod tests {
             equals: true,
             histogram: false,
             scatter: false,
+            logarithmic: false,
         });
     }
 

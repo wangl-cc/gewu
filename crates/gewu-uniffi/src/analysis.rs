@@ -208,28 +208,36 @@ pub struct DistinctValue {
 /// Range filters use `RangeHistogram.ranges` for exact bin boundaries.
 #[derive(uniffi::Record)]
 pub struct Histogram {
+    pub scale: crate::AxisScale,
     pub lo: Option<f64>,
     pub hi: Option<f64>,
     pub min_label: Option<String>,
     pub max_label: Option<String>,
     pub integer: bool,
     pub counts: Vec<u64>,
+    pub bin_edges: Vec<f64>,
     pub null_count: u64,
     pub nan_count: u64,
+    pub non_positive_count: u64,
+    pub infinite_count: u64,
     pub total: u64,
 }
 
 impl From<core::Histogram> for Histogram {
     fn from(h: core::Histogram) -> Self {
         Self {
+            scale: h.scale.into(),
             lo: h.lo,
             hi: h.hi,
             min_label: h.min_label,
             max_label: h.max_label,
             integer: h.integer,
             counts: h.counts,
+            bin_edges: h.bin_edges,
             null_count: h.null_count,
             nan_count: h.nan_count,
+            non_positive_count: h.non_positive_count,
+            infinite_count: h.infinite_count,
             total: h.total,
         }
     }

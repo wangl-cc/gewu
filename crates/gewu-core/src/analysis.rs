@@ -158,6 +158,7 @@ pub struct ColumnAnalysis {
     column: u32,
     section: AnalysisSection,
     histogram_bins: u32,
+    histogram_scale: crate::AxisScale,
     context: AnalysisContext,
 }
 
@@ -189,6 +190,7 @@ impl ColumnAnalysis {
             column,
             section,
             histogram_bins: 40,
+            histogram_scale: crate::AxisScale::Linear,
             context: AnalysisContext::default(),
         })
     }
@@ -204,6 +206,20 @@ impl ColumnAnalysis {
             return Err(Error::InvalidArgument("bins must be at least 1".into()));
         }
         self.histogram_bins = bins;
+        Ok(self)
+    }
+
+    /// Choose numeric distribution binning; other sections remain untransformed.
+    pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
+        if scale == crate::AxisScale::Log10
+            && (self.section != AnalysisSection::Distribution
+                || !DataKind::of(self.array.data_type()).supports_log())
+        {
+            return Err(Error::InvalidArgument(
+                "logarithmic binning requires a numeric distribution".into(),
+            ));
+        }
+        self.histogram_scale = scale;
         Ok(self)
     }
 
@@ -243,10 +259,11 @@ impl ColumnAnalysis {
                 }
             }
             AnalysisSection::Distribution => AnalysisData::Distribution {
-                histogram: histogram::counts_with_context(
+                histogram: histogram::counts_scaled_with_context(
                     &self.array,
                     &self.rows,
                     self.histogram_bins,
+                    self.histogram_scale,
                     &self.context,
                 )?,
             },

@@ -8,7 +8,7 @@ use arrow::array::ArrayRef;
 
 use crate::{
     analysis::{numeric::Numeric, AnalysisContext},
-    format, Error, Result,
+    format, AxisScale, DataKind, Error, Result,
 };
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;
@@ -30,8 +30,10 @@ pub struct ScatterResult {
     pub x_column: Option<u32>,
     pub y_column: u32,
     pub total_rows: u64,
-    /// Rows with finite, non-null values for both coordinates.
+    /// Rows with finite, non-null values in both requested axis domains.
     pub eligible_rows: u64,
+    /// Finite pairs omitted because a logarithmic axis is zero or negative.
+    pub non_positive_rows: u64,
     pub sampled: bool,
     pub points: Vec<ScatterPoint>,
 }
@@ -43,6 +45,8 @@ pub struct ScatterAnalysis {
     rows: Arc<Vec<u32>>,
     version: u64,
     limit: usize,
+    x_scale: AxisScale,
+    y_scale: AxisScale,
     context: AnalysisContext,
 }
 
@@ -73,12 +77,34 @@ impl ScatterAnalysis {
             rows,
             version,
             limit: limit as usize,
+            x_scale: AxisScale::Linear,
+            y_scale: AxisScale::Linear,
             context: AnalysisContext::default(),
         })
     }
 
     pub fn cancel(&self) {
         self.context.cancel();
+    }
+
+    /// Choose independent numeric axis domains. Dates, times and source row
+    /// IDs retain a linear scale. Coordinates and labels remain original values.
+    pub fn with_scales(mut self, x_scale: AxisScale, y_scale: AxisScale) -> Result<Self> {
+        for (scale, array) in [
+            (x_scale, self.x.as_ref().map(|(_, array)| array)),
+            (y_scale, Some(&self.y.1)),
+        ] {
+            if scale == AxisScale::Log10
+                && !array.is_some_and(|array| DataKind::of(array.data_type()).supports_log())
+            {
+                return Err(Error::InvalidArgument(
+                    "logarithmic scatter axes require a numeric column".into(),
+                ));
+            }
+        }
+        self.x_scale = x_scale;
+        self.y_scale = y_scale;
+        Ok(self)
     }
 
     /// Scan the snapshot off the UI thread. Uses O(limit) sample working memory,
@@ -92,12 +118,22 @@ impl ScatterAnalysis {
         let y = Numeric::new(&self.y.1).unwrap().accessor();
         let mut sample = BinaryHeap::with_capacity(self.limit);
         let mut eligible_rows = 0;
+        let mut non_positive_rows = 0;
         for (index, &row) in self.rows.iter().enumerate() {
             self.context.check_at(index)?;
             let xv = x
                 .as_ref()
                 .map_or(Some(f64::from(row)), |get| get(row as usize));
-            if !xv.is_some_and(f64::is_finite) || !y(row as usize).is_some_and(f64::is_finite) {
+            let (Some(xv), Some(yv)) = (xv, y(row as usize)) else {
+                continue;
+            };
+            if !xv.is_finite() || !yv.is_finite() {
+                continue;
+            }
+            if (self.x_scale == AxisScale::Log10 && xv <= 0.0)
+                || (self.y_scale == AxisScale::Log10 && yv <= 0.0)
+            {
+                non_positive_rows += 1;
                 continue;
             }
             eligible_rows += 1;
@@ -137,6 +173,7 @@ impl ScatterAnalysis {
             y_column: self.y.0,
             total_rows: self.rows.len() as u64,
             eligible_rows,
+            non_positive_rows,
             sampled: eligible_rows > points.len() as u64,
             points,
         })
@@ -154,9 +191,113 @@ fn priority(row: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Float64Array, Int64Array, StringArray};
+    use arrow::array::{Date32Array, Float64Array, Int64Array, StringArray};
 
     use super::*;
+
+    #[test]
+    fn log_axes_classify_pairs_independently_and_keep_original_values() {
+        let x: ArrayRef = Arc::new(Float64Array::from(vec![
+            None,
+            Some(-3.0),
+            Some(0.0),
+            Some(2.0),
+            Some(3.0),
+            Some(4.0),
+            Some(f64::INFINITY),
+            Some(5.0),
+        ]));
+        let y: ArrayRef = Arc::new(Float64Array::from(vec![
+            1.0,
+            -3.0,
+            0.0,
+            -2.0,
+            2.0,
+            f64::INFINITY,
+            3.0,
+            f64::NAN,
+        ]));
+        for (xs, ys, eligible, non_positive) in [
+            (AxisScale::Linear, AxisScale::Linear, 4, 0),
+            (AxisScale::Log10, AxisScale::Linear, 2, 2),
+            (AxisScale::Linear, AxisScale::Log10, 1, 3),
+            (AxisScale::Log10, AxisScale::Log10, 1, 3),
+        ] {
+            let result = ScatterAnalysis::new(
+                Some((0, x.clone())),
+                (1, y.clone()),
+                Arc::new((0..8).collect()),
+                7,
+                8,
+            )
+            .unwrap()
+            .with_scales(xs, ys)
+            .unwrap()
+            .run()
+            .unwrap();
+            assert_eq!((result.version, result.total_rows), (7, 8));
+            assert_eq!(
+                (result.eligible_rows, result.non_positive_rows),
+                (eligible, non_positive)
+            );
+            assert_eq!(result.total_rows - eligible - non_positive, 4);
+            let point = result.points.iter().find(|p| p.source_row == 4).unwrap();
+            assert_eq!((point.x, point.y), (3.0, 2.0));
+            assert_eq!((&*point.x_label, &*point.y_label), ("3.0", "2.0"));
+        }
+
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![1]));
+        let job =
+            || ScatterAnalysis::new(None, (0, dates.clone()), Arc::new(vec![0]), 0, 8).unwrap();
+        assert!(matches!(
+            job().with_scales(AxisScale::Log10, AxisScale::Linear),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            job().with_scales(AxisScale::Linear, AxisScale::Log10),
+            Err(Error::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn log_domain_is_applied_before_bounded_sampling() {
+        let array: ArrayRef = Arc::new(Int64Array::from_iter_values((0..1000).map(|row| {
+            if row >= 990 {
+                row
+            } else {
+                -1
+            }
+        })));
+        let make = |rows| {
+            ScatterAnalysis::new(None, (0, array.clone()), Arc::new(rows), 0, 5)
+                .unwrap()
+                .with_scales(AxisScale::Linear, AxisScale::Log10)
+                .unwrap()
+        };
+        let result = make((0..1000).collect()).run().unwrap();
+        assert_eq!((result.eligible_rows, result.non_positive_rows), (10, 990));
+        assert!(result.sampled);
+        assert_eq!(result.points.len(), 5);
+        let ids = |result: ScatterResult| {
+            result
+                .points
+                .into_iter()
+                .map(|p| p.source_row)
+                .collect::<Vec<_>>()
+        };
+        assert!(result
+            .points
+            .iter()
+            .all(|p| p.source_row >= 990 && p.y >= 990.0));
+        assert_eq!(
+            ids(result),
+            ids(make((0..1000).rev().collect()).run().unwrap())
+        );
+
+        let empty = make((0..990).collect()).run().unwrap();
+        assert_eq!((empty.eligible_rows, empty.non_positive_rows), (0, 990));
+        assert!(empty.points.is_empty() && !empty.sampled);
+    }
 
     #[test]
     fn scatter_preserves_pairs_filters_invalid_values_and_limits_memory() {

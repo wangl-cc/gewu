@@ -6,6 +6,8 @@ struct RangeFilterView: View {
     let nullable: Bool
     let distribution: RangeHistogram?
     @Binding var bins: UInt32
+    @Binding var scale: AxisScale
+    let supportsLog: Bool
     let current: [Filter]
     let onApply: ([Filter]) -> Void
 
@@ -19,6 +21,7 @@ struct RangeFilterView: View {
     @State private var upperEdited = false
     @State private var nullMode = NullMode.include
     @State private var error: String?
+    @State private var frequencyScale: AxisScale = .linear
 
     // Geometry uses ordinal bin edges, so large adjacent values never collapse.
     private var chart: RangeHistogram? {
@@ -33,12 +36,18 @@ struct RangeFilterView: View {
         h.lo = 0
         h.hi = Double(distribution.ranges.count)
         h.integer = false
+        h.binEdges = []
         return h
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if supportsLog {
+                ScalePicker(title: "Binning", selection: $scale)
+                    .help("Log10 bins include only finite positive values; typed bounds still use original values.")
+            }
             if let chart {
+                ScalePicker(title: "Frequency", selection: $frequencyScale)
                 Picker("Maximum bins", selection: $bins) {
                     ForEach([10, 20, 40, 60] as [UInt32], id: \.self) { count in
                         Text(count.formatted()).tag(count)
@@ -49,12 +58,16 @@ struct RangeFilterView: View {
                     histogram: plotHistogram(chart),
                     selection: Binding(
                         get: { selection }, set: selectBins
-                    )
+                    ), frequencyScale: frequencyScale
                 )
                 .frame(height: 140)
                 .accessibilityLabel("Distribution; edit the minimum and maximum fields to select a range")
-                Text("Drag to select a range · Double-click to reset").font(.caption).foregroundStyle(.secondary)
+                Text("Drag to select a range · Double-click to select all plotted values")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if distribution?.histogram.scale == .log10 {
+                Text("No positive finite values to plot").font(.caption).foregroundStyle(.secondary)
             }
+            if let distribution { HistogramOmissions(histogram: distribution.histogram) }
             HStack {
                 TextField(
                     "Min",
@@ -97,7 +110,7 @@ struct RangeFilterView: View {
             }
         }
         .onAppear { restore() }
-        .onChange(of: distribution?.histogram.counts.count) { _, _ in
+        .onChange(of: distribution?.histogram) { _, _ in
             projectSelection()
         }
     }
@@ -157,7 +170,22 @@ struct RangeFilterView: View {
         guard let lo = h.lo, let hi = h.hi, hi > lo, lo.isFinite, hi.isFinite,
             (hi - lo).isFinite
         else { return upper ? count : 0 }
-        let value = bound.axisValue() + (upper && h.integer ? 1 : 0)
+        let value: Double
+        if h.scale == .log10 {
+            let original = bound.axisValue()
+            guard original > 0 else { return 0 }
+            value = log10(original)
+        } else {
+            value = bound.axisValue() + (upper && h.integer ? 1 : 0)
+        }
+        if !h.binEdges.isEmpty {
+            for index in 0..<chart.ranges.count where value < h.binEdges[index + 1] {
+                let start = h.binEdges[index]
+                let fraction = Swift.max(0, (value - start) / (h.binEdges[index + 1] - start))
+                return Double(index) + fraction
+            }
+            return count
+        }
         let edge = (value - lo) / (hi - lo) * count
         guard !edge.isNaN else { return upper ? count : 0 }
         return Swift.min(count, Swift.max(0, edge))
@@ -195,10 +223,10 @@ struct RangeFilterView: View {
 
     private func selectionSummary(_ histogram: Histogram) -> String {
         guard !histogram.counts.isEmpty else { return "" }
-        let base = histogram.total - histogram.nullCount - histogram.nanCount
+        let base = histogram.counts.reduce(0, +)
         if let selectedBins, selectedBins.lowerBound >= 0, selectedBins.upperBound <= histogram.counts.count {
             let count = histogram.counts[selectedBins].reduce(0, +)
-            if selectedBins.count == histogram.counts.count { return "All \(formatCount(base)) values" }
+            if selectedBins.count == histogram.counts.count { return "All \(formatCount(base)) plotted values" }
             return "\(formatCount(count)) of \(formatCount(base)) values selected"
         }
         let count = histogram.counts.enumerated().reduce(0.0) { total, pair in

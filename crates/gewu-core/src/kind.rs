@@ -27,6 +27,11 @@ pub enum DataKind {
 }
 
 impl DataKind {
+    /// Numeric axes whose positive values can be displayed logarithmically.
+    pub fn supports_log(self) -> bool {
+        matches!(self, Self::Integer | Self::Float | Self::Decimal)
+    }
+
     pub fn of(data_type: &DataType) -> Self {
         use DataType::*;
         match data_type {

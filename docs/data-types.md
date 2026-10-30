@@ -22,7 +22,9 @@ Float16, Float32 and Float64 search uses the precision of the input:
 
 The lower edge is included and the upper edge is excluded. Matching also includes the exact parsed target, so a precision interval that collapses at the column's floating-point resolution still finds that value. Search accepts `nan` and `inf`.
 
-Explicit equality parses to the native floating-point type, including Float32 rounding for a Float32 column. Explicit range filters use inclusive endpoints and do not widen with input precision. NaN is distinct from null; histograms count it separately, while infinities go into the outer bins.
+Explicit equality parses to the native floating-point type, including Float32 rounding for a Float32 column. Explicit range filters use inclusive endpoints and do not widen with input precision. NaN is distinct from null; histograms count it separately. Linear histograms include infinities in the outer bins; logarithmic histograms exclude them and report their count.
+
+Numeric charts offer Linear and Log10 scales. Scatter X and Y scales are independent; logarithmic axes omit nonpositive values before sampling. Distribution and range-filter charts can use logarithmic binning, with a separate Linear/Log10 frequency scale. Zero-count bins remain empty. Omission counts are shown explicitly, and tooltips and filters keep original values. Calendar, time, duration and source-row axes retain their linear semantics. Displaying a chart with logarithmic scales does not modify the document's rows, values or filters.
 
 ## Decimals
 

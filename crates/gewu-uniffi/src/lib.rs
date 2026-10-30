@@ -11,6 +11,7 @@ mod error;
 mod export;
 mod file;
 mod filter;
+mod scale;
 mod scatter;
 mod text_choices;
 mod view;
@@ -28,6 +29,7 @@ pub use file::{
 pub use filter::{
     Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,
 };
+pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use view::{RowBlock, SortKey, ViewInfo, ViewState};

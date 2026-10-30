@@ -12,6 +12,7 @@ struct HistogramChart: NSViewRepresentable {
     let histogram: Histogram
     @Binding var selection: HistogramSelection
     var interactive = true
+    var frequencyScale: AxisScale = .linear
     var labelFormatter: ((Double) -> String)?
 
     final class Coordinator {
@@ -24,6 +25,7 @@ struct HistogramChart: NSViewRepresentable {
 
     func updateNSView(_ view: HistogramView, context: Context) {
         view.isInteractive = interactive
+        view.frequencyScale = frequencyScale
         view.labelFormatter = labelFormatter
         if let min = histogram.minLabel, let max = histogram.maxLabel {
             view.axisLabels = ChartLabels.endpoints(min, max)
@@ -35,7 +37,7 @@ struct HistogramChart: NSViewRepresentable {
         if context.coordinator.histogram != histogram {
             view.setData(
                 counts: histogram.counts, lo: histogram.lo ?? 0,
-                hi: histogram.hi ?? 1, integer: histogram.integer)
+                hi: histogram.hi ?? 1, integer: histogram.integer, binEdges: histogram.binEdges)
             context.coordinator.histogram = histogram
         }
         view.setSelection(selection.lower, selection.upper, snapped: selection.snapped)
@@ -64,6 +66,7 @@ final class HistogramView: NSView {
     var onChange: (() -> Void)?
     /// When false, only shows the distribution: no handles, no dragging.
     var isInteractive = true
+    var frequencyScale: AxisScale = .linear
     /// Text for axis values; numbers by default.
     var labelFormatter: ((Double) -> String)?
     /// Exact source extrema supplied by a typed range histogram.
@@ -73,6 +76,7 @@ final class HistogramView: NSView {
     private(set) var isSnapped = true
 
     private var counts: [UInt64] = []
+    private var binEdges: [Double] = []
     private var lo = 0.0, hi = 1.0
     private var integer = false
     private var maxCount: UInt64 = 1
@@ -90,8 +94,9 @@ final class HistogramView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// For integers `hi` is one past the largest value.
-    func setData(counts: [UInt64], lo: Double, hi: Double, integer: Bool) {
+    func setData(counts: [UInt64], lo: Double, hi: Double, integer: Bool, binEdges: [Double] = []) {
         self.counts = counts
+        self.binEdges = binEdges
         self.lo = lo
         self.hi = hi
         self.integer = integer
@@ -110,13 +115,12 @@ final class HistogramView: NSView {
     /// proportion).
     func selectedCount() -> UInt64 {
         guard !counts.isEmpty, hi > lo else { return 0 }
-        let width = (hi - lo) / Double(counts.count)
         var total = 0.0
         for (i, c) in counts.enumerated() {
-            let b0 = lo + Double(i) * width
-            let b1 = b0 + width
+            let b0 = binEdge(i)
+            let b1 = binEdge(i + 1)
             let overlap = min(b1, selection.1) - max(b0, selection.0)
-            if overlap > 0 { total += Double(c) * overlap / width }
+            if overlap > 0 { total += Double(c) * overlap / (b1 - b0) }
         }
         return UInt64(total.rounded())
     }
@@ -125,7 +129,9 @@ final class HistogramView: NSView {
 
     private var plot: NSRect {
         // Side insets keep the edge handles (and their hit areas) inside the view.
-        NSRect(x: bounds.minX + 11, y: bounds.minY + 4, width: bounds.width - 22, height: bounds.height - 22)
+        NSRect(
+            x: bounds.minX + 42, y: bounds.minY + 6, width: max(0, bounds.width - 53),
+            height: max(0, bounds.height - 24))
     }
 
     private func x(_ v: Double) -> CGFloat {
@@ -146,6 +152,10 @@ final class HistogramView: NSView {
 
     private var binWidth: Double { counts.isEmpty ? 1 : (hi - lo) / Double(counts.count) }
 
+    private func binEdge(_ index: Int) -> Double {
+        binEdges.isEmpty ? lo + Double(index) * binWidth : binEdges[index]
+    }
+
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -154,23 +164,26 @@ final class HistogramView: NSView {
         NSBezierPath(roundedRect: p.insetBy(dx: -1, dy: -2), xRadius: 4, yRadius: 4).fill()
         guard !counts.isEmpty else { return }
 
-        let barWidth = p.width / CGFloat(counts.count)
-        let gap: CGFloat = barWidth > 4 ? 1 : 0
         // Until a range is chosen, show the distribution in neutral grey.
         let everything = isEverything
         let selected = everything ? NSColor.secondaryLabelColor : NSColor.controlAccentColor
         let unselected = NSColor.tertiaryLabelColor
         for (i, c) in counts.enumerated() where c > 0 {
-            let h = max(1, CGFloat(Double(c) / Double(maxCount)) * (p.height - 4))
+            let left = x(binEdge(i))
+            let barWidth = x(binEdge(i + 1)) - left
+            let gap: CGFloat = barWidth > 4 ? 1 : 0
+            let h = max(
+                1, CGFloat(HistogramFrequency.fraction(c, maximum: maxCount, scale: frequencyScale)) * (p.height - 4))
             let r = NSRect(
-                x: p.minX + CGFloat(i) * barWidth + gap / 2, y: p.maxY - h,
-                width: barWidth - gap, height: h)
-            let mid = lo + (Double(i) + 0.5) * binWidth
+                x: left + gap / 2, y: p.maxY - h,
+                width: max(1, barWidth - gap), height: h)
+            let mid = (binEdge(i) + binEdge(i + 1)) / 2
             (mid >= selection.0 && mid <= selection.1 ? selected : unselected).setFill()
             r.fill()
         }
 
         drawAxisLabels(p)
+        drawFrequencyLabels(p)
         guard isInteractive else { return }
 
         // Selection band and handles.
@@ -215,6 +228,24 @@ final class HistogramView: NSView {
         let width = max(0, (p.width - 8) / 2)
         left.draw(in: NSRect(x: p.minX, y: p.maxY + 4, width: width, height: 15))
         right.draw(in: NSRect(x: p.maxX - width, y: p.maxY + 4, width: width, height: 15))
+    }
+
+    private func drawFrequencyLabels(_ p: NSRect) {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .right
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: style,
+        ]
+        let ticks: [UInt64] = frequencyScale == .log10 ? (maxCount > 1 ? [1, maxCount] : [1]) : [0, maxCount]
+        for count in ticks {
+            let text = Double(count).formatted(.number.notation(.compactName).precision(.significantDigits(1...3)))
+            let fraction = HistogramFrequency.fraction(count, maximum: maxCount, scale: frequencyScale)
+            let y = p.maxY - CGFloat(fraction) * (p.height - 4) - 5
+            NSAttributedString(string: text, attributes: attributes)
+                .draw(in: NSRect(x: bounds.minX, y: y, width: p.minX - bounds.minX - 5, height: 12))
+        }
     }
 
     private func axisLabel(_ v: Double) -> String {
@@ -309,6 +340,21 @@ final class HistogramView: NSView {
             NSCursor.openHand.set()
         } else {
             NSCursor.crosshair.set()
+        }
+    }
+}
+
+enum HistogramFrequency {
+    /// Log bars start at 0.5 so a count of one remains visible; empty bins have no bar.
+    static func fraction(_ count: UInt64, maximum: UInt64, scale: AxisScale) -> Double {
+        guard count > 0 else { return 0 }
+        let maximum = max(1, maximum)
+        switch scale {
+        case .linear:
+            return Double(count) / Double(maximum)
+        case .log10:
+            let baseline = log10(0.5)
+            return (log10(Double(count)) - baseline) / (log10(Double(maximum)) - baseline)
         }
     }
 }

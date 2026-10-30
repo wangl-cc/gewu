@@ -8,27 +8,41 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{analysis::AnalysisContext, scope::Selection, Bound, Error, Result};
+use crate::{analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, Result};
+
+mod logarithmic;
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Histogram {
+    /// Binning coordinate space. Log10 axes contain log10(value); labels and
+    /// range bounds always retain the original values.
+    pub scale: AxisScale,
     /// Approximate display axis over the whole source column, not just the
     /// counted rows, so it stays put while filters change. Native values decide
     /// bin membership; use [`RangeHistogram::ranges`] for exact filter bounds.
-    /// Infinities count in the end bins. `None` for empty/all-null/all-NaN data.
+    /// Linear bins include infinities at the ends. `None` when there is no
+    /// eligible finite domain (logarithmic bins require positive values).
     pub lo: Option<f64>,
     pub hi: Option<f64>,
     /// Exact finite source extrema for display, independent of plotting coordinates.
     /// Absent when the source has no finite domain.
     pub min_label: Option<String>,
     pub max_label: Option<String>,
-    /// Integer column (including dates and times). The axis encloses
+    /// Linear integer grid (including dates and times). The axis encloses
     /// `min..max + 1`, and small spans have exactly one integer per bin.
     pub integer: bool,
     pub counts: Vec<u64>,
+    /// Log10 display edges for the retained native bins, with `counts.len() + 1`
+    /// strictly increasing values. Empty for linear or empty histograms. Native
+    /// cuts that collapse at f64 log precision are nudged apart for display only.
+    pub bin_edges: Vec<f64>,
     pub null_count: u64,
     pub nan_count: u64,
+    /// Finite non-positive values omitted by logarithmic binning; zero for linear bins.
+    pub non_positive_count: u64,
+    /// Infinities omitted by logarithmic binning. Linear bins include them at the edges.
+    pub infinite_count: u64,
     /// Rows counted (including nulls and NaN).
     pub total: u64,
 }
@@ -97,6 +111,21 @@ pub(crate) fn build(
     )
 }
 
+pub(crate) fn build_scaled(
+    array: &ArrayRef,
+    rows: &Selection,
+    bins: u32,
+    scale: AxisScale,
+) -> Result<Option<RangeHistogram>> {
+    match scale {
+        AxisScale::Linear => build(array, rows, bins),
+        AxisScale::Log10 => {
+            logarithmic::build(array, rows, bins.min(MAX_BINS), &AnalysisContext::default())
+                .map(Some)
+        }
+    }
+}
+
 /// Statistics use the requested bin count and the caller's row scope, while
 /// sharing exact cuts with filter charts. Empty/all-NaN columns have no axis;
 /// an infinity-only column has no finite domain and is an explicit error.
@@ -111,6 +140,19 @@ pub(crate) fn counts_with_context(
     context: &AnalysisContext,
 ) -> Result<Histogram> {
     statistics(array, rows, bins, context)
+}
+
+pub(crate) fn counts_scaled_with_context(
+    array: &ArrayRef,
+    rows: &Selection,
+    bins: u32,
+    scale: AxisScale,
+    context: &AnalysisContext,
+) -> Result<Histogram> {
+    match scale {
+        AxisScale::Linear => counts_with_context(array, rows, bins, context),
+        AxisScale::Log10 => logarithmic::build(array, rows, bins, context),
+    }
 }
 
 pub(crate) fn ranges(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<RangeHistogram> {
@@ -160,14 +202,18 @@ fn statistics<H: Output>(
     context.check()?;
     H::finish(
         Histogram {
+            scale: AxisScale::Linear,
             lo: None,
             hi: None,
             min_label: None,
             max_label: None,
             integer: array.data_type().is_integer() || array.data_type().is_temporal(),
             counts: Vec::new(),
+            bin_edges: Vec::new(),
             null_count,
             nan_count: total - null_count,
+            non_positive_count: 0,
+            infinite_count: 0,
             total,
         },
         || Ok(Vec::new()),
@@ -511,14 +557,18 @@ fn count<T: ArrowPrimitiveType>(
 ) -> Result<Histogram> {
     context.check()?;
     let mut histogram = Histogram {
+        scale: AxisScale::Linear,
         lo: Some(axis.0),
         hi: Some(axis.1),
         min_label: None,
         max_label: None,
         integer,
         counts: vec![0; bins],
+        bin_edges: Vec::new(),
         null_count: 0,
         nan_count: 0,
+        non_positive_count: 0,
+        infinite_count: 0,
         total: rows.len() as u64,
     };
     for (index, row) in rows.iter().enumerate() {
