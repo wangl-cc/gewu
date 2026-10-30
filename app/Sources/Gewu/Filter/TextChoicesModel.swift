@@ -28,7 +28,7 @@ final class TextChoicesModel: ObservableObject {
             page = result
         } catch {
             guard !Task.isCancelled, session.isCurrent(ticket) else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
         }
     }
 

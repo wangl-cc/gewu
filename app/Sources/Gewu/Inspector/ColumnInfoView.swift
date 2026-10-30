@@ -13,7 +13,8 @@ struct InspectorSidebar: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             if model.inspectorPage == .column {
-                if let info = model.info, !info.columns.isEmpty {
+                if !model.info.columns.isEmpty {
+                    let info = model.info
                     VStack(alignment: .leading, spacing: 4) {
                         Menu {
                             Picker("Column", selection: $model.inspectedColumn) {
@@ -52,10 +53,9 @@ struct InspectorSidebar: View {
     }
 
     private var selectedColumnName: String {
-        guard let column = model.inspectedColumn, let info = model.info,
-            info.columns.indices.contains(column)
+        guard let column = model.inspectedColumn, model.info.columns.indices.contains(column)
         else { return "Choose Column" }
-        return info.columns[column].name
+        return model.info.columns[column].name
     }
 }
 
@@ -72,12 +72,12 @@ struct ColumnAnalysisView: View {
     init(model: DocumentModel, column: Int) {
         self.model = model
         self.column = column
-        let numeric = model.info?.columns[column].capabilities.histogram == true
+        let numeric = model.info.columns[column].capabilities.histogram
         _expanded = State(initialValue: numeric ? 7 : 9)
     }
 
     private struct Request: Equatable {
-        let document: ObjectIdentifier?
+        let document: ObjectIdentifier
         let version: UInt64
         let column: Int
         let expanded: Int
@@ -87,22 +87,20 @@ struct ColumnAnalysisView: View {
 
     private var request: Request {
         Request(
-            document: model.doc.map(ObjectIdentifier.init), version: model.current.version,
+            document: ObjectIdentifier(model.doc), version: model.current.version,
             column: column, expanded: expanded, retry: retry, histogramBins: histogramBins)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if let doc = model.doc,
-                    analysis.matches(document: doc, version: model.current.version, column: UInt32(column))
-                {
+                if analysis.matches(document: model.doc, version: model.current.version, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
                     if case .overview(let rows, let nulls) = analysis.results[.overview] {
                         Text("Missing \(countWithPercent(nulls, total: rows))")
                             .font(.caption).foregroundStyle(.secondary)
                             .help(
-                                "Missing values in the current results. Column type: \(model.info?.columns[column].typeName ?? "")"
+                                "Missing values in the current results. Column type: \(model.info.columns[column].typeName)"
                             )
                     }
                     if let error = analysis.errors[.overview] { failure(error) }
@@ -138,9 +136,8 @@ struct ColumnAnalysisView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task(id: request) {
-            guard let doc = model.doc else { return }
             await analysis.load(
-                document: doc, version: model.current.version,
+                document: model.doc, version: model.current.version,
                 column: UInt32(column), expanded: expanded, bins: histogramBins)
         }
         .onDisappear { analysis.cancel() }
@@ -237,8 +234,8 @@ struct ColumnAnalysisView: View {
 
     private func value(_ value: Double) -> String {
         if model.kinds.indices.contains(column), model.kinds[column] == .temporal,
-            let doc = model.doc, let integer = Int64(exactly: value.rounded()),
-            let text = try? doc.formatValue(column: UInt32(column), value: integer)
+            let integer = Int64(exactly: value.rounded()),
+            let text = try? model.doc.formatValue(column: UInt32(column), value: integer)
         {
             return "≈ " + text
         }

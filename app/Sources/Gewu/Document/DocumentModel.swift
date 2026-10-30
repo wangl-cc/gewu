@@ -12,9 +12,9 @@ enum InspectorPage: String, CaseIterable {
 @MainActor
 final class DocumentModel: ObservableObject {
     let url: URL
-    @Published private(set) var doc: GewuDocument?
-    @Published private(set) var info: FileInfo?
-    @Published private(set) var kinds: [ColumnKind] = []
+    let doc: GewuDocument
+    let info: FileInfo
+    let kinds: [ColumnKind]
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
     @Published private(set) var appliedState = ViewState(sort: [], filters: [], search: nil)
     @Published private(set) var isBusy = false
@@ -57,10 +57,10 @@ final class DocumentModel: ObservableObject {
         inspectedColumn = selectedColumn
     }
 
-    var canExport: Bool { doc != nil && !isBusy && export.isIdle }
+    var canExport: Bool { !isBusy && export.isIdle }
 
     func chooseExport() {
-        guard canExport, let doc, let table, let window = table.view.window else { return }
+        guard canExport, let table, let window = table.view.window else { return }
         export.choose(document: doc, view: current, columns: table.displayedColumns, source: url, window: window)
     }
 
@@ -73,21 +73,19 @@ final class DocumentModel: ObservableObject {
     }
 
     var subtitle: String {
-        guard let info else { return "" }
         let source = info.sheet.map { "\(info.format) · \($0)" } ?? info.format
         return "\(source) · \(formatCount(info.rowCount)) rows · \(info.columns.count) columns · "
             + ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)
     }
 
     func status(rowNumberBase: Int) -> String {
-        guard let info else { return isBusy ? "Opening \(url.lastPathComponent)…" : "Could not open file" }
         var text =
             current.rowCount == info.rowCount
             ? "\(formatCount(current.rowCount)) rows"
             : "\(formatCount(current.rowCount)) of \(formatCount(info.rowCount)) rows"
         text += " · \(info.columns.count) columns"
         if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
-        if let row = selectedSourceRow { text += " · row \(formatCount(row + (rowNumberBase == 1 ? 1 : 0))) in file" }
+        if let row = selectedSourceRow { text += " · row \(formatRowNumber(row, base: rowNumberBase)) in file" }
         if appliedState.search != nil, current.rowCount > 0 {
             if let row = selectedDisplayRow {
                 text += " · match \(formatCount(UInt64(row + 1))) of \(formatCount(current.rowCount))"
@@ -118,7 +116,7 @@ final class DocumentModel: ObservableObject {
     }
 
     func refresh(debounce: Bool = false) {
-        guard let doc else { return }
+        let doc = doc
         viewTask?.cancel()
         doc.cancelPending()
         request &+= 1
@@ -165,7 +163,7 @@ final class DocumentModel: ObservableObject {
         request &+= 1
         gate.set(request)
         viewTask?.cancel()
-        doc?.cancelPending()
+        doc.cancelPending()
         export.stop()
         copying.cancel()
         table?.stopLoading()
@@ -180,19 +178,7 @@ final class DocumentModel: ObservableObject {
     }
 
     func reportError(_ error: Error, prefix: String = "") {
-        let message: String
-        switch error {
-        case GewuError.Io(let reason), GewuError.Unsupported(let reason),
-            GewuError.InvalidArgument(let reason), GewuError.Internal(let reason):
-            message = reason
-        case GewuError.Cancelled:
-            message = "The operation was cancelled."
-        case GewuError.StaleVersion:
-            message = "The results changed. Please try again."
-        default:
-            message = error.localizedDescription
-        }
-        reportError(prefix + message)
+        reportError(prefix + error.userMessage)
     }
 }
 

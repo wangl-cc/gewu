@@ -35,7 +35,7 @@ struct WorkbookLifecycleTests {
         model.selectSheet("First")
         await settled(model)
         assert(model.selectedSheet == "First")
-        assert(model.document?.info?.columns.first?.name == "column_0")
+        assert(model.document?.info.columns.first?.name == "column_0")
         model.stop()
     }
 
@@ -66,7 +66,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         assert(model.selectedSheet == "Last")
         assert(model.document !== original)
-        assert(model.document?.info?.columns.first?.name == "column_3")
+        assert(model.document?.info.columns.first?.name == "column_3")
         assert(model.document?.searchText == "" && model.document?.chartY == nil)
         assert(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
         assert(model.document?.current.version == 0 && original.current.version == 0)
@@ -109,12 +109,13 @@ struct WorkbookLifecycleTests {
         model.open()
         await settled(model)
         assert(model.document?.current.rowCount == 2 && !model.hasHeader)
-        let first = try model.document?.doc?.rows(version: 0, start: 0, count: 1, columns: [0])
+        let first = try model.document?.doc.rows(version: 0, start: 0, count: 1, columns: [0])
         assert(first?.cells == ["1"])
+        try await presentationContracts(model.document!)
         model.reopen(hasHeader: true)
         await settled(model)
         assert(model.document?.current.rowCount == 1 && model.hasHeader)
-        assert(model.document?.info?.columns.first?.name == "1")
+        assert(model.document?.info.columns.first?.name == "1")
         let retained = model.document
         try FileManager.default.removeItem(at: csv)
         model.reopen(hasHeader: false)
@@ -124,12 +125,39 @@ struct WorkbookLifecycleTests {
         let workbook = WorkbookModel(url: fixture, hasHeader: false, didOpen: { _ in })
         workbook.open()
         await settled(workbook)
-        assert(!workbook.hasHeader && workbook.document?.info?.columns.first?.name == "column_1")
+        assert(!workbook.hasHeader && workbook.document?.info.columns.first?.name == "column_1")
         workbook.selectSheet("Last")
         await settled(workbook)
         assert(!workbook.hasHeader && workbook.selectedSheet == "Last")
-        let rows = try workbook.document!.doc!.rows(version: 0, start: 0, count: 1, columns: [0])
+        let rows = try workbook.document!.doc.rows(version: 0, start: 0, count: 1, columns: [0])
         assert(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
+    }
+
+    @MainActor
+    static func presentationContracts(_ document: DocumentModel) async throws {
+        let chart = ScatterModel()
+        document.selectedSourceRow = 0
+        for base in [0, 1] {
+            await chart.load(
+                document: document.doc, version: document.current.version,
+                x: nil, y: 0, xKind: nil, yKind: .integer, rowNumberBase: base)
+            let point = chart.result!.points[0]
+            assert(point.sourceRow == 0, "Presentation must not change source row identity")
+            let label = formatRowNumber(point.sourceRow, base: base)
+            assert(label == String(base) && point.xLabel == label && point.x == Double(base))
+            assert(document.status(rowNumberBase: base).contains("row \(label) in file"))
+        }
+        document.selectedSourceRow = nil
+        do {
+            _ = try document.doc.parseBound(column: 0, text: "not a number")
+            assertionFailure("Invalid numeric bounds must fail")
+        } catch GewuError.InvalidArgument(let message) {
+            let error: Error = GewuError.InvalidArgument(message: message)
+            assert(error.userMessage == message, "Show the Core message, not the generated enum description")
+            document.reportError(error)
+            assert(document.errorMessage == message)
+            document.isErrorPresented = false
+        }
     }
 
     @MainActor

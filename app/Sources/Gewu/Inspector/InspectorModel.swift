@@ -54,7 +54,7 @@ final class InspectorModel: ObservableObject {
             sections = try document.analysisCapabilities(column: column)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             return
         }
         for section in sections where expanded & section.mask != 0 && results[section] == nil {
@@ -78,7 +78,7 @@ final class InspectorModel: ObservableObject {
                 guard !Task.isCancelled, request == ticket else { return }
                 if case GewuError.StaleVersion = error { break }
                 if case GewuError.Cancelled = error { break }
-                errors[section] = error.localizedDescription
+                errors[section] = error.userMessage
             }
             job = nil
         }

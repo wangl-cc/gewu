@@ -19,7 +19,7 @@ struct DataTable: NSViewControllerRepresentable {
     func updateNSViewController(_ controller: DataTableController, context: Context) {
         controller.update(
             showsRowNumbers: showsRowNumbers, fontSize: min(max(fontSize, 10), 20),
-            rowHeight: min(max(rowHeight, 24), 36), rowNumberBase: rowNumberBase == 1 ? 1 : 0)
+            rowHeight: min(max(rowHeight, 24), 36), rowNumberBase: rowNumberBase)
     }
 
     static func dismantleNSViewController(_ controller: DataTableController, coordinator: ()) {
@@ -51,7 +51,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var reloading = false
     private var textSize: CGFloat = 12
     private var fonts = CellFonts()
-    private var rowNumberBase: UInt64 = 0
+    private var rowNumberBase = 0
     private let rowHeaderID = NSUserInterfaceItemIdentifier("rowHeader")
     private let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
 
@@ -104,9 +104,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         view = root
     }
 
-    func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: UInt64 = 0) {
+    func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: Int = 0) {
         loadViewIfNeeded()
-        guard let info = model.info else { return }
+        let info = model.info
         let effectiveHeight = max(rowHeight, fontSize + 8)
         let presentationChanged =
             textSize != fontSize || table.rowHeight != effectiveHeight || self.rowNumberBase != rowNumberBase
@@ -163,7 +163,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         gutter.label = { [weak self] row in
             guard let self, let block = self.block(for: row, column: nil) else { return nil }
             let r = row - Int(block.start)
-            return r >= 0 && r < Int(block.nRows) ? String(block.sourceRows[r] + self.rowNumberBase) : nil
+            return r >= 0 && r < Int(block.nRows) ? formatRowNumber(block.sourceRows[r], base: self.rowNumberBase) : nil
         }
         let rowHeader = NSTableColumn(identifier: rowHeaderID)
         rowHeader.headerCell = ColumnHeaderCell(textCell: "")
@@ -190,8 +190,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func fitGutter(_ info: FileInfo) {
-        gutter.fit(largest: max(info.rowCount, 1) - 1 + rowNumberBase)
-        gutter.toolTip = "Row in file (\(rowNumberBase)-based)"
+        gutter.fit(largest: rowNumber(max(info.rowCount, 1) - 1, base: rowNumberBase))
+        gutter.toolTip = "Row in file (\(formatRowNumber(0, base: rowNumberBase))-based)"
         if let column = table.tableColumn(withIdentifier: rowHeaderID) {
             column.minWidth = gutter.fittedWidth
             column.maxWidth = gutter.fittedWidth
@@ -200,7 +200,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func fittedWidth(column: Int, texts: [String?], maxWidth: CGFloat) -> CGFloat {
-        guard let info = model.info else { return 150 }
+        let info = model.info
         func width(_ text: String, font: NSFont) -> CGFloat {
             ceil((text as NSString).size(withAttributes: [.font: font]).width)
         }
@@ -233,7 +233,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func loadNext() {
-        guard loading == nil, !pending.isEmpty, let doc = model.doc, let version else { return }
+        guard loading == nil, !pending.isEmpty, let version else { return }
+        let doc = model.doc
         let key = pending.removeFirst()
         loading = key
         let reader = reader
@@ -387,7 +388,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard let i = columnIndex(table.tableColumns[column]) else { return table.tableColumns[column].width }
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return table.tableColumns[column].width }
-        guard let doc = model.doc else { return table.tableColumns[column].width }
+        let doc = model.doc
         let version = model.current.version
         let start = visible.location
         let count = min(200, visible.length)
@@ -459,9 +460,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let row = selected < 0 ? (step > 0 ? 0 : count - 1) : (selected + step + count) % count
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         table.scrollRowToVisible(row)
-        guard let doc = model.doc, let info = model.info else { return }
+        let doc = model.doc
         let version = model.current.version
-        let columns = info.columns.count
+        let columns = model.info.columns.count
         matchTask?.cancel()
         let reader = reader
         matchTask = Task { [weak self] in
@@ -493,13 +494,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     var displayedColumns: [UInt32] { table.tableColumns.compactMap(columnIndex).map(UInt32.init) }
 
     private func showFilter(at index: Int) {
-        guard let doc = model.doc, let info = model.info, let header = table.headerView,
+        guard let header = table.headerView,
             index >= 0, index < table.tableColumns.count, let col = columnIndex(table.tableColumns[index])
         else { return }
         closePopover()
         let column = UInt32(col)
         let content = ColumnFilterView(
-            doc: doc, column: column, info: info.columns[col],
+            doc: model.doc, column: column, info: model.info.columns[col],
             state: model.state, current: model.columnFilters[column] ?? []
         ) { [weak self] filters in
             self?.closePopover()
@@ -518,11 +519,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     @objc func copy(_ sender: Any?) {
-        guard let info = model.info, let doc = model.doc, !table.selectedRowIndexes.isEmpty else { return }
+        guard !table.selectedRowIndexes.isEmpty else { return }
         let columns = displayedColumns
         model.copying.copy(
-            document: doc, version: model.current.version,
+            document: model.doc, version: model.current.version,
             rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
-            names: columns.map { info.columns[Int($0)].name })
+            names: columns.map { model.info.columns[Int($0)].name })
     }
 }

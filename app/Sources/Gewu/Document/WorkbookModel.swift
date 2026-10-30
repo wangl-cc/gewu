@@ -42,7 +42,7 @@ final class WorkbookModel: ObservableObject {
         self.didOpen = didOpen
     }
 
-    var selectedSheet: String? { document?.info?.sheet }
+    var selectedSheet: String? { document?.info.sheet }
 
     var supportsHeaderOption: Bool { ["csv", "tsv", "xlsx"].contains(url.pathExtension.lowercased()) }
 
@@ -128,7 +128,7 @@ final class WorkbookModel: ObservableObject {
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
-                self.sheets = next.info?.sheets ?? []
+                self.sheets = next.info.sheets
                 self.pendingSheet = nil
                 self.isOpening = false
                 self.task = nil
@@ -139,21 +139,12 @@ final class WorkbookModel: ObservableObject {
                 self.isOpening = false
                 self.task = nil
                 if error is CancellationError { return }
-                self.errorMessage = Self.message(error)
+                self.errorMessage = error.userMessage
                 self.isErrorPresented = true
             }
         }
     }
 
-    private static func message(_ error: Error) -> String {
-        switch error {
-        case GewuError.Io(let message), GewuError.InvalidArgument(let message),
-            GewuError.Unsupported(let message), GewuError.Internal(let message):
-            return message
-        default:
-            return error.localizedDescription
-        }
-    }
 }
 
 private struct WorkbookRead: Sendable {

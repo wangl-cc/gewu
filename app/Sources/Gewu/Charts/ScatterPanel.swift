@@ -9,11 +9,11 @@ struct ScatterPanel: View {
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
 
     private var columns: [Int] {
-        model.info?.columns.indices.filter { model.info?.columns[$0].capabilities.scatter == true } ?? []
+        model.info.columns.indices.filter { model.info.columns[$0].capabilities.scatter }
     }
 
     private struct Request: Equatable {
-        let document: ObjectIdentifier?
+        let document: ObjectIdentifier
         let version: UInt64
         let x: Int?
         let y: Int?
@@ -24,7 +24,7 @@ struct ScatterPanel: View {
 
     private var request: Request {
         Request(
-            document: model.doc.map(ObjectIdentifier.init), version: model.current.version,
+            document: ObjectIdentifier(model.doc), version: model.current.version,
             x: model.chartX, y: model.chartY, retry: retry, pointLimit: pointLimit, rowNumberBase: rowNumberBase)
     }
 
@@ -58,7 +58,8 @@ struct ScatterPanel: View {
                             Text("No finite pairs to plot").foregroundStyle(.secondary)
                         } else {
                             ScatterChart(
-                                points: result.points, xDates: chart.xDates, yDates: chart.yDates, hovered: $hovered
+                                points: result.points, xDates: chart.xDates, yDates: chart.yDates,
+                                rowNumberBase: rowNumberBase, hovered: $hovered
                             )
                             .frame(height: 220)
                             .accessibilityLabel("Scatter plot, \(result.points.count) points")
@@ -87,7 +88,7 @@ struct ScatterPanel: View {
                             if let point = hovered {
                                 StatisticRow(
                                     title: "Source row",
-                                    value: formatCount(point.sourceRow + UInt64(rowNumberBase == 1 ? 1 : 0)))
+                                    value: formatRowNumber(point.sourceRow, base: rowNumberBase))
                                 StatisticRow(title: "X", value: point.xLabel)
                                 StatisticRow(title: "Y", value: point.yLabel)
                             } else {
@@ -105,10 +106,10 @@ struct ScatterPanel: View {
         }
         .task(id: request) {
             hovered = nil
-            guard let document = model.doc, let y = model.chartY else { return }
+            guard let y = model.chartY else { return }
             await chart.load(
-                document: document, version: model.current.version, x: model.chartX, y: y,
-                xKind: model.chartX.flatMap { model.info?.columns[$0].kind }, yKind: model.info?.columns[y].kind,
+                document: model.doc, version: model.current.version, x: model.chartX, y: y,
+                xKind: model.chartX.map { model.info.columns[$0].kind }, yKind: model.info.columns[y].kind,
                 limit: pointLimit, rowNumberBase: rowNumberBase)
         }
         .onDisappear { chart.cancel() }
@@ -116,7 +117,7 @@ struct ScatterPanel: View {
 
     private var columnOptions: some View {
         ForEach(columns, id: \.self) { index in
-            Text(model.info?.columns[index].name ?? "").tag(Optional(index))
+            Text(model.info.columns[index].name).tag(Optional(index))
         }
     }
 
@@ -158,10 +159,11 @@ final class ScatterModel: ObservableObject {
                 try await Task.detached(priority: .userInitiated) {
                     var result = try work.run()
                     try Task.checkCancellation()
-                    if x == nil && rowNumberBase == 1 {
+                    if x == nil {
                         for index in result.points.indices {
-                            result.points[index].x += 1
-                            result.points[index].xLabel = String(result.points[index].sourceRow + 1)
+                            let sourceRow = result.points[index].sourceRow
+                            result.points[index].x = Double(rowNumber(sourceRow, base: rowNumberBase))
+                            result.points[index].xLabel = formatRowNumber(sourceRow, base: rowNumberBase)
                         }
                     }
                     return (
@@ -181,7 +183,7 @@ final class ScatterModel: ObservableObject {
             guard !Task.isCancelled, ticket == request else { return }
             switch error {
             case GewuError.Cancelled, GewuError.StaleVersion: break
-            default: self.error = error.localizedDescription
+            default: self.error = error.userMessage
             }
         }
         guard ticket == request else { return }

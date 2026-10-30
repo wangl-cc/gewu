@@ -7,6 +7,7 @@ struct ScatterChart: View {
     let points: [ScatterPoint]
     let xDates: [Date]?
     let yDates: [Date]?
+    let rowNumberBase: Int
     @Binding var hovered: ScatterPoint?
 
     var body: some View {
@@ -14,7 +15,7 @@ struct ScatterChart: View {
             point(at: index)
                 .symbolSize(hovered?.sourceRow == points[index].sourceRow ? 45 : 16)
                 .foregroundStyle(Color.accentColor.opacity(0.65))
-                .accessibilityLabel("Row \(points[index].sourceRow)")
+                .accessibilityLabel("Row \(formatRowNumber(points[index].sourceRow, base: rowNumberBase))")
                 .accessibilityValue("X: \(points[index].xLabel), Y: \(points[index].yLabel)")
         }
         .chartXScale(domain: .automatic(includesZero: false), range: .plotDimension(padding: 8))
@@ -43,7 +44,9 @@ struct ScatterChart: View {
             }
         }
         .help(
-            hovered.map { "Row \($0.sourceRow)\nX: \($0.xLabel)\nY: \($0.yLabel)" }
+            hovered.map {
+                "Row \(formatRowNumber($0.sourceRow, base: rowNumberBase))\nX: \($0.xLabel)\nY: \($0.yLabel)"
+            }
                 ?? "Point to a dot to see its values"
         )
         .onDisappear { hovered = nil }

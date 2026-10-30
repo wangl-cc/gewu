@@ -228,7 +228,7 @@ struct RangeFilterView: View {
                 onApply([filter])
             }
         } catch {
-            self.error = error.localizedDescription
+            self.error = error.userMessage
         }
     }
 

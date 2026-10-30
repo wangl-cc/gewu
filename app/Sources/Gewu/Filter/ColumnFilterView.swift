@@ -67,7 +67,7 @@ struct ColumnFilterView: View {
             self.spec = spec
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
         }
         if !Task.isCancelled { loading = false }
     }
