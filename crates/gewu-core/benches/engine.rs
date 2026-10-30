@@ -1,7 +1,7 @@
 //! Benchmarks for the data engine on a generated 2M-row file.
 //!
-//! Run with `make bench`, which creates the file (fixed seed) and runs
-//! `cargo bench`. To use another file, set `GEWU_BENCH_FILE`.
+//! Generate the sample using the Core README, then run `cargo bench`. To use another file, set
+//! `GEWU_BENCH_FILE`.
 //!
 //! "cold" benchmarks open a fresh document for every iteration, so they
 //! include one-time work such as building a column's value index; "hot"
@@ -20,7 +20,7 @@ fn bench_file() -> PathBuf {
         });
     assert!(
         path.exists(),
-        "{} not found: run make bench-sample, or set GEWU_BENCH_FILE",
+        "{} not found: generate the sample using the Core README, or set GEWU_BENCH_FILE",
         path.display()
     );
     path

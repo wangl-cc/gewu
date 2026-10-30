@@ -63,6 +63,37 @@ targets:
           - $(DERIVED_FILE_DIR)/gewuFFI.h
           - $(DERIVED_FILE_DIR)/gewuFFI.modulemap
           - $(DERIVED_FILE_DIR)/Info.plist
+  GewuTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: app/Sources/Gewu
+        includes: ['**/*.swift']
+        excludes: [Generated, App/GewuApp.swift]
+      - path: $(GEWU_DERIVED_SOURCES)/gewu.swift
+        type: file
+        optional: true
+        buildPhase: sources
+      - path: app/Tests
+        includes: ['*.swift']
+      - path: app/Tests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: Gewu
+        link: false
+      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: ''
+        BUNDLE_LOADER: ''
+        GEWU_DERIVED_SOURCES: $(PROJECT_TEMP_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/Gewu.build/DerivedSources
+        OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(GEWU_DERIVED_SOURCES)/gewuFFI.modulemap"
+        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
+        CODE_SIGN_IDENTITY: '-'
 schemes:
   Gewu:
     build:
@@ -70,6 +101,10 @@ schemes:
         Gewu: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - GewuTests
     profile:
       config: Release-LTO
     archive:

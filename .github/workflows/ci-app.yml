@@ -1,0 +1,97 @@
+name: App CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'crates/gewu-ffi/**'
+      - 'project.yml'
+      - '.swift-format'
+      - 'scripts/build-rust.sh'
+      - '.github/workflows/ci-app.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'crates/gewu-ffi/**'
+      - 'project.yml'
+      - '.swift-format'
+      - 'scripts/build-rust.sh'
+      - '.github/workflows/ci-app.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-app-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: Format and style
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
+
+  test:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: xcode-27
+            rust-target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-26-intel
+            rust-target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate Xcode project
+        run: xcodegen generate --use-cache
+      - name: Build and test (Debug)
+        run: |
+          xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
+            -destination 'platform=macOS' -derivedDataPath build/xcode \
+            -resultBundlePath build/Tests.xcresult test
+      - name: Package Debug app
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/xcode/Build/Products/Debug/Gewu.app "build/Gewu-macos-$ARCH.zip"
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ matrix.arch }}
+          path: build/Tests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gewu-macos-${{ matrix.arch }}
+          path: build/Gewu-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -17,7 +17,7 @@ defaults:
 
 jobs:
   version:
-    name: Check release version
+    name: Check version
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
     steps:
@@ -38,12 +38,18 @@ jobs:
             exit 1
           fi
 
-  checks:
+  rust-checks:
+    name: Rust checks
     needs: version
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/ci-rust.yml
+
+  app-checks:
+    name: App checks
+    needs: version
+    uses: ./.github/workflows/ci-app.yml
 
   build:
-    name: Release-LTO (${{ matrix.arch }})
+    name: Build (${{ matrix.arch }})
     needs: version
     runs-on: ${{ matrix.runner }}
     env:
@@ -69,12 +75,21 @@ jobs:
         with:
           targets: ${{ matrix.rust-target }}
       - uses: Swatinem/rust-cache@v2
-      - name: Build, verify and archive app
+      - name: Generate Xcode project
+        run: xcodegen generate --use-cache
+      - name: Archive app (Release-LTO)
+        run: |
+          xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Release-LTO \
+            -destination 'generic/platform=macOS' -derivedDataPath build/xcode \
+            -archivePath build/Gewu.xcarchive CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
+      - name: Verify and package archived app
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          make dist CONFIG=release-lto
-          mv build/Gewu-macos.zip "build/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+          app=build/Gewu.xcarchive/Products/Applications/Gewu.app
+          lipo "$app/Contents/MacOS/Gewu" -verify_arch "$ARCH"
+          codesign --verify --deep --strict "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch }}
@@ -83,8 +98,8 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish release
-    needs: [version, checks, build]
+    name: Publish
+    needs: [version, rust-checks, app-checks, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

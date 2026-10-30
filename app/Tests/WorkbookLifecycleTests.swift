@@ -1,25 +1,22 @@
 import Combine
 import Foundation
+import Testing
 
 /// Exercises the real window/sheet models and FFI without creating application
 /// windows or modifying recent documents. The fixture has distinct schemas,
 /// four valid sheets, and one sheet containing an Excel error.
-@main
+@Suite(.serialized)
 struct WorkbookLifecycleTests {
-    @MainActor
-    static func main() async throws {
-        ChartPresentationTests.run()
-        FileOpeningTests.run()
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().appending(path: "Fixtures/multi-sheet.xlsx")
-        try await catalogSurvivesBadFirstSheet(fixture)
-        try await switchingUsesLatestRequest(fixture)
-        try await headerOptionReloadsData(fixture)
-        print("Workbook lifecycle regressions passed")
+    private static func fixture() throws -> URL {
+        try #require(
+            Bundle(for: FixtureBundle.self).url(
+                forResource: "multi-sheet", withExtension: "xlsx", subdirectory: "Fixtures"))
     }
 
+    @Test
     @MainActor
-    static func catalogSurvivesBadFirstSheet(_ fixture: URL) async throws {
+    static func catalogSurvivesBadFirstSheet() async throws {
+        let fixture = try fixture()
         let model = WorkbookModel(
             url: fixture,
             sheetNames: { path in
@@ -29,63 +26,66 @@ struct WorkbookLifecycleTests {
             didOpen: { _ in })
         model.open()
         await settled(model)
-        assert(model.document == nil)
-        assert(model.sheets.first == "Bad" && model.sheets.contains("First"))
-        assert(model.errorMessage?.contains("#DIV/0!") == true)
+        #expect(model.document == nil)
+        #expect(model.sheets.first == "Bad" && model.sheets.contains("First"))
+        #expect(model.errorMessage?.contains("#DIV/0!") == true)
         model.selectSheet("First")
         await settled(model)
-        assert(model.selectedSheet == "First")
-        assert(model.document?.info.columns.first?.name == "column_0")
+        #expect(model.selectedSheet == "First")
+        #expect(model.document?.info.columns.first?.name == "column_0")
         model.stop()
     }
 
+    @Test
     @MainActor
-    static func switchingUsesLatestRequest(_ fixture: URL) async throws {
+    static func switchingUsesLatestRequest() async throws {
+        let fixture = try fixture()
         let probe = OpenProbe()
         let model = WorkbookModel(
-            url: fixture, openDocument: { path, sheet, _ in try probe.open(path: path, sheet: sheet) }, didOpen: { _ in })
+            url: fixture, openDocument: { path, sheet, _ in try probe.open(path: path, sheet: sheet) },
+            didOpen: { _ in })
         model.open()
         await settled(model)
-        let original = model.document!
-        assert(model.selectedSheet == "First")
+        let original = try #require(model.document)
+        #expect(model.selectedSheet == "First")
         original.searchText = "keep while loading"
         original.chartY = 0
 
         model.selectSheet("Bad")
         await settled(model)
-        assert(model.document === original, "A failed switch must preserve the loaded document")
-        assert(original.searchText == "keep while loading")
+        #expect(model.document === original, "A failed switch must preserve the loaded document")
+        #expect(original.searchText == "keep while loading")
 
         model.selectSheet("Slow")
         await probe.waitForSlowStart()
-        assert(model.document === original && model.pendingSheet == "Slow")
+        #expect(model.document === original && model.pendingSheet == "Slow")
         model.selectSheet("Queued")
         await Task.yield()
         model.selectSheet("Last")
         probe.releaseSlow()
         await settled(model)
-        assert(model.selectedSheet == "Last")
-        assert(model.document !== original)
-        assert(model.document?.info.columns.first?.name == "column_3")
-        assert(model.document?.searchText == "" && model.document?.chartY == nil)
-        assert(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
-        assert(model.document?.current.version == 0 && original.current.version == 0)
+        #expect(model.selectedSheet == "Last")
+        #expect(model.document !== original)
+        #expect(model.document?.info.columns.first?.name == "column_3")
+        #expect(model.document?.searchText == "" && model.document?.chartY == nil)
+        #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
+        #expect(model.document?.current.version == 0 && original.current.version == 0)
 
         let last = model.document
         model.selectSheet("Slow")
         await probe.waitForSlowStart()
         model.selectSheet("Last")
-        assert(!model.isOpening && model.pendingSheet == nil)
+        #expect(!model.isOpening && model.pendingSheet == nil)
         probe.releaseSlow()
         // A later real open is a barrier behind the obsolete read on the serial queue.
         model.selectSheet("First")
         await settled(model)
-        assert(model.selectedSheet == "First" && model.document !== last)
+        #expect(model.selectedSheet == "First" && model.document !== last)
 
         let other = WorkbookModel(url: fixture, didOpen: { _ in })
         model.showsInspector = true
         other.showsInspector = false
-        assert(model.showsInspector && !other.showsInspector)
+        #expect(model.showsInspector && !other.showsInspector)
 
         let retained = model.document
         model.selectSheet("Slow")
@@ -95,11 +95,13 @@ struct WorkbookLifecycleTests {
         // Drain MainActor and the synchronous read without a wall-clock sleep.
         await probe.waitForSlowFinish()
         await Task.yield()
-        assert(model.document === retained && !model.isOpening)
+        #expect(model.document === retained && !model.isOpening)
     }
 
+    @Test
     @MainActor
-    static func headerOptionReloadsData(_ fixture: URL) async throws {
+    static func headerOptionReloadsData() async throws {
+        let fixture = try fixture()
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -108,29 +110,30 @@ struct WorkbookLifecycleTests {
         let model = WorkbookModel(url: csv, hasHeader: false, didOpen: { _ in })
         model.open()
         await settled(model)
-        assert(model.document?.current.rowCount == 2 && !model.hasHeader)
+        #expect(model.document?.current.rowCount == 2 && !model.hasHeader)
         let first = try model.document?.doc.rows(version: 0, start: 0, count: 1, columns: [0])
-        assert(first?.cells == ["1"])
-        try await presentationContracts(model.document!)
+        #expect(first?.cells == ["1"])
+        try await presentationContracts(#require(model.document))
         model.reopen(hasHeader: true)
         await settled(model)
-        assert(model.document?.current.rowCount == 1 && model.hasHeader)
-        assert(model.document?.info.columns.first?.name == "1")
+        #expect(model.document?.current.rowCount == 1 && model.hasHeader)
+        #expect(model.document?.info.columns.first?.name == "1")
         let retained = model.document
         try FileManager.default.removeItem(at: csv)
         model.reopen(hasHeader: false)
         await settled(model)
-        assert(model.document === retained && model.hasHeader, "A failed reload preserves the document and its options")
+        #expect(
+            model.document === retained && model.hasHeader, "A failed reload preserves the document and its options")
 
         let workbook = WorkbookModel(url: fixture, hasHeader: false, didOpen: { _ in })
         workbook.open()
         await settled(workbook)
-        assert(!workbook.hasHeader && workbook.document?.info.columns.first?.name == "column_1")
+        #expect(!workbook.hasHeader && workbook.document?.info.columns.first?.name == "column_1")
         workbook.selectSheet("Last")
         await settled(workbook)
-        assert(!workbook.hasHeader && workbook.selectedSheet == "Last")
-        let rows = try workbook.document!.doc.rows(version: 0, start: 0, count: 1, columns: [0])
-        assert(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
+        #expect(!workbook.hasHeader && workbook.selectedSheet == "Last")
+        let rows = try #require(workbook.document).doc.rows(version: 0, start: 0, count: 1, columns: [0])
+        #expect(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
     }
 
     @MainActor
@@ -141,21 +144,21 @@ struct WorkbookLifecycleTests {
             await chart.load(
                 document: document.doc, version: document.current.version,
                 x: nil, y: 0, xKind: nil, yKind: .integer, rowNumberBase: base)
-            let point = chart.result!.points[0]
-            assert(point.sourceRow == 0, "Presentation must not change source row identity")
+            let point = try #require(chart.result).points[0]
+            #expect(point.sourceRow == 0, "Presentation must not change source row identity")
             let label = formatRowNumber(point.sourceRow, base: base)
-            assert(label == String(base) && point.xLabel == label && point.x == Double(base))
-            assert(document.status(rowNumberBase: base).contains("row \(label) in file"))
+            #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
+            #expect(document.status(rowNumberBase: base).contains("row \(label) in file"))
         }
         document.selectedSourceRow = nil
         do {
             _ = try document.doc.parseBound(column: 0, text: "not a number")
-            assertionFailure("Invalid numeric bounds must fail")
+            Issue.record("Invalid numeric bounds must fail")
         } catch GewuError.InvalidArgument(let message) {
             let error: Error = GewuError.InvalidArgument(message: message)
-            assert(error.userMessage == message, "Show the Core message, not the generated enum description")
+            #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
             document.reportError(error)
-            assert(document.errorMessage == message)
+            #expect(document.errorMessage == message)
             document.isErrorPresented = false
         }
     }
@@ -217,3 +220,5 @@ private final class OpenProbe: @unchecked Sendable {
         }
     }
 }
+
+private final class FixtureBundle {}

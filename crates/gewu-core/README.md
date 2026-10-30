@@ -113,14 +113,16 @@ The standalone [data generator](../../tools/data-gen) creates fixed-seed test fi
 cargo run --release -p gewu-data-gen -- sample.parquet 5000000
 ```
 
-Make prepares a fixed-seed 2-million-row file at `target/bench/sample.parquet` on first use and reuses it unless the generator changes. Both benchmark targets share this file dependency. Set `GEWU_BENCH_FILE` to use another path.
+Prepare a fixed-seed 2-million-row file at `target/bench/sample.parquet` once and reuse it for both benchmarks. Regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
 
 ```sh
-make bench
-make bench-mem
+mkdir -p target/bench
+cargo run --locked --release -p gewu-data-gen -- target/bench/sample.parquet 2000000
+cargo bench --locked -p gewu-core --bench engine
+cargo build --locked --release -p gewu-cli
+scripts/bench-mem.sh target/release/gewu target/bench/sample.parquet
 
-# Prepare the sample once, then pass Criterion options directly to Cargo.
-make bench-sample
+# Pass Criterion options directly to Cargo.
 cargo bench --locked -p gewu-core --bench engine -- --save-baseline before
 cargo bench --locked -p gewu-core --bench engine -- --baseline before
 ```
