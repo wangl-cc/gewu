@@ -35,6 +35,9 @@ targets:
       - path: app/Icons/Gewu.icon
         type: file
         buildPhase: resources
+      - path: LICENSE
+        type: file
+        buildPhase: resources
     dependencies:
       - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
         embed: false

@@ -50,4 +50,8 @@ CSV/TSV recognize ISO-style dates and timestamps, such as `2026-10-30` and `2026
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+Copyright (c) 2026 The gewu contributors.
+
+Gewu is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version (`GPL-3.0-or-later`).
+
+Gewu is distributed without any warranty; without even the implied warranty of merchantability or fitness for a particular purpose. See the license for details.
