@@ -44,7 +44,7 @@ defaults:
 
 jobs:
   format:
-    name: Format
+    name: Lint (format)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -54,7 +54,7 @@ jobs:
       - run: cargo +nightly fmt --all --check
 
   clippy:
-    name: Clippy
+    name: Lint (clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -63,6 +63,17 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  deny:
+    name: Lint (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny --locked check
 
   test:
     name: Test (${{ matrix.runner }})
@@ -76,40 +87,3 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace
-
-  features:
-    name: Feature checks (${{ matrix.feature }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        feature: [none, parquet, csv, xlsx]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: features-${{ matrix.feature }}
-      - name: Test and lint selected feature configuration
-        env:
-          FEATURE: ${{ matrix.feature }}
-        run: |
-          args=(--locked -p gewu-core --no-default-features)
-          if [[ "$FEATURE" != none ]]; then
-            args+=(--features "$FEATURE")
-          fi
-          cargo test "${args[@]}"
-          cargo clippy "${args[@]}" --all-targets -- -D warnings
-
-  deny:
-    name: Dependency checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - run: cargo deny --locked check

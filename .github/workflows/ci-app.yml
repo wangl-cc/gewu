@@ -38,7 +38,7 @@ defaults:
 
 jobs:
   lint:
-    name: Format and style
+    name: Lint (swift-format)
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7
