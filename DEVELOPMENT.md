@@ -11,15 +11,15 @@ Install the native Rust target once with `rustup target add aarch64-apple-darwin
 Run from the repository root:
 
 ```sh
-make app                      # build/Release/Gewu.app for the current architecture
-make app CONFIG=debug          # build/Debug/Gewu.app
+make app                      # build/Debug/Gewu.app for the current architecture
+make app CONFIG=release        # build/Release/Gewu.app without LTO
 make app CONFIG=release-lto    # build/Release-LTO/Gewu.app
 make run                      # open the existing app without building
 make app run                  # build, then open (without -j)
 make dist CONFIG=release-lto   # build/Gewu-macos.zip for the current architecture
 ```
 
-`make run` opens the existing app for the selected `CONFIG` (Release by default); it requires a previous build and does not pick up source changes. For example, use `make run CONFIG=debug` to open an existing Debug build.
+`make run` opens the existing app for the selected `CONFIG` (Debug by default); it requires a previous build and does not pick up source changes. For example, use `make run CONFIG=release-lto` to open an existing Release-LTO build.
 
 The Makefile provides command-line entry points to XcodeGen and `xcodebuild`. The native app target owns Swift compilation, icon compilation, app assembly and ad-hoc signing. Its Rust build phase runs [scripts/build-rust.sh](scripts/build-rust.sh) before compiling Swift: Cargo builds the Rust library, UniFFI generates the Swift and C bridge, and the app directly links `libgewu.a`. The Xcode project references generated Swift files explicitly, so a fresh checkout does not need generated bindings before project generation.
 
@@ -27,11 +27,11 @@ The Makefile provides command-line entry points to XcodeGen and `xcodebuild`. Th
 
 | Make configuration | Xcode configuration | Rust profile | Swift build |
 | --- | --- | --- | --- |
-| `debug` | `Debug` | `dev` | Debug |
-| `release` (default) | `Release` | `release` | Release |
+| `debug` (default) | `Debug` | `dev` | Debug |
+| `release` | `Release` | `release` | Release |
 | `release-lto` | `Release-LTO` | `release-lto` | Release |
 
-The custom `release-lto` profile sets `lto = true` (fat LTO) and `codegen-units = 1`. Cargo keeps its artifacts in the profile's own directory; the host binding-generator tool always uses the ordinary release profile. Xcode builds only the current machine's architecture, with separate Apple Silicon and Intel jobs in CI.
+The custom `release-lto` profile sets `lto = true` (fat LTO) and `codegen-units = 1`. Cargo keeps its artifacts in the profile's own directory; the binding-generator tool uses the development profile. Xcode builds only the current machine's architecture, with separate Apple Silicon and Intel jobs in CI.
 
 For development in Xcode, run `make project` and open `Gewu.xcodeproj`. Select the `Gewu` scheme and the desired build configuration, then Build or Run; the Rust build phase runs automatically. The generated `/Gewu.xcodeproj` is ignored by Git: edit `project.yml` and regenerate after changing project configuration or adding sources. The phase invokes the Rust script by path, so script edits take effect on the next build without regenerating the project. Cargo and Rustup must be available to the build phase; the script adds `~/.cargo/bin` to its search path for the usual Rustup installation.
 
@@ -39,7 +39,7 @@ The build phase always consults Cargo so Rust source and dependency changes are 
 
 The Rust library builds set target-specific `-Ctarget-cpu=generic` flags so the app uses a shareable CPU baseline instead of inheriting a global `build.rustflags` setting such as `target-cpu=native`. Explicit `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` environment overrides still take precedence; avoid host-specific CPU options when producing distributable builds. The host binding-generator keeps the normal Cargo CPU configuration.
 
-The Rust build phase passes `profile.release.lto=false` and `profile.release.codegen-units=16` to Cargo so personal Cargo profile settings cannot silently enable fat LTO for its ordinary release library or binding generator. The custom `release-lto` profile overrides those inherited values with its own settings. These command-scoped overrides do not change the global Cargo configuration; direct Cargo commands continue to use that configuration.
+The Rust build phase passes `profile.release.lto=false` and `profile.release.codegen-units=16` to Cargo so personal Cargo profile settings cannot silently enable fat LTO for its ordinary release library. The custom `release-lto` profile overrides those inherited values with its own settings. These command-scoped overrides do not change the global Cargo configuration; direct Cargo commands continue to use that configuration.
 
 Xcode supplies the SDK and macOS deployment target to both Swift and the Rust build phase. Check the final binary with `xcrun vtool -show-build build/Release/Gewu.app/Contents/MacOS/Gewu`: `minos` should be `15.0`, while `sdk` should match the selected SDK. The Rust profile is also available directly through `cargo build --profile release-lto`. If Xcode reports a first-launch or plug-in setup failure, complete its setup with `xcodebuild -runFirstLaunch` before retrying.
 
@@ -98,22 +98,32 @@ cargo doc --locked -p gewu-core --no-deps --open
 
 `make fmt` formats Rust and Swift sources. `make fmt-check` checks Rust formatting and Swift formatting/style; `make lint` runs Rust Clippy and the same Swift check. Swift uses Xcode's bundled `swift-format` with `.swift-format` configuration, and lint findings fail the check. Only handwritten Swift sources under `app/Sources/Gewu` are checked; generated UniFFI bindings live in the build directory. The Swift check covers formatting and style rules, not type-aware analysis equivalent to Clippy.
 
-Nightly rustfmt is required by the repository's formatting configuration. The combined commands require macOS with Xcode; language-specific targets are `fmt-rust`, `fmt-swift`, `fmt-check-rust`, `lint-rust` and `lint-swift`. Dependency checks require `cargo-deny`. [CI](.github/workflows/ci.yml) also tests and lints Core without codecs and with each codec individually:
+Nightly rustfmt is required by the repository's formatting configuration. The combined commands require macOS with Xcode; language-specific targets are `fmt-rust`, `fmt-swift`, `fmt-check-rust`, `lint-rust` and `lint-swift`. Dependency checks require `cargo-deny`. [CI](.github/workflows/ci.yml) also tests and lints Core without default features and with each file-format feature individually:
 
 ```sh
-make check-features CODEC=none
-make check-features CODEC=csv
+make check-features FEATURE=none
+make check-features FEATURE=csv
 ```
 
 For sample generation and performance measurements, see [Core benchmarks](crates/gewu-core/README.md#benchmarks).
 
 ## Continuous integration
 
-[CI](.github/workflows/ci.yml) uses the same Make targets to run Rust tests on Linux and macOS, check Rust formatting, Clippy and dependencies on Linux, check Swift formatting/style on the Xcode 27 runner, and exercise each Core codec feature separately. The macOS app matrix builds each architecture natively with `make dist CONFIG=release-lto`:
+[CI](.github/workflows/ci.yml) uses the same Make targets to run Rust tests on Linux and macOS, check Rust formatting, Clippy and dependencies on Linux, check Swift formatting/style on the Xcode 27 runner, and exercise each Core file-format feature separately. Each macOS job runs Rust tests, builds the Debug app and runs Swift regressions in the same checkout. Rust tests and the app build use the same target, generic CPU flags, SDK and deployment target so Cargo can reuse compatible compilation outputs. There is no cross-job transfer of Rust libraries or bindings. The two architectures run independently:
 
 | Architecture | Runner | ZIP artifact |
 | --- | --- | --- |
 | Apple Silicon (`arm64`) | `xcode-27` (macOS 27) | `Gewu-macos-arm64.zip` |
 | Intel (`x86_64`) | `macos-26-intel` (macOS 26) | `Gewu-macos-x86_64.zip` |
 
+Pushes and pull requests archive the tested Debug app as workflow artifacts. The CI workflow is also reusable by the release workflow; it always tests and packages Debug.
+
 Each job installs XcodeGen, uses the runner image's default Xcode, verifies the ad-hoc signed app and uploads its architecture-specific ZIP. Both builds retain a macOS 15 deployment target. This validates the build and bundle structure; it does not establish runtime behavior on the minimum supported macOS release. [Dependabot](.github/dependabot.yml) checks Cargo and GitHub Actions dependencies weekly.
+
+## Releases
+
+[Release](.github/workflows/release.yml) runs when a `vX.Y.Z` tag is pushed. Update `[workspace.package].version` in `Cargo.toml` and the corresponding `Cargo.lock` entries, commit the changes, then push the version tag on that commit. The workflow rejects malformed tags or versions that do not match the `gewu-ffi` package metadata. Only stable version tags are supported.
+
+The workflow runs the reusable Debug CI checks and builds both architectures with `CONFIG=release-lto`. The App version still comes from Cargo; its build number is the release workflow's run number. Only after all checks and builds succeed does the publishing job create a draft Release, upload `Gewu-vX.Y.Z-macos-arm64.zip`, `Gewu-vX.Y.Z-macos-x86_64.zip` and `SHA256SUMS`, then publish it. Only the publishing job has write permission.
+
+If upload or publication fails, rerun the failed jobs in the same workflow run within the artifacts' 14-day retention period. The publishing job reuses an existing draft and replaces its assets before retrying publication. It refuses to replace assets of an already published version. A failed build creates no Release. Do not create a published Release manually to trigger the workflow; pushing the tag is the release entry point.

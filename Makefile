@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := app
 
-CONFIG ?= release
+CONFIG ?= debug
 BUILD_NUMBER ?= 1
-CODEC ?= none
+FEATURE ?= none
 
 DERIVED_SOURCES = build/xcode/Build/Intermediates.noindex/Gewu.build/$(XCODE_CONFIG)/Gewu.build/DerivedSources
 GEWU_BENCH_FILE ?= target/bench/sample.parquet
@@ -95,12 +95,12 @@ deny:
 	cargo deny --locked check
 
 check-features:
-	@case "$(CODEC)" in none|parquet|csv|xlsx) ;; *) echo 'CODEC must be none, parquet, csv or xlsx' >&2; exit 2 ;; esac
-	cargo test --locked -p gewu-core --no-default-features $(if $(filter-out none,$(CODEC)),--features $(CODEC))
-	cargo clippy --locked -p gewu-core --all-targets --no-default-features $(if $(filter-out none,$(CODEC)),--features $(CODEC)) -- -D warnings
+	@case "$(FEATURE)" in none|parquet|csv|xlsx) ;; *) echo 'FEATURE must be none, parquet, csv or xlsx' >&2; exit 2 ;; esac
+	cargo test --locked -p gewu-core --no-default-features $(if $(filter-out none,$(FEATURE)),--features $(FEATURE))
+	cargo clippy --locked -p gewu-core --all-targets --no-default-features $(if $(filter-out none,$(FEATURE)),--features $(FEATURE)) -- -D warnings
 
 help:
-	@echo 'make app [CONFIG=debug|release|release-lto] [BUILD_NUMBER=1]'
+	@echo 'make app [CONFIG=debug|release|release-lto] [BUILD_NUMBER=1] (default: debug)'
 	@echo 'make project   Generate Gewu.xcodeproj for Xcode'
 	@echo 'make run       Open the existing Gewu.app without building'
 	@echo 'make app run   Build and then open Gewu.app (without -j)'
@@ -111,4 +111,4 @@ help:
 	@echo 'make lint      Run Rust Clippy and Swift formatting/style checks'
 	@echo 'make fmt-rust | fmt-swift | fmt-check-rust | lint-rust | lint-swift'
 	@echo 'make test-swift Run headless table, worksheet and chart regressions against the built app core'
-	@echo 'make test | deny | check-features CODEC=none|parquet|csv|xlsx'
+	@echo 'make test | deny | check-features FEATURE=none|parquet|csv|xlsx'

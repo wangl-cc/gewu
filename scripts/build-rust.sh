@@ -15,7 +15,7 @@ target_dir="$(cargo metadata --locked --no-deps --format-version 1 | plutil -ext
 library="$target_dir/$target/${RUST_PROFILE/dev/debug}/libgewu"
 generated="$DERIVED_FILE_DIR/uniffi"
 mkdir -p "$generated" "$BUILT_PRODUCTS_DIR"
-cargo run --locked --release "${release_config[@]}" -p gewu-ffi --features bindgen --bin uniffi-bindgen -- \
+cargo run --locked --profile dev -p gewu-ffi --features bindgen --bin uniffi-bindgen -- \
   generate --library "$library.dylib" --language swift --out-dir "$generated"
 for file in gewu.swift gewuFFI.h gewuFFI.modulemap; do
   if ! cmp -s "$generated/$file" "$DERIVED_FILE_DIR/$file"; then

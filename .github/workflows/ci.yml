@@ -5,12 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -51,25 +52,21 @@ jobs:
       - run: make lint-swift
 
   test:
-    name: Rust tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15]
+    name: Rust tests (Linux)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make test
 
-  codecs:
-    name: Core codec (${{ matrix.codec }})
+  features:
+    name: Core features (${{ matrix.feature }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        codec: [none, parquet, csv, xlsx]
+        feature: [none, parquet, csv, xlsx]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -77,10 +74,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: codec-${{ matrix.codec }}
-      - name: Test and lint selected codec
+          key: features-${{ matrix.feature }}
+      - name: Test and lint selected feature configuration
         env:
-          CODEC: ${{ matrix.codec }}
+          FEATURE: ${{ matrix.feature }}
         run: make check-features
 
   deny:
@@ -97,10 +94,10 @@ jobs:
   # Preserve the original Rust required-check name after splitting its work.
   rust:
     if: always()
-    needs: [format, clippy, test, codecs, deny]
+    needs: [format, clippy, swift-style, test, features, deny, macos-app]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify Rust checks
+      - name: Verify CI checks
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
@@ -108,11 +105,13 @@ jobs:
   macos-app:
     name: macOS app (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
     strategy:
       fail-fast: false
       matrix:
         include:
-          # GitHub's macOS 27 image is named for its Xcode toolchain.
           - arch: arm64
             runner: xcode-27
             rust-target: aarch64-apple-darwin
@@ -127,12 +126,16 @@ jobs:
         with:
           targets: ${{ matrix.rust-target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Select the Xcode SDK for Rust and Swift
+        run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Test Rust (Debug)
+        run: make test
+      - name: Build app and test Swift (Debug)
+        run: make test-swift CONFIG=debug
       - name: Build, verify and archive app
         run: |
-          make dist CONFIG=release-lto
+          make dist CONFIG=debug
           mv build/Gewu-macos.zip build/Gewu-macos-${{ matrix.arch }}.zip
-      - name: Test Swift table and copy execution
-        run: make test-swift CONFIG=release-lto
       - uses: actions/upload-artifact@v4
         with:
           name: Gewu-macos-${{ matrix.arch }}

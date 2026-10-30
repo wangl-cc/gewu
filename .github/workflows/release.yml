@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Check release version
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches Cargo version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Expected a stable version tag: vX.Y.Z'
+            exit 1
+          fi
+          version="$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -er '.packages[] | select(.name == "gewu-ffi") | .version')"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match Cargo version $version"
+            exit 1
+          fi
+
+  checks:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Release-LTO (${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      RELEASE_TAG: ${{ github.ref_name }}
+      BUILD_NUMBER: ${{ github.run_number }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: xcode-27
+            rust-target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-26-intel
+            rust-target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build, verify and archive app
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make dist CONFIG=release-lto
+          mv build/Gewu-macos.zip "build/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: build/Gewu-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish release
+    needs: [version, checks, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Check archives and generate checksums
+        working-directory: dist
+        run: |
+          test -s "Gewu-$RELEASE_TAG-macos-arm64.zip"
+          test -s "Gewu-$RELEASE_TAG-macos-x86_64.zip"
+          sha256sum "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" > SHA256SUMS
+      - name: Create or reuse draft release
+        run: |
+          draft="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == env.RELEASE_TAG) | .draft')"
+          case "$draft" in
+            '') gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes ;;
+            true) ;;
+            false) echo '::error::This version is already published; its assets will not be replaced.'; exit 1 ;;
+            *) echo '::error::Unexpected release state'; exit 1 ;;
+          esac
+      - name: Upload assets
+        working-directory: dist
+        run: |
+          gh release upload "$RELEASE_TAG" --clobber \
+            "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" SHA256SUMS
+      - name: Publish release
+        run: gh release edit "$RELEASE_TAG" --draft=false
