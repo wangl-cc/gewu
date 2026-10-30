@@ -121,19 +121,21 @@ For sample generation and performance measurements, see [Core benchmarks](crates
 
 ## Continuous integration
 
-Two independent workflows run on pushes to `main` and pull requests targeting `main`, when their path filters match. Both also support `workflow_call`; Release calls them without path filtering.
+Three independent workflows run on pushes to `main` and pull requests targeting `main`, when their path filters match. Rust CI and App CI also support `workflow_call`; Release calls those two without path filtering.
 
 | Workflow | Checks | Outputs |
 | --- | --- | --- |
 | [Rust CI](.github/workflows/ci-rust.yml) | Workspace tests on Linux, Apple Silicon and Intel; nightly rustfmt, all-target/all-feature Clippy, dependency checks, and Core tests/Clippy with no features or one of `parquet`, `csv`, `xlsx`. | Job logs; no App package. |
 | [App CI](.github/workflows/ci-app.yml) | Swift formatting for App and test sources; native Debug build and Swift Testing on Apple Silicon and Intel. | Debug App ZIPs and Xcode test reports. |
+| [Docs CI](.github/workflows/ci-docs.yml) | Markdownlint, with line-length checks disabled. | Job logs. |
 
 ### Change detection
 
 - Rust CI watches `crates/**`, `tools/data-gen/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `rust-toolchain*`, `rustfmt.toml`, `deny.toml` and `.github/workflows/ci-rust.yml`.
 - App CI watches `app/**`, `crates/gewu-ffi/**`, `project.yml`, `.swift-format`, `scripts/build-rust.sh` and `.github/workflows/ci-app.yml`.
+- Docs CI watches `**/*.md`, `.markdownlint.yaml` and `.github/workflows/ci-docs.yml`. Run the same check locally with `pnx markdownlint-cli2 --config .markdownlint.yaml '**/*.md' '!target/**' '!build/**'`.
 
-FFI changes run both workflows. Core-only changes and changes limited to the root Cargo manifest, lockfile, Cargo configuration or Rust toolchain run Rust CI only; their App integration is checked on the next App CI run or release. Changes limited to the root README, this guide or `docs/` do not trigger either workflow; documentation inside a watched directory still does. Each workflow cancels its older run for the same pull request, using a distinct concurrency group so Rust and App checks do not cancel each other.
+FFI changes run Rust CI and App CI. Core-only changes and changes limited to the root Cargo manifest, lockfile, Cargo configuration or Rust toolchain run Rust CI only; their App integration is checked on the next App CI run or release. Changes limited to the root README, this guide or `docs/` run Docs CI only; documentation inside a Rust or App watched directory also triggers that workflow. Each workflow cancels its older run for the same pull request, using a distinct concurrency group so checks do not cancel each other.
 
 ### App builds and artifacts
 

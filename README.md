@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD033 MD041 -->
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="app/Icons/Gewu.icon/Assets/dark.png">
@@ -8,6 +9,8 @@
 <h1 align="center">gewu 格物</h1>
 
 <p align="center">A fast, native table viewer for large datasets.</p>
+
+<!-- markdownlint-enable MD033 MD041 -->
 
 Open downloaded data, explore its values and distributions, and find the rows that matter before moving to Python for deeper analysis.
 
@@ -27,6 +30,7 @@ Requires **macOS 15 or later**.
 2. Unzip the download. You can keep **Gewu.app** in that folder or move it to **Applications**.
 3. Launch Gewu and choose a file, or use **File → Open…** (`⌘O`).
 
+<!-- markdownlint-disable MD033 -->
 <details>
 <summary>If macOS blocks the first launch</summary>
 
@@ -40,6 +44,7 @@ xattr -dr com.apple.quarantine Gewu.app
 Replace the example folder path with your own. This removes the download quarantine attribute for Gewu; it does not sign or notarize the app.
 
 </details>
+<!-- markdownlint-enable MD033 -->
 
 Use **Gewu → Settings…** (`⌘,`) for display and copy preferences. Adjust histogram bins and scatter point limits beside their charts.
 
