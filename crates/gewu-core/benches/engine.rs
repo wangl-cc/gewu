@@ -1,6 +1,6 @@
 //! Benchmarks for the data engine on a generated 2M-row file.
 //!
-//! Run with `scripts/bench.sh`, which creates the file (fixed seed) and runs
+//! Run with `make bench`, which creates the file (fixed seed) and runs
 //! `cargo bench`. To use another file, set `GEWU_BENCH_FILE`.
 //!
 //! "cold" benchmarks open a fresh document for every iteration, so they
@@ -10,15 +10,17 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{Document, Filter, SortKey, ViewState};
+use gewu_core::{AnalysisSection, Document, Filter, SortKey, ViewState};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("gewu-bench.parquet"));
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/bench/sample.parquet")
+        });
     assert!(
         path.exists(),
-        "{} not found: run scripts/bench.sh, or set GEWU_BENCH_FILE",
+        "{} not found: run make bench-sample, or set GEWU_BENCH_FILE",
         path.display()
     );
     path
@@ -280,5 +282,22 @@ fn facets(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, open, apply_view, rows, facets);
+fn inspector_values(c: &mut Criterion) {
+    let doc = Document::open(bench_file()).unwrap();
+    let mut group = c.benchmark_group("inspector_values");
+    group.sample_size(10);
+    for name in ["label", "id", "uuid"] {
+        let job = doc
+            .prepare_analysis(
+                doc.current_view().version,
+                col(&doc, name),
+                AnalysisSection::Values,
+            )
+            .unwrap();
+        group.bench_function(name, |b| b.iter(|| job.run().unwrap()));
+    }
+    group.finish();
+}
+
+criterion_group!(benches, open, apply_view, rows, facets, inspector_values);
 criterion_main!(benches);

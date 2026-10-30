@@ -1,0 +1,76 @@
+name: Gewu
+options:
+  fileTypes:
+    icon:
+      file: true
+configs:
+  Debug: debug
+  Release: release
+  Release-LTO: release
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: '15.0'
+    ARCHS: $(NATIVE_ARCH_ACTUAL)
+    ONLY_ACTIVE_ARCH: YES
+    SWIFT_VERSION: '5.0'
+  configs:
+    Debug:
+      RUST_PROFILE: dev
+    Release:
+      RUST_PROFILE: release
+    Release-LTO:
+      RUST_PROFILE: release-lto
+targets:
+  Gewu:
+    type: application
+    platform: macOS
+    sources:
+      - path: app/Sources/Gewu
+        includes: ['**/*.swift']
+        excludes: [Generated]
+      - path: $(DERIVED_FILE_DIR)/gewu.swift
+        type: file
+        optional: true
+        buildPhase: sources
+      - path: app/Icons/Gewu.icon
+        type: file
+        buildPhase: resources
+    dependencies:
+      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu
+        INFOPLIST_FILE: $(DERIVED_FILE_DIR)/Info.plist
+        CURRENT_PROJECT_VERSION: '1'
+        ASSETCATALOG_COMPILER_APPICON_NAME: Gewu
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: '-'
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(DERIVED_FILE_DIR)/gewuFFI.modulemap"
+        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
+    preBuildScripts:
+      - script: exec /bin/bash "$SRCROOT/scripts/build-rust.sh"
+        name: Build Rust and generate UniFFI bindings
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/libgewu.a
+          - $(DERIVED_FILE_DIR)/gewu.swift
+          - $(DERIVED_FILE_DIR)/gewuFFI.h
+          - $(DERIVED_FILE_DIR)/gewuFFI.modulemap
+          - $(DERIVED_FILE_DIR)/Info.plist
+schemes:
+  Gewu:
+    build:
+      targets:
+        Gewu: all
+    run:
+      config: Debug
+    profile:
+      config: Release-LTO
+    archive:
+      config: Release-LTO

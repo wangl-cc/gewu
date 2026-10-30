@@ -9,7 +9,7 @@ use parquet::{
 };
 
 use super::{collect_batches, ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
-use crate::{FileMetadata, Result};
+use crate::{FileMetadata, ParquetCompression, Result};
 
 pub(super) fn read(file: File) -> Result<LoadedFile> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -46,11 +46,19 @@ pub(super) fn read(file: File) -> Result<LoadedFile> {
 
 pub(super) fn write(
     file: &mut File,
+    compression: ParquetCompression,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
 ) -> Result<()> {
     let properties = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
+        .set_compression(match compression {
+            ParquetCompression::Zstd => Compression::ZSTD(Default::default()),
+            ParquetCompression::Snappy => Compression::SNAPPY,
+            ParquetCompression::Gzip => Compression::GZIP(Default::default()),
+            ParquetCompression::Brotli => Compression::BROTLI(Default::default()),
+            ParquetCompression::Lz4 => Compression::LZ4_RAW,
+            ParquetCompression::Uncompressed => Compression::UNCOMPRESSED,
+        })
         .set_max_row_group_row_count(Some(64 * 1024))
         .set_max_row_group_bytes(Some(16 * 1024 * 1024))
         .build();

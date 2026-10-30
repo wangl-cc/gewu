@@ -8,7 +8,7 @@ pub(crate) mod bound;
 pub(crate) mod histogram;
 mod nested;
 mod scalar;
-mod text;
+pub(crate) mod text;
 
 use std::sync::Arc;
 
@@ -22,6 +22,17 @@ use crate::{
     format, predicate::Predicate, value_index::ValueIndex, DataKind, Error, Filter, Result,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnInfo {
+    pub name: String,
+    /// The Arrow type, e.g. `Timestamp(Microsecond, Some("UTC"))`.
+    pub type_name: String,
+    /// How gewu displays the values. Query supported operations through
+    /// `Document::column_capabilities`.
+    pub kind: crate::DataKind,
+    pub nullable: bool,
+}
+
 /// Operations supported by a column's logical type. Value-list availability
 /// additionally depends on cardinality and is reported by `DistinctResult`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +42,8 @@ pub struct ColumnCapabilities {
     pub equals: bool,
     /// Histograms currently require a directly stored numeric array.
     pub histogram: bool,
+    /// Direct numeric and temporal arrays support approximate plot coordinates.
+    pub scatter: bool,
 }
 
 /// Maximum source cardinality offered as a checkbox list.
@@ -59,6 +72,7 @@ impl<'a> Column<'a> {
             if let DataType::Dictionary(_, values) = data_type {
                 return ColumnCapabilities {
                     histogram: false,
+                    scatter: false,
                     ..of(values)
                 };
             }
@@ -67,6 +81,7 @@ impl<'a> Column<'a> {
                 contains: !kind.is_ordered() && kind != DataKind::Boolean,
                 range: kind.is_ordered(),
                 histogram: kind.is_ordered(),
+                scatter: kind.is_ordered(),
                 equals: kind.is_ordered() || matches!(kind, DataKind::Boolean | DataKind::Text),
             }
         }
@@ -156,6 +171,12 @@ impl<'a> Column<'a> {
     }
 
     fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
+        if let Filter::TextValues {
+            values, exclude, ..
+        } = filter
+        {
+            return text::selected_values(self.array, values, *exclude);
+        }
         if let Filter::IsNull { negate, .. } = filter {
             let negate = *negate;
             let array = self.array;
@@ -181,17 +202,26 @@ impl<'a> Column<'a> {
             Filter::Range { min, max, .. } if capabilities.range => {
                 bound::prepare_range(self.array, min.as_ref(), max.as_ref())
             }
-            Filter::Equals { value, .. } if capabilities.equals => {
-                if DataKind::of(self.array.data_type()) == DataKind::Text {
-                    Ok(text::equals(self.array, value))
-                } else {
-                    scalar::equals(self.array, value)
-                }
+            Filter::Equals { value, .. } if capabilities.equals => self.prepare_equals(value),
+            Filter::EqualsAny { values, .. } if capabilities.equals => {
+                let predicates = values
+                    .iter()
+                    .map(|value| self.prepare_equals(value))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Predicate::any_of(predicates))
             }
             _ => Err(Error::InvalidArgument(format!(
                 "filter is not supported for {}",
                 self.array.data_type()
             ))),
+        }
+    }
+
+    fn prepare_equals(self, value: &str) -> Result<Predicate<'a>> {
+        if DataKind::of(self.array.data_type()) == DataKind::Text {
+            Ok(text::equals(self.array, value))
+        } else {
+            scalar::equals(self.array, value)
         }
     }
 
@@ -232,6 +262,47 @@ mod tests {
                 .unwrap();
         }
         hits
+    }
+
+    #[test]
+    fn typed_membership_validates_every_input_and_empty_lists_match_nothing() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let column = Column::new(&array);
+        let test = column
+            .prepare_filter(&Filter::EqualsAny {
+                column: 0,
+                values: Vec::new(),
+            })
+            .unwrap();
+        let mut hits = [true; 3];
+        test.evaluate(0..3, &mut hits, &CancelToken::never())
+            .unwrap();
+        assert_eq!(hits, [false; 3]);
+        assert!(matches!(
+            column.prepare_filter(&Filter::EqualsAny {
+                column: 0,
+                values: vec!["1".into(), "invalid".into()],
+            }),
+            Err(Error::InvalidArgument(_))
+        ));
+
+        let array: ArrayRef = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(
+                Int8Array::from(vec![Some(0), None, Some(1), Some(2)]),
+                Arc::new(StringArray::from(vec![Some("01"), None, Some("2")])),
+            )
+            .unwrap(),
+        );
+        let test = Column::new(&array)
+            .prepare_filter(&Filter::EqualsAny {
+                column: 0,
+                values: vec!["01".into(), "2".into()],
+            })
+            .unwrap();
+        let mut hits = [false; 4];
+        test.evaluate(0..4, &mut hits, &CancelToken::never())
+            .unwrap();
+        assert_eq!(hits, [true, false, false, true]);
     }
 
     #[test]
@@ -419,6 +490,7 @@ mod tests {
             range: true,
             equals: true,
             histogram: false,
+            scatter: false,
         });
     }
 

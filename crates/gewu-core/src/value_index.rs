@@ -10,17 +10,41 @@
 //! hundreds of megabytes.
 
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    cmp::Reverse,
+    collections::{hash_map::DefaultHasher, BinaryHeap, HashMap, HashSet},
     hash::{Hash, Hasher},
 };
 
 use arrow::{
-    array::{Array, ArrayRef, UInt32Array},
+    array::{Array, ArrayRef, AsArray, PrimitiveArray, UInt32Array},
     compute::take,
+    datatypes::{ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type},
     row::{RowConverter, SortField},
 };
 
-use crate::{format, scope::Selection, DistinctValue, Result};
+use crate::{analysis::AnalysisContext, format, scope::Selection, Result};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctValue {
+    /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
+    pub key: u64,
+    /// Displayed text; `None` is the null value.
+    pub label: Option<String>,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctResult {
+    /// Sorted by value, nulls first.
+    pub values: Vec<DistinctValue>,
+    /// Number of distinct values before `limit` was applied.
+    pub total: u64,
+    pub truncated: bool,
+    /// Whether the keys name values for [`crate::Filter::InValues`]. False for
+    /// columns with too many distinct values to index; `values` then holds
+    /// the most common ones.
+    pub keyed: bool,
+}
 
 /// Most distinct values a column may have and still be indexed.
 pub(crate) const INDEX_LIMIT: usize = 100_000;
@@ -159,39 +183,77 @@ pub(crate) struct ValueCounts {
 /// Count the distinct values of `array` over `rows`, keeping the `keep`
 /// most common. Values are told apart by a 64-bit hash, so memory is a few
 /// words per distinct value; a collision (unlikely below billions of
-/// values) would merge two values.
+/// values) would merge two values. Floats use exact normalized bit keys instead:
+/// signed zeros form one group, all NaNs another, and null remains separate.
 pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> Result<ValueCounts> {
+    count_values_with_context(array, rows, keep, &AnalysisContext::default())
+}
+
+pub(crate) fn count_values_with_context(
+    array: &ArrayRef,
+    rows: &Selection,
+    keep: usize,
+    context: &AnalysisContext,
+) -> Result<ValueCounts> {
+    context.check()?;
     let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
-    // hash -> (count, first row)
-    let mut counts: HashMap<u64, (u64, u32)> = HashMap::new();
-    let mut tally = |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
-        let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
-        for (row, r) in converted.iter().zip(source) {
-            let mut h = DefaultHasher::new();
-            row.as_ref().hash(&mut h);
-            counts.entry(h.finish()).or_insert((0, r as u32)).0 += 1;
-        }
-        Ok(())
-    };
-    match rows {
-        Selection::All(n) => {
-            for start in (0..*n).step_by(CHUNK) {
-                let len = CHUNK.min(n - start);
-                tally(&array.slice(start, len), &mut (start..start + len))?;
+    let counts = match array.data_type() {
+        DataType::Float16 => count_floats(array.as_primitive::<Float16Type>(), rows, context)?,
+        DataType::Float32 => count_floats(array.as_primitive::<Float32Type>(), rows, context)?,
+        DataType::Float64 => count_floats(array.as_primitive::<Float64Type>(), rows, context)?,
+        _ => {
+            // hash -> (count, first row)
+            let mut counts: HashMap<u64, (u64, u32)> = HashMap::new();
+            let mut tally =
+                |chunk: &ArrayRef, source: &mut dyn Iterator<Item = usize>| -> Result<()> {
+                    context.check()?;
+                    let converted = converter.convert_columns(std::slice::from_ref(chunk))?;
+                    for (i, (row, r)) in converted.iter().zip(source).enumerate() {
+                        context.check_at(i)?;
+                        let mut h = DefaultHasher::new();
+                        row.as_ref().hash(&mut h);
+                        counts.entry(h.finish()).or_insert((0, r as u32)).0 += 1;
+                    }
+                    Ok(())
+                };
+            match rows {
+                Selection::All(n) => {
+                    for start in (0..*n).step_by(CHUNK) {
+                        let len = CHUNK.min(n - start);
+                        tally(&array.slice(start, len), &mut (start..start + len))?;
+                    }
+                }
+                Selection::Rows(rows) => {
+                    for chunk in rows.chunks(CHUNK) {
+                        context.check()?;
+                        let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
+                        tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
+                    }
+                }
             }
+            counts
         }
-        Selection::Rows(rows) => {
-            for chunk in rows.chunks(CHUNK) {
-                let taken = take(array.as_ref(), &UInt32Array::from(chunk.to_vec()), None)?;
-                tally(&taken, &mut chunk.iter().map(|&r| r as usize))?;
+    };
+
+    let distinct = counts.len() as u64;
+    // Keep only the requested candidates, not a second collection of every
+    // distinct value. Higher counts and earlier source rows win ties.
+    let mut candidates = BinaryHeap::with_capacity(keep.min(counts.len()));
+    for (i, (count, row)) in counts.into_values().enumerate() {
+        context.check_at(i)?;
+        let candidate = Reverse((count, Reverse(row)));
+        if candidates.len() < keep {
+            candidates.push(candidate);
+        } else if let Some(mut smallest) = candidates.peek_mut() {
+            if candidate.0 > smallest.0 {
+                *smallest = candidate;
             }
         }
     }
-
-    let distinct = counts.len() as u64;
-    let mut top: Vec<(u64, u32)> = counts.into_values().collect();
-    top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    top.truncate(keep);
+    let top: Vec<(u64, u32)> = candidates
+        .into_iter()
+        .map(|Reverse((count, Reverse(row)))| (count, row))
+        .collect();
 
     // Back into value order.
     let first_rows = UInt32Array::from(top.iter().map(|&(_, r)| r).collect::<Vec<_>>());
@@ -201,25 +263,105 @@ pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> R
     order.sort_by(|&a, &b| converted.row(a).cmp(&converted.row(b)));
 
     let f = format::formatter(array.as_ref())?;
+    let nulls = array.logical_nulls();
     let top = order
         .into_iter()
         .enumerate()
         .map(|(key, i)| DistinctValue {
             key: key as u64,
-            label: format::cell(array.as_ref(), &f, top[i].1 as usize),
+            label: if nulls
+                .as_ref()
+                .is_some_and(|nulls| nulls.is_null(top[i].1 as usize))
+            {
+                None
+            } else {
+                format::cell(array.as_ref(), &f, top[i].1 as usize)
+            },
             count: top[i].0,
         })
         .collect();
+    context.check()?;
     Ok(ValueCounts { distinct, top })
+}
+
+/// Float equality for analysis groups signed zero and NaN payloads. Native
+/// scalar reads avoid a row-format allocation or widened copy of the column.
+fn count_floats<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    rows: &Selection,
+    context: &AnalysisContext,
+) -> Result<HashMap<u64, (u64, u32)>>
+where
+    T::Native: Into<f64>,
+{
+    const NAN_KEY: u64 = f64::NAN.to_bits();
+    // All source NaNs become NAN_KEY, leaving this payload exclusively for null.
+    const NULL_KEY: u64 = NAN_KEY | 1;
+    let mut counts = HashMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        context.check_at(index)?;
+        let key = if array.is_null(row) {
+            NULL_KEY
+        } else {
+            let value: f64 = array.value(row).into();
+            if value == 0.0 {
+                0
+            } else if value.is_nan() {
+                NAN_KEY
+            } else {
+                value.to_bits()
+            }
+        };
+        counts.entry(key).or_insert((0, row as u32)).0 += 1;
+    }
+    context.check()?;
+    Ok(counts)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, Int64Array, StringArray};
+    use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
 
     use super::*;
+
+    #[test]
+    fn float_counts_group_signed_zero_and_nan_payloads_separately_from_null() {
+        let source = Float64Array::from(vec![
+            Some(-0.0),
+            Some(0.0),
+            Some(f64::NAN),
+            Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+            Some(f64::from_bits(0xfff8_2000_0000_0000)),
+            None,
+            None,
+            Some(1.0),
+        ]);
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let array = arrow::compute::cast(&source, &data_type).unwrap();
+            for rows in [
+                Selection::All(array.len()),
+                Selection::Rows(Arc::new(vec![7, 6, 5, 4, 3, 2, 1, 0])),
+            ] {
+                let result = count_values(&array, &rows, 8).unwrap();
+                assert_eq!(result.distinct, 4);
+                assert_eq!(result.top.len(), 4);
+                for value in result.top {
+                    let expected = match value.label {
+                        None => 2,
+                        Some(label) => match label.parse::<f64>().unwrap() {
+                            value if value.is_nan() => 3,
+                            0.0 => 2,
+                            1.0 => 1,
+                            value => panic!("unexpected value {value}"),
+                        },
+                    };
+                    assert_eq!(value.count, expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn codes_follow_value_order() {

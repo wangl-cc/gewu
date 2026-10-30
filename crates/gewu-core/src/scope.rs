@@ -17,14 +17,23 @@ pub(crate) enum RowScope<'a> {
 }
 
 impl<'a> RowScope<'a> {
-    /// `Facet` when there is a state, otherwise `All`.
+    /// A facet with no other-column filters or search is the whole source;
+    /// avoid allocating a source-row list just because a UI supplied a state.
     pub fn facet(state: Option<&'a ViewState>, column: u32) -> Self {
         match state {
-            Some(state) => Self::Facet {
-                state,
-                except: column,
-            },
-            None => Self::All,
+            Some(state)
+                if state.filters.iter().any(|filter| filter.column() != column)
+                    || state
+                        .search
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()) =>
+            {
+                Self::Facet {
+                    state,
+                    except: column,
+                }
+            }
+            _ => Self::All,
         }
     }
 }

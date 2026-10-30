@@ -162,13 +162,16 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
         search: Some("needle".into()),
         ..Default::default()
     };
-    let FilterEditor::Choices { values } = doc.filter_spec(2, Some(&state)).unwrap().editor else {
-        panic!("category should offer choices")
-    };
+    let values = doc
+        .prepare_text_choices(2, Some(&state))
+        .unwrap()
+        .page("", None, 100)
+        .unwrap()
+        .values;
     assert_eq!(
         values
             .iter()
-            .map(|value| (value.label.as_deref(), value.count))
+            .map(|value| (value.value.as_deref(), value.count))
             .collect::<Vec<_>>(),
         [(Some("A"), 2), (Some("B"), 2)]
     );

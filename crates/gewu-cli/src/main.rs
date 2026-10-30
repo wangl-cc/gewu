@@ -240,22 +240,22 @@ fn view_state(doc: &Document, args: &ViewArgs) -> Result<ViewState> {
         });
     }
 
-    let mut eq: BTreeMap<u32, Vec<Option<String>>> = BTreeMap::new();
+    let mut eq: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for w in &args.where_eq {
         let (name, value) = split_pair(w, "where")?;
         eq.entry(column_index(doc, name)?)
             .or_default()
-            .push(Some(value.to_string()));
+            .push(value.to_string());
     }
     for (column, labels) in eq {
         let equals = doc.column_capabilities(column)?.equals;
-        if let (true, [Some(value)]) = (equals, labels.as_slice()) {
-            // A single typed equality does not need a distinct-value index.
-            state.filters.push(Filter::Equals {
+        if equals {
+            state.filters.push(Filter::EqualsAny {
                 column,
-                value: value.clone(),
+                values: labels,
             });
         } else {
+            let labels = labels.into_iter().map(Some).collect::<Vec<_>>();
             let keys = doc.keys_for_labels(column, &labels)?;
             state.filters.push(Filter::InValues { column, keys });
         }

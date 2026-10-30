@@ -16,6 +16,12 @@ fn feature_availability_matches_open_errors() {
             let path = directory.path().join(format!("disabled.{extension}"));
             fs::write(&path, []).unwrap();
             assert!(matches!(Document::open(&path), Err(Error::Unsupported(_))));
+            if format == FileType::Xlsx {
+                assert!(matches!(
+                    gewu_core::xlsx_sheet_names(&path),
+                    Err(Error::Unsupported(_))
+                ));
+            }
             assert!(matches!(
                 Document::open_with_options(&path, &OpenOptions {
                     format: Some(format),

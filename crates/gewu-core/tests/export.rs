@@ -10,7 +10,9 @@ use arrow::{
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, Schema},
 };
-use gewu_core::{Document, Error, FileType, Filter, SortKey, ViewState};
+use gewu_core::{
+    Document, Error, ExportOptions, FileType, Filter, ParquetCompression, SortKey, ViewState,
+};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
@@ -220,10 +222,14 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
     doc.cancel_pending();
     let path = directory.path().join("result.parquet");
     export.write(&path).unwrap();
-    let mut reader = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&path).unwrap())
-        .unwrap()
-        .build()
-        .unwrap();
+    let builder = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&path).unwrap()).unwrap();
+    assert!(builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .flat_map(|group| group.columns())
+        .all(|column| { matches!(column.compression(), parquet::basic::Compression::ZSTD(_)) }));
+    let mut reader = builder.build().unwrap();
     let batch = reader.next().unwrap().unwrap();
     assert_eq!(batch.num_rows(), 4);
     assert_eq!(
@@ -260,6 +266,27 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
         .unwrap();
     assert_eq!(dates.values().as_ref(), &[-1, 1, 0, 2]);
     assert!(reader.next().is_none());
+}
+
+#[test]
+fn parquet_export_honors_explicit_compression() {
+    let (directory, doc) = sample();
+    let path = directory.path().join("snappy.parquet");
+    doc.prepare_export(0, &[0, 1], FileType::Parquet)
+        .unwrap()
+        .write_with_options(&path, &ExportOptions {
+            parquet_compression: ParquetCompression::Snappy,
+        })
+        .unwrap();
+    let reopened = Document::open(path).unwrap();
+    let gewu_core::FileMetadata::Parquet { compression, .. } = &reopened.info().metadata else {
+        panic!("expected Parquet metadata");
+    };
+    assert_eq!(compression, &["SNAPPY"]);
+    assert_eq!(
+        reopened.rows(0, 0, 5, &[0, 1]).unwrap().cells,
+        doc.rows(0, 0, 5, &[0, 1]).unwrap().cells
+    );
 }
 
 #[test]

@@ -13,7 +13,7 @@ use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use crate::{
     file::{self, ExportData, WriteProgress},
-    Error, FileType, Result,
+    Error, ExportOptions, FileType, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +94,16 @@ impl Export {
     /// this job, formatting failures, and cancellation return errors without
     /// replacing the destination. A failed job cannot be retried.
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_with_options(path, &ExportOptions::default())
+    }
+
+    /// Write with explicit encoding options, with the same single-use and
+    /// atomic destination semantics as [`Self::write`]. Defaults use Zstd for Parquet.
+    pub fn write_with_options(
+        &self,
+        path: impl AsRef<Path>,
+        options: &ExportOptions,
+    ) -> Result<()> {
         if self.started.swap(true, Ordering::Relaxed) {
             return Err(Error::InvalidArgument(
                 "this export has already been started".into(),
@@ -112,6 +122,7 @@ impl Export {
         file::write(
             temporary.as_file_mut(),
             self.format,
+            options,
             self.data(),
             self.write_progress(),
         )?;

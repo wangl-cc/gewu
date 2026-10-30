@@ -12,7 +12,7 @@ name = "gewu"
 
 [[bin]]
 name = "uniffi-bindgen"
-path = "src/bin/uniffi-bindgen.rs"
+path = "uniffi-bindgen.rs"
 required-features = ["bindgen"]
 
 [features]

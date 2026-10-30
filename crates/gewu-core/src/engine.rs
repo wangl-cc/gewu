@@ -114,8 +114,9 @@ impl ViewEngine {
         self.generation.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Switch to `rows` unless `token` was cancelled. The check happens under
-    /// the lock, so a cancelled change can never be committed.
+    /// Switch to `rows` unless `token` was cancelled. The final check under
+    /// the view lock is the commit linearization point: a concurrent cancel
+    /// after that check does not roll back this already accepted publication.
     pub fn commit(
         &self,
         token: &CancelToken,

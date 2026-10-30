@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleName</key><string>Gewu</string>
+  <key>CFBundleDisplayName</key><string>Gewu</string>
+  <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string></string>
+  <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>Data table</string>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Alternate</string>
+    <key>LSItemContentTypes</key><array>
+      <string>io.github.wangl-cc.gewu.parquet</string>
+      <string>public.comma-separated-values-text</string>
+      <string>public.tab-separated-values-text</string>
+      <string>org.openxmlformats.spreadsheetml.sheet</string>
+    </array>
+  </dict></array>
+  <key>UTImportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>io.github.wangl-cc.gewu.parquet</string>
+    <key>UTTypeDescription</key><string>Parquet table</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>parquet</string></array>
+    </dict>
+  </dict><dict>
+    <key>UTTypeIdentifier</key><string>org.openxmlformats.spreadsheetml.sheet</string>
+    <key>UTTypeDescription</key><string>Excel Workbook</string>
+    <key>UTTypeConformsTo</key><array><string>public.spreadsheet</string></array>
+    <key>UTTypeTagSpecification</key><dict>
+      <key>public.filename-extension</key><array><string>xlsx</string></array>
+      <key>public.mime-type</key><string>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</string>
+    </dict>
+  </dict></array>
+</dict></plist>

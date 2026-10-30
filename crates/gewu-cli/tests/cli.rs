@@ -138,6 +138,10 @@ fn rows_with_filters_and_sort() {
     // One value of a number column, and bounds read in the column's type.
     let v = gewu(&["rows", f, "--where", "id=30"]);
     assert_eq!(ids(&v), ["30"]);
+    let v = gewu(&["rows", f, "--where", "id=030"]);
+    assert_eq!(ids(&v), ["30"]);
+    let v = gewu(&["rows", f, "--where", "id=030", "--where", "id=20"]);
+    assert_eq!(ids(&v), ["20", "30"]);
     let v = gewu(&["rows", f, "--range", "id=15..30.5", "--sort", "id"]);
     assert_eq!(ids(&v), ["20", "30"]);
 
@@ -150,7 +154,7 @@ fn rows_with_filters_and_sort() {
 }
 
 #[test]
-fn single_string_equality_does_not_require_a_value_index() {
+fn string_equalities_do_not_require_a_value_index() {
     use std::io::Write;
 
     let path = std::env::temp_dir().join(format!(
@@ -166,6 +170,17 @@ fn single_string_equality_does_not_require_a_value_index() {
     let result = gewu(&["rows", path.to_str().unwrap(), "--where", "code=v100000"]);
     assert_eq!(result["matched_rows"], 1);
     assert_eq!(result["rows"][0]["code"], "v100000");
+    let result = gewu(&[
+        "rows",
+        path.to_str().unwrap(),
+        "--where",
+        "code=v100000",
+        "--where",
+        "code=v1",
+    ]);
+    assert_eq!(result["matched_rows"], 2);
+    assert_eq!(result["rows"][0]["code"], "v1");
+    assert_eq!(result["rows"][1]["code"], "v100000");
     std::fs::remove_file(path).unwrap();
 }
 

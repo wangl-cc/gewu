@@ -20,14 +20,22 @@ use rust_xlsxwriter::{Format, Workbook};
 use super::{ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
 use crate::{Error, FileMetadata, OpenOptions, Result};
 
-pub(super) fn read(file: File, options: &OpenOptions) -> Result<LoadedFile> {
-    let mut workbook = Xlsx::new(file)?;
-    let sheets = workbook
+fn worksheet_names(workbook: &Xlsx<File>) -> Vec<String> {
+    workbook
         .sheets_metadata()
         .iter()
         .filter(|sheet| sheet.typ == SheetType::WorkSheet)
         .map(|sheet| sheet.name.clone())
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+pub(super) fn sheet_names(file: File) -> Result<Vec<String>> {
+    Ok(worksheet_names(&Xlsx::new(file)?))
+}
+
+pub(super) fn read(file: File, options: &OpenOptions) -> Result<LoadedFile> {
+    let mut workbook = Xlsx::new(file)?;
+    let sheets = worksheet_names(&workbook);
     let sheet = options
         .sheet
         .as_ref()
@@ -250,7 +258,7 @@ pub(super) fn write(
         .map(|column| column.logical_nulls())
         .collect::<Vec<_>>();
     let mut workbook = Workbook::new();
-    let worksheet = workbook.add_worksheet_with_constant_memory();
+    let worksheet = workbook.add_worksheet_with_constant_memory()?;
     for (column, field) in data.schema.fields().iter().enumerate() {
         worksheet.write_string(0, column as u16, field.name())?;
     }
@@ -381,7 +389,7 @@ mod tests {
     }
 
     fn save(workbook: &mut Workbook) -> tempfile::NamedTempFile {
-        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let mut file = tempfile::Builder::new().suffix(".xlsx").tempfile().unwrap();
         workbook.save_to_writer(file.as_file_mut()).unwrap();
         file
     }
@@ -392,12 +400,16 @@ mod tests {
         workbook.add_worksheet().set_name("empty").unwrap();
         let worksheet = workbook.add_worksheet();
         worksheet.set_name("data").unwrap();
+        worksheet.set_hidden(true);
         worksheet.write_string(0, 0, "first").unwrap();
         worksheet.write_string(1, 0, "second").unwrap();
         let worksheet = workbook.add_worksheet();
         worksheet.set_name("header").unwrap();
         worksheet.write_string(0, 0, "id").unwrap();
         let file = save(&mut workbook);
+        assert_eq!(crate::xlsx_sheet_names(file.path()).unwrap(), [
+            "empty", "data", "header"
+        ]);
         let empty = read(file.reopen().unwrap(), &OpenOptions::default()).unwrap();
         assert_eq!(empty.batch.num_rows(), 0);
         assert_eq!(empty.batch.num_columns(), 0);
@@ -518,8 +530,18 @@ mod tests {
                 rust_xlsxwriter::Formula::new("1/0").set_result("#DIV/0!"),
             )
             .unwrap();
+        workbook.worksheets_mut().swap(0, 1);
         let file = save(&mut workbook);
-        let loaded = read(file.reopen().unwrap(), &OpenOptions::default()).unwrap();
+        // Even an unreadable first worksheet must not block selecting another.
+        assert_eq!(crate::xlsx_sheet_names(file.path()).unwrap(), [
+            "error", "Sheet1"
+        ]);
+        assert!(read(file.reopen().unwrap(), &OpenOptions::default()).is_err());
+        let loaded = read(file.reopen().unwrap(), &OpenOptions {
+            sheet: Some("Sheet1".into()),
+            ..OpenOptions::default()
+        })
+        .unwrap();
         assert_eq!(
             loaded
                 .batch

@@ -18,7 +18,7 @@ parquet = { workspace = true, optional = true }
 arrow-csv = { version = "60", optional = true }
 csv = { version = "1", optional = true }
 calamine = { version = "0.37", features = ["chrono"], optional = true }
-rust_xlsxwriter = { version = "0.96", features = ["constant_memory"], optional = true }
+rust_xlsxwriter = { version = "0.100", features = ["constant_memory"], optional = true }
 thiserror.workspace = true
 chrono.workspace = true
 tempfile = "3"
@@ -27,14 +27,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
-rand = "0.9"
-rand_distr = "0.5"
 
 [[bench]]
 name = "engine"
 harness = false
-required-features = ["parquet"]
-
-[[example]]
-name = "gen_sample"
 required-features = ["parquet"]

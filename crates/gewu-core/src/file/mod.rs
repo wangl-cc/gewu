@@ -15,7 +15,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::{Error, Result};
+use crate::{ColumnInfo, Error, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
@@ -26,6 +26,16 @@ mod xlsx;
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 pub(crate) const CHUNK_ROWS: usize = 8 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileInfo {
+    pub path: String,
+    pub row_count: u64,
+    pub columns: Vec<ColumnInfo>,
+    pub file_size: u64,
+    pub format: crate::FileType,
+    pub metadata: crate::FileMetadata,
+}
 
 /// A recognized file format. Variants remain available when a codec feature
 /// is disabled; attempting to use that codec returns an Unsupported error.
@@ -116,6 +126,25 @@ impl Default for OpenOptions {
     }
 }
 
+/// Parquet compression algorithms compiled into this build.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ParquetCompression {
+    #[default]
+    Zstd,
+    Snappy,
+    Gzip,
+    Brotli,
+    Lz4,
+    Uncompressed,
+}
+
+/// Encoding options for an export. Format-specific options are ignored by
+/// other formats; row and column selection belong to the export snapshot.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOptions {
+    pub parquet_compression: ParquetCompression,
+}
+
 /// Metadata that belongs to a particular file format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileMetadata {
@@ -135,6 +164,27 @@ pub enum FileMetadata {
 pub(crate) struct LoadedFile {
     pub batch: RecordBatch,
     pub metadata: FileMetadata,
+}
+
+/// List XLSX worksheets in workbook order, including hidden and empty sheets.
+/// Chart sheets are excluded. Does not decode worksheet cells, so Excel error
+/// cells in an individual sheet do not prevent listing the others. Workbook
+/// metadata, styles and shared strings are still read; this is blocking I/O.
+/// Returns an empty list when the workbook has no worksheets. The path must
+/// identify an XLSX file under the same detection rules as [`crate::Document::open`].
+pub fn xlsx_sheet_names(path: impl AsRef<Path>) -> Result<Vec<String>> {
+    FileType::Xlsx.require_enabled()?;
+    let path = path.as_ref();
+    let mut file = File::open(path)?;
+    if FileType::detect(path, &mut file)? != FileType::Xlsx {
+        return Err(Error::InvalidArgument(
+            "worksheet listing requires XLSX".into(),
+        ));
+    }
+    #[cfg(feature = "xlsx")]
+    return xlsx::sheet_names(file);
+    #[cfg(not(feature = "xlsx"))]
+    unreachable!("XLSX availability was checked above")
 }
 
 pub(crate) fn read(path: &Path, options: &OpenOptions) -> Result<(FileType, LoadedFile)> {
@@ -255,13 +305,14 @@ impl WriteProgress<'_> {
 pub(crate) fn write(
     file: &mut File,
     format: FileType,
+    options: &ExportOptions,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
 ) -> Result<()> {
     format.require_enabled()?;
     match format {
         #[cfg(feature = "parquet")]
-        FileType::Parquet => parquet::write(file, data, progress),
+        FileType::Parquet => parquet::write(file, options.parquet_compression, data, progress),
         #[cfg(feature = "csv")]
         FileType::Csv => delimited::write(file, b',', data, progress),
         #[cfg(feature = "csv")]
@@ -270,7 +321,7 @@ pub(crate) fn write(
         FileType::Xlsx => xlsx::write(file, data, progress),
         #[allow(unreachable_patterns)]
         _ => {
-            let _ = (file, data, progress);
+            let _ = (file, options, data, progress);
             Err(Error::Unsupported(format!(
                 "{format} support is disabled in this build"
             )))

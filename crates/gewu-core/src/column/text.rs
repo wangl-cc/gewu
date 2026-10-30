@@ -1,14 +1,60 @@
 //! Text predicates prepare their pattern once and scan only execution batches.
 
-use std::fmt::Write;
+use std::{collections::HashSet, fmt::Write};
 
 use arrow::{
-    array::{Array, ArrayAccessor, ArrayRef, AsArray},
-    datatypes::DataType,
+    array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
+    datatypes::{ArrowNativeType, DataType},
 };
 use regex::RegexBuilder;
 
 use crate::{format, predicate::Predicate, Error, Result};
+
+/// Borrow a string cell without decoding dictionaries or formatting a column.
+/// Both a null dictionary key and a key naming a null value yield `None`.
+pub(crate) type StringAccessor<'a> = Box<dyn Fn(usize) -> Option<&'a str> + Send + Sync + 'a>;
+
+pub(crate) fn accessor(array: &ArrayRef) -> Result<StringAccessor<'_>> {
+    match array.data_type() {
+        DataType::Utf8 => Ok(borrow_strings(array.as_string::<i32>())),
+        DataType::LargeUtf8 => Ok(borrow_strings(array.as_string::<i64>())),
+        DataType::Utf8View => Ok(borrow_strings(array.as_string_view())),
+        DataType::Dictionary(..) => {
+            downcast_dictionary_array!(array => {
+                let values = accessor(array.values())?;
+                Ok(Box::new(move |row| {
+                    if array.is_null(row) { None } else { values(array.keys().value(row).as_usize()) }
+                }) as StringAccessor<'_>)
+            }, _ => unreachable!("dictionary type checked above"))
+        }
+        _ => Err(Error::InvalidArgument(format!(
+            "{} is not a string column",
+            array.data_type()
+        ))),
+    }
+}
+
+fn borrow_strings<'a, A>(array: A) -> StringAccessor<'a>
+where
+    A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
+{
+    Box::new(move |row| array.is_valid(row).then(|| array.value(row)))
+}
+
+/// Exact membership retains only the explicitly included or excluded values.
+pub(super) fn selected_values<'a>(
+    array: &'a ArrayRef,
+    values: &[Option<String>],
+    exclude: bool,
+) -> Result<Predicate<'a>> {
+    let read = accessor(array)?;
+    let null_selected = values.iter().any(Option::is_none);
+    let selected: HashSet<String> = values.iter().filter_map(Clone::clone).collect();
+    Ok(Predicate::rows(Box::new(move |row| {
+        let included = read(row).map_or(null_selected, |value| selected.contains(value));
+        included != exclude
+    })))
+}
 
 pub(super) fn contains<'a>(
     array: &'a ArrayRef,
@@ -93,12 +139,62 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{Scalar, StringArray},
+        array::{DictionaryArray, Int8Array, Scalar, StringArray},
         compute::{cast, kernels::comparison::ilike},
+        datatypes::Int8Type,
     };
 
     use super::*;
-    use crate::engine::CancelToken;
+    use crate::{column::Column, engine::CancelToken, Filter};
+
+    #[test]
+    fn dictionary_membership_combines_nulls_and_duplicate_values() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("a"),
+            Some("A"),
+        ]));
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(3), Some(0)]);
+        let array: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
+        for exclude in [false, true] {
+            let filter = Filter::TextValues {
+                column: 0,
+                values: vec![Some("a".into()), None, Some("a".into()), None],
+                exclude,
+            };
+            let test = Column::new(&array).prepare_filter(&filter).unwrap();
+            let mut actual = vec![false; array.len()];
+            test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
+                .unwrap();
+            assert_eq!(
+                actual,
+                [true, true, true, true, false, true].map(|v| v != exclude)
+            );
+        }
+    }
+
+    #[test]
+    fn selected_values_borrow_each_native_string_representation() {
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("A"),
+            None,
+            Some(""),
+            Some("(null)"),
+        ]));
+        for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let array = cast(&input, &data_type).unwrap();
+            for exclude in [false, true] {
+                let test = selected_values(&array, &[Some("a".into()), None], exclude).unwrap();
+                let mut actual = vec![false; array.len()];
+                test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
+                    .unwrap();
+                let expected = [true, false, true, false, false].map(|value| value != exclude);
+                assert_eq!(actual, expected, "{data_type}: exclude={exclude}");
+            }
+        }
+    }
 
     #[test]
     fn prepared_matching_preserves_arrows_unicode_and_literal_semantics() {

@@ -1,6 +1,4 @@
 /target
-/app/.build
-/app/GewuCore.xcframework
-/app/Sources/Gewu/Generated/
+/Gewu.xcodeproj/
 /build
 .DS_Store

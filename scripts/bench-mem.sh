@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # Peak memory (and wall time) of common operations, each in its own process,
-# on the same generated 2M-row file as scripts/bench.sh. Uses the CLI, so it
+# on the sample prepared by Make. Uses the CLI, so it
 # measures what a single user action costs end to end, including loading.
 set -euo pipefail
-cd "$(dirname "$0")/.."
-
-FILE="${GEWU_BENCH_FILE:-${TMPDIR:-/tmp}/gewu-bench.parquet}"
-# Regenerate when missing or when the generator changed.
-if [[ ! -f "$FILE" || crates/gewu-core/examples/gen_sample.rs -nt "$FILE" ]]; then
-  cargo run --release -q -p gewu-core --example gen_sample -- "$FILE" 2000000
-fi
-cargo build --release -q -p gewu-cli
-GEWU=target/release/gewu
+GEWU="${1:?usage: bench-mem.sh CLI SAMPLE}"
+FILE="${2:?usage: bench-mem.sh CLI SAMPLE}"
 
 measure() {
   local name="$1"; shift

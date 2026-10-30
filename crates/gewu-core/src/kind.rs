@@ -83,7 +83,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::numeric::Numeric;
+    use crate::analysis::numeric::Numeric;
 
     fn every_type() -> Vec<DataType> {
         use DataType::*;

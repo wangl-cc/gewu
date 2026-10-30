@@ -6,7 +6,9 @@ use arrow::{
     array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt64Array},
     datatypes::DataType,
 };
-use gewu_core::{Bound, DataKind, Document, Error, Filter, FilterEditor, ViewState};
+use gewu_core::{
+    Bound, DataKind, Document, Error, Filter, FilterEditor, TextFilterMode, ViewState,
+};
 use parquet::arrow::ArrowWriter;
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> Document {
@@ -49,7 +51,10 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
     ));
     assert_eq!(
         doc.filter_spec(2, None).unwrap().editor,
-        FilterEditor::Contains
+        FilterEditor::Text {
+            modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
+            recommended: TextFilterMode::Contains
+        }
     );
     let state = ViewState {
         filters: vec![Filter::Range {
@@ -72,7 +77,10 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
     );
     assert_eq!(
         doc.filter_spec(2, Some(&state)).unwrap().editor,
-        FilterEditor::Contains
+        FilterEditor::Text {
+            modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
+            recommended: TextFilterMode::Contains
+        }
     );
     let chosen = ViewState {
         filters: vec![Filter::InValues {
@@ -170,6 +178,19 @@ fn choice_limit_counts_null_and_empty_columns_remain_valid() {
         let spec = doc.filter_spec(0, None).unwrap();
         assert!(spec.nullable);
         assert_eq!(matches!(spec.editor, FilterEditor::Choices { .. }), choices);
+        let text = StringArray::from_iter((0..count).map(|i| Some(i.to_string())).chain([None]));
+        let doc = document(vec![("text", Arc::new(text))]);
+        assert_eq!(
+            doc.filter_spec(0, None).unwrap().editor,
+            FilterEditor::Text {
+                modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
+                recommended: if choices {
+                    TextFilterMode::Choices
+                } else {
+                    TextFilterMode::Contains
+                },
+            }
+        );
     }
     let doc = document(vec![(
         "value",
@@ -178,6 +199,123 @@ fn choice_limit_counts_null_and_empty_columns_remain_valid() {
     assert!(
         matches!(doc.filter_spec(0, None).unwrap().editor, FilterEditor::Choices { values } if values.is_empty())
     );
+}
+
+#[test]
+fn high_cardinality_text_choices_do_not_require_a_value_index() {
+    let doc = document(vec![(
+        "text",
+        Arc::new(StringArray::from_iter_values(
+            (0..100_001).map(|i| format!("value-{i:06}")),
+        )),
+    )]);
+    let choices = doc
+        .prepare_text_choices(0, Some(&ViewState::default()))
+        .unwrap();
+    let page = choices.page("value-100000", None, 100).unwrap();
+    assert_eq!(page.values.len(), 1);
+    assert_eq!(page.values[0].count, 1);
+    let view = doc
+        .apply_view(&ViewState {
+            filters: vec![Filter::TextValues {
+                column: 0,
+                values: vec![page.values[0].value.clone()],
+                exclude: false,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows, [
+        100_000
+    ]);
+}
+
+#[test]
+fn text_selection_and_captured_facets_keep_exact_value_semantics() {
+    let doc = document(vec![
+        (
+            "text",
+            Arc::new(StringArray::from(vec![
+                None,
+                Some(""),
+                Some("cat"),
+                Some("Cat"),
+                Some("cat"),
+            ])),
+        ),
+        ("group", Arc::new(Int32Array::from(vec![1, 1, 1, 1, 2]))),
+    ]);
+    let state = ViewState {
+        filters: vec![
+            Filter::TextValues {
+                column: 0,
+                values: vec![Some("Cat".into())],
+                exclude: false,
+            },
+            Filter::Equals {
+                column: 1,
+                value: "1".into(),
+            },
+        ],
+        search: Some("cat".into()),
+        ..Default::default()
+    };
+    let choices = doc.prepare_text_choices(0, Some(&state)).unwrap();
+    doc.apply_view(&ViewState::default()).unwrap();
+    assert_eq!(
+        choices
+            .page("", None, 10)
+            .unwrap()
+            .values
+            .iter()
+            .map(|v| (v.value.as_deref(), v.count))
+            .collect::<Vec<_>>(),
+        [(None, 0), (Some(""), 0), (Some("Cat"), 1), (Some("cat"), 1)]
+    );
+    for (values, exclude, expected) in [
+        (vec![None, Some("cat".into())], false, vec![0, 2, 4]),
+        (vec![None, Some("cat".into())], true, vec![1, 3]),
+        (vec![], false, vec![]),
+        (vec![], true, vec![0, 1, 2, 3, 4]),
+    ] {
+        let view = doc
+            .apply_view(&ViewState {
+                filters: vec![Filter::TextValues {
+                    column: 0,
+                    values,
+                    exclude,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows,
+            expected
+        );
+    }
+    choices.cancel();
+    assert!(matches!(choices.page("", None, 10), Err(Error::Cancelled)));
+    assert_eq!(
+        doc.prepare_text_choices(0, None)
+            .unwrap()
+            .page("", None, 10)
+            .unwrap()
+            .values
+            .len(),
+        4
+    );
+    assert!(matches!(
+        doc.prepare_text_choices(1, None),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        doc.validate_filter(&Filter::TextValues {
+            column: 1,
+            values: vec![],
+            exclude: false
+        }),
+        Err(Error::InvalidArgument(_))
+    ));
 }
 
 #[test]

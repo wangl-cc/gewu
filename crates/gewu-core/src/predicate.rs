@@ -27,6 +27,34 @@ impl<'a> Predicate<'a> {
         Self::Batch(test)
     }
 
+    /// Combine prepared equality alternatives without scanning the source or
+    /// materializing one whole-column mask per value.
+    pub(crate) fn any_of(predicates: Vec<Self>) -> Self {
+        let mut rows = Vec::new();
+        let mut batches = Vec::new();
+        for predicate in predicates {
+            match predicate {
+                Self::Rows(test) => rows.push(test),
+                Self::Batch(test) => batches.push(Self::Batch(test)),
+            }
+        }
+        let rows = Self::rows(Box::new(move |row| rows.iter().any(|test| test(row))));
+        if batches.is_empty() {
+            return rows;
+        }
+        Self::batch(Box::new(move |range, hits, cancel| {
+            rows.evaluate(range.clone(), hits, cancel)?;
+            let mut scratch = vec![false; range.len()];
+            for predicate in &batches {
+                predicate.evaluate(range.clone(), &mut scratch, cancel)?;
+                for (hit, other) in hits.iter_mut().zip(&scratch) {
+                    *hit |= *other;
+                }
+            }
+            Ok(())
+        }))
+    }
+
     /// Overwrite the output with matches for this source range.
     pub(crate) fn evaluate(
         &self,
