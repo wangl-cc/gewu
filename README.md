@@ -21,11 +21,46 @@ Open downloaded data, explore its values and distributions, and find the rows th
 
 ## Get started
 
-Requires **macOS 15 or later**. Gewu is currently in early development; follow the [build instructions](DEVELOPMENT.md#build-and-run) to build and launch the app.
+Requires **macOS 15 or later**.
 
-Use **Gewu → Settings…** (`⌘,`) to adjust table text and row spacing, row numbering, copied headers and statistics precision. Histogram bin counts and scatter point limits are available beside their charts.
+1. Download Gewu from [Releases](https://github.com/wangl-cc/gewu/releases): choose `arm64` for Apple Silicon or `x86_64` for Intel.
+2. Unzip the download. You can keep **Gewu.app** in that folder or move it to **Applications**.
+3. Launch Gewu and choose a file, or use **File → Open…** (`⌘O`).
 
-CSV, TSV and Excel open with the first row treated as column names. Use **File → Import Options…** to change this for the current file, including when opening fails; reopening resets its search, filters and sorting. Export defaults to Parquet with Zstd compression; choose other formats from the system format menu and other Parquet compression methods in the Export panel. The app remembers the last successful export format unless disabled in Settings.
+<details>
+<summary>If macOS blocks the first launch</summary>
+
+Gewu is ad-hoc signed but not signed with Developer ID or notarized by Apple. If macOS blocks it because the developer cannot be verified, confirm that you downloaded it from this repository's Releases, then use **System Settings → Privacy & Security → Open Anyway**. Alternatively, open Terminal, change to the folder containing `Gewu.app`, and remove its quarantine attribute:
+
+```sh
+cd "/path/to/folder-containing-Gewu.app"
+xattr -dr com.apple.quarantine Gewu.app
+```
+
+Replace the example folder path with your own. This removes the download quarantine attribute for Gewu; it does not sign or notarize the app.
+
+</details>
+
+Use **Gewu → Settings…** (`⌘,`) for display and copy preferences. Adjust histogram bins and scatter point limits beside their charts.
+
+For files without column headers, use **File → Import Options…**. Save the current results with **File → Export…** (`⇧⌘E`); the initial default is Parquet with Zstd compression. See [file formats](docs/file-formats.md) for import and export details.
+
+To build from source, follow the [development guide](DEVELOPMENT.md#build-and-run).
+
+## File formats and limits
+
+Gewu decodes the opened table into memory, so the dataset size you can explore depends on available RAM. Compressed file size can be much smaller than the memory required; for XLSX, only the selected worksheet is loaded as a table.
+
+| Format | Read and export | Main considerations |
+| --- | --- | --- |
+| Parquet | Typed tables, including lists and structs. | Preferred for preserving types, nested values and nulls. |
+| CSV / TSV | Flat tables with inferred column types. | Types are not preserved; empty strings and nulls read as null. Nested columns cannot be exported. |
+| XLSX | Read individual worksheets; export one worksheet. | Dates/times and high-precision numbers export as text. Nested columns cannot be exported; workbook formatting and formulas are not preserved. |
+
+See [format details](docs/file-formats.md) for type inference, date handling and conversion rules.
+
+> [!IMPORTANT]
+> XLSX worksheets support up to **1,048,576 rows × 16,384 columns**. Gewu reserves one row for headers, allowing **1,048,575 data rows** per export.
 
 ## Documentation
 
@@ -34,19 +69,6 @@ CSV, TSV and Excel open with the first row treated as column names. Use **File �
 - [Data types](docs/data-types.md) — values, precision and typed input.
 - [Search and filtering](docs/search-and-filter.md) — conditions and result counts.
 - [File formats](docs/file-formats.md) — reading, exporting and format limits.
-
-## File formats and limits
-
-| Format | Text | Numbers | Booleans | Dates / times | Lists | Structs |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Parquet | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| CSV / TSV | ✓ | ✓ | ✓ | Limited | ✗ | ✗ |
-| XLSX | ✓ | ✓ | ✓ | Limited | ✗ | ✗ |
-
-CSV/TSV recognize ISO-style dates and timestamps, such as `2026-10-30` and `2026-10-30T14:30:00`; locale-specific dates and standalone times remain text. XLSX reads date/time cells, but exports dates, times and high-precision numbers as text. Original date types and display formats are not guaranteed to round-trip through these formats. See [format details](docs/file-formats.md).
-
-> [!IMPORTANT]
-> XLSX worksheets support up to **1,048,576 rows × 16,384 columns**. Gewu reserves one row for headers, allowing **1,048,575 data rows** per export.
 
 ## License
 

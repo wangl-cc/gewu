@@ -119,23 +119,47 @@ For sample generation and performance measurements, see [Core benchmarks](crates
 
 ## Continuous integration
 
-[Rust CI](.github/workflows/ci-rust.yml) runs workspace tests on Linux and both macOS architectures, and checks Rust formatting, Clippy, dependencies and individual Core file-format features on Linux. It runs for changes under `crates/` or `tools/data-gen/`, Rust configuration and its own workflow.
+Two independent workflows run on pushes to `main` and pull requests targeting `main`, when their path filters match. Both also support `workflow_call`; Release calls them without path filtering.
 
-[App CI](.github/workflows/ci-app.yml) checks Swift formatting/style, builds the Debug app and runs Swift regressions. It runs for changes under `app/` or `crates/gewu-ffi/`, plus `project.yml`, `.swift-format`, `scripts/build-rust.sh` and its own workflow. Core-only changes and changes limited to the root Cargo manifest, lockfile, Cargo configuration or Rust toolchain run Rust CI only; their App integration is checked on the next App CI run or release. Rust tests own Core behavior, while Swift tests own App behavior and FFI integration. App CI builds the Rust library and bindings it needs but does not run Rust tests or download Rust outputs from another job. App builds run independently for each architecture:
-
-| Architecture | Runner | ZIP artifact |
+| Workflow | Checks | Outputs |
 | --- | --- | --- |
-| Apple Silicon (`arm64`) | `xcode-27` (macOS 27) | `Gewu-macos-arm64.zip` |
-| Intel (`x86_64`) | `macos-26-intel` (macOS 26) | `Gewu-macos-x86_64.zip` |
+| [Rust CI](.github/workflows/ci-rust.yml) | Workspace tests on Linux, Apple Silicon and Intel; nightly rustfmt, all-target/all-feature Clippy, dependency checks, and Core tests/Clippy with no features or one of `parquet`, `csv`, `xlsx`. | Job logs; no App package. |
+| [App CI](.github/workflows/ci-app.yml) | Swift formatting for App and test sources; native Debug build and Swift Testing on Apple Silicon and Intel. | Debug App ZIPs and Xcode test reports. |
 
-When App CI runs for a push or pull request, `xcodebuild test` builds the app and runs Swift tests; CI uploads the test results and a ZIP of the Debug app. Both CI workflows also support `workflow_call`, so releases always run both suites regardless of changed paths. Their concurrency groups are distinct even when called from the same release workflow.
+### Change detection
 
-Each App build job installs XcodeGen, uses the runner image's default Xcode and uploads its architecture-specific ZIP. Release jobs also verify the archived App's architecture and ad-hoc signature. Both architectures retain a macOS 15 deployment target. This validates the build and bundle structure; it does not establish runtime behavior on the minimum supported macOS release. [Dependabot](.github/dependabot.yml) checks Cargo and GitHub Actions dependencies weekly.
+- Rust CI watches `crates/**`, `tools/data-gen/**`, `Cargo.toml`, `Cargo.lock`, `.cargo/**`, `rust-toolchain*`, `rustfmt.toml`, `deny.toml` and `.github/workflows/ci-rust.yml`.
+- App CI watches `app/**`, `crates/gewu-ffi/**`, `project.yml`, `.swift-format`, `scripts/build-rust.sh` and `.github/workflows/ci-app.yml`.
+
+FFI changes run both workflows. Core-only changes and changes limited to the root Cargo manifest, lockfile, Cargo configuration or Rust toolchain run Rust CI only; their App integration is checked on the next App CI run or release. Changes limited to the root README, this guide or `docs/` do not trigger either workflow; documentation inside a watched directory still does. Each workflow cancels its older run for the same pull request, using a distinct concurrency group so Rust and App checks do not cancel each other.
+
+### App builds and artifacts
+
+Each App build job installs XcodeGen and the native Rust target, generates `Gewu.xcodeproj`, then runs `xcodebuild test -configuration Debug` with the runner's default Xcode. The App build compiles its own Rust library and generates UniFFI bindings. It does not run Rust tests or download a library from another job.
+
+| Architecture | Runner | Debug ZIP | Test artifact |
+| --- | --- | --- | --- |
+| Apple Silicon (`arm64`) | `xcode-27` | `Gewu-macos-arm64.zip` | `tests-arm64` |
+| Intel (`x86_64`) | `macos-26-intel` | `Gewu-macos-x86_64.zip` | `tests-x86_64` |
+
+CI uses `build/xcode` for DerivedData and `build/Tests.xcresult` for the test report. A successful test job packages the Debug App from `build/xcode/Build/Products/Debug/Gewu.app`. Test-report upload is also attempted after a failure, unless the job was cancelled; a missing report is ignored. Artifacts are retained for 14 days.
+
+App CI exercises the hostless Swift test bundle described in [Validation](#validation), not interactive GUI tests. The deployment target remains macOS 15, but these runners do not establish runtime behavior on that minimum OS version. Explicit architecture and signature verification belongs to Release packaging below. [Dependabot](.github/dependabot.yml) checks Cargo and GitHub Actions dependencies weekly.
 
 ## Releases
 
 [Release](.github/workflows/release.yml) runs when a `vX.Y.Z` tag is pushed. Update `[workspace.package].version` in `Cargo.toml` and the corresponding `Cargo.lock` entries, commit the changes, then push the version tag on that commit. The workflow rejects malformed tags or versions that do not match the `gewu-ffi` package metadata. Only stable version tags are supported.
 
-The workflow runs both reusable Debug CI workflows and builds both architectures with `xcodebuild archive -configuration Release-LTO`. The App version still comes from Cargo; its build number is the release workflow's run number. Only after Rust CI, App CI and both builds succeed does the publishing job create a draft Release, upload `Gewu-vX.Y.Z-macos-arm64.zip`, `Gewu-vX.Y.Z-macos-x86_64.zip` and `SHA256SUMS`, then publish it. Only the publishing job has write permission.
+After version validation, three branches run in parallel: Rust CI, App CI, and the two-architecture Release build matrix. Release builds use the same architecture/runner pairs as App CI, but create a fresh archive with `xcodebuild archive -configuration Release-LTO`. The App version comes from Cargo; `CURRENT_PROJECT_VERSION` is set to the release workflow's run number.
+
+Each Release build takes `Gewu.app` from `build/Gewu.xcarchive/Products/Applications/`, verifies its expected architecture with `lipo` and its ad-hoc signature with `codesign --verify --deep --strict`, then creates a ZIP. These are separate Release-LTO artifacts, not the Debug ZIPs produced by App CI. The workflow does not rerun Swift tests against the Release-LTO configuration or notarize the App.
+
+Publishing waits for Rust CI, App CI and both Release builds to succeed. It downloads only the `release-*` artifacts from that run, checks that both archives exist, generates `SHA256SUMS`, creates or reuses a draft Release, uploads all three assets, then publishes it:
+
+- `Gewu-vX.Y.Z-macos-arm64.zip`
+- `Gewu-vX.Y.Z-macos-x86_64.zip`
+- `SHA256SUMS`
+
+Only the publishing job has repository write permission. Runs for the same tag are serialized without cancelling the active run.
 
 If upload or publication fails, rerun the failed jobs in the same workflow run within the artifacts' 14-day retention period. The publishing job reuses an existing draft and replaces its assets before retrying publication. It refuses to replace assets of an already published version. A failed build creates no Release. Do not create a published Release manually to trigger the workflow; pushing the tag is the release entry point.

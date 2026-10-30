@@ -4,6 +4,10 @@ Gewu reads and exports Parquet, CSV, TSV and XLSX. Extensions are recognized cas
 
 The whole file is decoded into memory when opened. Compressed file size does not indicate the memory needed to explore it. Format support does not guarantee lossless preservation of types: see [data types](data-types.md) for the behavior of a column after loading.
 
+In the app, **File → Import Options…** changes header interpretation for CSV, TSV and XLSX, including when the initial open fails. Reopening resets search, filters and sorting. For XLSX, the header is the first occupied row, and the chosen policy also applies when switching worksheets.
+
+**File → Export…** offers the supported formats in the system format menu and compression options for Parquet. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression.
+
 ## Parquet
 
 Parquet preserves nested types and nulls and is the preferred format for typed round trips. Export uses the selected rows and columns from the captured view.
@@ -12,7 +16,7 @@ Export defaults to Zstd compression. The export dialog also offers Snappy, Gzip,
 
 ## CSV and TSV
 
-Both formats use the first record as column names by default. Core callers can also request headerless input.
+Both formats use the first record as column names by default. The app's Import Options and Core's opening options also support headerless input.
 
 Type inference examines the entire input before decoding. Mixed types can become text; mixed integer/fractional columns become text if floating-point promotion would round an integer literal.
 
