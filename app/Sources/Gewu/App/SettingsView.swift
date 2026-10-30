@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @ObservedObject var updater: AppUpdater
     @AppStorage("TableFontSize") private var fontSize = 12.0
     @AppStorage("TableRowHeight") private var rowHeight = 28.0
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
@@ -37,6 +38,23 @@ struct SettingsView: View {
                 }
             }
             .help("Applies to approximate statistics. Original values and exact statistics retain their precision.")
+            if let sparkle = updater.updater {
+                Divider()
+                Toggle(
+                    "Automatically check for updates",
+                    isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates },
+                        set: { sparkle.automaticallyChecksForUpdates = $0 }))
+                Toggle(
+                    "Automatically download and install updates",
+                    isOn: Binding(
+                        get: { updater.automaticallyDownloadsUpdates },
+                        set: { sparkle.automaticallyDownloadsUpdates = $0 })
+                )
+                .disabled(!updater.automaticallyChecksForUpdates)
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
         }
         .formStyle(.columns)
         .toggleStyle(.checkbox)

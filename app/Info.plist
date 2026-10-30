@@ -10,6 +10,9 @@
   <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>$(SPARKLE_FEED_URL)</string>
+  <key>SUPublicEDKey</key><string>$(SPARKLE_PUBLIC_KEY)</string>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
   <key>CFBundleDocumentTypes</key><array><dict>
     <key>CFBundleTypeName</key><string>Data table</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>

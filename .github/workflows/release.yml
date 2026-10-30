@@ -22,6 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Check update signing configuration
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_PUBLIC_KEY" || -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            echo '::error::Configure SPARKLE_PUBLIC_KEY (variable) and SPARKLE_PRIVATE_KEY (secret) before releasing.'
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify tag matches Cargo version
         env:
@@ -57,6 +66,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       RELEASE_TAG: ${{ github.ref_name }}
       BUILD_NUMBER: ${{ github.run_number }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +91,8 @@ jobs:
         run: |
           xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Release-LTO \
             -destination 'generic/platform=macOS' -derivedDataPath build/xcode \
-            -archivePath build/Gewu.xcarchive CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
+            -archivePath build/Gewu.xcarchive CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY" archive
       - name: Verify and package archived app
         env:
           ARCH: ${{ matrix.arch }}
@@ -89,11 +100,35 @@ jobs:
           app=build/Gewu.xcarchive/Products/Applications/Gewu.app
           lipo "$app/Contents/MacOS/Gewu" -verify_arch "$ARCH"
           codesign --verify --deep --strict "$app"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "build/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+          mkdir -p build/updates
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+      - name: Sign update and generate appcast
+        env:
+          ARCH: ${{ matrix.arch }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$SPARKLE_PRIVATE_KEY" |
+            build/xcode/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast \
+              --ed-key-file - --maximum-deltas 0 \
+              --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
+              --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
+              --link "https://github.com/$GITHUB_REPOSITORY/releases" \
+              -o "build/updates/appcast-$ARCH.xml" build/updates
+          signature="$(xmllint --xpath 'string(/rss/channel/item/enclosure/@*[local-name()="edSignature"])' \
+            "build/updates/appcast-$ARCH.xml")"
+          if [[ -z "$signature" ]]; then
+            echo '::error::The appcast has no signed update. Check that the public and private keys match.'
+            exit 1
+          fi
+          printf '%s' "$SPARKLE_PRIVATE_KEY" |
+            build/xcode/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update \
+              --ed-key-file - --verify "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip" "$signature"
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.arch }}
-          path: build/Gewu-*.zip
+          path: |
+            build/updates/Gewu-*.zip
+            build/updates/appcast-*.xml
           if-no-files-found: error
           retention-days: 14
 
@@ -118,6 +153,8 @@ jobs:
         run: |
           test -s "Gewu-$RELEASE_TAG-macos-arm64.zip"
           test -s "Gewu-$RELEASE_TAG-macos-x86_64.zip"
+          test -s appcast-arm64.xml
+          test -s appcast-x86_64.xml
       - name: Create or reuse draft release
         run: |
           draft="$(gh api --paginate "repos/$GH_REPO/releases" \
@@ -132,6 +169,7 @@ jobs:
         working-directory: dist
         run: |
           gh release upload "$RELEASE_TAG" --clobber \
-            "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip"
+            "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" \
+            appcast-arm64.xml appcast-x86_64.xml
       - name: Publish release
         run: gh release edit "$RELEASE_TAG" --draft=false

@@ -2,6 +2,8 @@
 
 The SwiftUI and AppKit interface to [gewu-core](../crates/gewu-core/README.md), through [UniFFI](../crates/gewu-uniffi/README.md). For environment setup, terminal builds, launch and tests, follow the [Swift development guide](../DEVELOPMENT.md#swift-macos-ui).
 
+See [App updates](../docs/app-updates.md) for Sparkle signing and publication configuration.
+
 ## Code map
 
 Start with [GewuApp](Sources/Gewu/App/GewuApp.swift) for scenes and commands.
@@ -10,7 +12,7 @@ Views and state are grouped by feature under `app/Sources/Gewu`:
 
 | Directory | Responsibility |
 | --- | --- |
-| `App/` | App entry point, file opening, settings, commands and shared display formatting. |
+| `App/` | App entry point, file opening, settings, commands, Sparkle updates and shared display formatting. |
 | `Document/` | Workbook window, sheet loading, per-table query state and file information. |
 | `Table/` | AppKit table, row cache, copying and row gutter. |
 | `Filter/` | Filter editors and candidate paging. |

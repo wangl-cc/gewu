@@ -4,11 +4,12 @@ import SwiftUI
 struct GewuApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var files = FileCoordinator.shared
+    @StateObject private var updater = AppUpdater()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
-        Settings { SettingsView() }
+        Settings { SettingsView(updater: updater) }
             .windowResizability(.contentSize)
 
         WindowGroup("Gewu", id: "viewer", for: URL.self) { $url in
@@ -17,7 +18,13 @@ struct GewuApp: App {
         .defaultSize(width: 1200, height: 720)
         .windowToolbarStyle(.unified)
         .defaultLaunchBehavior(.suppressed)
-        .commands { ViewerCommands(files: files) }
+        .commands {
+            ViewerCommands(files: files)
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
+        }
         .onChange(of: scenePhase, initial: true) {
             // The app must be able to open its first file without an existing view.
             files.connect { openWindow(id: "viewer", value: $0) }
