@@ -7,8 +7,8 @@ import Foundation
 final class WorkbookModel: ObservableObject {
     let url: URL
     @Published private(set) var document: DocumentModel?
-    @Published private(set) var sheets: [String] = []
-    @Published private(set) var pendingSheet: String?
+    @Published private(set) var sheets: [WorksheetName] = []
+    @Published private(set) var pendingSheet: WorksheetName?
     @Published private(set) var isOpening = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -21,7 +21,7 @@ final class WorkbookModel: ObservableObject {
     private let gate = RequestGate()
     private let worker = DispatchQueue(label: "gewu.workbook.open", qos: .userInitiated)
     private var listedSheets = false
-    private var attemptedSheet: String?
+    private var attemptedSheet: WorksheetName?
     private let sheetNames: @Sendable (String) throws -> [String]
     private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDocument
     private let didOpen: @MainActor (URL) -> Void
@@ -42,7 +42,7 @@ final class WorkbookModel: ObservableObject {
         self.didOpen = didOpen
     }
 
-    var selectedSheet: String? { document?.info.sheet }
+    var selectedSheet: WorksheetName? { document?.info.sheet.map(WorksheetName.init) }
 
     var supportsHeaderOption: Bool { ["csv", "tsv", "xlsx"].contains(url.pathExtension.lowercased()) }
 
@@ -56,7 +56,7 @@ final class WorkbookModel: ObservableObject {
         load(sheet: attemptedSheet)
     }
 
-    func selectSheet(_ sheet: String) {
+    func selectSheet(_ sheet: WorksheetName) {
         guard sheets.contains(sheet) else { return }
         if sheet == selectedSheet {
             cancelOpening()
@@ -80,7 +80,7 @@ final class WorkbookModel: ObservableObject {
         pendingSheet = nil
     }
 
-    private func load(sheet: String?, hasHeader: Bool? = nil) {
+    private func load(sheet: WorksheetName?, hasHeader: Bool? = nil) {
         cancelOpening()
         attemptedSheet = sheet
         pendingSheet = sheet
@@ -104,12 +104,12 @@ final class WorkbookModel: ObservableObject {
                             return
                         }
                         do {
-                            let names = try listSheets ? sheetNames(path) : nil
+                            let names = try listSheets ? sheetNames(path).map(WorksheetName.init) : nil
                             let selected = sheet ?? names?.first
                             guard gate.isCurrent(mine) else { throw CancellationError() }
                             // Keep the successful catalog even when the selected sheet
                             // contains an Excel error. Other sheets remain selectable.
-                            let document = Result { try openDocument(path, selected, header) }
+                            let document = Result { try openDocument(path, selected?.rawValue, header) }
                             continuation.resume(
                                 returning: WorkbookRead(sheets: names, sheet: selected, document: document))
                         } catch {
@@ -128,7 +128,7 @@ final class WorkbookModel: ObservableObject {
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
-                self.sheets = next.info.sheets
+                self.sheets = next.info.sheets.map(WorksheetName.init)
                 self.pendingSheet = nil
                 self.isOpening = false
                 self.task = nil
@@ -148,7 +148,7 @@ final class WorkbookModel: ObservableObject {
 }
 
 private struct WorkbookRead: Sendable {
-    let sheets: [String]?
-    let sheet: String?
+    let sheets: [WorksheetName]?
+    let sheet: WorksheetName?
     let document: Result<GewuDocument, Error>
 }

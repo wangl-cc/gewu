@@ -79,7 +79,7 @@ struct DocumentScene: View {
                     } label: {
                         HStack(spacing: 5) {
                             if workbook.pendingSheet == sheet { ProgressView().controlSize(.mini) }
-                            Text(sheet).lineLimit(1)
+                            Text(sheet.rawValue).lineLimit(1)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background {
@@ -89,7 +89,7 @@ struct DocumentScene: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Worksheet \(sheet)")
+                    .accessibilityLabel("Worksheet \(sheet.rawValue)")
                     .accessibilityAddTraits(workbook.selectedSheet == sheet ? .isSelected : [])
                 }
             }.padding(5)
