@@ -113,12 +113,11 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: dist
-      - name: Check archives and generate checksums
+      - name: Check archives
         working-directory: dist
         run: |
           test -s "Gewu-$RELEASE_TAG-macos-arm64.zip"
           test -s "Gewu-$RELEASE_TAG-macos-x86_64.zip"
-          sha256sum "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" > SHA256SUMS
       - name: Create or reuse draft release
         run: |
           draft="$(gh api --paginate "repos/$GH_REPO/releases" \
@@ -133,6 +132,6 @@ jobs:
         working-directory: dist
         run: |
           gh release upload "$RELEASE_TAG" --clobber \
-            "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" SHA256SUMS
+            "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip"
       - name: Publish release
         run: gh release edit "$RELEASE_TAG" --draft=false

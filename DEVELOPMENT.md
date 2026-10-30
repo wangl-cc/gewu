@@ -158,11 +158,12 @@ After version validation, three branches run in parallel: Rust CI, App CI, and t
 
 Each Release build takes `Gewu.app` from `build/Gewu.xcarchive/Products/Applications/`, verifies its expected architecture with `lipo` and its ad-hoc signature with `codesign --verify --deep --strict`, then creates a ZIP. These are separate Release-LTO artifacts, not the Debug ZIPs produced by App CI. The workflow does not rerun Swift tests against the Release-LTO configuration or notarize the App.
 
-Publishing waits for Rust CI, App CI and both Release builds to succeed. It downloads only the `release-*` artifacts from that run, checks that both archives exist, generates `SHA256SUMS`, creates or reuses a draft Release, uploads all three assets, then publishes it:
+Publishing waits for Rust CI, App CI and both Release builds to succeed. It downloads only the `release-*` artifacts from that run, checks that both archives exist, creates or reuses a draft Release, uploads both packages, then publishes it:
 
 - `Gewu-vX.Y.Z-macos-arm64.zip`
 - `Gewu-vX.Y.Z-macos-x86_64.zip`
-- `SHA256SUMS`
+
+GitHub provides each uploaded asset's SHA-256 digest through the [Release assets API](https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
 
 Only the publishing job has repository write permission. Runs for the same tag are serialized without cancelling the active run.
 
