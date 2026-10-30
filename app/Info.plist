@@ -15,26 +15,18 @@
     <key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string>
     <key>LSItemContentTypes</key><array>
-      <string>io.github.wangl-cc.gewu.parquet</string>
+      <string>org.apache.parquet</string>
       <string>public.comma-separated-values-text</string>
       <string>public.tab-separated-values-text</string>
       <string>org.openxmlformats.spreadsheetml.sheet</string>
     </array>
   </dict></array>
   <key>UTImportedTypeDeclarations</key><array><dict>
-    <key>UTTypeIdentifier</key><string>io.github.wangl-cc.gewu.parquet</string>
-    <key>UTTypeDescription</key><string>Parquet table</string>
+    <key>UTTypeIdentifier</key><string>org.apache.parquet</string>
+    <key>UTTypeDescription</key><string>Apache Parquet</string>
     <key>UTTypeConformsTo</key><array><string>public.data</string></array>
     <key>UTTypeTagSpecification</key><dict>
       <key>public.filename-extension</key><array><string>parquet</string></array>
-    </dict>
-  </dict><dict>
-    <key>UTTypeIdentifier</key><string>org.openxmlformats.spreadsheetml.sheet</string>
-    <key>UTTypeDescription</key><string>Excel Workbook</string>
-    <key>UTTypeConformsTo</key><array><string>public.spreadsheet</string></array>
-    <key>UTTypeTagSpecification</key><dict>
-      <key>public.filename-extension</key><array><string>xlsx</string></array>
-      <key>public.mime-type</key><string>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</string>
     </dict>
   </dict></array>
 </dict></plist>

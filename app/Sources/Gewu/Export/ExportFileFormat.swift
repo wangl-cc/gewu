@@ -16,8 +16,8 @@ enum ExportFileFormat: String, CaseIterable {
         switch self {
         case .csv: return .commaSeparatedText
         case .tsv: return .tabSeparatedText
-        case .parquet: return UTType(importedAs: "io.github.wangl-cc.gewu.parquet", conformingTo: .data)
-        case .xlsx: return UTType(importedAs: "org.openxmlformats.spreadsheetml.sheet", conformingTo: .spreadsheet)
+        case .parquet: return UTType(importedAs: "org.apache.parquet", conformingTo: .data)
+        case .xlsx: return UTType("org.openxmlformats.spreadsheetml.sheet")!
         }
     }
 
