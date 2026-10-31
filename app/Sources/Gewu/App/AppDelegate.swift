@@ -36,8 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        // Let AppKit bring back minimized windows instead of presenting a picker.
-        if hasVisibleWindows || sender.windows.contains(where: \.isMiniaturized) { return true }
+        // Let AppKit bring back minimized viewer windows instead of presenting a picker.
+        if FileCoordinator.hasViewerWindows(in: sender.windows) { return true }
         FileCoordinator.shared.chooseFiles()
         return false
     }
@@ -57,10 +57,17 @@ final class FileCoordinator: ObservableObject {
     private let makePanel: @MainActor () -> NSOpenPanel
     private let hasExistingWindows: @MainActor () -> Bool
 
+    static func hasViewerWindows(in windows: [NSWindow]) -> Bool {
+        windows.contains { window in
+            (window.isVisible || window.isMiniaturized)
+                && window.representedURL != nil
+        }
+    }
+
     init(
         makePanel: @escaping @MainActor () -> NSOpenPanel = { NSOpenPanel() },
         hasExistingWindows: @escaping @MainActor () -> Bool = {
-            NSApp.windows.contains(where: { $0.isVisible || $0.isMiniaturized })
+            FileCoordinator.hasViewerWindows(in: NSApp.windows)
         }
     ) {
         self.makePanel = makePanel

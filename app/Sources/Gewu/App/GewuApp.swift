@@ -9,9 +9,6 @@ struct GewuApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
-        Settings { SettingsView(updater: updater) }
-            .windowResizability(.contentSize)
-
         WindowGroup("Gewu", id: "viewer", for: URL.self) { $url in
             ViewerScene(url: url).environmentObject(files)
         }
@@ -35,8 +32,19 @@ struct GewuApp: App {
         }
         .defaultSize(width: 460, height: 440)
         .windowResizability(.contentMinSize)
-        .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.suppressed)
+        .auxiliaryScene()
+
+        Settings { SettingsView(updater: updater) }
+            .windowResizability(.contentSize)
+            .auxiliaryScene()
+    }
+}
+
+extension Scene {
+    /// Auxiliary scenes must never auto-open at launch or restore across restarts.
+    fileprivate func auxiliaryScene() -> some Scene {
+        defaultLaunchBehavior(.suppressed)
+            .restorationBehavior(.disabled)
     }
 }
 

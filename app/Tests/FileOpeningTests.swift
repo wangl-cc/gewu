@@ -72,7 +72,28 @@ struct FileOpeningTests {
         #expect(opened.count == 2)
         requested.connect { _ in Issue.record("A consumed request must not be replayed") }
 
+        let settingsWindow = TestWindow(visible: true)
+        let infoWindow = TestWindow(visible: true)
+        #expect(
+            !FileCoordinator.hasViewerWindows(in: [settingsWindow, infoWindow]),
+            "Settings and info windows must not suppress the launch file picker")
+        let viewerURL = URL(fileURLWithPath: "/tmp/sample.parquet")
+        let viewerWindow = TestWindow(visible: true, representedURL: viewerURL)
+        #expect(FileCoordinator.hasViewerWindows(in: [settingsWindow, viewerWindow]))
     }
+}
+
+@MainActor
+private final class TestWindow: NSWindow {
+    private let reportedVisible: Bool
+
+    init(visible: Bool, representedURL: URL? = nil) {
+        reportedVisible = visible
+        super.init(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        self.representedURL = representedURL
+    }
+
+    override var isVisible: Bool { reportedVisible }
 }
 
 /// Exercises the coordinator without displaying native windows or running a modal loop.
