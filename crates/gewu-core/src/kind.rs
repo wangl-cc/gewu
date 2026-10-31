@@ -132,19 +132,6 @@ impl LogicalType {
         )
     }
 
-    /// Backwards-compatible alias for `supports_logarithmic`.
-    pub fn supports_log(&self) -> bool {
-        self.supports_logarithmic()
-    }
-
-    /// Dates and times, shown and typed as text but stored as integers.
-    pub fn is_temporal(&self) -> bool {
-        matches!(
-            self,
-            Self::Date | Self::Time | Self::Timestamp { .. } | Self::Duration { .. }
-        )
-    }
-
     /// Normalized, concise display text for UI badges and type labels.
     pub fn display_name(&self) -> String {
         match self {
@@ -459,11 +446,5 @@ mod tests {
         assert!(!date.supports_logarithmic());
         assert!(!ts.supports_logarithmic());
         assert!(!text.supports_logarithmic());
-
-        assert!(date.is_temporal());
-        assert!(ts.is_temporal());
-        assert!(duration.is_temporal());
-        assert!(!int.is_temporal());
-        assert!(!text.is_temporal());
     }
 }

@@ -31,17 +31,6 @@ impl From<core::TimeUnit> for TimeUnit {
     }
 }
 
-impl From<TimeUnit> for core::TimeUnit {
-    fn from(u: TimeUnit) -> Self {
-        match u {
-            TimeUnit::Second => Self::Second,
-            TimeUnit::Millisecond => Self::Millisecond,
-            TimeUnit::Microsecond => Self::Microsecond,
-            TimeUnit::Nanosecond => Self::Nanosecond,
-        }
-    }
-}
-
 /// A logical data type with semantic parameters; mirrors `gewu_core::LogicalType`.
 #[derive(uniffi::Enum, Clone, PartialEq, Eq)]
 pub enum LogicalType {
@@ -96,36 +85,6 @@ impl From<core::LogicalType> for LogicalType {
             core::LogicalType::List => Self::List,
             core::LogicalType::Struct => Self::Struct,
             core::LogicalType::Other { raw_name } => Self::Other { raw_name },
-        }
-    }
-}
-
-impl From<&core::LogicalType> for LogicalType {
-    fn from(t: &core::LogicalType) -> Self {
-        t.clone().into()
-    }
-}
-
-impl From<LogicalType> for core::LogicalType {
-    fn from(t: LogicalType) -> Self {
-        match t {
-            LogicalType::Text => Self::Text,
-            LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
-            LogicalType::Float { bits } => Self::Float { bits },
-            LogicalType::Decimal { precision, scale } => Self::Decimal { precision, scale },
-            LogicalType::Boolean => Self::Boolean,
-            LogicalType::Date => Self::Date,
-            LogicalType::Time => Self::Time,
-            LogicalType::Timestamp { unit, timezone } => Self::Timestamp {
-                unit: unit.into(),
-                timezone,
-            },
-            LogicalType::Duration { unit } => Self::Duration { unit: unit.into() },
-            LogicalType::Interval => Self::Interval,
-            LogicalType::Binary => Self::Binary,
-            LogicalType::List => Self::List,
-            LogicalType::Struct => Self::Struct,
-            LogicalType::Other { raw_name } => Self::Other { raw_name },
         }
     }
 }
