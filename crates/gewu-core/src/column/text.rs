@@ -54,7 +54,7 @@ pub(super) fn selected_values<'a>(
     let read = accessor(array)?;
     let null_selected = values.iter().any(Option::is_none);
     let selected: HashSet<String> = values.iter().filter_map(Clone::clone).collect();
-    Ok(Predicate::chunk(Box::new(
+    Ok(Predicate::new(Box::new(
         move |rows, incoming, output, _cancel| {
             match (rows, incoming) {
                 (RowSelection::Range(range), None) => {
@@ -122,11 +122,18 @@ pub(super) fn contains<'a>(
     // values. One buffer per batch, reused across cells, never a column of strings.
     let text = query.text().to_owned();
     let lower = (!case_sensitive && !text.is_ascii()).then(|| text.to_lowercase());
-    Ok(Predicate::batch(Box::new(move |rows, hits, _| {
+    Ok(Predicate::new(Box::new(move |rows, incoming, hits, _| {
         let f = format::formatter(array.as_ref())?;
         let mut buf = String::new();
         for (index, row) in rows.iter().enumerate() {
+            if let Some(mask) = incoming {
+                if !mask[index] {
+                    hits[index] = false;
+                    continue;
+                }
+            }
             if array.is_null(row) {
+                hits[index] = false;
                 continue;
             }
             buf.clear();
@@ -168,8 +175,20 @@ fn bind<'a, A>(array: A, is_match: impl Fn(&str) -> bool + Send + Sync + 'a) -> 
 where
     A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
 {
-    Predicate::scalar(Box::new(move |row| {
-        array.is_valid(row) && is_match(array.value(row))
+    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+        match incoming {
+            Some(mask) => {
+                for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
+                    output[i] = m && array.is_valid(row) && is_match(array.value(row));
+                }
+            }
+            None => {
+                for (i, row) in rows.iter().enumerate() {
+                    output[i] = array.is_valid(row) && is_match(array.value(row));
+                }
+            }
+        }
+        Ok(())
     }))
 }
 

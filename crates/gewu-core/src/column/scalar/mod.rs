@@ -66,7 +66,7 @@ fn boolean(text: &str) -> Option<bool> {
 fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
     let array = array.as_boolean();
     let has_nulls = array.null_count() > 0;
-    Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
         match (rows, incoming) {
             (RowSelection::Range(range), None) => {
                 for (i, row) in range.enumerate() {

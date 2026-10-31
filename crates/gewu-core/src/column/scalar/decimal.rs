@@ -259,10 +259,7 @@ where
     let lo = lo.max(Endpoint::Finite(<T::Native as Coefficient>::MIN));
     let hi = hi.min(Endpoint::Finite(<T::Native as Coefficient>::MAX));
     if lo > hi {
-        return Predicate::chunk(Box::new(|_, _, output, _| {
-            output.fill(false);
-            Ok(())
-        }));
+        return Predicate::empty();
     }
     let (Endpoint::Finite(lo), Endpoint::Finite(hi)) = (lo, hi) else {
         unreachable!("native domain intersection");
@@ -271,7 +268,7 @@ where
     let values = array.values();
     let has_nulls = array.null_count() > 0;
 
-    Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
         match (rows, incoming) {
             (RowSelection::Range(range), None) => {
                 let slice = &values[range.clone()];

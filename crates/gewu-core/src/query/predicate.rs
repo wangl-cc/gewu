@@ -3,7 +3,8 @@
 //! Predicates operate on 8K chunks (`CHUNK = 8 * 1024`), ensuring working data and masks
 //! fit entirely inside the CPU's L1 data cache (<= 80 KB). Evaluators receive an optional incoming
 //! mask (`incoming: Option<&[bool]>`), allowing:
-//! - **Branchless SIMD**: Primitive comparisons compute unconditionally and bitwise-AND with the mask.
+//! - **Branchless SIMD**: Primitive comparisons compute unconditionally and bitwise-AND with the
+//!   mask.
 //! - **Branching Short-circuit**: Expensive string/complex operations skip rejected rows.
 //! - **Chunk-level Circuit Breaking**: Fully-rejected chunks are bypassed entirely.
 
@@ -23,14 +24,6 @@ pub(crate) type ChunkEvaluator<'a> = Box<
         + 'a,
 >;
 
-/// Single-row scalar matcher closure: takes a row index and returns whether it matches.
-pub(crate) type ScalarFilter<'a> = Box<dyn Fn(usize) -> bool + Send + Sync + 'a>;
-
-/// Block-level evaluator: populates the output boolean slice for a selection of rows.
-pub(crate) type BatchEvaluator<'a> = Box<
-    dyn for<'b> Fn(RowSelection<'b>, &mut [bool], &CancelToken) -> Result<()> + Send + Sync + 'a,
->;
-
 #[derive(Clone)]
 pub(crate) enum RowSelection<'a> {
     Range(Range<usize>),
@@ -42,13 +35,6 @@ impl<'a> RowSelection<'a> {
         match self {
             Self::Range(rows) => rows.len(),
             Self::Indices(rows) => rows.len(),
-        }
-    }
-
-    pub(crate) fn get(&self, index: usize) -> usize {
-        match self {
-            Self::Range(rows) => rows.start + index,
-            Self::Indices(rows) => rows[index],
         }
     }
 
@@ -64,6 +50,24 @@ impl<'a> RowSelection<'a> {
             Self::Range(rows) => Self::Range(rows.start + offset..rows.start + offset + len),
             Self::Indices(rows) => Self::Indices(&rows[offset..offset + len]),
         }
+    }
+}
+
+impl<'a> From<Range<usize>> for RowSelection<'a> {
+    fn from(range: Range<usize>) -> Self {
+        Self::Range(range)
+    }
+}
+
+impl<'a> From<&'a [usize]> for RowSelection<'a> {
+    fn from(indices: &'a [usize]) -> Self {
+        Self::Indices(indices)
+    }
+}
+
+impl<'a> From<&'a Vec<usize>> for RowSelection<'a> {
+    fn from(indices: &'a Vec<usize>) -> Self {
+        Self::Indices(indices.as_slice())
     }
 }
 
@@ -87,38 +91,14 @@ pub(crate) struct Predicate<'a>(ChunkEvaluator<'a>);
 
 impl<'a> Predicate<'a> {
     /// Construct a chunk-level vectorized predicate directly.
-    pub(crate) fn chunk(evaluator: ChunkEvaluator<'a>) -> Self {
+    pub(crate) fn new(evaluator: ChunkEvaluator<'a>) -> Self {
         Self(evaluator)
     }
 
-    /// Construct a predicate from a scalar row matcher (adapted to chunk-level execution).
-    pub(crate) fn scalar(is_match: ScalarFilter<'a>) -> Self {
-        Self::chunk(Box::new(move |rows, incoming, output, _cancel| {
-            match incoming {
-                Some(mask) => {
-                    for (i, &m) in mask.iter().enumerate() {
-                        output[i] = m && is_match(rows.get(i));
-                    }
-                }
-                None => {
-                    for (i, hit) in output.iter_mut().enumerate() {
-                        *hit = is_match(rows.get(i));
-                    }
-                }
-            }
-            Ok(())
-        }))
-    }
-
-    /// Construct a predicate from a batch evaluator (adapted to chunk-level execution).
-    pub(crate) fn batch(evaluator: BatchEvaluator<'a>) -> Self {
-        Self::chunk(Box::new(move |rows, incoming, output, cancel| {
-            evaluator(rows, output, cancel)?;
-            if let Some(mask) = incoming {
-                for (hit, &m) in output.iter_mut().zip(mask) {
-                    *hit &= m;
-                }
-            }
+    /// Construct a predicate that matches nothing (all false).
+    pub(crate) fn empty() -> Self {
+        Self::new(Box::new(|_rows, _incoming, output, _cancel| {
+            output.fill(false);
             Ok(())
         }))
     }
@@ -138,23 +118,21 @@ impl<'a> Predicate<'a> {
     /// materializing one whole-column mask per value.
     pub(crate) fn any_of(predicates: Vec<Self>) -> Self {
         if predicates.is_empty() {
-            return Self::chunk(Box::new(|_rows, _incoming, output, _cancel| {
-                output.fill(false);
-                Ok(())
-            }));
+            return Self::empty();
         }
         if predicates.len() == 1 {
             return predicates.into_iter().next().unwrap();
         }
-        Self::chunk(Box::new(move |rows, incoming, output, cancel| {
-            output.fill(false);
+        Self::new(Box::new(move |rows, incoming, output, cancel| {
             let mut scratch = vec![false; output.len()];
             for (i, predicate) in predicates.iter().enumerate() {
                 cancel.check()?;
                 if i == 0 {
+                    // First alternative directly populates the chunk output with its matches.
                     predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
                 } else {
-                    // Fast circuit-break: if all active rows are already true, skip remaining predicates.
+                    // Fast circuit-break: if all active rows are already true, skip remaining
+                    // predicates.
                     if let Some(mask) = incoming {
                         let all_true = mask.iter().zip(output.iter()).all(|(&m, &hit)| !m || hit);
                         if all_true {
@@ -174,23 +152,15 @@ impl<'a> Predicate<'a> {
         }))
     }
 
-    /// Overwrite the output with matches for this source range.
-    pub(crate) fn evaluate(
+    /// Overwrite `matched` with results for the given rows (Range or borrowed slice of row
+    /// indices).
+    pub(crate) fn evaluate<'r>(
         &self,
-        source_rows: Range<usize>,
+        source_rows: impl Into<RowSelection<'r>>,
         matched: &mut [bool],
         cancel: &CancelToken,
     ) -> Result<()> {
-        self.evaluate_selected(RowSelection::Range(source_rows), matched, cancel)
-    }
-
-    /// Overwrite the output with matches for an ordered borrowed selection.
-    pub(crate) fn evaluate_selected(
-        &self,
-        source_rows: RowSelection<'_>,
-        matched: &mut [bool],
-        cancel: &CancelToken,
-    ) -> Result<()> {
+        let source_rows = source_rows.into();
         assert_eq!(source_rows.len(), matched.len());
         cancel.check()?;
         for (chunk_idx, out) in matched.chunks_mut(CHUNK).enumerate() {
@@ -212,8 +182,10 @@ impl<'a> Predicate<'a> {
         assert_eq!(source_rows.len(), matched.len());
         assert_eq!(matched.len(), scratch.len());
         cancel.check()?;
-        for (chunk_idx, (out, scratch_chunk)) in
-            matched.chunks_mut(CHUNK).zip(scratch.chunks_mut(CHUNK)).enumerate()
+        for (chunk_idx, (out, scratch_chunk)) in matched
+            .chunks_mut(CHUNK)
+            .zip(scratch.chunks_mut(CHUNK))
+            .enumerate()
         {
             cancel.check()?;
             // Fast chunk-level short-circuit: if all rows in this chunk are already false, skip it!

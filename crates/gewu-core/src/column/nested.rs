@@ -10,7 +10,7 @@ use arrow::{
 
 use super::{Column, SearchQuery};
 use crate::{
-    predicate::{Predicate, RowSelection, CHUNK},
+    predicate::{Predicate, CHUNK},
     Result,
 };
 
@@ -73,17 +73,23 @@ pub(super) fn search<'a>(
             if children.is_empty() {
                 return Ok(None);
             }
-            Ok(Some(Predicate::batch(Box::new(
-                move |rows, hits, cancel| {
+            Ok(Some(Predicate::new(Box::new(
+                move |rows, incoming, hits, cancel| {
+                    hits.fill(false);
                     let mut scratch = vec![false; rows.len()];
                     for child in &children {
-                        child.evaluate_selected(rows.clone(), &mut scratch, cancel)?;
+                        child.evaluate(rows.clone(), &mut scratch, cancel)?;
                         for (hit, other) in hits.iter_mut().zip(&scratch) {
                             *hit |= *other;
                         }
                     }
                     for (index, row) in rows.iter().enumerate() {
                         hits[index] &= array.is_valid(row);
+                    }
+                    if let Some(mask) = incoming {
+                        for (hit, &m) in hits.iter_mut().zip(mask) {
+                            *hit &= m;
+                        }
                     }
                     Ok(())
                 },
@@ -103,17 +109,23 @@ fn dictionary_find<'a>(
     downcast_dictionary_array!(array => {
         let values = array.values();
         let Some(child) = prepare(values)? else { return Ok(None) };
-        Ok(Some(Predicate::batch(Box::new(move |rows, hits, cancel| {
+        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
+            hits.fill(false);
             let mut keys = Vec::with_capacity(rows.len());
             let mut output_rows = Vec::with_capacity(rows.len());
             for (index, row) in rows.iter().enumerate() {
+                if let Some(mask) = incoming {
+                    if !mask[index] {
+                        continue;
+                    }
+                }
                 if array.is_valid(row) {
                     keys.push(array.keys().value(row).as_usize());
                     output_rows.push(index);
                 }
             }
             let mut matched = vec![false; keys.len()];
-            child.evaluate_selected(RowSelection::Indices(&keys), &mut matched, cancel)?;
+            child.evaluate(&keys, &mut matched, cancel)?;
             for (key, output) in output_rows.into_iter().enumerate() {
                 hits[output] = matched[key];
             }
@@ -132,7 +144,7 @@ pub(super) fn dictionary<'a>(
         let values = array.values();
         let Some(child) = prepare(values)? else { return Ok(None) };
         let cached = OnceLock::<Vec<bool>>::new();
-        Ok(Some(Predicate::batch(Box::new(move |rows, hits, cancel| {
+        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
             let matched = match cached.get() {
                 Some(matched) => matched,
                 None => {
@@ -141,8 +153,19 @@ pub(super) fn dictionary<'a>(
                     cached.get_or_init(|| matched)
                 }
             };
-            for (index, row) in rows.iter().enumerate() {
-                hits[index] = array.is_valid(row) && matched[array.keys().value(row).as_usize()];
+            match incoming {
+                Some(mask) => {
+                    for (index, row) in rows.iter().enumerate() {
+                        hits[index] = mask[index]
+                            && array.is_valid(row)
+                            && matched[array.keys().value(row).as_usize()];
+                    }
+                }
+                None => {
+                    for (index, row) in rows.iter().enumerate() {
+                        hits[index] = array.is_valid(row) && matched[array.keys().value(row).as_usize()];
+                    }
+                }
             }
             Ok(())
         }))))
@@ -171,7 +194,8 @@ fn elements<'a>(
     child: Predicate<'a>,
     offsets: impl Fn(usize) -> Range<usize> + Send + Sync + 'a,
 ) -> Predicate<'a> {
-    Predicate::batch(Box::new(move |rows, hits, cancel| {
+    Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
+        hits.fill(false);
         // Size scratch to this batch rather than to CHUNK: the closure is reused
         // for every 1,024-row batch, so preallocating a full CHUNK per call would
         // churn megabytes per scan. Large spans still grow these vectors as needed.
@@ -188,7 +212,7 @@ fn elements<'a>(
                 return Ok(());
             }
             matched.resize(children.len(), false);
-            child.evaluate_selected(RowSelection::Indices(children), matched, cancel)?;
+            child.evaluate(children.as_slice(), matched, cancel)?;
             for &(output, start, end) in owners.iter() {
                 if !hits[output] && matched[start..end].contains(&true) {
                     hits[output] = true;
@@ -200,6 +224,11 @@ fn elements<'a>(
         };
         for (output, row) in rows.iter().enumerate() {
             cancel.check()?;
+            if let Some(mask) = incoming {
+                if !mask[output] {
+                    continue;
+                }
+            }
             if hits[output] || array.is_null(row) {
                 continue;
             }
@@ -252,7 +281,7 @@ mod tests {
             Some(9_999),
         ]));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::batch(Box::new(|rows, hits, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, hits, _| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
@@ -265,11 +294,7 @@ mod tests {
         let rows = [3, 1, 2];
         let mut hits = [false; 3];
         predicate
-            .evaluate_selected(
-                RowSelection::Indices(&rows),
-                &mut hits,
-                &CancelToken::never(),
-            )
+            .evaluate(&rows[..], &mut hits, &CancelToken::never())
             .unwrap();
         assert_eq!(*selected.lock().unwrap(), [9_999, 2]);
         assert_eq!(hits, [false, true, false]);
@@ -289,7 +314,7 @@ mod tests {
             None,
         ));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::batch(Box::new(|rows, hits, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, hits, _| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
@@ -319,7 +344,7 @@ mod tests {
             None,
         ));
         let calls = Mutex::new(Vec::new());
-        let child = Predicate::batch(Box::new(|rows, _, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, _hits, _| {
             let len = rows.len();
             let first = rows.iter().next().unwrap();
             calls.lock().unwrap().push((first, len));

@@ -197,7 +197,7 @@ impl ValueIndex {
 
     fn make_chunk_predicate(self: &Arc<Self>, allowed: Vec<bool>) -> Predicate<'static> {
         let index = Arc::clone(self);
-        Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+        Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
             match (rows, incoming) {
                 (RowSelection::Range(range), None) => {
                     let slice = &index.codes[range];

@@ -17,7 +17,7 @@ use arrow::array::ArrayRef;
 use crate::{
     column::{Column, SearchQuery},
     engine::CancelToken,
-    predicate::{Predicate, RowSelection},
+    predicate::Predicate,
     Error, Result,
 };
 
@@ -311,11 +311,7 @@ impl Find {
         for (column, predicate) in predicates.iter().enumerate() {
             token.check()?;
             if let Some(predicate) = predicate {
-                predicate.evaluate_selected(
-                    RowSelection::Indices(&scratch.source_rows),
-                    &mut scratch.column_hits,
-                    token,
-                )?;
+                predicate.evaluate(&scratch.source_rows, &mut scratch.column_hits, token)?;
             } else {
                 scratch.column_hits.fill(false);
             }
@@ -404,7 +400,7 @@ mod tests {
         let resumed = std::sync::Mutex::new(resumed);
         let observed = Arc::new(std::sync::Mutex::new(false));
         let inner_observed = observed.clone();
-        let predicates = vec![Some(Predicate::batch(Box::new(move |_, _, cancel| {
+        let predicates = vec![Some(Predicate::new(Box::new(move |_, _, _, cancel| {
             started.send(()).unwrap();
             resumed.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
             let result = cancel.check();

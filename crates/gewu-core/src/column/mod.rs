@@ -200,7 +200,7 @@ impl<'a> Column<'a> {
         if !include_nulls || array.null_count() == 0 {
             return Ok(predicate);
         }
-        Ok(Predicate::chunk(Box::new(
+        Ok(Predicate::new(Box::new(
             move |rows, incoming, output, cancel| {
                 predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
                 for (index, row) in rows.iter().enumerate() {
@@ -221,7 +221,7 @@ impl<'a> Column<'a> {
         if let Filter::IsNull { negate, .. } = filter {
             let negate = *negate;
             let array = self.array;
-            return Ok(Predicate::chunk(Box::new(
+            return Ok(Predicate::new(Box::new(
                 move |rows, incoming, output, _cancel| {
                     match (rows, incoming) {
                         (RowSelection::Range(range), None) => {

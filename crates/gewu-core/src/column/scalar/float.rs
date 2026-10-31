@@ -50,7 +50,7 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
             let array = array.as_primitive::<$ty>();
             let values = array.values();
             let has_nulls = array.null_count() > 0;
-            Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+            Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
                 match (rows, incoming) {
                     (RowSelection::Range(range), None) => {
                         let slice = &values[range.clone()];
@@ -115,7 +115,21 @@ pub(super) fn nan(array: &ArrayRef) -> Predicate<'_> {
     macro_rules! native {
         ($ty:ty) => {{
             let a = array.as_primitive::<$ty>();
-            Predicate::scalar(Box::new(move |r| a.is_valid(r) && a.value(r).is_nan()))
+            Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+                match incoming {
+                    Some(mask) => {
+                        for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
+                            output[i] = m && a.is_valid(row) && a.value(row).is_nan();
+                        }
+                    }
+                    None => {
+                        for (i, row) in rows.iter().enumerate() {
+                            output[i] = a.is_valid(row) && a.value(row).is_nan();
+                        }
+                    }
+                }
+                Ok(())
+            }))
         }};
     }
     match array.data_type() {
@@ -134,7 +148,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
             "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
         )
     {
-        return Ok(Predicate::scalar(Box::new(|_| false)));
+        return Ok(Predicate::empty());
     }
     if target.is_nan() {
         return Ok(nan(array));
@@ -158,7 +172,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
         _ => unreachable!("float dispatch"),
     };
     if original.is_finite() && !target.is_finite() {
-        return Ok(Predicate::scalar(Box::new(|_| false)));
+        return Ok(Predicate::empty());
     }
     Ok(bound_range(array, target, target))
 }
