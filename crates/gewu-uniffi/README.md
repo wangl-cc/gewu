@@ -2,7 +2,7 @@
 
 The UniFFI boundary between [gewu-core](../gewu-core/README.md) and the macOS app. It exposes Rust objects, records and enums to Swift, converts arguments and results, and maps Core errors to `GewuError`. Query execution and file codecs remain in Core.
 
-This document describes the calling contract. See [data types](../../docs/data-types.md), [search and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for Rust and Swift builds and tests. Method names below use Rust spelling; generated Swift methods use camel case, such as `apply_view` → `applyView`.
+This document describes the calling contract. See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for Rust and Swift builds and tests. Method names below use Rust spelling; generated Swift methods use camel case, such as `apply_view` → `applyView`.
 
 ## Objects and ownership
 
@@ -94,7 +94,7 @@ Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, 
 | `Contains` | Offer text input and case sensitivity. |
 | `NullOnly` | Offer null/non-null filtering through `Filter::IsNull`. |
 
-Core chooses the editor using type capabilities and cardinality. Do not infer it solely from `LogicalType`. Filter facet counts include other columns' explicit filters, excluding the inspected column's own filters. See [search and filtering](../../docs/search-and-filter.md) for the full contract.
+Core chooses the editor using type capabilities and cardinality. Do not infer it solely from `LogicalType`. Filter facet counts include other columns' explicit filters, excluding the inspected column's own filters. See [Find and filtering](../../docs/search-and-filter.md) for the full contract.
 
 String choices use `prepare_text_choices(column, state)` followed by `TextChoices::page(query, after, limit)`, both off the UI thread. Reuse the captured session across searches and pages. Pages use an exclusive value cursor, retain bounded candidate storage, and include zero-count source values. Preparation is not cancellable. For a new search, call `invalidate_pages()` when accepting the request, then pass the returned generation to `page_for_generation`; this interrupts obsolete scans while retaining the facet. Queued requests must not advance generations themselves. `cancel()` permanently closes the session independently of table queries. Debounce requests, serialize scans, and reject obsolete results before publishing them.
 

@@ -5,6 +5,7 @@ import SwiftUI
 /// when Rust publishes a new view version, preserving the live NSTableView.
 struct DataTable: NSViewControllerRepresentable {
     @ObservedObject var model: DocumentModel
+    // Observed only so SwiftUI calls `update` when Find state or highlights change.
     @ObservedObject private var find: FindModel
     var showsRowNumbers: Bool
     @AppStorage("TableFontSize") private var fontSize = 12.0

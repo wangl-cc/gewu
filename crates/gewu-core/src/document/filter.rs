@@ -236,7 +236,7 @@ impl Document {
     }
 
     /// Keys for the given displayed labels (`None` = null). Unknown labels
-    /// are ignored. Used by the CLI and MCP, which filter by value text.
+    /// are ignored. Used when filtering by displayed value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
         let idx = self.keyed_index(column)?;
         Ok(idx

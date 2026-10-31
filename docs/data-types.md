@@ -1,6 +1,6 @@
 # Data types
 
-A column's type determines how Gewu displays values and interprets Find and filter inputs. The type comes from the file or its reader's inference; text that looks like a date does not automatically receive date-Find behavior. See [file formats](file-formats.md) for import and export rules, and [Find and filtering](search-and-filter.md) for how operations differ and filters combine.
+A column's type determines how Gewu displays values and interprets Find and filter inputs. The type comes from the file or its reader's inference; text that looks like a date does not automatically receive date semantics from Find. See [file formats](file-formats.md) for import and export rules, and [Find and filtering](search-and-filter.md) for how operations differ and filters combine.
 
 ## Text
 

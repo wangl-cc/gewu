@@ -11,7 +11,7 @@ Changing Find does not alter `ViewState`, row contents, export contents or inspe
 ## Combining filter conditions
 
 - Separate filters are combined with **AND**. Every condition names its column and uses that column's typed semantics.
-- A multi-value selection matches **any selected value** within that condition. CLI repeated `--where` values for the same column form one such selection.
+- A multi-value selection matches **any selected value** within that condition.
 - Including nulls extends only that condition. It does not bypass the other filters.
 - Invalid explicit filter inputs are errors rather than silently ignored conditions.
 
