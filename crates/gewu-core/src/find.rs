@@ -177,7 +177,7 @@ impl Find {
         count: u32,
         operation: &CancelToken,
     ) -> Result<FindHighlight> {
-        let token = self.token.and(operation);
+        let token = self.token.combined_with(operation);
         token.check()?;
         if !(1..=MAX_FIND_HIGHLIGHT_ROWS).contains(&count) {
             return Err(Error::InvalidArgument(format!(
@@ -231,7 +231,7 @@ impl Find {
         operation: &CancelToken,
         predicates: &[Option<Predicate<'_>>],
     ) -> Result<Vec<CellMatch>> {
-        let token = self.token.and(operation);
+        let token = self.token.combined_with(operation);
         token.check()?;
         if self.rows.is_empty() || self.columns.is_empty() {
             return Ok(Vec::new());

@@ -42,9 +42,8 @@ impl CancelToken {
         )
     }
 
-    /// Combine two independent scopes without changing the predicate API.
-    /// Future preparation-job constructors can supply either scope here.
-    pub(crate) fn and(&self, other: &Self) -> Self {
+    /// Observe this scope and another one; cancelling either cancels the result.
+    pub(crate) fn combined_with(&self, other: &Self) -> Self {
         let mut additional = self.additional.clone();
         additional.push(Arc::new(other.clone()));
         Self {
@@ -166,7 +165,7 @@ mod tests {
             let (first, first_cancel) = CancelToken::independent();
             let (second, second_cancel) = CancelToken::independent();
             let (third, third_cancel) = CancelToken::independent();
-            let combined = first.and(&second).and(&third);
+            let combined = first.combined_with(&second).combined_with(&third);
             assert!(combined.check().is_ok());
             [first_cancel, second_cancel, third_cancel][cancelled].fetch_add(1, Ordering::SeqCst);
             assert!(matches!(combined.check(), Err(Error::Cancelled)));
