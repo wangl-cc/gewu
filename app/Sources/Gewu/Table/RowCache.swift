@@ -66,7 +66,7 @@ final class RowCache {
 
     private static func bytes(_ block: RowBlock) -> Int {
         block.cells.reduce(0) { $0 + ($1?.utf8.count ?? 0) + MemoryLayout<String?>.stride }
-            + block.sourceRows.count * MemoryLayout<UInt64>.stride + block.matched.count
+            + block.sourceRows.count * MemoryLayout<UInt64>.stride
     }
 }
 

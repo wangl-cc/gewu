@@ -13,7 +13,7 @@ Open downloaded data, explore its values and distributions, and find the rows th
 
 ## Features
 
-- Browse, sort, search and filter your data in a native Mac interface.
+- Browse, sort, find and filter your data in a native Mac interface.
 - Keep a column's statistics and distribution in view while filtering other columns, or explore a sampled scatter plot.
 - Switch between XLSX worksheets in the same window.
 - Read Parquet, CSV, TSV and XLSX files, including nested Parquet data.
@@ -66,7 +66,7 @@ See [format details](docs/file-formats.md) for type inference, date handling and
 
 - [Development](DEVELOPMENT.md) — Rust and macOS UI build, run and test workflows.
 - [Data types](docs/data-types.md) — values, precision and typed input.
-- [Search and filtering](docs/search-and-filter.md) — conditions and result counts.
+- [Find and filtering](docs/search-and-filter.md) — typed cell navigation and filter conditions.
 - [File formats](docs/file-formats.md) — reading, exporting and format limits.
 
 ## License

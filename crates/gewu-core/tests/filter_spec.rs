@@ -260,7 +260,6 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
                 value: "1".into(),
             },
         ],
-        search: Some("cat".into()),
         ..Default::default()
     };
     let choices = doc.prepare_text_choices(0, Some(&state)).unwrap();
@@ -273,7 +272,7 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
             .iter()
             .map(|v| (v.value.as_deref(), v.count))
             .collect::<Vec<_>>(),
-        [(None, 0), (Some(""), 0), (Some("Cat"), 1), (Some("cat"), 1)]
+        [(None, 1), (Some(""), 1), (Some("Cat"), 1), (Some("cat"), 1)]
     );
     for (values, exclude, expected) in [
         (vec![None, Some("cat".into())], false, vec![0, 2, 4]),

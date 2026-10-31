@@ -1,5 +1,5 @@
-//! Turning cell values into display text. All front ends share this so the
-//! app, CLI and MCP show exactly the same strings.
+//! Turning cell values into display text. The app and UniFFI share this so
+//! every consumer shows exactly the same strings.
 
 use arrow::{
     array::Array,

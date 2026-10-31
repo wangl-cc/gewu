@@ -31,13 +31,6 @@ fn col(doc: &Document, name: &str) -> u32 {
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
-fn search(text: &str) -> ViewState {
-    ViewState {
-        search: Some(text.into()),
-        ..Default::default()
-    }
-}
-
 fn open(c: &mut Criterion) {
     let path = bench_file();
     let mut g = c.benchmark_group("open");
@@ -116,12 +109,6 @@ fn apply_view(c: &mut Criterion) {
             }],
             ..Default::default()
         }),
-        ("search_text", search("city-12")),
-        ("search_int", search("123456")),
-        ("search_float", search("3089.62")),
-        ("search_date", search("2024-03")),
-        ("search_uuid_prefix", search("0000a")),
-        ("search_bool", search("true")),
         ("sort_price", ViewState {
             sort: vec![SortKey {
                 column: price,
@@ -169,7 +156,6 @@ fn apply_view(c: &mut Criterion) {
                 column: score,
                 descending: false,
             }],
-            ..Default::default()
         }),
     ];
 
@@ -193,10 +179,11 @@ fn rows(c: &mut Criterion) {
         b.iter(|| doc.rows(plain.version, 1_000_000, 256, &columns).unwrap())
     });
 
-    // With a search, rows() also marks which cells match.
-    let searched = doc.apply_view(&search("2024-03")).unwrap();
-    g.bench_function("block_256_with_highlight", |b| {
-        b.iter(|| doc.rows(searched.version, 1_000, 256, &columns).unwrap())
+    let find = doc
+        .prepare_find(plain.version, "2024-03", &columns)
+        .unwrap();
+    g.bench_function("find_highlight_256_all_columns", |b| {
+        b.iter(|| find.highlight(1_000, 256).unwrap())
     });
     g.finish();
 }

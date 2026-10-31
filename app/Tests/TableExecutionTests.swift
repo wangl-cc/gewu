@@ -7,7 +7,7 @@ struct TableExecutionTests {
     static func block(_ values: [String?], start: Int = 0, columns: Int = 1) -> RowBlock {
         RowBlock(
             version: 1, start: UInt64(start), nRows: UInt32(values.count / columns), nCols: UInt32(columns),
-            cells: values, sourceRows: (0..<(values.count / columns)).map(UInt64.init), matched: [])
+            cells: values, sourceRows: (0..<(values.count / columns)).map(UInt64.init))
     }
 
     @Test
@@ -26,7 +26,7 @@ struct TableExecutionTests {
             !cache.insert(block([String(repeating: "界", count: 100)]), for: b), "Use UTF-8 bytes, not character count")
         #expect(cache.byteCount <= 256 && cache.cellCount <= 3)
         let metadata = RowBlock(
-            version: 1, start: 0, nRows: 4, nCols: 0, cells: [], sourceRows: [0, 1, 2, 3], matched: [])
+            version: 1, start: 0, nRows: 4, nCols: 0, cells: [], sourceRows: [0, 1, 2, 3])
         #expect(!cache.insert(metadata, for: .init(start: 0, column: nil)), "Source-only blocks consume cell budget")
         cache.clear()
         #expect(cache.byteCount == 0 && cache.cellCount == 0 && cache.block(for: a) == nil)
@@ -94,7 +94,7 @@ struct TableExecutionTests {
                 calls += 1
                 if calls == 2 {
                     _ = try doc.applyView(
-                        state: ViewState(sort: [SortKey(column: 0, descending: true)], filters: [], search: nil))
+                        state: ViewState(sort: [SortKey(column: 0, descending: true)], filters: []))
                 }
                 return try doc.rows(version: version, start: UInt64(start), count: UInt32(count), columns: columns)
             }

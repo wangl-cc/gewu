@@ -6,7 +6,8 @@ use gewu_core as core;
 
 use crate::{
     AnalysisSection, AxisScale, Bound, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
-    FilterSpec, GewuError, GewuExport, Histogram, RowBlock, TextChoices, ViewInfo, ViewState,
+    FilterSpec, FindSession, GewuError, GewuExport, Histogram, RowBlock, TextChoices, ViewInfo,
+    ViewState,
 };
 
 /// One open file.
@@ -124,6 +125,19 @@ impl GewuDocument {
         columns: Vec<u32>,
     ) -> Result<RowBlock, GewuError> {
         Ok(self.inner.rows(version, start, count, &columns)?.into())
+    }
+
+    /// Capture cell Find over a view and visible column order. Preparation does
+    /// not scan rows; directional pages and highlights run off the UI thread.
+    pub fn prepare_find(
+        &self,
+        version: u64,
+        query: String,
+        columns: Vec<u32>,
+    ) -> Result<Arc<FindSession>, GewuError> {
+        Ok(Arc::new(FindSession {
+            inner: self.inner.prepare_find(version, &query, &columns)?,
+        }))
     }
 
     /// Cheap type metadata: no column scan or cardinality calculation.
@@ -259,7 +273,7 @@ impl GewuDocument {
         Ok(self.inner.validate_filter(&filter.into())?)
     }
 
-    /// Summary of a column over the current view (filters and search apply).
+    /// Summary of a column over the current view (explicit filters apply).
     /// Call off the main thread.
     pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary, GewuError> {
         Ok(self.inner.column_summary(column, top)?.into())
@@ -345,7 +359,6 @@ mod tests {
                 .apply_view(ViewState {
                     sort: Vec::new(),
                     filters: vec![filter],
-                    search: None,
                 })
                 .unwrap();
             let rows = doc.rows(view.version, 0, 10, vec![0]).unwrap();
@@ -378,7 +391,6 @@ mod tests {
                 column: 1,
                 value: "10".into(),
             }],
-            search: None,
         };
         let choices = doc.prepare_text_choices(0, Some(state)).unwrap();
         let first = choices.page(String::new(), None, 1).unwrap();
@@ -398,7 +410,6 @@ mod tests {
                     values: vec![Some("dog".into())],
                     exclude: false,
                 }],
-                search: None,
             })
             .unwrap();
         assert_eq!(doc.rows(view.version, 0, 10, vec![0]).unwrap().cells, [
@@ -474,7 +485,6 @@ mod tests {
                         min: bounds.min.clone(),
                         max: bounds.max.clone(),
                     }],
-                    search: None,
                 })
                 .unwrap();
             assert_eq!(view.row_count, distribution.histogram.counts[bin]);
@@ -534,7 +544,6 @@ mod tests {
                             column: 0,
                             value: "cat".into(),
                         }],
-                        search: None,
                     })
                     .unwrap();
                 assert_eq!(selected.current_view().row_count, 1);

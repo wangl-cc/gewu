@@ -10,24 +10,17 @@ pub(crate) enum RowScope<'a> {
     /// Exactly these source rows, e.g. a view's, each at most once. Their
     /// order does not matter to anything that counts them.
     Rows(Arc<Vec<u32>>),
-    /// Rows that pass `state`'s filters and search, ignoring the filters on
-    /// column `except` (like Excel: a column's own filter does not hide
-    /// that column's values).
+    /// Rows that pass `state`'s filters, ignoring the filters on column
+    /// `except` (like Excel: a column's own filter does not hide its values).
     Facet { state: &'a ViewState, except: u32 },
 }
 
 impl<'a> RowScope<'a> {
-    /// A facet with no other-column filters or search is the whole source;
-    /// avoid allocating a source-row list just because a UI supplied a state.
+    /// A facet with no other-column filters is the whole source; avoid
+    /// allocating a source-row list just because a UI supplied a state.
     pub fn facet(state: Option<&'a ViewState>, column: u32) -> Self {
         match state {
-            Some(state)
-                if state.filters.iter().any(|filter| filter.column() != column)
-                    || state
-                        .search
-                        .as_deref()
-                        .is_some_and(|text| !text.trim().is_empty()) =>
-            {
+            Some(state) if state.filters.iter().any(|filter| filter.column() != column) => {
                 Self::Facet {
                     state,
                     except: column,

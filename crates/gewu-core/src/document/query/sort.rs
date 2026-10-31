@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(checkpoints, first_merge_check + 1);
         assert_eq!(engine.current().version, 0);
         assert!(matches!(
-            engine.commit(&token, Vec::new(), None),
+            engine.commit(&token, Vec::new()),
             Err(Error::Cancelled)
         ));
         assert_eq!(engine.current().rows.len(), len);

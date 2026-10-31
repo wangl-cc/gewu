@@ -23,6 +23,7 @@ use crate::{
 mod analysis;
 mod export;
 mod filter;
+mod find;
 mod query;
 
 /// One open file. Safe to share between threads.

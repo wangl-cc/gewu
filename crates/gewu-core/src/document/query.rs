@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{make_comparator, ArrayRef, UInt32Array},
-    compute::{take, SortOptions},
+    array::{make_comparator, ArrayRef},
+    compute::SortOptions,
 };
 
 mod sort;
@@ -33,13 +33,12 @@ impl Document {
     /// which case it returns [`crate::Error::Cancelled`] and the old view stays.
     pub fn apply_view(&self, state: &ViewState) -> Result<ViewInfo> {
         let token = self.views.begin();
-        let mut rows = self.select(&state.filters, state.search.as_deref(), None, &token)?;
+        let mut rows = self.select(&state.filters, None, &token)?;
         token.check()?;
         if !state.sort.is_empty() {
             rows = self.sort(rows, state, &token)?;
         }
-        let search = state.search.clone().filter(|s| !s.trim().is_empty());
-        self.views.commit(&token, rows, search)
+        self.views.commit(&token, rows)
     }
 
     /// Formatted cells for display rows `start..start+count` of view
@@ -68,27 +67,6 @@ impl Document {
             }
         }
 
-        // Which cells match the search: the same tests the search filtered
-        // with, run on just these rows. Nothing is kept afterwards.
-        let mut matched = Vec::new();
-        if let Some(text) = &view.search {
-            let indices = UInt32Array::from(source_rows.to_vec());
-            let token = CancelToken::never();
-            let mut per_column = Vec::with_capacity(columns.len());
-            for &c in columns {
-                let column = &self.columns[c as usize];
-                let mut hits = vec![false; source_rows.len()];
-                let block = take(column.as_ref(), &indices, None)?;
-                if let Some(predicate) = Column::new(&block).prepare_search(text)? {
-                    predicate.evaluate(0..block.len(), &mut hits, &token)?;
-                }
-                per_column.push(hits);
-            }
-            matched = (0..source_rows.len())
-                .flat_map(|r| per_column.iter().map(move |hits| hits[r]))
-                .collect();
-        }
-
         Ok(RowBlock {
             version,
             start,
@@ -96,7 +74,6 @@ impl Document {
             n_cols: columns.len() as u32,
             cells,
             source_rows: source_rows.iter().map(|&r| r as u64).collect(),
-            matched,
         })
     }
 
@@ -110,12 +87,7 @@ impl Document {
             RowScope::Rows(rows) => Selection::Rows(rows),
             RowScope::Facet { state, except } => {
                 self.column(except)?;
-                let rows = self.select(
-                    &state.filters,
-                    state.search.as_deref(),
-                    Some(except),
-                    &CancelToken::never(),
-                )?;
+                let rows = self.select(&state.filters, Some(except), &CancelToken::never())?;
                 Selection::Rows(Arc::new(rows))
             }
         })
@@ -126,7 +98,6 @@ impl Document {
     fn select(
         &self,
         filters: &[Filter],
-        search: Option<&str>,
         skip: Option<u32>,
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
@@ -136,19 +107,7 @@ impl Document {
             .filter(|f| Some(f.column()) != skip)
             .map(|f| self.prepare_filter(f))
             .collect::<Result<Vec<_>>>()?;
-        let search = search.filter(|s| !s.trim().is_empty());
-        let search_tests = match search {
-            Some(text) => self
-                .columns
-                .iter()
-                .map(|a| Column::new(a).prepare_search(text))
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>(),
-            None => Vec::new(),
-        };
-        if filters.is_empty() && search.is_none() {
+        if filters.is_empty() {
             let rows = (0..self.n_rows as u32).collect();
             token.check()?;
             return Ok(rows);
@@ -156,7 +115,6 @@ impl Document {
         let batch_len = self.n_rows.min(CHUNK);
         let mut selected = vec![true; batch_len];
         let mut scratch = vec![false; batch_len];
-        let mut searched = vec![false; if search.is_some() { batch_len } else { 0 }];
         let mut rows = Vec::new();
         for start in (0..self.n_rows).step_by(CHUNK) {
             token.check()?;
@@ -169,22 +127,6 @@ impl Document {
                 test.intersect(range.clone(), selected, scratch, token)?;
                 if !selected.contains(&true) {
                     break;
-                }
-            }
-            if !selected.contains(&true) {
-                continue;
-            }
-            if search.is_some() {
-                let searched = &mut searched[..range.len()];
-                searched.fill(false);
-                for test in &search_tests {
-                    test.evaluate(range.clone(), scratch, token)?;
-                    for (hit, other) in searched.iter_mut().zip(scratch.iter()) {
-                        *hit |= *other;
-                    }
-                }
-                for (hit, other) in selected.iter_mut().zip(searched) {
-                    *hit &= *other;
                 }
             }
             rows.extend(

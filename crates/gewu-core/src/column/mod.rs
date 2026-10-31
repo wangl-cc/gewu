@@ -10,17 +10,55 @@ mod nested;
 mod scalar;
 pub(crate) mod text;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::{
     array::{Array, ArrayRef},
     datatypes::DataType,
     util::display::ArrayFormatter,
 };
+use regex::RegexBuilder;
 
 use crate::{
     format, predicate::Predicate, value_index::ValueIndex, Error, Filter, LogicalType, Result,
 };
+
+/// A Find query prepared once per captured session. The parsed literal matcher
+/// is shared by every column, so a page or highlight never recompiles it.
+pub(crate) struct SearchQuery {
+    text: String,
+    matcher: OnceLock<std::result::Result<Arc<regex::Regex>, String>>,
+}
+
+impl SearchQuery {
+    pub(crate) fn new(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            matcher: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The case-insensitive literal matcher, compiled at most once.
+    pub(crate) fn matcher(&self) -> Result<Arc<regex::Regex>> {
+        let matcher = self.matcher.get_or_init(|| {
+            RegexBuilder::new(&regex::escape(&self.text))
+                .case_insensitive(true)
+                .build()
+                .map(Arc::new)
+                .map_err(|error| error.to_string())
+        });
+        match matcher {
+            Ok(matcher) => Ok(matcher.clone()),
+            Err(error) => Err(Error::InvalidArgument(format!(
+                "cannot prepare text search: {error}"
+            ))),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
@@ -115,9 +153,8 @@ impl<'a> Column<'a> {
         format::formatter(self.array.as_ref())
     }
 
-    pub(crate) fn prepare_search(self, query: &str) -> Result<Option<Predicate<'a>>> {
-        let query = query.trim();
-        if query.is_empty() {
+    pub(crate) fn prepare_search(self, query: &SearchQuery) -> Result<Option<Predicate<'a>>> {
+        if query.text().is_empty() {
             return Ok(None);
         }
         match self.array.data_type() {
@@ -136,7 +173,7 @@ impl<'a> Column<'a> {
                 if LogicalType::from_arrow(data_type).is_ordered()
                     || *data_type == DataType::Boolean =>
             {
-                scalar::search(self.array, query)
+                scalar::search(self.array, query.text())
             }
             _ => text::contains(self.array, query, false).map(Some),
         }
@@ -165,9 +202,9 @@ impl<'a> Column<'a> {
                 Predicate::rows(Box::new(move |row| array.is_null(row) || test(row)))
             }
             predicate => Predicate::batch(Box::new(move |rows, hits, cancel| {
-                predicate.evaluate(rows.clone(), hits, cancel)?;
-                for (row, hit) in rows.zip(hits) {
-                    *hit |= array.is_null(row);
+                predicate.evaluate_selected(rows.clone(), hits, cancel)?;
+                for (index, row) in rows.iter().enumerate() {
+                    hits[index] |= array.is_null(row);
                 }
                 Ok(())
             })),
@@ -202,7 +239,9 @@ impl<'a> Column<'a> {
                 text: value,
                 case_sensitive,
                 ..
-            } if capabilities.contains => text::contains(self.array, value, *case_sensitive),
+            } if capabilities.contains => {
+                text::contains(self.array, &SearchQuery::new(value), *case_sensitive)
+            }
             Filter::Range { min, max, .. } if capabilities.range => {
                 bound::prepare_range(self.array, min.as_ref(), max.as_ref())
             }
@@ -261,7 +300,10 @@ mod tests {
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
-        if let Some(test) = Column::new(array).prepare_search(query).unwrap() {
+        if let Some(test) = Column::new(array)
+            .prepare_search(&SearchQuery::new(query))
+            .unwrap()
+        {
             test.evaluate(range, &mut hits, &CancelToken::never())
                 .unwrap();
         }
@@ -511,7 +553,10 @@ mod tests {
         let token = engine.begin();
         engine.cancel_pending();
         for array in arrays {
-            let test = Column::new(&array).prepare_search("2").unwrap().unwrap();
+            let test = Column::new(&array)
+                .prepare_search(&SearchQuery::new("2"))
+                .unwrap()
+                .unwrap();
             assert!(matches!(
                 test.evaluate(0..1, &mut [false], &token),
                 Err(Error::Cancelled)

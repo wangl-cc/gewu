@@ -23,8 +23,8 @@ mod values;
 
 use numeric::Numeric;
 
-/// Facts about one column over the rows of the current view (so filters
-/// and search apply), for aggregate reporting.
+/// Facts about one column over the rows of the current view (so explicit
+/// filters apply), for aggregate reporting.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ColumnSummary {
     /// Rows in the current view.

@@ -183,7 +183,6 @@ mod delimited {
                     column: 0,
                     descending: true,
                 }],
-                ..Default::default()
             })
             .unwrap()
             .version;
@@ -206,7 +205,10 @@ mod delimited {
         }
         let empty = doc
             .apply_view(&ViewState {
-                search: Some("absent-value".into()),
+                filters: vec![gewu_core::Filter::Equals {
+                    column: 1,
+                    value: "absent-value".into(),
+                }],
                 ..Default::default()
             })
             .unwrap();
@@ -363,7 +365,10 @@ mod xlsx {
         );
         let empty = doc
             .apply_view(&ViewState {
-                search: Some("absent-value".into()),
+                filters: vec![gewu_core::Filter::Equals {
+                    column: 1,
+                    value: "absent-value".into(),
+                }],
                 ..Default::default()
             })
             .unwrap();

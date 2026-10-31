@@ -28,13 +28,21 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     let doc = Document::open(file.path()).unwrap();
     let keys = doc.keys_for_labels(1, &[Some("2".into())]).unwrap();
     let state = ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.parse_bound(0, "65530.5").unwrap()),
-            max: Some(doc.parse_bound(0, "131080").unwrap()),
-        }],
-        search: Some("keep".into()),
+        filters: vec![
+            Filter::InValues { column: 1, keys },
+            Filter::Range {
+                include_nulls: false,
+                column: 0,
+                min: Some(doc.parse_bound(0, "65530.5").unwrap()),
+                max: Some(doc.parse_bound(0, "131080").unwrap()),
+            },
+            Filter::Contains {
+                include_nulls: false,
+                column: 2,
+                text: "keep".into(),
+                case_sensitive: false,
+            },
+        ],
         ..Default::default()
     };
     let view = doc.apply_view(&state).unwrap();
@@ -44,12 +52,6 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         .map(|i| i as u64)
         .collect::<Vec<_>>();
     assert_eq!(rows.source_rows, expected);
-    assert!(rows
-        .matched
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .all(|cells| *cells == [false, false, true]));
 
     let invalid = ViewState {
         filters: vec![Filter::Range {

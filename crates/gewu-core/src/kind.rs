@@ -145,7 +145,7 @@ impl LogicalType {
         )
     }
 
-    /// Normalized, concise display text for UI badges and CLI outputs.
+    /// Normalized, concise display text for UI badges and type labels.
     pub fn display_name(&self) -> String {
         match self {
             Self::Text => "string".into(),

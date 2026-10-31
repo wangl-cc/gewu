@@ -1,10 +1,10 @@
 # gewu-core
 
-The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core owns decoded Arrow data, typed search and filters, sorting, statistics and file export. The CLI and UniFFI interface share this implementation; Core does not depend on the Mac UI.
+The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core owns decoded Arrow data, typed Find and explicit filters, sorting, statistics and file export. The UniFFI interface exposes this implementation to the Mac app; Core does not depend on the UI.
 
-Behavior references: [data types](../../docs/data-types.md), [search and filtering](../../docs/search-and-filter.md), and [file formats](../../docs/file-formats.md). This document covers engine ownership, APIs and implementation.
+Behavior references: [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), and [file formats](../../docs/file-formats.md). This document covers engine ownership, APIs and implementation.
 
-For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core--cli).
+For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
 ## Document and views
 
@@ -13,20 +13,27 @@ For builds, tests and formatting, follow the [Rust development guide](../../DEVE
 - `Document::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
 - `Document::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
 - `Document::apply_view` evaluates a `ViewState` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
-- `Document::rows(version, start, count, columns)` formats a requested block and returns source row numbers and search-match flags. A stale version returns `Error::StaleVersion` instead of silently reading a different view.
+- `Document::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
+- `Document::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
 - `Document::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
 
-The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Value indexes are lazy; nested dictionary predicates cache matches once per dictionary value for the prepared query.
+The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Value indexes are lazy. Explicit-filter dictionary predicates cache matches once per dictionary value; Find instead evaluates only keys referenced by its selected rows.
 
 ## Query preparation and execution
 
-`ViewState` carries search, filters and sorting. `Filter` describes explicit conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior.
+`ViewState` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
 `Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
 
 `Document::column_capabilities` reports supported operations. `Document::validate_filter` validates and prepares a filter without applying a view. Preparation parses scalar inputs and binds borrowed arrays; value-list filters may build a lazy index. String matching prepares one reusable Unicode matcher per query, without recompiling it for every batch.
 
 Prepared predicates evaluate in bounded batches with cancellation checks. Native row predicates can skip rows already rejected by another filter. Sorting compares source row IDs in bounded runs and merges, with cancellation checkpoints between units of work. Sort-key columns are not widened or copied in full. Nulls remain last in both directions; equal keys retain source-row order. Comparator preparation and individual value comparisons are not interruptible, so checkpoints do not imply a fixed wall-clock deadline. `ViewEngine` publishes the completed view at its final cancellation check.
+
+### Cell Find
+
+`Find::next` and `Find::previous` return at most 256 ordered cell cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight` covers at most 256 display rows. Neither API computes or estimates a total hit count.
+
+Scans prepare typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time. The literal text matcher is parsed once per session, so pages and highlights reuse it instead of recompiling per column. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell. `Find::operation` creates independent cancellation for one page or highlight, so obsolete same-query work can stop without closing the session; `Find::cancel` permanently closes the captured session. Both scopes reach nested predicate checkpoints, but individual comparisons and formatting steps do not have a fixed wall-clock deadline.
 
 ### Filter editors and candidate sessions
 
@@ -42,11 +49,11 @@ Range editors receive optional distributions with exact typed bounds for each bi
 
 Inspector Statistics includes `median_label`. It selects the central native values using one source-row-ID buffer, without widening columns or fully sorting them; partition scans check cancellation. Nulls and NaNs are excluded. An even-sized median averages the two central values, retaining exact integer/decimal precision and one extra decimal place when necessary. Floating-point midpoints avoid overflow; infinities participate in ordering, and an opposite-infinity midpoint is undefined (`None`). Temporal midpoints retain fractional source units: a date midpoint can include a time, and timestamp/time results can show a half nanosecond. Duration midpoints use decimal seconds with an explicit `s` suffix. Mean and standard deviation remain floating-point estimates. Computing an exact median adds O(selected rows) temporary row-ID memory when Statistics is requested.
 
-Analysis has two reporting contracts. `prepare_analysis(version, column, section)` captures an independently cancellable job for one inspector section; callers request only expanded sections. Its Values section uses fixed-capacity estimated counting: 4,096 smallest hashes for distinct cardinality and 256 Misra–Gries counters for candidate selection, retaining source row IDs rather than owned values. A second full scan recounts the selected candidates; displayed counts are not scaled sample counts or candidate-counter estimates. Candidate selection may omit globally top-ranked values, and 64-bit hash collisions may merge groups, so results remain marked estimated. Native scalar hashing follows dictionary keys without encoding the complete dictionary. The final eight formatted labels still consume space proportional to their lengths. `column_summary(column, top)` is the aggregate report used by the CLI: it collects exact native numeric distinct counts and up to `top` non-numeric values. Both share the native numeric implementation under `analysis/numeric`; they intentionally differ in cost and result shape.
+Analysis has two reporting contracts. `prepare_analysis(version, column, section)` captures an independently cancellable job for one inspector section; callers request only expanded sections. Its Values section uses fixed-capacity estimated counting: 4,096 smallest hashes for distinct cardinality and 256 Misra–Gries counters for candidate selection, retaining source row IDs rather than owned values. A second full scan recounts the selected candidates; displayed counts are not scaled sample counts or candidate-counter estimates. Candidate selection may omit globally top-ranked values, and 64-bit hash collisions may merge groups, so results remain marked estimated. Native scalar hashing follows dictionary keys without encoding the complete dictionary. The final eight formatted labels still consume space proportional to their lengths. `column_summary(column, top)` is the compact aggregate report: it collects exact native numeric distinct counts and up to `top` non-numeric values. Both share the native numeric implementation under `analysis/numeric`; they intentionally differ in cost and result shape.
 
 `prepare_scatter(version, x_column, y_column, limit)` captures an independently cancellable `ScatterAnalysis`. `None` for X means the zero-based source row ID. Axes must have the `scatter` column capability (direct numeric/temporal arrays), and `limit` must be 1–4,096. `run()` scans only the captured view, omits null/NaN/infinite coordinate pairs, counts eligible rows, and retains the lowest deterministic source-row hash priorities in O(limit) working memory. Sorting the same view does not change the sample; filtering does. Returned points include source IDs, approximate f64 coordinates and exact native display labels. Temporal coordinates use physical Arrow units, as histograms do. `sampled` indicates truncation; the bounded sample is not a complete plot and can omit outliers. Buffers are shared with the snapshot, and returned label memory depends on label lengths.
 
-- `Document::column_summary` describes the current view, including its own column filters and search. It returns counts, numeric statistics where supported, and top values for non-numeric columns. Use `min_label` and `max_label` for exact displayed extrema; numeric `min`, `max` and other floating-point statistics can be approximate.
+- `Document::column_summary` describes the current view, including its explicit column filters but not Find. It returns counts, numeric statistics where supported, and top values for non-numeric columns. Use `min_label` and `max_label` for exact displayed extrema; numeric `min`, `max` and other floating-point statistics can be approximate.
 - `Document::view_histogram(version, column, bins)` counts the specified current view. Its axis still spans the source column.
 - `Document::histogram(column, state, bins)` uses facet scope and returns counts and approximate axis coordinates without allocating filter bounds.
 - `Document::histogram_ranges(column, state, bins)` uses the same facet scope and returns exact inclusive bin bounds. Unlike editor charts, it preserves the requested bin count.
@@ -57,7 +64,7 @@ Numeric distributions support `ColumnAnalysis::with_histogram_scale(AxisScale::L
 
 Scatter jobs support `with_scales(x_scale, y_scale)` with independent `AxisScale::Linear` or `Log10` domains. Logarithmic axes require `ColumnCapabilities.logarithmic`; temporal columns and the source-row axis remain linear. Missing/non-finite pairs are excluded first, followed by pairs with nonpositive coordinates on logarithmic axes. `non_positive_rows` reports the latter separately. Sampling considers only eligible pairs, while returned coordinates and labels stay in original units for the UI's scale and tooltip rendering.
 
-The CLI's `gewu hist` exposes inclusive `min`/`max` text bounds per bin, with `null` meaning an unbounded edge. Top-level `min`/`max` labels describe finite source extrema. These bounds can be passed to typed range filters; plotting coordinates must not be used to reconstruct them.
+`histogram_ranges(column, state, bins)` exposes inclusive `min`/`max` text bounds per bin, with `null` meaning an unbounded edge. Top-level `min`/`max` labels describe finite source extrema. These bounds can be passed to typed range filters; plotting coordinates must not be used to reconstruct them.
 
 ## File adapters
 
@@ -83,14 +90,15 @@ For an embedded core with only delimited-text support, use a dependency such as 
 gewu-core = { path = "crates/gewu-core", default-features = false, features = ["csv"] }
 ```
 
-`FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app and CLI use the default codec set.
+`FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
 
 ## Code map
 
 | Path | Responsibility |
 | --- | --- |
 | [document.rs](src/document.rs) | Source data, metadata and lazy index ownership; public operations are grouped under [document/](src/document). |
-| [document/query.rs](src/document/query.rs) | Search/filter execution, sorting, view publication and visible row formatting. |
+| [document/query.rs](src/document/query.rs) | Explicit filter execution, sorting, view publication and visible row formatting. |
+| [document/find.rs](src/document/find.rs) and [find.rs](src/find.rs) | Find snapshots, bounded directional pages, highlights and per-operation cancellation. |
 | [document/filter.rs](src/document/filter.rs) | Typed inputs, editor recommendations, candidate sessions and facet counts. |
 | [document/analysis.rs](src/document/analysis.rs) | Capture analysis snapshots and assemble aggregate summaries. |
 | [document/export.rs](src/document/export.rs) | Validate columns and capture export snapshots. |

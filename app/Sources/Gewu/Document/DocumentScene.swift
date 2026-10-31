@@ -142,8 +142,14 @@ private struct ImportOptionsView: View {
 
 private struct LoadedDocumentView: View {
     @ObservedObject var model: DocumentModel
+    @ObservedObject private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
     @FocusState private var searchFocused: Bool
+
+    init(model: DocumentModel) {
+        self.model = model
+        _find = ObservedObject(wrappedValue: model.find)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -151,10 +157,10 @@ private struct LoadedDocumentView: View {
             Divider()
             DocumentStatus(model: model)
         }
-        .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search all columns")
+        .searchable(text: $find.query, placement: .toolbar, prompt: "Find in all columns")
         .searchFocused($searchFocused)
         .onSubmit(of: .search) { model.findNext(backwards: NSEvent.modifierFlags.contains(.shift)) }
-        .onChange(of: model.searchText) { _, _ in model.refresh(debounce: true) }
+        .onChange(of: find.query) { _, _ in model.updateFind(debounce: true) }
         .onChange(of: model.searchFocusRequest) { _, _ in searchFocused = true }
         .focusedSceneObject(model)
         .alert("Gewu", isPresented: $model.isErrorPresented) {
@@ -167,7 +173,13 @@ private struct LoadedDocumentView: View {
 
 private struct DocumentStatus: View {
     @ObservedObject var model: DocumentModel
+    @ObservedObject private var find: FindModel
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
+
+    init(model: DocumentModel) {
+        self.model = model
+        _find = ObservedObject(wrappedValue: model.find)
+    }
 
     var body: some View {
         HStack(spacing: 10) {
