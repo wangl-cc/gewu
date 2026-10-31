@@ -279,7 +279,8 @@ fn parquet_export_honors_explicit_compression() {
         })
         .unwrap();
     let reopened = Document::open(path).unwrap();
-    let gewu_core::FileMetadata::Parquet { compression, .. } = &reopened.info().metadata else {
+    let info = reopened.info();
+    let gewu_core::FileMetadata::Parquet { compression, .. } = &info.metadata else {
         panic!("expected Parquet metadata");
     };
     assert_eq!(compression, &["SNAPPY"]);

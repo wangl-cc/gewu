@@ -103,7 +103,7 @@ impl Document {
         };
         if DataKind::of(typed.logical_data_type()) == DataKind::Text {
             return Ok(FilterSpec {
-                nullable: self.info.columns[column as usize].nullable,
+                nullable: self.schema.field(column as usize).is_nullable(),
                 editor: FilterEditor::Text {
                     modes: vec![
                         crate::TextFilterMode::Choices,
@@ -135,7 +135,7 @@ impl Document {
             FilterEditorKind::NullOnly => FilterEditor::NullOnly,
         };
         Ok(FilterSpec {
-            nullable: self.info.columns[column as usize].nullable,
+            nullable: self.schema.field(column as usize).is_nullable(),
             editor,
         })
     }

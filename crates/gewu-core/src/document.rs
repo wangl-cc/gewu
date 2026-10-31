@@ -16,7 +16,8 @@ use crate::{
     engine::ViewEngine,
     file, format,
     value_index::{ValueIndex, INDEX_LIMIT},
-    ColumnCapabilities, ColumnInfo, DataKind, Error, FileInfo, OpenOptions, Result,
+    ColumnCapabilities, ColumnInfo, DataKind, Error, FileInfo, FileMetadata, FileType, OpenOptions,
+    Result,
 };
 
 mod analysis;
@@ -26,11 +27,13 @@ mod query;
 
 /// One open file. Safe to share between threads.
 pub struct Document {
-    info: FileInfo,
     source_path: PathBuf,
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
     n_rows: usize,
+    file_size: u64,
+    format: FileType,
+    metadata: FileMetadata,
     indexes: Vec<OnceLock<Indexed>>,
     filter_editors: Vec<OnceLock<FilterEditorKind>>,
     views: ViewEngine,
@@ -67,7 +70,27 @@ impl Document {
             )));
         }
 
-        let columns_info = schema
+        let columns = batch.columns().to_vec();
+        let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
+        let filter_editors = (0..columns.len()).map(|_| OnceLock::new()).collect();
+
+        Ok(Self {
+            source_path,
+            schema,
+            columns,
+            n_rows,
+            file_size,
+            format,
+            metadata: loaded.metadata,
+            indexes,
+            filter_editors,
+            views: ViewEngine::new(n_rows),
+        })
+    }
+
+    pub fn info(&self) -> FileInfo {
+        let columns = self
+            .schema
             .fields()
             .iter()
             .map(|f| ColumnInfo {
@@ -78,34 +101,14 @@ impl Document {
             })
             .collect();
 
-        let info = FileInfo {
-            path: path.display().to_string(),
-            row_count: n_rows as u64,
-            columns: columns_info,
-            file_size,
-            format,
-            metadata: loaded.metadata,
-        };
-
-        let columns = batch.columns().to_vec();
-        let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
-
-        let filter_editors = (0..columns.len()).map(|_| OnceLock::new()).collect();
-
-        Ok(Self {
-            info,
-            source_path,
-            schema,
+        FileInfo {
+            path: self.source_path.display().to_string(),
+            row_count: self.n_rows as u64,
             columns,
-            n_rows,
-            indexes,
-            filter_editors,
-            views: ViewEngine::new(n_rows),
-        })
-    }
-
-    pub fn info(&self) -> &FileInfo {
-        &self.info
+            file_size: self.file_size,
+            format: self.format,
+            metadata: self.metadata.clone(),
+        }
     }
 
     pub fn schema(&self) -> &SchemaRef {
@@ -114,10 +117,10 @@ impl Document {
 
     /// Index of the column with this name.
     pub fn column_index(&self, name: &str) -> Option<u32> {
-        self.info
-            .columns
+        self.schema
+            .fields()
             .iter()
-            .position(|c| c.name == name)
+            .position(|f| f.name() == name)
             .map(|i| i as u32)
     }
 
@@ -177,7 +180,7 @@ impl Document {
         self.index(c)?.ok_or_else(|| {
             Error::InvalidArgument(format!(
                 "column {} has more than {INDEX_LIMIT} distinct values; filter it with contains or a range",
-                self.info.columns[c as usize].name
+                self.schema.field(c as usize).name()
             ))
         })
     }
