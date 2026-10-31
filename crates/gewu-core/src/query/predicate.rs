@@ -10,7 +10,7 @@
 
 use std::ops::Range;
 
-use super::engine::CancelToken;
+use super::{engine::CancelToken, selection::RowSelection};
 use crate::Result;
 
 pub(crate) const CHUNK: usize = 8 * 1024;
@@ -23,69 +23,6 @@ pub(crate) type ChunkEvaluator<'a> = Box<
         + Sync
         + 'a,
 >;
-
-#[derive(Clone)]
-pub(crate) enum RowSelection<'a> {
-    Range(Range<usize>),
-    Indices(&'a [usize]),
-}
-
-impl<'a> RowSelection<'a> {
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::Range(rows) => rows.len(),
-            Self::Indices(rows) => rows.len(),
-        }
-    }
-
-    pub(crate) fn iter(&self) -> RowSelectionIter<'_> {
-        match self {
-            Self::Range(rows) => RowSelectionIter::Range(rows.clone()),
-            Self::Indices(rows) => RowSelectionIter::Indices(rows.iter()),
-        }
-    }
-
-    pub(crate) fn chunk(&self, offset: usize, len: usize) -> Self {
-        match self {
-            Self::Range(rows) => Self::Range(rows.start + offset..rows.start + offset + len),
-            Self::Indices(rows) => Self::Indices(&rows[offset..offset + len]),
-        }
-    }
-}
-
-impl<'a> From<Range<usize>> for RowSelection<'a> {
-    fn from(range: Range<usize>) -> Self {
-        Self::Range(range)
-    }
-}
-
-impl<'a> From<&'a [usize]> for RowSelection<'a> {
-    fn from(indices: &'a [usize]) -> Self {
-        Self::Indices(indices)
-    }
-}
-
-impl<'a> From<&'a Vec<usize>> for RowSelection<'a> {
-    fn from(indices: &'a Vec<usize>) -> Self {
-        Self::Indices(indices.as_slice())
-    }
-}
-
-pub(crate) enum RowSelectionIter<'a> {
-    Range(Range<usize>),
-    Indices(std::slice::Iter<'a, usize>),
-}
-
-impl Iterator for RowSelectionIter<'_> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Range(rows) => rows.next(),
-            Self::Indices(rows) => rows.next().copied(),
-        }
-    }
-}
 
 pub(crate) struct Predicate<'a>(ChunkEvaluator<'a>);
 

@@ -28,7 +28,7 @@ pub use file::{
     ParquetCompression,
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
-pub(crate) use query::{engine, predicate, scope};
+pub(crate) use query::{engine, predicate, scope, selection};
 pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo, ViewState};
 pub use session::{Document, Session};
 pub(crate) use task::analysis;

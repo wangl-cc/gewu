@@ -8,11 +8,7 @@ use arrow::{
 };
 
 use super::SearchQuery;
-use crate::{
-    format,
-    predicate::{Predicate, RowSelection},
-    Error, Result,
-};
+use crate::{format, predicate::Predicate, selection::RowSelection, Error, Result};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.

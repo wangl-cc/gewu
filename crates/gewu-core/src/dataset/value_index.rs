@@ -24,11 +24,8 @@ use arrow::{
 };
 
 use crate::{
-    analysis::AnalysisContext,
-    format,
-    predicate::{Predicate, RowSelection},
-    scope::Selection,
-    Result,
+    analysis::AnalysisContext, format, predicate::Predicate, scope::Selection,
+    selection::RowSelection, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

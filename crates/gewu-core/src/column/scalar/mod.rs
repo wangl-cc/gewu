@@ -10,7 +10,8 @@ use arrow::array::{Array, ArrayRef, AsArray};
 
 use crate::{
     column::bound::{prepare_range, Bound},
-    predicate::{Predicate, RowSelection},
+    predicate::Predicate,
+    selection::RowSelection,
     Error, LogicalType, Result,
 };
 

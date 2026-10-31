@@ -3,6 +3,7 @@
 pub(crate) mod engine;
 pub(crate) mod predicate;
 pub(crate) mod scope;
+pub(crate) mod selection;
 pub(crate) mod sort;
 pub(crate) mod view;
 

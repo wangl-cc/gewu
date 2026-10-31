@@ -20,10 +20,8 @@ use arrow::{
 use regex::RegexBuilder;
 
 use crate::{
-    format,
-    predicate::{Predicate, RowSelection},
-    value_index::ValueIndex,
-    Error, Filter, LogicalType, Result,
+    format, predicate::Predicate, selection::RowSelection, value_index::ValueIndex, Error, Filter,
+    LogicalType, Result,
 };
 
 /// A Find query prepared once per captured session. The parsed literal matcher

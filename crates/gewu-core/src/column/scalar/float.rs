@@ -5,10 +5,7 @@ use arrow::{
     datatypes::{DataType, Float16Type, Float32Type, Float64Type},
 };
 
-use crate::{
-    predicate::{Predicate, RowSelection},
-    Error, Result,
-};
+use crate::{predicate::Predicate, selection::RowSelection, Error, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
     let value: f64 = text.parse().ok()?;

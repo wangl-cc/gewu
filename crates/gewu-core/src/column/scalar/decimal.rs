@@ -8,7 +8,7 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::predicate::{Predicate, RowSelection};
+use crate::{predicate::Predicate, selection::RowSelection};
 
 /// Signed digits times 10^exponent. Trailing digits are retained because they
 /// specify search precision; leading zeros do not affect that precision.
