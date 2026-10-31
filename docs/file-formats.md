@@ -26,7 +26,7 @@ Dates such as `2026-10-30` and ISO-style timestamps such as `2026-10-30T14:30:00
 
 ## XLSX
 
-The default is the first worksheet with its first row used as column names. For workbooks with multiple sheets, select a worksheet in the strip below the table; the CLI selects by name with `--sheet` (see [CLI examples](../crates/gewu-cli/README.md)). Switching loads only the requested sheet and resets its search, filters, sorting and analysis selections. If loading fails, the current sheet stays open; the sheet list remains available even if the first sheet cannot be read. Reading uses the occupied worksheet range, trimming blank edges including trailing all-null rows. Formula results come from cached values; Core does not recalculate formulas and rejects cells containing Excel errors.
+The default is the first worksheet with its first row used as column names. For workbooks with multiple sheets, select a worksheet in the strip below the table. Switching loads only the requested sheet and resets its search, filters, sorting and analysis selections. If loading fails, the current sheet stays open; the sheet list remains available even if the first sheet cannot be read. Reading uses the occupied worksheet range, trimming blank edges including trailing all-null rows. Formula results come from cached values; Core does not recalculate formulas and rejects cells containing Excel errors.
 
 Export writes one worksheet with a header. Boolean values and ordinary finite numbers use native cells. Integers exceeding 15 digits, decimals, dates/times and non-finite numbers use literal text to preserve displayed values. Nested columns are rejected. This is table export, not workbook, styling or formula round-trip editing.
 

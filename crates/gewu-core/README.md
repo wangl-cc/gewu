@@ -119,18 +119,16 @@ The standalone [data generator](../../tools/data-gen) creates fixed-seed test fi
 cargo run --release -p gewu-data-gen -- sample.parquet 5000000
 ```
 
-Prepare a fixed-seed 2-million-row file at `target/bench/sample.parquet` once and reuse it for both benchmarks. Regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
+Prepare a fixed-seed 2-million-row file at `target/bench/sample.parquet` once and reuse it for engine benchmarks. Regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
 
 ```sh
 mkdir -p target/bench
 cargo run --locked --release -p gewu-data-gen -- target/bench/sample.parquet 2000000
 cargo bench --locked -p gewu-core --bench engine
-cargo build --locked --release -p gewu-cli
-scripts/bench-mem.sh target/release/gewu target/bench/sample.parquet
 
 # Pass Criterion options directly to Cargo.
 cargo bench --locked -p gewu-core --bench engine -- --save-baseline before
 cargo bench --locked -p gewu-core --bench engine -- --baseline before
 ```
 
-Engine benchmark reports are written to `target/criterion/`. The memory script prints peak process memory and elapsed time to the terminal; each measurement runs a fresh CLI process and includes loading the file. These measurements do not establish UI interaction latency.
+Engine benchmark reports are written to `target/criterion/`. These measurements do not establish UI interaction latency.

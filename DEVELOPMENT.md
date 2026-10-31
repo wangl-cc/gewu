@@ -2,25 +2,23 @@
 
 Choose the path that matches the code you are changing. Run all commands from the repository root. For Markdown-only changes, run `pnx markdownlint-cli2 --config .markdownlint.yaml <changed-files>`.
 
-## Rust Core / CLI
+## Rust Core
 
 Building requires stable Rust and a native compiler/linker; on macOS, Command Line Tools are sufficient.
 
 ### Build and run
 
-Core is a library. Build it directly, or use the CLI to exercise it:
+Core is a library. Build it directly:
 
 ```sh
 cargo build --locked -p gewu-core
-cargo run --locked -p gewu-cli -- --help
-cargo run --locked -p gewu-cli -- schema /path/to/data.parquet
 ```
 
-Build an optimized CLI with `cargo build --locked --release -p gewu-cli`. See the [Core README](crates/gewu-core/README.md) for architecture and APIs, the [CLI README](crates/gewu-cli/README.md) for installation and command usage, and [Core benchmarks](crates/gewu-core/README.md#benchmarks) for performance measurements. Generate the API reference with `cargo doc --locked -p gewu-core --no-deps --open`.
+See the [Core README](crates/gewu-core/README.md) for architecture, APIs and benchmarks. Generate the API reference with `cargo doc --locked -p gewu-core --no-deps --open`.
 
 ### Test and format
 
-Test and lint the affected crate; replace `gewu-core` with `gewu-cli` or `gewu-uniffi` as appropriate:
+Test and lint the affected crate; replace `gewu-core` with `gewu-uniffi` as appropriate:
 
 ```sh
 cargo test --locked -p gewu-core

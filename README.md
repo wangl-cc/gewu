@@ -64,7 +64,6 @@ See [format details](docs/file-formats.md) for type inference, date handling and
 
 ## Documentation
 
-- [Command line](crates/gewu-cli/README.md) — JSON output for scripts and agents.
 - [Development](DEVELOPMENT.md) — Rust and macOS UI build, run and test workflows.
 - [Data types](docs/data-types.md) — values, precision and typed input.
 - [Search and filtering](docs/search-and-filter.md) — conditions and result counts.

@@ -15,7 +15,6 @@
 ## Read as needed
 
 - [Core README](crates/gewu-core/README.md): engine architecture, API contracts and benchmarks.
-- [CLI README](crates/gewu-cli/README.md): installation and command usage.
 - [FFI README](crates/gewu-uniffi/README.md): Rust/Swift calling contract.
 - [App README](app/README.md): UI code navigation and icon assets.
 - [Data types](docs/data-types.md), [search and filtering](docs/search-and-filter.md), and [file formats](docs/file-formats.md): consult the relevant contract when changing data behavior.

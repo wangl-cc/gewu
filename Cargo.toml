@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gewu-core", "crates/gewu-uniffi", "crates/gewu-cli", "tools/data-gen"]
+members = ["crates/gewu-core", "crates/gewu-uniffi", "tools/data-gen"]
 
 [workspace.package]
 version = "0.1.0"
