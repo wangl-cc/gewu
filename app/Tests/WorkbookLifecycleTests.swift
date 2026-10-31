@@ -230,7 +230,7 @@ private final class OpenProbe: @unchecked Sendable {
         return opened
     }
 
-    func open(path: String, sheet: String?) throws -> GewuDocument {
+    func open(path: String, sheet: String?) throws -> GewuSession {
         lock.lock()
         opened.append(sheet ?? "First")
         lock.unlock()
@@ -238,10 +238,10 @@ private final class OpenProbe: @unchecked Sendable {
             slowStarted.signal()
             slowReleased.wait()
             defer { slowFinished.signal() }
-            return try GewuDocument.openSheet(path: path, sheet: sheet)
+            return try GewuSession.openSheet(path: path, sheet: sheet)
         }
-        if let sheet { return try GewuDocument.openSheet(path: path, sheet: sheet) }
-        return try GewuDocument.open(path: path)
+        if let sheet { return try GewuSession.openSheet(path: path, sheet: sheet) }
+        return try GewuSession.open(path: path)
     }
 
     func waitForSlowStart() async {

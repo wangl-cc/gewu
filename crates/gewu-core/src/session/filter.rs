@@ -1,15 +1,15 @@
 //! Filter inputs, editor data and facet queries.
 
-use super::{Document, Indexed};
+use super::Session;
 use crate::{
-    column::{histogram, Column, FilterEditorKind, CHOICE_LIMIT},
+    column::{histogram, Column, FilterEditorKind},
     predicate::Predicate,
     scope::RowScope,
     value_index::count_values,
     DistinctResult, Error, Filter, Histogram, LogicalType, Result, ViewState,
 };
 
-impl Document {
+impl Session {
     /// Parse text once at the input boundary, retaining the column's full type.
     pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
         crate::Bound::parse(Column::new(self.column(column)?).logical_data_type(), text)
@@ -81,29 +81,10 @@ impl Document {
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
-        let cell = &self.filter_editors[column as usize];
-        let editor_kind = match cell.get() {
-            Some(kind) => *kind,
-            None => {
-                let supported =
-                    arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
-                        array.data_type().clone(),
-                    )]);
-                let low_cardinality = if !supported {
-                    false
-                } else {
-                    match self.indexes[column as usize].get() {
-                        Some(Indexed::Built(index)) => index.len() <= CHOICE_LIMIT,
-                        Some(Indexed::TooMany) => false,
-                        None => crate::value_index::has_at_most(array, CHOICE_LIMIT)?,
-                    }
-                };
-                *cell.get_or_init(|| typed.filter_editor(low_cardinality))
-            }
-        };
+        let editor_kind = self.dataset.filter_editor_kind(column)?;
         if LogicalType::from_arrow(typed.logical_data_type()) == LogicalType::Text {
             return Ok(FilterSpec {
-                nullable: self.schema.field(column as usize).is_nullable(),
+                nullable: self.schema().field(column as usize).is_nullable(),
                 editor: FilterEditor::Text {
                     modes: vec![
                         crate::TextFilterMode::Choices,
@@ -135,7 +116,7 @@ impl Document {
             FilterEditorKind::NullOnly => FilterEditor::NullOnly,
         };
         Ok(FilterSpec {
-            nullable: self.schema.field(column as usize).is_nullable(),
+            nullable: self.schema().field(column as usize).is_nullable(),
             editor,
         })
     }
@@ -239,13 +220,7 @@ impl Document {
     /// are ignored. Used when filtering by displayed value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
         let idx = self.keyed_index(column)?;
-        Ok(idx
-            .labels
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| labels.contains(l))
-            .map(|(k, _)| k as u64)
-            .collect())
+        Ok(idx.keys_for_labels(labels))
     }
 
     pub(super) fn prepare_filter(&self, filter: &Filter) -> Result<Predicate<'_>> {
@@ -253,6 +228,21 @@ impl Document {
         match filter {
             Filter::InValues { keys, .. } => {
                 Ok(column.prepare_values(self.keyed_index(filter.column())?, keys))
+            }
+            Filter::TextValues {
+                values, exclude, ..
+            } => {
+                let array = self.column(filter.column())?;
+                if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
+                    return Err(Error::InvalidArgument(format!(
+                        "{} is not a string column",
+                        array.data_type()
+                    )));
+                }
+                if let Some(index) = self.index(filter.column())? {
+                    return Ok(index.prepare_text_predicate(values, *exclude));
+                }
+                column.prepare_filter(filter)
             }
             _ => column.prepare_filter(filter),
         }

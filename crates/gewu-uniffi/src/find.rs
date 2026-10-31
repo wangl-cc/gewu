@@ -185,7 +185,7 @@ impl From<core::FindHighlight> for FindHighlight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GewuDocument;
+    use crate::GewuSession;
 
     #[test]
     fn find_limits_match_the_exported_core_constants() {
@@ -199,7 +199,7 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-find-{}.csv", std::process::id()));
         std::fs::write(&source, "value,other\nhit,12\nmiss,120\nhit,12\n").unwrap();
-        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         let stale = doc.prepare_find(0, "miss".into(), vec![0, 1]).unwrap();
         let find = doc.prepare_find(0, "12".into(), vec![0, 1]).unwrap();
         stale.cancel();

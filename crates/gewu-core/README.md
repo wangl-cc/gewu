@@ -6,16 +6,17 @@ Behavior references: [data types](../../docs/data-types.md), [Find and filtering
 
 For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
-## Document and views
+## Session, dataset and views
 
-`Document` is the public entry point. It retains immutable Arrow columns and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
+`Session` (also aliased as `Document` for backward compatibility) is the public viewing session entry point. It pairs an immutable `Dataset` with an interactive `ViewEngine` and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
 
-- `Document::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
-- `Document::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
-- `Document::apply_view` evaluates a `ViewState` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
-- `Document::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
-- `Document::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
-- `Document::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
+- `Session::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
+- `Session::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
+- `Session::from_dataset` creates a fresh viewing session sharing an existing loaded dataset.
+- `Session::apply_view` evaluates a `QuerySpec` (or `ViewState`) and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
+- `Session::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
+- `Session::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
+- `Session::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
 
 The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Value indexes are lazy. Explicit-filter dictionary predicates cache matches once per dictionary value; Find instead evaluates only keys referenced by its selected rows.
 

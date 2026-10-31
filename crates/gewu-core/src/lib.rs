@@ -5,49 +5,37 @@
 //! display order. Sorting and filtering never move data; they only produce a
 //! new list of row numbers.
 
-mod analysis;
 mod column;
-mod document;
-mod engine;
+mod dataset;
 mod error;
-mod export;
 mod file;
 mod filter;
-mod find;
-mod format;
-mod kind;
-mod predicate;
-mod scale;
-mod scatter;
-mod scope;
-mod text_choices;
-mod value_index;
-mod view;
+pub(crate) mod query;
+pub mod session;
+pub mod task;
 
-pub use analysis::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
-    LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
-};
 pub use arrow::datatypes::TimeUnit;
 pub use column::{
     bound::Bound,
     histogram::{Histogram, RangeBounds, RangeHistogram},
     ColumnCapabilities, ColumnInfo,
 };
-pub use document::Document;
+pub(crate) use dataset::{format, value_index};
+pub use dataset::{AxisScale, Dataset, DistinctResult, DistinctValue, LogicalType};
 pub use error::{Error, Result};
-pub use export::{Export, ExportProgress};
 pub use file::{
     xlsx_sheet_names, ExportOptions, FileInfo, FileMetadata, FileType, OpenOptions,
     ParquetCompression,
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
-pub use find::{
-    CellMatch, Find, FindHighlight, FindOperation, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+pub(crate) use query::{engine, predicate, scope};
+pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo, ViewState};
+pub use session::{Document, Session};
+pub(crate) use task::analysis;
+pub use task::{
+    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,
+    ColumnSummary, Export, ExportProgress, Find, FindHighlight, FindOperation, LengthSummary,
+    LengthUnit, NumericStatistics, ScatterAnalysis, ScatterPoint, ScatterResult, TextChoice,
+    TextChoiceCursor, TextChoicePage, TextChoices, ValueSummary, MAX_FIND_HIGHLIGHT_ROWS,
+    MAX_FIND_PAGE_SIZE, MAX_SCATTER_POINTS,
 };
-pub use kind::LogicalType;
-pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
-pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use value_index::{DistinctResult, DistinctValue};
-pub use view::{RowBlock, SortKey, ViewInfo, ViewState};

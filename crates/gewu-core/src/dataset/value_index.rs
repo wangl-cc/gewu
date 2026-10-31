@@ -13,6 +13,7 @@ use std::{
     cmp::Reverse,
     collections::{hash_map::DefaultHasher, BinaryHeap, HashMap, HashSet},
     hash::{Hash, Hasher},
+    sync::Arc,
 };
 
 use arrow::{
@@ -22,7 +23,7 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use crate::{analysis::AnalysisContext, format, scope::Selection, Result};
+use crate::{analysis::AnalysisContext, format, predicate::Predicate, scope::Selection, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
@@ -47,7 +48,9 @@ pub struct DistinctResult {
 }
 
 /// Most distinct values a column may have and still be indexed.
-pub(crate) const INDEX_LIMIT: usize = 100_000;
+/// Aligned with UI choices limit (CHOICE_LIMIT = 500) with a safe headroom.
+/// Columns with higher cardinality bypass the index and use streaming counts/searches.
+pub(crate) const INDEX_LIMIT: usize = 1_000;
 
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
@@ -78,9 +81,9 @@ pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
 
 pub(crate) struct ValueIndex {
     /// Code of each source row.
-    pub codes: Vec<u32>,
+    codes: Vec<u32>,
     /// Display label of each code, `None` for null.
-    pub labels: Vec<Option<String>>,
+    labels: Vec<Option<String>>,
 }
 
 impl ValueIndex {
@@ -167,6 +170,54 @@ impl ValueIndex {
                 count,
             })
             .collect()
+    }
+
+    /// Returns the internal code for the given row index.
+    #[inline]
+    pub fn code(&self, row: usize) -> u32 {
+        self.codes[row]
+    }
+
+    /// Resolve matching keys for a list of displayed labels (`None` = null).
+    pub fn keys_for_labels(&self, labels: &[Option<String>]) -> Vec<u64> {
+        let target: HashSet<&Option<String>> = labels.iter().collect();
+        self.labels
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| target.contains(l))
+            .map(|(k, _)| k as u64)
+            .collect()
+    }
+
+    /// Prepare a row-based predicate for filtering by key codes.
+    pub fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
+        let mut allowed = vec![false; self.len()];
+        for &key in keys {
+            if let Ok(key) = usize::try_from(key) {
+                if let Some(slot) = allowed.get_mut(key) {
+                    *slot = true;
+                }
+            }
+        }
+        let index = Arc::clone(self);
+        Predicate::rows(Box::new(move |row| allowed[index.code(row) as usize]))
+    }
+
+    /// Prepare a row-based predicate for filtering by text values (`None` for null).
+    pub fn prepare_text_predicate(
+        self: &Arc<Self>,
+        values: &[Option<String>],
+        exclude: bool,
+    ) -> Predicate<'static> {
+        let keys = self.keys_for_labels(values);
+        let mut allowed = vec![exclude; self.len()];
+        for k in keys {
+            if let Some(slot) = allowed.get_mut(k as usize) {
+                *slot = !exclude;
+            }
+        }
+        let index = Arc::clone(self);
+        Predicate::rows(Box::new(move |row| allowed[index.code(row) as usize]))
     }
 }
 

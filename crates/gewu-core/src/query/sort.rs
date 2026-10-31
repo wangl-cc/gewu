@@ -20,7 +20,7 @@ const RUN: usize = 4096;
 const NATIVE_RUN: usize = 65536;
 const BATCH: usize = 4096;
 
-pub(super) fn sort_rows(
+pub(crate) fn sort_rows(
     mut rows: Vec<u32>,
     comparators: &[DynComparator],
     primitive: Option<(&ArrayRef, SortOptions)>,

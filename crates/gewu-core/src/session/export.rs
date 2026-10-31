@@ -2,10 +2,10 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use super::Document;
+use super::Session;
 use crate::{Error, Export, FileType, Result};
 
-impl Document {
+impl Session {
     /// Capture a view and column order for export without copying its cells or
     /// row indices. The returned job remains valid when the current view changes.
     pub fn prepare_export(
@@ -32,7 +32,7 @@ impl Document {
             })
             .collect::<Result<Vec<_>>>()?;
         let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
-        let schema = Arc::new(self.schema.project(&indices)?);
+        let schema = Arc::new(self.dataset.schema.project(&indices)?);
         if format != FileType::Parquet {
             let nested = self.nested_export_columns(columns)?;
             if !nested.is_empty() {
@@ -43,7 +43,7 @@ impl Document {
             }
         }
         Ok(Export::new(
-            self.source_path.clone(),
+            self.dataset.source_path.clone(),
             schema,
             arrays,
             view.rows.clone(),
@@ -57,7 +57,7 @@ impl Document {
         let mut nested = Vec::new();
         for &column in columns {
             if self.column(column)?.data_type().is_nested() {
-                nested.push(self.schema.field(column as usize).name().clone());
+                nested.push(self.dataset.schema.field(column as usize).name().clone());
             }
         }
         Ok(nested)

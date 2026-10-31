@@ -5,7 +5,7 @@ use arrow::{
     compute::SortOptions,
 };
 
-use super::Document;
+use super::Session;
 use crate::{
     analysis::numeric::Numeric,
     column::histogram,
@@ -15,7 +15,7 @@ use crate::{
     ColumnSummary, Histogram, Result,
 };
 
-impl Document {
+impl Session {
     /// Capture an independently cancellable scatter sample. X=None uses source
     /// row IDs; explicit axes must support the column's scatter capability.
     /// Rejects stale views and limits outside 1..=MAX_SCATTER_POINTS.

@@ -61,6 +61,28 @@ impl Filter {
             | Filter::Range { column, .. } => *column,
         }
     }
+
+    /// Estimated evaluation cost (0 = cheapest, higher = more expensive).
+    /// Used by the query planner to reorder AND predicates so that cheap,
+    /// high-selectivity checks run first to trigger batch short-circuiting early.
+    pub fn estimated_cost(&self) -> u8 {
+        match self {
+            // Null check: direct null bitmap test, near-zero cost.
+            Filter::IsNull { .. } => 0,
+            // InValues: bitmask or small integer code comparison against pre-indexed keys.
+            Filter::InValues { .. } => 1,
+            // TextValues: exact value-set selection (accelerated by ValueIndex when available).
+            Filter::TextValues { .. } => 1,
+            // Range: primitive numeric / temporal bounds comparison.
+            Filter::Range { .. } => 2,
+            // Equals: single-value typed equality.
+            Filter::Equals { .. } => 3,
+            // EqualsAny: set of typed equality checks.
+            Filter::EqualsAny { .. } => 4,
+            // Contains: string / list substring search.
+            Filter::Contains { .. } => 5,
+        }
+    }
 }
 
 /// The editor and data a frontend needs for one column's filter.

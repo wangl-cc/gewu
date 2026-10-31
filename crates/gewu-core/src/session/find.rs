@@ -2,10 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use super::Document;
+use super::Session;
 use crate::{Error, Find, Result};
 
-impl Document {
+impl Session {
     /// Capture a view, query and ordered visible-column scope for cell Find.
     /// Preparation is cheap and does not scan rows. The returned session remains
     /// valid after later view changes and owns independent cancellation.

@@ -8,12 +8,18 @@ pub struct SortKey {
     pub descending: bool,
 }
 
-/// What the user wants to see. Filters are combined with AND.
+/// Declarative specification of what rows to show and how to order them.
+///
+/// Filters are combined with AND. This is an immutable ruleset / query definition,
+/// rather than mutable UI state.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ViewState {
+pub struct QuerySpec {
     pub sort: Vec<SortKey>,
     pub filters: Vec<Filter>,
 }
+
+/// Backward-compatible alias for [`QuerySpec`].
+pub type ViewState = QuerySpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewInfo {

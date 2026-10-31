@@ -8,7 +8,7 @@ This document describes the calling contract. See [data types](../../docs/data-t
 
 | Object | Responsibility and lifetime |
 | --- | --- |
-| `GewuDocument` | Owns an open Core document and its current view. Opening decodes the file into memory. |
+| `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
 | `Bound` | Immutable, exact typed range endpoint. Obtained from a document's parsing or native constructors, or from filter histogram bins. |
 | `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
@@ -23,7 +23,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 ## Open, query and read rows
 
-1. Call `GewuDocument::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuDocument::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
+1. Call `GewuSession::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuSession::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
 2. Read `info()` for schema and file metadata, and `current_view()` for the initial `ViewInfo`.
 3. Construct a `ViewState` containing sort keys and explicit column filters. Run `apply_view(state)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
 4. Pass that view's `version` to `rows(version, start, count, columns)`. Column indexes refer to the source schema, even when the UI reorders columns; the returned cells follow the requested column order.
@@ -42,7 +42,7 @@ Generated Swift entry points are:
 
 ```swift
 let names = try xlsxSheetNames(path: path)
-let document = try GewuDocument.openSheet(path: path, sheet: name)
+let session = try GewuSession.openSheet(path: path, sheet: name)
 ```
 
 The name is matched exactly, without trimming or case folding. Missing names produce `InvalidArgument`. Opening uses the first occupied row as headers, including when that leaves an empty table. Each call rereads the file and creates an independent document with an unfiltered initial view; listing does not retain a workbook snapshot. If the file changes between calls, opening uses its new contents and may reject a previously listed name. `document.info().sheet` and `.sheets` describe the workbook at open time.
@@ -72,7 +72,7 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 Cancellation has independent scopes:
 
-- A new `apply_view` supersedes older view work when it enters Core. `GewuDocument::cancel_pending()` invalidates pending work; a concurrent request past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible. It does not cancel file opening, analysis or export.
+- A new `apply_view` supersedes older view work when it enters Core. `GewuSession::cancel_pending()` invalidates pending work; a concurrent request past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible. It does not cancel file opening, analysis or export.
 - `ColumnAnalysis::cancel()` cancels only that analysis job. Cancellation is terminal for the handle; prepare a new job to run it again after cancellation.
 - `ScatterAnalysis::cancel()` similarly cancels only its scatter scan, not table queries or other analysis jobs.
 - `FindOperation::cancel()` interrupts one Find scan at predicate and batch checkpoints without closing its session. `FindSession::cancel()` permanently closes only that captured Find.

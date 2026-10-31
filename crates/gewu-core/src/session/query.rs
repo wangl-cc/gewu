@@ -7,19 +7,18 @@ use arrow::{
     compute::SortOptions,
 };
 
-mod sort;
-
-use super::Document;
+use super::Session;
 use crate::{
     column::Column,
+    dataset::format,
     engine::CancelToken,
-    format,
     predicate::CHUNK,
+    query::sort_rows,
     scope::{RowScope, Selection},
     Filter, Result, RowBlock, ViewInfo, ViewState,
 };
 
-impl Document {
+impl Session {
     pub fn current_view(&self) -> ViewInfo {
         self.views.current().info()
     }
@@ -54,7 +53,10 @@ impl Document {
         let end = start.saturating_add(count as u64).min(len);
         let source_rows = &view.rows[start as usize..end as usize];
 
-        let arrays: Vec<&ArrayRef> = columns.iter().map(|&c| &self.columns[c as usize]).collect();
+        let arrays: Vec<&ArrayRef> = columns
+            .iter()
+            .map(|&c| &self.dataset.columns[c as usize])
+            .collect();
         let formatters = arrays
             .iter()
             .map(|a| Column::new(a).formatter())
@@ -79,11 +81,12 @@ impl Document {
 
     /// Resolve which rows a facet counts.
     pub(super) fn rows_in(&self, scope: RowScope<'_>) -> Result<Selection> {
+        let total_rows = self.dataset.n_rows;
         Ok(match scope {
-            RowScope::All => Selection::All(self.n_rows),
+            RowScope::All => Selection::All(total_rows),
             // A view keeps each row at most once, so a full-length view is
             // every row, and counting in file order is faster.
-            RowScope::Rows(rows) if rows.len() == self.n_rows => Selection::All(self.n_rows),
+            RowScope::Rows(rows) if rows.len() == total_rows => Selection::All(total_rows),
             RowScope::Rows(rows) => Selection::Rows(rows),
             RowScope::Facet { state, except } => {
                 self.column(except)?;
@@ -95,6 +98,7 @@ impl Document {
 
     /// Prepare column predicates once, then combine AND/OR in bounded batches.
     /// Masks are reused across columns and batches, not retained per column.
+    /// Filters are reordered by estimated cost to maximize batch-level short-circuiting.
     fn select(
         &self,
         filters: &[Filter],
@@ -102,28 +106,40 @@ impl Document {
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
         token.check()?;
-        let filters = filters
+        let total_rows = self.dataset.n_rows;
+        let mut active_filters: Vec<&Filter> = filters
             .iter()
             .filter(|f| Some(f.column()) != skip)
-            .map(|f| self.prepare_filter(f))
-            .collect::<Result<Vec<_>>>()?;
-        if filters.is_empty() {
-            let rows = (0..self.n_rows as u32).collect();
+            .collect();
+        if active_filters.is_empty() {
+            let rows = (0..total_rows as u32).collect();
             token.check()?;
             return Ok(rows);
         }
-        let batch_len = self.n_rows.min(CHUNK);
+
+        // Query optimization:
+        // Execute cheap, highly selective filters (null checks, indexed values, range bounds)
+        // before expensive string or substring scans. In bounded batch execution, this zeroes
+        // out matching rows early and triggers `break` before evaluating costlier predicates.
+        active_filters.sort_by_key(|f| f.estimated_cost());
+
+        let prepared_filters = active_filters
+            .iter()
+            .map(|f| self.prepare_filter(f))
+            .collect::<Result<Vec<_>>>()?;
+
+        let batch_len = total_rows.min(CHUNK);
         let mut selected = vec![true; batch_len];
         let mut scratch = vec![false; batch_len];
         let mut rows = Vec::new();
-        for start in (0..self.n_rows).step_by(CHUNK) {
+        for start in (0..total_rows).step_by(CHUNK) {
             token.check()?;
-            let end = (start + CHUNK).min(self.n_rows);
+            let end = (start + CHUNK).min(total_rows);
             let range = start..end;
             let selected = &mut selected[..range.len()];
             let scratch = &mut scratch[..range.len()];
             selected.fill(true);
-            for test in &filters {
+            for test in &prepared_filters {
                 test.intersect(range.clone(), selected, scratch, token)?;
                 if !selected.contains(&true) {
                     break;
@@ -167,6 +183,6 @@ impl Document {
         } else {
             None
         };
-        sort::sort_rows(rows, &comparators, primitive, || token.check())
+        sort_rows(rows, &comparators, primitive, || token.check())
     }
 }

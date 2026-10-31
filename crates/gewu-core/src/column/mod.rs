@@ -269,15 +269,7 @@ impl<'a> Column<'a> {
     }
 
     pub(crate) fn prepare_values(self, index: Arc<ValueIndex>, keys: &[u64]) -> Predicate<'a> {
-        let mut allowed = vec![false; index.len()];
-        for &key in keys {
-            if let Ok(key) = usize::try_from(key) {
-                if let Some(slot) = allowed.get_mut(key) {
-                    *slot = true;
-                }
-            }
-        }
-        Predicate::rows(Box::new(move |row| allowed[index.codes[row] as usize]))
+        index.prepare_predicate(keys)
     }
 }
 

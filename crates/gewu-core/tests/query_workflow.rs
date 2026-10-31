@@ -71,3 +71,60 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         expected[..1]
     );
 }
+
+#[test]
+fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
+    let len = 50_000;
+    let numbers: ArrayRef = Arc::new(Int32Array::from_iter_values(0..len));
+    let text: ArrayRef = Arc::new(StringArray::from_iter_values((0..len).map(|i| {
+        if i % 5 == 0 {
+            "match_target"
+        } else {
+            "other"
+        }
+    })));
+    let batch = RecordBatch::try_from_iter(vec![("id", numbers), ("text", text)]).unwrap();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let dataset = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
+    assert_eq!(dataset.n_rows(), len as usize);
+
+    // Create session from shared dataset
+    let doc = Document::from_dataset(dataset.clone());
+    assert_eq!(doc.n_rows(), len as usize);
+
+    // Pass filters in reverse cost order: expensive text search first, cheap range second, null
+    // check third
+    let expensive_first = gewu_core::QuerySpec {
+        sort: vec![],
+        filters: vec![
+            Filter::Contains {
+                column: 1,
+                text: "match_target".into(),
+                case_sensitive: true,
+                include_nulls: false,
+            },
+            Filter::Range {
+                column: 0,
+                min: Some(doc.parse_bound(0, "100").unwrap()),
+                max: Some(doc.parse_bound(0, "200").unwrap()),
+                include_nulls: false,
+            },
+            Filter::IsNull {
+                column: 0,
+                negate: true,
+            },
+        ],
+    };
+
+    let view = doc.apply_view(&expensive_first).unwrap();
+    let expected: Vec<u64> = (100..=200)
+        .filter(|i| i % 5 == 0)
+        .map(|i| i as u64)
+        .collect();
+    let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
+    assert_eq!(rows.source_rows, expected);
+}

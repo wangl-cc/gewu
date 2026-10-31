@@ -2,6 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+public typealias GewuDocument = GewuSession
+
 enum InspectorPage: String, CaseIterable {
     case column = "Column Overview"
     case chart = "Chart"
@@ -12,7 +14,7 @@ enum InspectorPage: String, CaseIterable {
 @MainActor
 final class DocumentModel: ObservableObject {
     let url: URL
-    let doc: GewuDocument
+    let doc: GewuSession
     let info: FileInfo
     let kinds: [ColumnKind]
     let find: FindModel
@@ -46,7 +48,7 @@ final class DocumentModel: ObservableObject {
     // Serial execution keeps Rust's request order consistent with UI order.
     private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
-    init(url: URL, document: GewuDocument) {
+    init(url: URL, document: GewuSession) {
         self.url = url
         doc = document
         let metadata = document.info()

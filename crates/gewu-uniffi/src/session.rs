@@ -10,14 +10,14 @@ use crate::{
     ViewState,
 };
 
-/// One open file.
+/// One open viewing session over a table.
 #[derive(uniffi::Object)]
-pub struct GewuDocument {
-    inner: core::Document,
+pub struct GewuSession {
+    inner: core::Session,
 }
 
 #[uniffi::export]
-impl GewuDocument {
+impl GewuSession {
     /// Capture a bounded scatter job over the current view; stale versions fail.
     /// A nil X column means source row IDs. Limit must be in 1...4096.
     pub fn prepare_scatter(
@@ -290,7 +290,7 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
         std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
-        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         assert!(doc.info().columns[0].capabilities.histogram);
         assert!(doc.info().columns[0].capabilities.scatter);
         let scatter = doc
@@ -375,7 +375,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
-        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         let FilterEditor::Text { modes, recommended } = doc.filter_spec(0, None).unwrap().editor
         else {
             panic!("strings should offer both filter modes");
@@ -435,7 +435,7 @@ mod tests {
             writeln!(csv, "{}", base + offset).unwrap();
         }
         std::fs::write(&source, csv).unwrap();
-        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         let FilterEditor::Range {
             distribution: Some(custom),
             ..
@@ -497,7 +497,7 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-formats-{}.csv", std::process::id()));
         std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
-        let doc = GewuDocument::open(source.to_str().unwrap().to_owned()).unwrap();
+        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         let info = doc.info();
         assert_eq!(info.format, "CSV");
         assert_eq!(info.row_count, 2);
@@ -509,7 +509,7 @@ mod tests {
             Err(GewuError::InvalidArgument { .. })
         ));
         assert!(matches!(
-            GewuDocument::open_sheet(source.to_str().unwrap().to_owned(), "Sheet1".into()),
+            GewuSession::open_sheet(source.to_str().unwrap().to_owned(), "Sheet1".into()),
             Err(GewuError::InvalidArgument { .. })
         ));
 
@@ -522,7 +522,7 @@ mod tests {
                 .unwrap()
                 .write(destination.to_str().unwrap().to_owned())
                 .unwrap();
-            let reopened = GewuDocument::open(destination.to_str().unwrap().to_owned()).unwrap();
+            let reopened = GewuSession::open(destination.to_str().unwrap().to_owned()).unwrap();
             let info = reopened.info();
             assert_eq!(info.format, name);
             assert_eq!(info.row_count, 2);
@@ -532,7 +532,7 @@ mod tests {
                 let path = destination.to_str().unwrap().to_owned();
                 assert_eq!(crate::xlsx_sheet_names(path.clone()).unwrap(), info.sheets);
                 assert_eq!(info.sheets, vec![sheet.clone()]);
-                let selected = GewuDocument::open_sheet(path.clone(), sheet.clone()).unwrap();
+                let selected = GewuSession::open_sheet(path.clone(), sheet.clone()).unwrap();
                 assert_eq!(selected.info().sheet, Some(sheet));
                 assert_eq!(selected.rows(0, 0, 1, vec![0]).unwrap().cells, [Some(
                     "cat".into()
@@ -549,7 +549,7 @@ mod tests {
                 assert_eq!(selected.current_view().row_count, 1);
                 assert_eq!(reopened.current_view().row_count, 2);
                 assert!(matches!(
-                    GewuDocument::open_sheet(path, "absent".into()),
+                    GewuSession::open_sheet(path, "absent".into()),
                     Err(GewuError::InvalidArgument { .. })
                 ));
             } else {

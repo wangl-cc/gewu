@@ -1,13 +1,14 @@
 //! Prepared, column-bound predicates. Preparation does not scan rows.
 //!
-//! Row predicates retain native typed comparisons and can short-circuit an
-//! AND. Batch predicates handle formatted fallback or nested arrays. Selections
-//! borrow either a contiguous range or ordered source-row indices; output slots
-//! follow selection order and never require copying Arrow value payload.
+//! Row predicates retain native typed comparisons and can short-circuit an AND.
+//! Batch predicates handle formatted fallback or nested arrays.
+//! Selections borrow either a contiguous range or ordered source-row indices;
+//! output slots follow selection order and never require copying Arrow value payload.
 
 use std::ops::Range;
 
-use crate::{engine::CancelToken, Result};
+use super::engine::CancelToken;
+use crate::Result;
 
 pub(crate) const CHUNK: usize = 64 * 1024;
 pub(crate) type RowTest<'a> = Box<dyn Fn(usize) -> bool + Send + Sync + 'a>;
