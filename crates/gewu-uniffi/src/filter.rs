@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{DataKind, DistinctValue, Histogram};
+use crate::{DistinctValue, Histogram, LogicalType};
 
 #[derive(uniffi::Enum)]
 pub enum Filter {
@@ -103,13 +103,17 @@ impl From<core::TextFilterMode> for TextFilterMode {
 }
 
 #[derive(uniffi::Enum)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
+)]
 pub enum FilterEditor {
     Text {
         modes: Vec<TextFilterMode>,
         recommended: TextFilterMode,
     },
     Range {
-        kind: DataKind,
+        logical_type: LogicalType,
         distribution: Option<RangeHistogram>,
     },
     Choices {
@@ -132,8 +136,11 @@ impl From<core::FilterSpec> for FilterSpec {
                 modes: modes.into_iter().map(Into::into).collect(),
                 recommended: recommended.into(),
             },
-            core::FilterEditor::Range { kind, distribution } => FilterEditor::Range {
-                kind: kind.into(),
+            core::FilterEditor::Range {
+                logical_type,
+                distribution,
+            } => FilterEditor::Range {
+                logical_type: logical_type.into(),
                 distribution: distribution.map(|distribution| RangeHistogram {
                     histogram: distribution.histogram.into(),
                     ranges: distribution

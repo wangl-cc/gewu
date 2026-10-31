@@ -73,6 +73,10 @@ pub struct FilterSpec {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
+)]
 pub enum FilterEditor {
     /// String filters always offer both modes. Source cardinality only selects
     /// the initial recommendation; candidate pages are requested separately.
@@ -81,7 +85,7 @@ pub enum FilterEditor {
         recommended: TextFilterMode,
     },
     Range {
-        kind: crate::DataKind,
+        logical_type: crate::LogicalType,
         distribution: Option<RangeHistogram>,
     },
     /// All source values, including values with zero rows in the current facet.

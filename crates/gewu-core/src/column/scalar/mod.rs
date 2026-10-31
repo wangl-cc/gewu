@@ -11,7 +11,7 @@ use arrow::array::{Array, ArrayRef, AsArray};
 use crate::{
     column::bound::{prepare_range, Bound},
     predicate::Predicate,
-    DataKind, Error, Result,
+    Error, LogicalType, Result,
 };
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
@@ -19,30 +19,33 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
     if text.is_empty() {
         return Ok(None);
     }
-    Ok(match DataKind::of(array.data_type()) {
-        DataKind::Integer => integer::search(array, text),
-        DataKind::Float => float::search(array, text),
-        DataKind::Decimal => decimal::search(array, text),
-        DataKind::Boolean => boolean(text).map(|target| bool_test(array, target)),
-        DataKind::Date | DataKind::Timestamp | DataKind::Time | DataKind::Duration => {
-            return temporal::search(array, text)
+    Ok(match LogicalType::from_arrow(array.data_type()) {
+        LogicalType::Integer { .. } => integer::search(array, text),
+        LogicalType::Float { .. } => float::search(array, text),
+        LogicalType::Decimal { .. } => decimal::search(array, text),
+        LogicalType::Boolean => boolean(text).map(|target| bool_test(array, target)),
+        LogicalType::Date
+        | LogicalType::Timestamp { .. }
+        | LogicalType::Time
+        | LogicalType::Duration { .. } => {
+            return temporal::search(array, text);
         }
         _ => {
             return Err(Error::InvalidArgument(format!(
                 "{} is not a scalar query type",
                 array.data_type()
-            )))
+            )));
         }
     })
 }
 
 pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a>> {
     let text = text.trim();
-    match DataKind::of(array.data_type()) {
-        DataKind::Boolean => boolean(text)
+    match LogicalType::from_arrow(array.data_type()) {
+        LogicalType::Boolean => boolean(text)
             .map(|target| bool_test(array, target))
             .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
-        DataKind::Float => float::equals(array, text),
+        LogicalType::Float { .. } => float::equals(array, text),
         _ => {
             let bound = Bound::parse(array.data_type(), text)?;
             prepare_range(array, Some(&bound), Some(&bound))

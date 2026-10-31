@@ -51,7 +51,7 @@ final class DocumentModel: ObservableObject {
         doc = document
         let metadata = document.info()
         info = metadata
-        kinds = metadata.columns.map { ColumnKind($0.kind) }
+        kinds = metadata.columns.map { ColumnKind($0.logicalType) }
         current = document.currentView()
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn

@@ -6,7 +6,7 @@ use crate::{
     predicate::Predicate,
     scope::RowScope,
     value_index::count_values,
-    DataKind, DistinctResult, Error, Filter, Histogram, Result, ViewState,
+    DistinctResult, Error, Filter, Histogram, LogicalType, Result, ViewState,
 };
 
 impl Document {
@@ -101,7 +101,7 @@ impl Document {
                 *cell.get_or_init(|| typed.filter_editor(low_cardinality))
             }
         };
-        if DataKind::of(typed.logical_data_type()) == DataKind::Text {
+        if LogicalType::from_arrow(typed.logical_data_type()) == LogicalType::Text {
             return Ok(FilterSpec {
                 nullable: self.schema.field(column as usize).is_nullable(),
                 editor: FilterEditor::Text {
@@ -127,7 +127,7 @@ impl Document {
             FilterEditorKind::Range => {
                 let rows = self.rows_in(RowScope::facet(state, column))?;
                 FilterEditor::Range {
-                    kind: DataKind::of(typed.logical_data_type()),
+                    logical_type: LogicalType::from_arrow(typed.logical_data_type()),
                     distribution: histogram::build_scaled(array, &rows, bins, scale)?,
                 }
             }
@@ -150,7 +150,7 @@ impl Document {
         state: Option<&ViewState>,
     ) -> Result<crate::TextChoices> {
         let array = self.column(column)?;
-        if DataKind::of(array.data_type()) != DataKind::Text {
+        if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
             return Err(Error::InvalidArgument(
                 "text choices require a string column".into(),
             ));

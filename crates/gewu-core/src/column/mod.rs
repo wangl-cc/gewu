@@ -19,17 +19,15 @@ use arrow::{
 };
 
 use crate::{
-    format, predicate::Predicate, value_index::ValueIndex, DataKind, Error, Filter, Result,
+    format, predicate::Predicate, value_index::ValueIndex, Error, Filter, LogicalType, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
     pub name: String,
-    /// The Arrow type, e.g. `Timestamp(Microsecond, Some("UTC"))`.
-    pub type_name: String,
-    /// How gewu displays the values. Query supported operations through
-    /// `Document::column_capabilities`.
-    pub kind: crate::DataKind,
+    pub logical_type: LogicalType,
+    pub display_type: String,
+    pub technical_type: String,
     pub nullable: bool,
 }
 
@@ -79,14 +77,15 @@ impl<'a> Column<'a> {
                     ..of(values)
                 };
             }
-            let kind = DataKind::of(data_type);
+            let logical_type = LogicalType::from_arrow(data_type);
             ColumnCapabilities {
-                contains: !kind.is_ordered() && kind != DataKind::Boolean,
-                range: kind.is_ordered(),
-                histogram: kind.is_ordered(),
-                scatter: kind.is_ordered(),
-                logarithmic: kind.supports_log(),
-                equals: kind.is_ordered() || matches!(kind, DataKind::Boolean | DataKind::Text),
+                contains: !logical_type.is_ordered() && logical_type != LogicalType::Boolean,
+                range: logical_type.is_ordered(),
+                histogram: logical_type.is_ordered(),
+                scatter: logical_type.is_ordered(),
+                logarithmic: logical_type.supports_logarithmic(),
+                equals: logical_type.is_ordered()
+                    || matches!(logical_type, LogicalType::Boolean | LogicalType::Text),
             }
         }
         of(self.array.data_type())
@@ -134,7 +133,8 @@ impl<'a> Column<'a> {
             | DataType::BinaryView
             | DataType::FixedSizeBinary(_) => Ok(None),
             data_type
-                if DataKind::of(data_type).is_ordered() || *data_type == DataType::Boolean =>
+                if LogicalType::from_arrow(data_type).is_ordered()
+                    || *data_type == DataType::Boolean =>
             {
                 scalar::search(self.array, query)
             }
@@ -222,7 +222,7 @@ impl<'a> Column<'a> {
     }
 
     fn prepare_equals(self, value: &str) -> Result<Predicate<'a>> {
-        if DataKind::of(self.array.data_type()) == DataKind::Text {
+        if LogicalType::from_arrow(self.array.data_type()) == LogicalType::Text {
             Ok(text::equals(self.array, value))
         } else {
             scalar::equals(self.array, value)

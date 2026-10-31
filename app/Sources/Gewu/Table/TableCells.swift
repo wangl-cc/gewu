@@ -4,8 +4,8 @@ import AppKit
 enum ColumnKind {
     case number, temporal, text
 
-    init(_ kind: DataKind) {
-        switch kind {
+    init(_ type: LogicalType) {
+        switch type {
         case .integer, .float, .decimal: self = .number
         case .date, .time, .timestamp, .duration, .interval: self = .temporal
         default: self = .text

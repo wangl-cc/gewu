@@ -181,7 +181,7 @@ struct WorkbookLifecycleTests {
         for base in [0, 1] {
             await chart.load(
                 document: document.doc, version: document.current.version,
-                x: nil, y: 0, xKind: nil, yKind: .integer, rowNumberBase: base)
+                x: nil, y: 0, xKind: nil, yKind: .integer(bits: 64, signed: true), rowNumberBase: base)
             let point = try #require(chart.result).points[0]
             #expect(point.sourceRow == 0, "Presentation must not change source row identity")
             let label = formatRowNumber(point.sourceRow, base: base)

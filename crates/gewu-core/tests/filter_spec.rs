@@ -7,7 +7,7 @@ use arrow::{
     datatypes::DataType,
 };
 use gewu_core::{
-    Bound, DataKind, Document, Error, Filter, FilterEditor, TextFilterMode, ViewState,
+    Bound, Document, Error, Filter, FilterEditor, LogicalType, TextFilterMode, ViewState,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -45,7 +45,10 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
     assert!(matches!(
         doc.filter_spec(1, None).unwrap().editor,
         FilterEditor::Range {
-            kind: DataKind::Integer,
+            logical_type: LogicalType::Integer {
+                bits: 32,
+                signed: true,
+            },
             distribution: Some(_)
         }
     ));

@@ -2,7 +2,7 @@
 
 use gewu_core as core;
 
-use crate::GewuError;
+use crate::{GewuError, LogicalType};
 
 #[derive(uniffi::Enum, Clone, Copy)]
 pub enum AnalysisSection {
@@ -78,7 +78,9 @@ pub struct LengthSummary {
 #[derive(uniffi::Record)]
 pub struct AnalysisField {
     pub name: String,
-    pub type_name: String,
+    pub logical_type: LogicalType,
+    pub display_type: String,
+    pub technical_type: String,
     pub nullable: bool,
 }
 
@@ -145,7 +147,9 @@ impl From<core::AnalysisResult> for AnalysisResult {
                     .into_iter()
                     .map(|field| AnalysisField {
                         name: field.name,
-                        type_name: field.type_name,
+                        logical_type: field.logical_type.into(),
+                        display_type: field.display_type,
+                        technical_type: field.technical_type,
                         nullable: field.nullable,
                     })
                     .collect(),

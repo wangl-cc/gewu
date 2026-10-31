@@ -24,7 +24,8 @@ pub use document::GewuDocument;
 pub use error::GewuError;
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
 pub use file::{
-    xlsx_sheet_names, ColumnCapabilities, ColumnInfo, DataKind, FileInfo, FileType, KeyValue,
+    xlsx_sheet_names, ColumnCapabilities, ColumnInfo, FileInfo, FileType, KeyValue, LogicalType,
+    TimeUnit,
 };
 pub use filter::{
     Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,

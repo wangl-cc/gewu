@@ -33,8 +33,9 @@ struct InspectorSidebar: View {
                         .accessibilityValue(selectedColumnName)
                         .help("Choose the column to analyze")
                         if let column = model.inspectedColumn, info.columns.indices.contains(column) {
-                            Text(info.columns[column].typeName)
+                            Text(info.columns[column].displayType)
                                 .font(.caption).foregroundStyle(.secondary)
+                                .help(info.columns[column].technicalType)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
@@ -104,7 +105,7 @@ struct ColumnAnalysisView: View {
                         Text("Missing \(countWithPercent(nulls, total: rows))")
                             .font(.caption).foregroundStyle(.secondary)
                             .help(
-                                "Missing values in the current results. Column type: \(model.info.columns[column].typeName)"
+                                "Missing values in the current results. Column type: \(model.info.columns[column].technicalType)"
                             )
                     }
                     if let error = analysis.errors[.overview] { failure(error) }
@@ -213,7 +214,11 @@ struct ColumnAnalysisView: View {
             distribution(summary.histogram)
         case .structure(let fields):
             ForEach(Array(fields.enumerated()), id: \.offset) { _, field in
-                detail(field.name, field.typeName + (field.nullable ? " · nullable" : ""))
+                detail(
+                    field.name,
+                    field.displayType + (field.nullable ? " · nullable" : ""),
+                    help: field.technicalType
+                )
             }
         }
     }
@@ -238,8 +243,8 @@ struct ColumnAnalysisView: View {
         HistogramOmissions(histogram: histogram)
     }
 
-    private func detail(_ title: String, _ text: String) -> some View {
-        StatisticRow(title: title, value: text)
+    private func detail(_ title: String, _ text: String, help: String? = nil) -> some View {
+        StatisticRow(title: title, value: text, help: help)
     }
 
     private func countWithPercent(_ count: UInt64, total: UInt64) -> String {
@@ -265,6 +270,7 @@ struct ColumnAnalysisView: View {
 struct StatisticRow: View {
     let title: String
     let value: String
+    var help: String? = nil
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -278,7 +284,7 @@ struct StatisticRow: View {
                 Text(value).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.caption).textSelection(.enabled).help(value)
+        .font(.caption).textSelection(.enabled).help(help ?? value)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

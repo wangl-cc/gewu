@@ -37,13 +37,16 @@ struct ChartPresentationTests {
         let document = try await Task.detached { try GewuDocument.open(path: url.path) }.value
         let model = ScatterModel()
         await model.load(
-            document: document, version: 0, x: 0, y: 1, xKind: .integer, yKind: .integer,
+            document: document, version: 0, x: 0, y: 1,
+            xKind: .integer(bits: 64, signed: true), yKind: .integer(bits: 64, signed: true),
             xScale: .log10, yScale: .log10)
         let result = try #require(model.result)
         #expect(model.xScale == .log10 && model.yScale == .log10)
         #expect(result.nonPositiveRows == 2 && result.points.map(\.sourceRow) == [2, 3])
         #expect(result.points[0].x == 10 && result.points[0].xLabel == "10")
-        await model.load(document: document, version: 0, x: 0, y: 1, xKind: .integer, yKind: .integer)
+        await model.load(
+            document: document, version: 0, x: 0, y: 1,
+            xKind: .integer(bits: 64, signed: true), yKind: .integer(bits: 64, signed: true))
         #expect(model.xScale == .linear && model.yScale == .linear && model.result?.eligibleRows == 4)
     }
 
@@ -70,10 +73,12 @@ struct ChartPresentationTests {
             ScatterPoint(sourceRow: 1, x: 1, y: 1, xLabel: "2024-01-02", yLabel: "2024-01-01T03:00:00.123456789"),
         ]
         let days = try #require(ScatterDates.make(points: datePoints, x: true, kind: .date))
-        let timestamps = try #require(ScatterDates.make(points: datePoints, x: false, kind: .timestamp))
+        let timestamps = try #require(
+            ScatterDates.make(points: datePoints, x: false, kind: .timestamp(unit: .nanosecond, timezone: nil)))
         #expect(days[1].timeIntervalSince(days[0]) == 86400)
         #expect(ScatterDates.context(days) == "2024 · UTC")
         #expect(abs(timestamps[1].timeIntervalSince(timestamps[0]) - 3600) < 0.001)
-        #expect(ScatterDates.make(points: datePoints, x: true, kind: .integer) == nil)
+        #expect(
+            ScatterDates.make(points: datePoints, x: true, kind: .integer(bits: 64, signed: true)) == nil)
     }
 }
