@@ -10,7 +10,7 @@ use arrow::array::{Array, ArrayRef, AsArray};
 
 use crate::{
     column::bound::{prepare_range, Bound},
-    predicate::Predicate,
+    predicate::{Predicate, RowSelection},
     Error, LogicalType, Result,
 };
 
@@ -65,8 +65,33 @@ fn boolean(text: &str) -> Option<bool> {
 
 fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
     let array = array.as_boolean();
-    Predicate::scalar(Box::new(move |row| {
-        array.is_valid(row) && array.value(row) == target
+    let has_nulls = array.null_count() > 0;
+    Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+        match (rows, incoming) {
+            (RowSelection::Range(range), None) => {
+                for (i, row) in range.enumerate() {
+                    output[i] = (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                }
+            }
+            (RowSelection::Range(range), Some(mask)) => {
+                for (i, row) in range.enumerate() {
+                    output[i] =
+                        mask[i] && (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                }
+            }
+            (RowSelection::Indices(indices), None) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                }
+            }
+            (RowSelection::Indices(indices), Some(mask)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] =
+                        mask[i] && (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                }
+            }
+        }
+        Ok(())
     }))
 }
 

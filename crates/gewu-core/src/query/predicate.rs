@@ -1,10 +1,11 @@
 //! Prepared, column-bound predicates for high-throughput query execution.
 //!
-//! Two execution tracks are supported:
-//! - **Scalar**: Per-row scalar test (`Fn(usize) -> bool`). Highly efficient for primitive
-//!   comparisons and dictionary codes; supports immediate AND short-circuiting.
-//! - **Batch**: Block-level vectorized evaluation (`Fn(RowSelection, &mut [bool], ...)`). Allows
-//!   reusing formatting scratch buffers across rows (e.g. text Contains or nested types).
+//! Predicates operate on 64K chunks (`CHUNK = 64 * 1024`), ensuring working data
+//! fits entirely inside the CPU's L1 cache. Evaluators receive an optional incoming
+//! mask (`incoming: Option<&[bool]>`), allowing:
+//! - **Branchless SIMD**: Primitive comparisons compute unconditionally and bitwise-AND with the mask.
+//! - **Branching Short-circuit**: Expensive string/complex operations skip rejected rows.
+//! - **Chunk-level Circuit Breaking**: Fully-rejected chunks are bypassed entirely.
 
 use std::ops::Range;
 
@@ -13,10 +14,19 @@ use crate::Result;
 
 pub(crate) const CHUNK: usize = 64 * 1024;
 
+/// Chunk-level vectorized evaluator: populates the output boolean slice for a selection of rows,
+/// optionally taking an incoming mask to support short-circuiting or branchless bitwise AND.
+pub(crate) type ChunkEvaluator<'a> = Box<
+    dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool], &CancelToken) -> Result<()>
+        + Send
+        + Sync
+        + 'a,
+>;
+
 /// Single-row scalar matcher closure: takes a row index and returns whether it matches.
 pub(crate) type ScalarFilter<'a> = Box<dyn Fn(usize) -> bool + Send + Sync + 'a>;
 
-/// Block-level vectorized evaluator: populates the output boolean slice for a selection of rows.
+/// Block-level evaluator: populates the output boolean slice for a selection of rows.
 pub(crate) type BatchEvaluator<'a> = Box<
     dyn for<'b> Fn(RowSelection<'b>, &mut [bool], &CancelToken) -> Result<()> + Send + Sync + 'a,
 >;
@@ -49,7 +59,7 @@ impl<'a> RowSelection<'a> {
         }
     }
 
-    fn chunk(&self, offset: usize, len: usize) -> Self {
+    pub(crate) fn chunk(&self, offset: usize, len: usize) -> Self {
         match self {
             Self::Range(rows) => Self::Range(rows.start + offset..rows.start + offset + len),
             Self::Indices(rows) => Self::Indices(&rows[offset..offset + len]),
@@ -73,46 +83,91 @@ impl Iterator for RowSelectionIter<'_> {
     }
 }
 
-pub(crate) enum Predicate<'a> {
-    /// Scalar per-row evaluation: native typed comparisons with AND short-circuiting.
-    Scalar(ScalarFilter<'a>),
-    /// Vectorized chunk evaluation: buffer reuse for text formatting or nested types.
-    Batch(BatchEvaluator<'a>),
-}
+pub(crate) struct Predicate<'a>(ChunkEvaluator<'a>);
 
 impl<'a> Predicate<'a> {
-    pub(crate) fn scalar(filter: ScalarFilter<'a>) -> Self {
-        Self::Scalar(filter)
+    /// Construct a chunk-level vectorized predicate directly.
+    pub(crate) fn chunk(evaluator: ChunkEvaluator<'a>) -> Self {
+        Self(evaluator)
     }
 
+    /// Construct a predicate from a scalar row matcher (adapted to chunk-level execution).
+    pub(crate) fn scalar(is_match: ScalarFilter<'a>) -> Self {
+        Self::chunk(Box::new(move |rows, incoming, output, _cancel| {
+            match incoming {
+                Some(mask) => {
+                    for (i, &m) in mask.iter().enumerate() {
+                        output[i] = m && is_match(rows.get(i));
+                    }
+                }
+                None => {
+                    for (i, hit) in output.iter_mut().enumerate() {
+                        *hit = is_match(rows.get(i));
+                    }
+                }
+            }
+            Ok(())
+        }))
+    }
+
+    /// Construct a predicate from a batch evaluator (adapted to chunk-level execution).
     pub(crate) fn batch(evaluator: BatchEvaluator<'a>) -> Self {
-        Self::Batch(evaluator)
+        Self::chunk(Box::new(move |rows, incoming, output, cancel| {
+            evaluator(rows, output, cancel)?;
+            if let Some(mask) = incoming {
+                for (hit, &m) in output.iter_mut().zip(mask) {
+                    *hit &= m;
+                }
+            }
+            Ok(())
+        }))
+    }
+
+    /// Evaluate a single chunk of rows.
+    pub(crate) fn evaluate_chunk(
+        &self,
+        rows: RowSelection<'_>,
+        incoming: Option<&[bool]>,
+        output: &mut [bool],
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        (self.0)(rows, incoming, output, cancel)
     }
 
     /// Combine prepared equality alternatives without scanning the source or
     /// materializing one whole-column mask per value.
     pub(crate) fn any_of(predicates: Vec<Self>) -> Self {
-        let mut scalars = Vec::new();
-        let mut batches = Vec::new();
-        for predicate in predicates {
-            match predicate {
-                Self::Scalar(filter) => scalars.push(filter),
-                Self::Batch(evaluator) => batches.push(Self::Batch(evaluator)),
-            }
+        if predicates.is_empty() {
+            return Self::chunk(Box::new(|_rows, _incoming, output, _cancel| {
+                output.fill(false);
+                Ok(())
+            }));
         }
-        let scalar_pred = Self::scalar(Box::new(move |row| {
-            scalars.iter().any(|is_match| is_match(row))
-        }));
-        if batches.is_empty() {
-            return scalar_pred;
+        if predicates.len() == 1 {
+            return predicates.into_iter().next().unwrap();
         }
-        Self::batch(Box::new(move |selection, hits, cancel| {
-            scalar_pred.evaluate_selected(selection.clone(), hits, cancel)?;
-            let mut scratch = vec![false; selection.len()];
-            for predicate in &batches {
-                predicate.evaluate_selected(selection.clone(), &mut scratch, cancel)?;
-                for (hit, other) in hits.iter_mut().zip(&scratch) {
-                    *hit |= *other;
+        Self::chunk(Box::new(move |rows, incoming, output, cancel| {
+            output.fill(false);
+            let mut scratch = vec![false; output.len()];
+            for (i, predicate) in predicates.iter().enumerate() {
+                cancel.check()?;
+                if i == 0 {
+                    predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
+                } else {
+                    // Fast circuit-break: if all active rows are already true, skip remaining predicates.
+                    if let Some(mask) = incoming {
+                        let all_true = mask.iter().zip(output.iter()).all(|(&m, &hit)| !m || hit);
+                        if all_true {
+                            break;
+                        }
+                    } else if output.iter().all(|&hit| hit) {
+                        break;
+                    }
+                    scratch.fill(false);
+                    predicate.evaluate_chunk(rows.clone(), incoming, &mut scratch, cancel)?;
+                    for (hit, &s) in output.iter_mut().zip(&scratch) {
+                        *hit |= s;
+                    }
                 }
             }
             Ok(())
@@ -138,28 +193,15 @@ impl<'a> Predicate<'a> {
     ) -> Result<()> {
         assert_eq!(source_rows.len(), matched.len());
         cancel.check()?;
-        match self {
-            Self::Scalar(is_match) => {
-                for (chunk, out) in matched.chunks_mut(CHUNK).enumerate() {
-                    cancel.check()?;
-                    let rows = source_rows.chunk(chunk * CHUNK, out.len());
-                    for (index, hit) in (0..).zip(out) {
-                        *hit = is_match(rows.get(index));
-                    }
-                }
-            }
-            Self::Batch(evaluator) => {
-                for (chunk, out) in matched.chunks_mut(CHUNK).enumerate() {
-                    cancel.check()?;
-                    out.fill(false);
-                    evaluator(source_rows.chunk(chunk * CHUNK, out.len()), out, cancel)?;
-                }
-            }
+        for (chunk_idx, out) in matched.chunks_mut(CHUNK).enumerate() {
+            cancel.check()?;
+            let rows = source_rows.chunk(chunk_idx * CHUNK, out.len());
+            (self.0)(rows, None, out, cancel)?;
         }
         cancel.check()
     }
 
-    /// AND with existing matches. Native scalar checks short-circuit rejected rows.
+    /// AND with existing matches. Leverages incoming mask and skips fully-rejected chunks.
     pub(crate) fn intersect(
         &self,
         source_rows: Range<usize>,
@@ -168,27 +210,23 @@ impl<'a> Predicate<'a> {
         cancel: &CancelToken,
     ) -> Result<()> {
         assert_eq!(source_rows.len(), matched.len());
+        assert_eq!(matched.len(), scratch.len());
         cancel.check()?;
-        match self {
-            Self::Scalar(is_match) => {
-                for (chunk, out) in matched.chunks_mut(CHUNK).enumerate() {
-                    cancel.check()?;
-                    let start = source_rows.start + chunk * CHUNK;
-                    for (row, hit) in (start..).zip(out) {
-                        if *hit {
-                            *hit = is_match(row);
-                        }
-                    }
-                }
-                Ok(())
+        for (chunk_idx, (out, scratch_chunk)) in
+            matched.chunks_mut(CHUNK).zip(scratch.chunks_mut(CHUNK)).enumerate()
+        {
+            cancel.check()?;
+            // Fast chunk-level short-circuit: if all rows in this chunk are already false, skip it!
+            if !out.iter().any(|&hit| hit) {
+                continue;
             }
-            _ => {
-                self.evaluate(source_rows, scratch, cancel)?;
-                for (hit, other) in matched.iter_mut().zip(scratch) {
-                    *hit &= *other;
-                }
-                Ok(())
-            }
+            let offset = chunk_idx * CHUNK;
+            let rows = RowSelection::Range(
+                source_rows.start + offset..source_rows.start + offset + out.len(),
+            );
+            (self.0)(rows, Some(out), scratch_chunk, cancel)?;
+            out.copy_from_slice(scratch_chunk);
         }
+        Ok(())
     }
 }

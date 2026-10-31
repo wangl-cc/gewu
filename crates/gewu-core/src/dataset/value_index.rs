@@ -23,7 +23,13 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use crate::{analysis::AnalysisContext, format, predicate::Predicate, scope::Selection, Result};
+use crate::{
+    analysis::AnalysisContext,
+    format,
+    predicate::{Predicate, RowSelection},
+    scope::Selection,
+    Result,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
@@ -189,6 +195,37 @@ impl ValueIndex {
             .collect()
     }
 
+    fn make_chunk_predicate(self: &Arc<Self>, allowed: Vec<bool>) -> Predicate<'static> {
+        let index = Arc::clone(self);
+        Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+            match (rows, incoming) {
+                (RowSelection::Range(range), None) => {
+                    let slice = &index.codes[range];
+                    for (i, &code) in slice.iter().enumerate() {
+                        output[i] = allowed[code as usize];
+                    }
+                }
+                (RowSelection::Range(range), Some(mask)) => {
+                    let slice = &index.codes[range];
+                    for (i, &code) in slice.iter().enumerate() {
+                        output[i] = allowed[code as usize] & mask[i];
+                    }
+                }
+                (RowSelection::Indices(indices), None) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        output[i] = allowed[index.code(row) as usize];
+                    }
+                }
+                (RowSelection::Indices(indices), Some(mask)) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        output[i] = allowed[index.code(row) as usize] & mask[i];
+                    }
+                }
+            }
+            Ok(())
+        }))
+    }
+
     /// Prepare a row-based predicate for filtering by key codes.
     pub fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
         let mut allowed = vec![false; self.len()];
@@ -199,8 +236,7 @@ impl ValueIndex {
                 }
             }
         }
-        let index = Arc::clone(self);
-        Predicate::scalar(Box::new(move |row| allowed[index.code(row) as usize]))
+        self.make_chunk_predicate(allowed)
     }
 
     /// Prepare a row-based predicate for filtering by text values (`None` for null).
@@ -216,8 +252,7 @@ impl ValueIndex {
                 *slot = !exclude;
             }
         }
-        let index = Arc::clone(self);
-        Predicate::scalar(Box::new(move |row| allowed[index.code(row) as usize]))
+        self.make_chunk_predicate(allowed)
     }
 }
 

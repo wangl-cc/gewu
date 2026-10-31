@@ -5,7 +5,10 @@ use arrow::{
     datatypes::{DataType, Float16Type, Float32Type, Float64Type},
 };
 
-use crate::{predicate::Predicate, Error, Result};
+use crate::{
+    predicate::{Predicate, RowSelection},
+    Error, Result,
+};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
     let value: f64 = text.parse().ok()?;
@@ -45,12 +48,58 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
     macro_rules! native {
         ($ty:ty) => {{
             let array = array.as_primitive::<$ty>();
-            Predicate::scalar(Box::new(move |row| {
-                if array.is_null(row) {
-                    return false;
+            let values = array.values();
+            let has_nulls = array.null_count() > 0;
+            Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+                match (rows, incoming) {
+                    (RowSelection::Range(range), None) => {
+                        let slice = &values[range.clone()];
+                        for (i, &v) in slice.iter().enumerate() {
+                            let v = f64::from(v);
+                            output[i] = v >= lo && v <= hi;
+                        }
+                        if has_nulls {
+                            for (i, row) in range.enumerate() {
+                                if array.is_null(row) {
+                                    output[i] = false;
+                                }
+                            }
+                        }
+                    }
+                    (RowSelection::Range(range), Some(mask)) => {
+                        let slice = &values[range.clone()];
+                        for (i, &v) in slice.iter().enumerate() {
+                            let v = f64::from(v);
+                            output[i] = (v >= lo && v <= hi) & mask[i];
+                        }
+                        if has_nulls {
+                            for (i, row) in range.enumerate() {
+                                if array.is_null(row) {
+                                    output[i] = false;
+                                }
+                            }
+                        }
+                    }
+                    (RowSelection::Indices(indices), None) => {
+                        for (i, &row) in indices.iter().enumerate() {
+                            output[i] = (!has_nulls || array.is_valid(row)) && {
+                                let v = f64::from(values[row]);
+                                v >= lo && v <= hi
+                            };
+                        }
+                    }
+                    (RowSelection::Indices(indices), Some(mask)) => {
+                        for (i, &row) in indices.iter().enumerate() {
+                            output[i] = mask[i]
+                                && (!has_nulls || array.is_valid(row))
+                                && {
+                                    let v = f64::from(values[row]);
+                                    v >= lo && v <= hi
+                                };
+                        }
+                    }
                 }
-                let value = f64::from(array.value(row));
-                value >= lo && value <= hi
+                Ok(())
             }))
         }};
     }

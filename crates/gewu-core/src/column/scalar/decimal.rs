@@ -8,7 +8,7 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::predicate::Predicate;
+use crate::predicate::{Predicate, RowSelection};
 
 /// Signed digits times 10^exponent. Trailing digits are retained because they
 /// specify search precision; leading zeros do not affect that precision.
@@ -259,14 +259,63 @@ where
     let lo = lo.max(Endpoint::Finite(<T::Native as Coefficient>::MIN));
     let hi = hi.min(Endpoint::Finite(<T::Native as Coefficient>::MAX));
     if lo > hi {
-        return Predicate::scalar(Box::new(|_| false));
+        return Predicate::chunk(Box::new(|_, _, output, _| {
+            output.fill(false);
+            Ok(())
+        }));
     }
     let (Endpoint::Finite(lo), Endpoint::Finite(hi)) = (lo, hi) else {
         unreachable!("native domain intersection");
     };
     let (lo, hi) = (T::Native::from_wide(lo), T::Native::from_wide(hi));
-    Predicate::scalar(Box::new(move |row| {
-        array.is_valid(row) && array.value(row) >= lo && array.value(row) <= hi
+    let values = array.values();
+    let has_nulls = array.null_count() > 0;
+
+    Predicate::chunk(Box::new(move |rows, incoming, output, _cancel| {
+        match (rows, incoming) {
+            (RowSelection::Range(range), None) => {
+                let slice = &values[range.clone()];
+                for (i, &v) in slice.iter().enumerate() {
+                    output[i] = v >= lo && v <= hi;
+                }
+                if has_nulls {
+                    for (i, row) in range.enumerate() {
+                        if array.is_null(row) {
+                            output[i] = false;
+                        }
+                    }
+                }
+            }
+            (RowSelection::Range(range), Some(mask)) => {
+                let slice = &values[range.clone()];
+                for (i, &v) in slice.iter().enumerate() {
+                    output[i] = (v >= lo && v <= hi) & mask[i];
+                }
+                if has_nulls {
+                    for (i, row) in range.enumerate() {
+                        if array.is_null(row) {
+                            output[i] = false;
+                        }
+                    }
+                }
+            }
+            (RowSelection::Indices(indices), None) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = (!has_nulls || array.is_valid(row))
+                        && values[row] >= lo
+                        && values[row] <= hi;
+                }
+            }
+            (RowSelection::Indices(indices), Some(mask)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = mask[i]
+                        && (!has_nulls || array.is_valid(row))
+                        && values[row] >= lo
+                        && values[row] <= hi;
+                }
+            }
+        }
+        Ok(())
     }))
 }
 

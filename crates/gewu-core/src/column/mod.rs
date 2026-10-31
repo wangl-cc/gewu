@@ -20,7 +20,10 @@ use arrow::{
 use regex::RegexBuilder;
 
 use crate::{
-    format, predicate::Predicate, value_index::ValueIndex, Error, Filter, LogicalType, Result,
+    format,
+    predicate::{Predicate, RowSelection},
+    value_index::ValueIndex,
+    Error, Filter, LogicalType, Result,
 };
 
 /// A Find query prepared once per captured session. The parsed literal matcher
@@ -197,18 +200,15 @@ impl<'a> Column<'a> {
         if !include_nulls || array.null_count() == 0 {
             return Ok(predicate);
         }
-        Ok(match predicate {
-            Predicate::Scalar(is_match) => {
-                Predicate::scalar(Box::new(move |row| array.is_null(row) || is_match(row)))
-            }
-            predicate => Predicate::batch(Box::new(move |rows, hits, cancel| {
-                predicate.evaluate_selected(rows.clone(), hits, cancel)?;
+        Ok(Predicate::chunk(Box::new(
+            move |rows, incoming, output, cancel| {
+                predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
                 for (index, row) in rows.iter().enumerate() {
-                    hits[index] |= array.is_null(row);
+                    output[index] |= array.is_null(row);
                 }
                 Ok(())
-            })),
-        })
+            },
+        )))
     }
 
     fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
@@ -221,9 +221,33 @@ impl<'a> Column<'a> {
         if let Filter::IsNull { negate, .. } = filter {
             let negate = *negate;
             let array = self.array;
-            return Ok(Predicate::scalar(Box::new(move |row| {
-                array.is_null(row) != negate
-            })));
+            return Ok(Predicate::chunk(Box::new(
+                move |rows, incoming, output, _cancel| {
+                    match (rows, incoming) {
+                        (RowSelection::Range(range), None) => {
+                            for (i, row) in range.enumerate() {
+                                output[i] = array.is_null(row) != negate;
+                            }
+                        }
+                        (RowSelection::Range(range), Some(mask)) => {
+                            for (i, row) in range.enumerate() {
+                                output[i] = (array.is_null(row) != negate) & mask[i];
+                            }
+                        }
+                        (RowSelection::Indices(indices), None) => {
+                            for (i, &row) in indices.iter().enumerate() {
+                                output[i] = array.is_null(row) != negate;
+                            }
+                        }
+                        (RowSelection::Indices(indices), Some(mask)) => {
+                            for (i, &row) in indices.iter().enumerate() {
+                                output[i] = (array.is_null(row) != negate) & mask[i];
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            )));
         }
         if matches!(self.array.data_type(), DataType::Dictionary(..)) {
             return nested::dictionary(self.array, |values| {

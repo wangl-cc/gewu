@@ -8,7 +8,11 @@ use arrow::{
 };
 
 use super::SearchQuery;
-use crate::{format, predicate::Predicate, Error, Result};
+use crate::{
+    format,
+    predicate::{Predicate, RowSelection},
+    Error, Result,
+};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.
@@ -50,10 +54,49 @@ pub(super) fn selected_values<'a>(
     let read = accessor(array)?;
     let null_selected = values.iter().any(Option::is_none);
     let selected: HashSet<String> = values.iter().filter_map(Clone::clone).collect();
-    Ok(Predicate::scalar(Box::new(move |row| {
-        let included = read(row).map_or(null_selected, |value| selected.contains(value));
-        included != exclude
-    })))
+    Ok(Predicate::chunk(Box::new(
+        move |rows, incoming, output, _cancel| {
+            match (rows, incoming) {
+                (RowSelection::Range(range), None) => {
+                    for (i, row) in range.enumerate() {
+                        let included =
+                            read(row).map_or(null_selected, |value| selected.contains(value));
+                        output[i] = included != exclude;
+                    }
+                }
+                (RowSelection::Range(range), Some(mask)) => {
+                    for (i, row) in range.enumerate() {
+                        if mask[i] {
+                            let included =
+                                read(row).map_or(null_selected, |value| selected.contains(value));
+                            output[i] = included != exclude;
+                        } else {
+                            output[i] = false;
+                        }
+                    }
+                }
+                (RowSelection::Indices(indices), None) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        let included =
+                            read(row).map_or(null_selected, |value| selected.contains(value));
+                        output[i] = included != exclude;
+                    }
+                }
+                (RowSelection::Indices(indices), Some(mask)) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        if mask[i] {
+                            let included =
+                                read(row).map_or(null_selected, |value| selected.contains(value));
+                            output[i] = included != exclude;
+                        } else {
+                            output[i] = false;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        },
+    )))
 }
 
 pub(super) fn contains<'a>(
