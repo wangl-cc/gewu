@@ -26,8 +26,10 @@ jobs:
     name: Lint (markdownlint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: DavidAnson/markdownlint-cli2-action@v25
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Lint markdown files
+        uses: DavidAnson/markdownlint-cli2-action@v25
         with:
           config: .markdownlint.yaml
           globs: |

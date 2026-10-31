@@ -47,33 +47,44 @@ jobs:
     name: Lint (format)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
-      - run: cargo +nightly fmt --all --check
+      - name: Check code formatting
+        run: cargo +nightly fmt --all --check
 
   clippy:
     name: Lint (clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Configure Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Lint Rust sources
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
   deny:
     name: Lint (cargo deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - run: cargo deny --locked check
+      - name: Check dependencies
+        run: cargo deny --locked check
 
   test:
     name: Test (${{ matrix.runner }})
@@ -83,10 +94,14 @@ jobs:
       matrix:
         runner: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked --workspace
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Configure Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --locked --workspace
 
   coverage:
     name: Coverage
@@ -96,15 +111,20 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - run: cargo llvm-cov --locked -p gewu-core --all-features --codecov --output-path codecov.json
-      - uses: codecov/codecov-action@v7
+      - name: Generate code coverage report
+        run: cargo llvm-cov --locked -p gewu-core --all-features --codecov --output-path codecov.json
+      - name: Upload coverage report to Codecov
+        uses: codecov/codecov-action@v7
         with:
           use_oidc: true
           files: codecov.json

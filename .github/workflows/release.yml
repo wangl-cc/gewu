@@ -21,7 +21,8 @@ jobs:
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Check update signing configuration
         env:
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
@@ -31,7 +32,8 @@ jobs:
             echo '::error::Configure SPARKLE_PUBLIC_KEY (variable) and SPARKLE_PRIVATE_KEY (secret) before releasing.'
             exit 1
           fi
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Verify tag matches Cargo version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -78,13 +80,16 @@ jobs:
             runner: macos-26-intel
             rust-target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
-      - uses: Swatinem/rust-cache@v2
+      - name: Configure Rust cache
+        uses: Swatinem/rust-cache@v2
       - name: Generate Xcode project
         run: xcodegen generate --use-cache
       - name: Archive app (Release-LTO)
@@ -123,7 +128,8 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" |
             build/xcode/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update \
               --ed-key-file - --verify "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip" "$signature"
-      - uses: actions/upload-artifact@v7
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.arch }}
           path: |
@@ -143,7 +149,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/download-artifact@v8
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true

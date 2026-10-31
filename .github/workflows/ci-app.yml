@@ -41,8 +41,10 @@ jobs:
     name: Lint (swift-format)
     runs-on: xcode-27
     steps:
-      - uses: actions/checkout@v7
-      - run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Lint Swift sources
+        run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
 
   test:
     name: Build and test (arm64)
@@ -51,13 +53,16 @@ jobs:
       CARGO_BUILD_TARGET: aarch64-apple-darwin
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - name: Configure Rust cache
+        uses: Swatinem/rust-cache@v2
       - name: Generate Xcode project
         run: xcodegen generate --use-cache
       - name: Build and test (Debug)
@@ -77,7 +82,8 @@ jobs:
           path: build/Tests.xcresult
           if-no-files-found: ignore
           retention-days: 14
-      - uses: actions/upload-artifact@v7
+      - name: Upload packaged app
+        uses: actions/upload-artifact@v7
         with:
           name: Gewu-macos-arm64
           path: build/Gewu-macos-arm64.zip
