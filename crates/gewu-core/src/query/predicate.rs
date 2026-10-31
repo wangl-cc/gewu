@@ -1,7 +1,7 @@
 //! Prepared, column-bound predicates for high-throughput query execution.
 //!
-//! Predicates operate on 64K chunks (`CHUNK = 64 * 1024`), ensuring working data
-//! fits entirely inside the CPU's L1 cache. Evaluators receive an optional incoming
+//! Predicates operate on 8K chunks (`CHUNK = 8 * 1024`), ensuring working data and masks
+//! fit entirely inside the CPU's L1 data cache (<= 80 KB). Evaluators receive an optional incoming
 //! mask (`incoming: Option<&[bool]>`), allowing:
 //! - **Branchless SIMD**: Primitive comparisons compute unconditionally and bitwise-AND with the mask.
 //! - **Branching Short-circuit**: Expensive string/complex operations skip rejected rows.
@@ -12,7 +12,7 @@ use std::ops::Range;
 use super::engine::CancelToken;
 use crate::Result;
 
-pub(crate) const CHUNK: usize = 64 * 1024;
+pub(crate) const CHUNK: usize = 8 * 1024;
 
 /// Chunk-level vectorized evaluator: populates the output boolean slice for a selection of rows,
 /// optionally taking an incoming mask to support short-circuiting or branchless bitwise AND.
