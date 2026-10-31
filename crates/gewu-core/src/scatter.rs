@@ -8,7 +8,7 @@ use arrow::array::ArrayRef;
 
 use crate::{
     analysis::{numeric::Numeric, AnalysisContext},
-    format, AxisScale, DataKind, Error, Result,
+    format, AxisScale, Error, LogicalType, Result,
 };
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;
@@ -95,7 +95,9 @@ impl ScatterAnalysis {
             (y_scale, Some(&self.y.1)),
         ] {
             if scale == AxisScale::Log10
-                && !array.is_some_and(|array| DataKind::of(array.data_type()).supports_log())
+                && !array.is_some_and(|array| {
+                    LogicalType::from_arrow(array.data_type()).supports_logarithmic()
+                })
             {
                 return Err(Error::InvalidArgument(
                     "logarithmic scatter axes require a numeric column".into(),

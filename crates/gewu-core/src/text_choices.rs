@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use arrow::array::{Array, ArrayRef};
 use regex::RegexBuilder;
 
-use crate::{column::text, scope::Selection, DataKind, Error, Result};
+use crate::{column::text, scope::Selection, Error, LogicalType, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoice {
@@ -47,7 +47,7 @@ impl TextChoices {
     /// Facet row IDs must be unique and ascending, as returned by Document's
     /// source-order filter scan. The selection and Arrow buffers are shared.
     pub(crate) fn new(array: ArrayRef, rows: Selection) -> Result<Self> {
-        if DataKind::of(array.data_type()) != DataKind::Text {
+        if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
             return Err(Error::InvalidArgument(format!(
                 "{} is not a string column",
                 array.data_type()

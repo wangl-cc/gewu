@@ -177,11 +177,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
             let header = ColumnHeaderCell(textCell: column.name)
             header.textSize = textSize
-            header.subtitle = shortTypeName(column.typeName)
+            header.subtitle = column.displayType
             header.showsFunnel = true
             c.headerCell = header
             c.headerToolTip =
-                "\(column.name): \(column.typeName)\nClick to sort; use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
+                "\(column.name): \(column.technicalType)\nClick to sort; use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
             c.width = fittedWidth(column: i, texts: [], maxWidth: 320)
             c.minWidth = 50
             c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
@@ -208,7 +208,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         var result =
             max(
                 width(c.name, font: .systemFont(ofSize: textSize, weight: .semibold)),
-                width(shortTypeName(c.typeName), font: .systemFont(ofSize: textSize - 2))) + 50
+                width(c.displayType, font: .systemFont(ofSize: textSize - 2))) + 50
         for text in texts.prefix(200) {
             result = max(
                 result, width(String((text ?? "null").prefix(200)), font: fonts.font(for: model.kinds[column])) + 20)

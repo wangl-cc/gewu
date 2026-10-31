@@ -171,18 +171,27 @@ enum ScatterDates {
         return (start == end ? "\(start)" : "\(start)–\(end)") + " · UTC"
     }
 
-    static func make(points: [ScatterPoint], x: Bool, kind: DataKind?) -> [Date]? {
-        guard kind == .date || kind == .timestamp else { return nil }
+    static func make(points: [ScatterPoint], x: Bool, kind: LogicalType?) -> [Date]? {
+        guard let kind else { return nil }
+        let isDate: Bool
+        switch kind {
+        case .date:
+            isDate = true
+        case .timestamp:
+            isDate = false
+        default:
+            return nil
+        }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let whole = ISO8601DateFormatter()
-        whole.formatOptions = kind == .date ? [.withFullDate] : [.withInternetDateTime]
+        whole.formatOptions = isDate ? [.withFullDate] : [.withInternetDateTime]
         whole.timeZone = TimeZone(secondsFromGMT: 0)
         var dates: [Date] = []
         dates.reserveCapacity(points.count)
         for point in points {
             var label = x ? point.xLabel : point.yLabel
-            if kind == .timestamp {
+            if !isDate {
                 let offset = label.suffix(6).first
                 if !label.hasSuffix("Z"), offset != "+", offset != "-" { label += "Z" }
             }

@@ -9,7 +9,7 @@ use num_traits::ToPrimitive;
 
 use super::{Histogram, Output, RangeBounds};
 use crate::{
-    analysis::AnalysisContext, scope::Selection, AxisScale, Bound, DataKind, Error, Result,
+    analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, LogicalType, Result,
 };
 
 pub(super) fn build<H: Output>(
@@ -22,7 +22,7 @@ pub(super) fn build<H: Output>(
     if bins == 0 {
         return Err(Error::InvalidArgument("bins must be at least 1".into()));
     }
-    if !DataKind::of(array.data_type()).supports_log() {
+    if !LogicalType::from_arrow(array.data_type()).supports_logarithmic() {
         return Err(Error::InvalidArgument(format!(
             "{} does not support logarithmic histograms",
             array.data_type()

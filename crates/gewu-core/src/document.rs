@@ -16,8 +16,8 @@ use crate::{
     engine::ViewEngine,
     file, format,
     value_index::{ValueIndex, INDEX_LIMIT},
-    ColumnCapabilities, ColumnInfo, DataKind, Error, FileInfo, FileMetadata, FileType, OpenOptions,
-    Result,
+    ColumnCapabilities, ColumnInfo, Error, FileInfo, FileMetadata, FileType, LogicalType,
+    OpenOptions, Result,
 };
 
 mod analysis;
@@ -93,11 +93,15 @@ impl Document {
             .schema
             .fields()
             .iter()
-            .map(|f| ColumnInfo {
-                name: f.name().clone(),
-                type_name: f.data_type().to_string(),
-                kind: DataKind::of(f.data_type()),
-                nullable: f.is_nullable(),
+            .map(|f| {
+                let logical_type = LogicalType::from_arrow(f.data_type());
+                ColumnInfo {
+                    name: f.name().clone(),
+                    display_type: logical_type.display_name(),
+                    technical_type: f.data_type().to_string(),
+                    logical_type,
+                    nullable: f.is_nullable(),
+                }
             })
             .collect();
 

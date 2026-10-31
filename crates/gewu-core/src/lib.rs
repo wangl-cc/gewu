@@ -27,6 +27,7 @@ pub use analysis::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
     LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
 };
+pub use arrow::datatypes::TimeUnit;
 pub use column::{
     bound::Bound,
     histogram::{Histogram, RangeBounds, RangeHistogram},
@@ -40,7 +41,7 @@ pub use file::{
     ParquetCompression,
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
-pub use kind::DataKind;
+pub use kind::LogicalType;
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};

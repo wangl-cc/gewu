@@ -12,7 +12,8 @@ use arrow::{
 };
 
 use crate::{
-    column::histogram, format, scope::Selection, DataKind, DistinctValue, Error, Histogram, Result,
+    column::histogram, format, scope::Selection, DistinctValue, Error, Histogram, LogicalType,
+    Result,
 };
 
 mod lengths;
@@ -98,10 +99,12 @@ pub struct LengthSummary {
     pub histogram: Histogram,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisField {
     pub name: String,
-    pub type_name: String,
+    pub logical_type: LogicalType,
+    pub display_type: String,
+    pub technical_type: String,
     pub nullable: bool,
 }
 
@@ -213,7 +216,7 @@ impl ColumnAnalysis {
     pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
         if scale == crate::AxisScale::Log10
             && (self.section != AnalysisSection::Distribution
-                || !DataKind::of(self.array.data_type()).supports_log())
+                || !LogicalType::from_arrow(self.array.data_type()).supports_logarithmic())
         {
             return Err(Error::InvalidArgument(
                 "logarithmic binning requires a numeric distribution".into(),
@@ -310,16 +313,18 @@ impl ColumnAnalysis {
 pub(crate) fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
     use AnalysisSection::*;
     let mut sections = vec![Overview];
-    let kind = DataKind::of(data_type);
-    if kind.is_ordered() {
+    let logical = LogicalType::from_arrow(data_type);
+    if logical.is_ordered() {
         sections.extend([Statistics, Distribution]);
     }
     let value_type = match data_type {
         DataType::Dictionary(_, value) => value.as_ref(),
         _ => data_type,
     };
-    let value_kind = DataKind::of(value_type);
-    if value_kind.is_ordered() || matches!(value_kind, DataKind::Text | DataKind::Boolean) {
+    let value_logical = LogicalType::from_arrow(value_type);
+    if value_logical.is_ordered()
+        || matches!(value_logical, LogicalType::Text | LogicalType::Boolean)
+    {
         sections.push(Values);
     }
     if lengths::unit(data_type).is_some() {
@@ -342,10 +347,15 @@ pub(crate) fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
 }
 
 fn structure(data_type: &DataType) -> Vec<AnalysisField> {
-    let field = |f: &arrow::datatypes::Field| AnalysisField {
-        name: f.name().clone(),
-        type_name: f.data_type().to_string(),
-        nullable: f.is_nullable(),
+    let field = |f: &arrow::datatypes::Field| {
+        let logical = LogicalType::from_arrow(f.data_type());
+        AnalysisField {
+            name: f.name().clone(),
+            display_type: logical.display_name(),
+            technical_type: f.data_type().to_string(),
+            logical_type: logical,
+            nullable: f.is_nullable(),
+        }
     };
     match data_type {
         DataType::Struct(fields) => fields.iter().map(|f| field(f)).collect(),
@@ -355,18 +365,26 @@ fn structure(data_type: &DataType) -> Vec<AnalysisField> {
         | DataType::LargeListView(f)
         | DataType::FixedSizeList(f, _)
         | DataType::Map(f, _) => vec![field(f)],
-        DataType::Dictionary(key, value) => vec![
-            AnalysisField {
-                name: "Key".into(),
-                type_name: key.to_string(),
-                nullable: false,
-            },
-            AnalysisField {
-                name: "Value".into(),
-                type_name: value.to_string(),
-                nullable: true,
-            },
-        ],
+        DataType::Dictionary(key, value) => {
+            let key_logical = LogicalType::from_arrow(key);
+            let value_logical = LogicalType::from_arrow(value);
+            vec![
+                AnalysisField {
+                    name: "Key".into(),
+                    display_type: key_logical.display_name(),
+                    technical_type: key.to_string(),
+                    logical_type: key_logical,
+                    nullable: false,
+                },
+                AnalysisField {
+                    name: "Value".into(),
+                    display_type: value_logical.display_name(),
+                    technical_type: value.to_string(),
+                    logical_type: value_logical,
+                    nullable: true,
+                },
+            ]
+        }
         _ => Vec::new(),
     }
 }
@@ -491,9 +509,18 @@ mod tests {
             };
             assert_eq!(fields.len(), 1);
             assert_eq!(
-                (&*fields[0].name, &*fields[0].type_name, fields[0].nullable),
-                ("child", "Int32", true)
+                (
+                    &*fields[0].name,
+                    &*fields[0].display_type,
+                    fields[0].nullable
+                ),
+                ("child", "int32", true)
             );
+            assert_eq!(fields[0].technical_type, "Int32");
+            assert_eq!(fields[0].logical_type, LogicalType::Integer {
+                bits: 32,
+                signed: true
+            });
         }
     }
 }

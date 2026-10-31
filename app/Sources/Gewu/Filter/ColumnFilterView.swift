@@ -18,7 +18,7 @@ struct ColumnFilterView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(info.name).font(.headline)
-                Text(shortTypeName(info.typeName)).font(.caption).foregroundStyle(.secondary)
+                Text(info.displayType).font(.caption).foregroundStyle(.secondary)
             }
             if let spec {
                 editor(spec)

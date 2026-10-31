@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{analysis::AnalysisContext, ColumnSummary, DataKind, Result};
+use crate::{analysis::AnalysisContext, ColumnSummary, LogicalType, Result};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -58,9 +58,9 @@ mod summary;
 
 impl<'a> Numeric<'a> {
     pub(crate) fn new(array: &'a ArrayRef) -> Option<Self> {
-        // `DataKind` decides; the dispatch table above must cover every
+        // `LogicalType` decides; the dispatch table above must cover every
         // ordered kind (checked by a test in kind.rs).
-        DataKind::of(array.data_type())
+        LogicalType::from_arrow(array.data_type())
             .is_ordered()
             .then_some(Self(array))
     }

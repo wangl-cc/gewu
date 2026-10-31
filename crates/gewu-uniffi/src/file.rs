@@ -11,41 +11,121 @@ pub fn xlsx_sheet_names(path: String) -> Result<Vec<String>, crate::GewuError> {
     Ok(core::xlsx_sheet_names(path)?)
 }
 
-/// How gewu treats a column's values; mirrors `gewu_core::DataKind`.
+/// Time unit for timestamps and durations; mirrors `arrow::datatypes::TimeUnit`.
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
-pub enum DataKind {
+pub enum TimeUnit {
+    Second,
+    Millisecond,
+    Microsecond,
+    Nanosecond,
+}
+
+impl From<core::TimeUnit> for TimeUnit {
+    fn from(u: core::TimeUnit) -> Self {
+        match u {
+            core::TimeUnit::Second => Self::Second,
+            core::TimeUnit::Millisecond => Self::Millisecond,
+            core::TimeUnit::Microsecond => Self::Microsecond,
+            core::TimeUnit::Nanosecond => Self::Nanosecond,
+        }
+    }
+}
+
+impl From<TimeUnit> for core::TimeUnit {
+    fn from(u: TimeUnit) -> Self {
+        match u {
+            TimeUnit::Second => Self::Second,
+            TimeUnit::Millisecond => Self::Millisecond,
+            TimeUnit::Microsecond => Self::Microsecond,
+            TimeUnit::Nanosecond => Self::Nanosecond,
+        }
+    }
+}
+
+/// A logical data type with semantic parameters; mirrors `gewu_core::LogicalType`.
+#[derive(uniffi::Enum, Clone, PartialEq, Eq)]
+pub enum LogicalType {
     Text,
-    Integer,
-    Float,
-    Decimal,
+    Integer {
+        bits: u8,
+        signed: bool,
+    },
+    Float {
+        bits: u8,
+    },
+    Decimal {
+        precision: u8,
+        scale: i8,
+    },
     Boolean,
     Date,
     Time,
-    Timestamp,
-    Duration,
+    Timestamp {
+        unit: TimeUnit,
+        timezone: Option<String>,
+    },
+    Duration {
+        unit: TimeUnit,
+    },
     Interval,
     Binary,
     List,
-    Other,
+    Struct,
+    Other {
+        raw_name: String,
+    },
 }
 
-impl From<core::DataKind> for DataKind {
-    fn from(k: core::DataKind) -> Self {
-        use core::DataKind as K;
-        match k {
-            K::Text => Self::Text,
-            K::Integer => Self::Integer,
-            K::Float => Self::Float,
-            K::Decimal => Self::Decimal,
-            K::Boolean => Self::Boolean,
-            K::Date => Self::Date,
-            K::Time => Self::Time,
-            K::Timestamp => Self::Timestamp,
-            K::Duration => Self::Duration,
-            K::Interval => Self::Interval,
-            K::Binary => Self::Binary,
-            K::List => Self::List,
-            K::Other => Self::Other,
+impl From<core::LogicalType> for LogicalType {
+    fn from(t: core::LogicalType) -> Self {
+        match t {
+            core::LogicalType::Text => Self::Text,
+            core::LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
+            core::LogicalType::Float { bits } => Self::Float { bits },
+            core::LogicalType::Decimal { precision, scale } => Self::Decimal { precision, scale },
+            core::LogicalType::Boolean => Self::Boolean,
+            core::LogicalType::Date => Self::Date,
+            core::LogicalType::Time => Self::Time,
+            core::LogicalType::Timestamp { unit, timezone } => Self::Timestamp {
+                unit: unit.into(),
+                timezone,
+            },
+            core::LogicalType::Duration { unit } => Self::Duration { unit: unit.into() },
+            core::LogicalType::Interval => Self::Interval,
+            core::LogicalType::Binary => Self::Binary,
+            core::LogicalType::List => Self::List,
+            core::LogicalType::Struct => Self::Struct,
+            core::LogicalType::Other { raw_name } => Self::Other { raw_name },
+        }
+    }
+}
+
+impl From<&core::LogicalType> for LogicalType {
+    fn from(t: &core::LogicalType) -> Self {
+        t.clone().into()
+    }
+}
+
+impl From<LogicalType> for core::LogicalType {
+    fn from(t: LogicalType) -> Self {
+        match t {
+            LogicalType::Text => Self::Text,
+            LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
+            LogicalType::Float { bits } => Self::Float { bits },
+            LogicalType::Decimal { precision, scale } => Self::Decimal { precision, scale },
+            LogicalType::Boolean => Self::Boolean,
+            LogicalType::Date => Self::Date,
+            LogicalType::Time => Self::Time,
+            LogicalType::Timestamp { unit, timezone } => Self::Timestamp {
+                unit: unit.into(),
+                timezone,
+            },
+            LogicalType::Duration { unit } => Self::Duration { unit: unit.into() },
+            LogicalType::Interval => Self::Interval,
+            LogicalType::Binary => Self::Binary,
+            LogicalType::List => Self::List,
+            LogicalType::Struct => Self::Struct,
+            LogicalType::Other { raw_name } => Self::Other { raw_name },
         }
     }
 }
@@ -76,8 +156,9 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
 #[derive(uniffi::Record)]
 pub struct ColumnInfo {
     pub name: String,
-    pub type_name: String,
-    pub kind: DataKind,
+    pub logical_type: LogicalType,
+    pub display_type: String,
+    pub technical_type: String,
     pub capabilities: ColumnCapabilities,
     pub nullable: bool,
 }
@@ -139,8 +220,9 @@ impl From<&core::Document> for FileInfo {
                         .expect("column came from this document's schema");
                     ColumnInfo {
                         name: c.name.clone(),
-                        type_name: c.type_name.clone(),
-                        kind: c.kind.into(),
+                        logical_type: c.logical_type.clone().into(),
+                        display_type: c.display_type.clone(),
+                        technical_type: c.technical_type.clone(),
                         capabilities: capabilities.into(),
                         nullable: c.nullable,
                     }
