@@ -86,13 +86,13 @@ struct WorkbookLifecycleTests {
         await settled(model)
         let original = try #require(model.document)
         #expect(model.selectedSheet?.rawValue == "First")
-        original.searchText = "keep while loading"
+        original.find.query = "keep while loading"
         original.chartY = 0
 
         model.selectSheet(.init(rawValue: "Bad"))
         await settled(model)
         #expect(model.document === original, "A failed switch must preserve the loaded document")
-        #expect(original.searchText == "keep while loading")
+        #expect(original.find.query == "keep while loading")
 
         model.selectSheet(.init(rawValue: "Slow"))
         await probe.waitForSlowStart()
@@ -105,7 +105,7 @@ struct WorkbookLifecycleTests {
         #expect(model.selectedSheet?.rawValue == "Last")
         #expect(model.document !== original)
         #expect(model.document?.info.columns.first?.name == "column_3")
-        #expect(model.document?.searchText == "" && model.document?.chartY == nil)
+        #expect(model.document?.find.query == "" && model.document?.chartY == nil)
         #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
         #expect(model.document?.current.version == 0 && original.current.version == 0)
 

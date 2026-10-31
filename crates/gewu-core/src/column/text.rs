@@ -6,8 +6,8 @@ use arrow::{
     array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
     datatypes::{ArrowNativeType, DataType},
 };
-use regex::RegexBuilder;
 
+use super::SearchQuery;
 use crate::{format, predicate::Predicate, Error, Result};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
@@ -58,7 +58,7 @@ pub(super) fn selected_values<'a>(
 
 pub(super) fn contains<'a>(
     array: &'a ArrayRef,
-    text: &str,
+    query: &SearchQuery,
     case_sensitive: bool,
 ) -> Result<Predicate<'a>> {
     if matches!(
@@ -66,33 +66,29 @@ pub(super) fn contains<'a>(
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         if case_sensitive {
-            let text = text.to_owned();
+            let text = query.text().to_owned();
             return Ok(strings(array, move |value| value.contains(&text)));
         }
-        // Arrow's public ilike kernel compiles a new regex on every call.
-        // Prepare the same Unicode literal matching once, without scanning
-        // the column for ASCII or building a mask for every batch.
-        let matcher = RegexBuilder::new(&regex::escape(text))
-            .case_insensitive(true)
-            .build()
-            .map_err(|e| Error::InvalidArgument(format!("cannot prepare text search: {e}")))?;
+        // The session compiles one matcher and every column reuses it, so pages
+        // and highlights never rebuild the same literal pattern.
+        let matcher = query.matcher()?;
         return Ok(strings(array, move |value| matcher.is_match(value)));
     }
 
     // A formatted fallback retains existing Contains semantics for non-ordered
     // values. One buffer per batch, reused across cells, never a column of strings.
-    let text = text.to_owned();
+    let text = query.text().to_owned();
     let lower = (!case_sensitive && !text.is_ascii()).then(|| text.to_lowercase());
     Ok(Predicate::batch(Box::new(move |rows, hits, _| {
         let f = format::formatter(array.as_ref())?;
         let mut buf = String::new();
-        for (r, hit) in rows.zip(hits) {
-            if array.is_null(r) {
+        for (index, row) in rows.iter().enumerate() {
+            if array.is_null(row) {
                 continue;
             }
             buf.clear();
-            write!(buf, "{}", f.value(r)).expect("writing to String cannot fail");
-            *hit = if case_sensitive {
+            write!(buf, "{}", f.value(row)).expect("writing to String cannot fail");
+            hits[index] = if case_sensitive {
                 buf.contains(&text)
             } else if let Some(lower) = &lower {
                 buf.to_lowercase().contains(lower)
@@ -219,7 +215,7 @@ mod tests {
                 let pattern: ArrayRef = Arc::new(StringArray::from(vec![format!("%{escaped}%")]));
                 let pattern = cast(&pattern, &data_type).unwrap();
                 let expected = ilike(&array, &Scalar::new(pattern)).unwrap();
-                let test = contains(&array, query, false).unwrap();
+                let test = contains(&array, &SearchQuery::new(query), false).unwrap();
                 let mut actual = vec![false; array.len()];
                 test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
                     .unwrap();

@@ -75,7 +75,6 @@ fn busy_state(doc: &Document) -> ViewState {
             min: Some(doc.parse_bound(2, "2.0").unwrap()),
             max: None,
         }],
-        search: None,
         ..Default::default()
     }
 }
@@ -108,11 +107,14 @@ fn distinct_ignores_only_its_own_column() {
 }
 
 #[test]
-fn distinct_and_histogram_apply_the_search() {
+fn distinct_and_histogram_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
     let state = ViewState {
-        search: Some("cat".into()),
+        filters: vec![Filter::Equals {
+            column: 1,
+            value: "cat".into(),
+        }],
         ..Default::default()
     };
     let names: Vec<String> = labels_of(&doc, 0, Some(&state))
@@ -219,12 +221,14 @@ fn cancelled_apply_never_replaces_the_view() {
     let before = doc.current_view();
 
     let state = ViewState {
-        search: Some("12345".into()),
+        filters: vec![Filter::Equals {
+            column: 0,
+            value: "12345".into(),
+        }],
         sort: vec![gewu_core::SortKey {
             column: 0,
             descending: true,
         }],
-        ..Default::default()
     };
     let worker = {
         let doc = doc.clone();

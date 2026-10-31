@@ -169,7 +169,6 @@ fn filtered(doc: &Document) -> u64 {
             min: Some(doc.parse_bound(0, "2").unwrap()),
             max: None,
         }],
-        search: None,
     })
     .unwrap()
     .version
@@ -295,7 +294,10 @@ fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let version = doc
         .apply_view(&ViewState {
-            search: Some("absent-value".into()),
+            filters: vec![Filter::Equals {
+                column: 0,
+                value: "-1".into(),
+            }],
             ..Default::default()
         })
         .unwrap()

@@ -4,7 +4,7 @@ Gewu reads and exports Parquet, CSV, TSV and XLSX. Extensions are recognized cas
 
 The whole file is decoded into memory when opened. Compressed file size does not indicate the memory needed to explore it. Format support does not guarantee lossless preservation of types: see [data types](data-types.md) for the behavior of a column after loading.
 
-In the app, **File → Import Options…** changes header interpretation for CSV, TSV and XLSX, including when the initial open fails. Reopening resets search, filters and sorting. For XLSX, the header is the first occupied row, and the chosen policy also applies when switching worksheets.
+In the app, **File → Import Options…** changes header interpretation for CSV, TSV and XLSX, including when the initial open fails. Reopening resets Find, filters and sorting. For XLSX, the header is the first occupied row, and the chosen policy also applies when switching worksheets.
 
 **File → Export…** offers the supported formats in the system format menu and compression options for Parquet. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression.
 
@@ -26,7 +26,7 @@ Dates such as `2026-10-30` and ISO-style timestamps such as `2026-10-30T14:30:00
 
 ## XLSX
 
-The default is the first worksheet with its first row used as column names. For workbooks with multiple sheets, select a worksheet in the strip below the table. Switching loads only the requested sheet and resets its search, filters, sorting and analysis selections. If loading fails, the current sheet stays open; the sheet list remains available even if the first sheet cannot be read. Reading uses the occupied worksheet range, trimming blank edges including trailing all-null rows. Formula results come from cached values; Core does not recalculate formulas and rejects cells containing Excel errors.
+The default is the first worksheet with its first row used as column names. For workbooks with multiple sheets, select a worksheet in the strip below the table. Switching loads only the requested sheet and resets its Find, filters, sorting and analysis selections. If loading fails, the current sheet stays open; the sheet list remains available even if the first sheet cannot be read. Reading uses the occupied worksheet range, trimming blank edges including trailing all-null rows. Formula results come from cached values; Core does not recalculate formulas and rejects cells containing Excel errors.
 
 Export writes one worksheet with a header. Boolean values and ordinary finite numbers use native cells. Integers exceeding 15 digits, decimals, dates/times and non-finite numbers use literal text to preserve displayed values. Nested columns are rejected. This is table export, not workbook, styling or formula round-trip editing.
 

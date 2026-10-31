@@ -10,10 +10,10 @@ use arrow::{
     compute::cast,
     datatypes::{DataType, TimeUnit},
 };
-use gewu_core::{Document, ViewState};
+use gewu_core::Document;
 use parquet::arrow::ArrowWriter;
 
-/// Search for each query and check the rows it keeps and highlights.
+/// Find each query and check matching source/display rows in the initial view.
 fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
@@ -23,19 +23,14 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let doc = Document::open(file.path()).unwrap();
 
     for (query, expected) in queries {
-        let state = ViewState {
-            search: Some((*query).into()),
-            ..Default::default()
-        };
-        let view = doc.apply_view(&state).unwrap();
-        let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
+        let find = doc.prepare_find(0, query, &[0]).unwrap();
+        let hits = find.next(None, 256).unwrap();
         assert_eq!(
-            &rows.source_rows,
-            expected,
-            "query {query:?}, type {:?}",
+            hits.iter().map(|hit| hit.display_row).collect::<Vec<_>>(),
+            *expected,
+            "Find query {query:?}, type {:?}",
             batch.schema().field(0).data_type()
         );
-        assert_eq!(rows.matched, vec![true; expected.len()]);
     }
 }
 

@@ -20,7 +20,7 @@ Views and state are grouped by feature under `app/Sources/Gewu`:
 | `Export/` | Save panel, export jobs, progress and format selection. |
 | `Charts/` | Histograms, scatter plots and chart labels. |
 
-[WorkbookModel](Sources/Gewu/Document/WorkbookModel.swift) owns the window and sheet-loading lifecycle. Each successfully opened table has a [DocumentModel](Sources/Gewu/Document/DocumentModel.swift) for its query, selection and analysis state. For table reads and copying, start with [RowCache](Sources/Gewu/Table/RowCache.swift) and [CopyModel](Sources/Gewu/Table/CopyModel.swift); for analysis requests, start with [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift). Consult the [FFI contract](../crates/gewu-uniffi/README.md) when changing snapshot identity, cancellation or data transfer.
+[WorkbookModel](Sources/Gewu/Document/WorkbookModel.swift) owns the window and sheet-loading lifecycle. Each successfully opened table has a [DocumentModel](Sources/Gewu/Document/DocumentModel.swift) for its query, selection and analysis state, with a [FindModel](Sources/Gewu/Document/FindModel.swift) for bounded cell navigation and visible highlights. For table reads and copying, start with [RowCache](Sources/Gewu/Table/RowCache.swift) and [CopyModel](Sources/Gewu/Table/CopyModel.swift); for analysis requests, start with [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift). Consult the [FFI contract](../crates/gewu-uniffi/README.md) when changing snapshot identity, cancellation or data transfer.
 
 ## App icon
 

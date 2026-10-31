@@ -131,7 +131,7 @@ fn contains_null_policy_preserves_case_matching_and_only_nulls() {
 }
 
 #[test]
-fn included_nulls_still_obey_other_columns_and_global_search() {
+fn included_nulls_still_obey_other_column_filters() {
     let doc = document();
     for (filter, expected) in [
         (range(&doc, true), vec![0, 1]),
@@ -139,11 +139,19 @@ fn included_nulls_still_obey_other_columns_and_global_search() {
     ] {
         assert_eq!(
             rows(&doc, ViewState {
-                filters: vec![filter, Filter::Equals {
-                    column: 2,
-                    value: "A".into(),
-                }],
-                search: Some("needle".into()),
+                filters: vec![
+                    filter,
+                    Filter::Equals {
+                        column: 2,
+                        value: "A".into(),
+                    },
+                    Filter::Contains {
+                        include_nulls: false,
+                        column: 3,
+                        text: "needle".into(),
+                        case_sensitive: false,
+                    }
+                ],
                 ..Default::default()
             }),
             expected
@@ -155,11 +163,19 @@ fn included_nulls_still_obey_other_columns_and_global_search() {
 fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
     let doc = document();
     let state = ViewState {
-        filters: vec![range(&doc, true), Filter::Equals {
-            column: 2,
-            value: "A".into(),
-        }],
-        search: Some("needle".into()),
+        filters: vec![
+            range(&doc, true),
+            Filter::Equals {
+                column: 2,
+                value: "A".into(),
+            },
+            Filter::Contains {
+                include_nulls: false,
+                column: 3,
+                text: "needle".into(),
+                case_sensitive: false,
+            },
+        ],
         ..Default::default()
     };
     let values = doc

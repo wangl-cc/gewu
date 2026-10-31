@@ -15,12 +15,12 @@ final class DocumentModel: ObservableObject {
     let doc: GewuDocument
     let info: FileInfo
     let kinds: [ColumnKind]
+    let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedState = ViewState(sort: [], filters: [], search: nil)
+    @Published private(set) var appliedState = ViewState(sort: [], filters: [])
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
-    @Published var searchText = ""
     @Published var selectedColumn: Int?
     @Published var inspectedColumn: Int?
     @Published var inspectorPage = InspectorPage.column
@@ -52,9 +52,12 @@ final class DocumentModel: ObservableObject {
         let metadata = document.info()
         info = metadata
         kinds = metadata.columns.map { ColumnKind($0.logicalType) }
+        find = FindModel()
         current = document.currentView()
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn
+        find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
+        find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
     }
 
     var canExport: Bool { !isBusy && export.isIdle }
@@ -65,11 +68,9 @@ final class DocumentModel: ObservableObject {
     }
 
     var state: ViewState {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ViewState(
+        ViewState(
             sort: sort,
-            filters: columnFilters.sorted { $0.key < $1.key }.flatMap(\.value),
-            search: query.isEmpty ? nil : query)
+            filters: columnFilters.sorted { $0.key < $1.key }.flatMap(\.value))
     }
 
     var subtitle: String {
@@ -86,13 +87,7 @@ final class DocumentModel: ObservableObject {
         text += " · \(info.columns.count) columns"
         if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
         if let row = selectedSourceRow { text += " · row \(formatRowNumber(row, base: rowNumberBase)) in file" }
-        if appliedState.search != nil, current.rowCount > 0 {
-            if let row = selectedDisplayRow {
-                text += " · match \(formatCount(UInt64(row + 1))) of \(formatCount(current.rowCount))"
-            } else {
-                text += " · ⏎ next match · ⇧⏎ previous"
-            }
-        }
+        if let findStatus = find.status { text += " · \(findStatus)" }
         return text
     }
 
@@ -117,6 +112,7 @@ final class DocumentModel: ObservableObject {
 
     func refresh(debounce: Bool = false) {
         let doc = doc
+        find.invalidate()
         viewTask?.cancel()
         doc.cancelPending()
         request &+= 1
@@ -150,13 +146,35 @@ final class DocumentModel: ObservableObject {
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil
                 self.isBusy = false
+                self.updateFind()
             } catch {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.isBusy = false
-                if case GewuError.Cancelled = error { return }
+                if case GewuError.Cancelled = error {
+                    self.updateFind()
+                    return
+                }
                 self.reportError(error)
+                self.updateFind()
             }
         }
+    }
+
+    func updateFind(debounce: Bool = false, preservingMatch: Bool = false) {
+        guard !isBusy else {
+            find.invalidate()
+            return
+        }
+        let columns = table?.displayedColumns ?? info.columns.indices.map(UInt32.init)
+        find.update(
+            document: doc, version: current.version, columns: columns,
+            cursor: preservingMatch ? find.currentMatch : nil, debounce: debounce)
+    }
+
+    /// Reordering columns keeps the current match instead of jumping to the first one.
+    func findColumnsChanged() {
+        guard find.activeQuery != nil else { return }
+        updateFind(preservingMatch: true)
     }
 
     func stop() {
@@ -164,12 +182,13 @@ final class DocumentModel: ObservableObject {
         gate.set(request)
         viewTask?.cancel()
         doc.cancelPending()
+        find.stop()
         export.stop()
         copying.cancel()
         table?.stopLoading()
     }
 
-    func findNext(backwards: Bool = false) { table?.moveToMatch(by: backwards ? -1 : 1) }
+    func findNext(backwards: Bool = false) { find.next(backwards: backwards) }
     func focusSearch() { searchFocusRequest &+= 1 }
 
     private func reportError(_ message: String) {

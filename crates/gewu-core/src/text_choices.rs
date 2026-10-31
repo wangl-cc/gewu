@@ -14,7 +14,7 @@ use crate::{column::text, scope::Selection, Error, LogicalType, Result};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoice {
     pub value: Option<String>,
-    /// Rows passing the other columns' filters and global search.
+    /// Rows passing the other columns' explicit filters.
     pub count: u64,
 }
 

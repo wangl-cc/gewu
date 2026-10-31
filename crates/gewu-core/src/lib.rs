@@ -13,6 +13,7 @@ mod error;
 mod export;
 mod file;
 mod filter;
+mod find;
 mod format;
 mod kind;
 mod predicate;
@@ -41,6 +42,9 @@ pub use file::{
     ParquetCompression,
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
+pub use find::{
+    CellMatch, Find, FindHighlight, FindOperation, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+};
 pub use kind::LogicalType;
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};

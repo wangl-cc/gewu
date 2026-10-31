@@ -35,12 +35,12 @@ struct ViewerCommands: Commands {
         CommandGroup(after: .textEditing) {
             Divider()
             Button("Find…") { model?.focusSearch() }.keyboardShortcut("f").disabled(model?.doc == nil)
-            Button("Find Next") { model?.findNext() }.keyboardShortcut("g")
-                .disabled(model?.appliedState.search == nil || model?.current.rowCount == 0)
-            Button("Find Previous") { model?.findNext(backwards: true) }.keyboardShortcut(
-                "g", modifiers: [.command, .shift]
-            )
-            .disabled(model?.appliedState.search == nil || model?.current.rowCount == 0)
+            if let model {
+                FindNavigationCommands(model: model, find: model.find)
+            } else {
+                Button("Find Next") {}.keyboardShortcut("g").disabled(true)
+                Button("Find Previous") {}.keyboardShortcut("g", modifiers: [.command, .shift]).disabled(true)
+            }
         }
         SidebarCommands()
         CommandGroup(after: .sidebar) {
@@ -77,6 +77,20 @@ struct ViewerCommands: Commands {
             Button("Clear All Filters") { model?.clearFilters() }.keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(model?.canClearFilters != true)
         }
+    }
+}
+
+private struct FindNavigationCommands: View {
+    @ObservedObject var model: DocumentModel
+    @ObservedObject var find: FindModel
+
+    var body: some View {
+        Button("Find Next") { model.findNext() }.keyboardShortcut("g")
+            .disabled(!find.canNavigate)
+        Button("Find Previous") { model.findNext(backwards: true) }.keyboardShortcut(
+            "g", modifiers: [.command, .shift]
+        )
+        .disabled(!find.canNavigate)
     }
 }
 

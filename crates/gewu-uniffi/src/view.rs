@@ -14,7 +14,6 @@ pub struct SortKey {
 pub struct ViewState {
     pub sort: Vec<SortKey>,
     pub filters: Vec<Filter>,
-    pub search: Option<String>,
 }
 
 #[derive(uniffi::Record)]
@@ -32,8 +31,6 @@ pub struct RowBlock {
     /// Row-major, `n_rows * n_cols` cells; `nil` is null.
     pub cells: Vec<Option<String>>,
     pub source_rows: Vec<u64>,
-    /// With a search active, row-major flags for cells that match it.
-    pub matched: Vec<bool>,
 }
 
 impl From<ViewState> for core::ViewState {
@@ -48,7 +45,6 @@ impl From<ViewState> for core::ViewState {
                 })
                 .collect(),
             filters: s.filters.into_iter().map(Into::into).collect(),
-            search: s.search,
         }
     }
 }
@@ -71,7 +67,6 @@ impl From<core::RowBlock> for RowBlock {
             n_cols: block.n_cols,
             cells: block.cells,
             source_rows: block.source_rows,
-            matched: block.matched,
         }
     }
 }

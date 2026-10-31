@@ -5,10 +5,17 @@ import SwiftUI
 /// when Rust publishes a new view version, preserving the live NSTableView.
 struct DataTable: NSViewControllerRepresentable {
     @ObservedObject var model: DocumentModel
+    @ObservedObject private var find: FindModel
     var showsRowNumbers: Bool
     @AppStorage("TableFontSize") private var fontSize = 12.0
     @AppStorage("TableRowHeight") private var rowHeight = 28.0
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
+
+    init(model: DocumentModel, showsRowNumbers: Bool) {
+        self.model = model
+        self.showsRowNumbers = showsRowNumbers
+        _find = ObservedObject(wrappedValue: model.find)
+    }
 
     func makeNSViewController(context: Context) -> DataTableController {
         let controller = DataTableController(model: model)
@@ -40,7 +47,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var loading: RowCache.Key?
     private var loadTask: Task<Void, Never>?
     private var fitTask: Task<Void, Never>?
-    private var matchTask: Task<Void, Never>?
+    private var findRevision: UInt64?
+    private var highlightRevision: UInt64?
     private var failedVersion: UInt64?
     private var initialFitsRemaining = 32
     private var initiallyFitted: Set<Int> = []
@@ -86,6 +94,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(visibleRectChanged), name: NSView.boundsDidChangeNotification,
+            object: scroll.contentView)
         // SwiftUI positions this view below its toolbar; no second titlebar inset.
         scroll.automaticallyAdjustsContentInsets = false
         for child in [scroll, gutter] {
@@ -107,6 +119,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: Int = 0) {
         loadViewIfNeeded()
         let info = model.info
+        let findChanged = findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
+        findRevision = model.find.revision
+        highlightRevision = model.find.highlightRevision
         let effectiveHeight = max(rowHeight, fontSize + 8)
         let presentationChanged =
             textSize != fontSize || table.rowHeight != effectiveHeight || self.rowNumberBase != rowNumberBase
@@ -138,8 +153,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             table.reloadData()
             reloading = false
             gutter.needsDisplay = true
-        } else if presentationChanged {
-            // Recreate visible cells from the existing cache without re-running the query.
+        } else if presentationChanged || findChanged {
+            // Recreate visible cells from the existing cache without re-running
+            // row formatting when only Find presentation changes.
             reloading = true
             table.reloadData()
             reloading = false
@@ -157,6 +173,17 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             header.sortAscending = !(sort?.descending ?? false)
         }
         table.headerView?.needsDisplay = true
+        requestHighlights()
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func visibleRectChanged() { requestHighlights() }
+
+    private func requestHighlights() {
+        let rows = table.rows(in: table.visibleRect)
+        guard rows.location != NSNotFound, rows.length > 0 else { return }
+        model.find.requestHighlight(start: UInt64(rows.location), count: UInt32(rows.length))
     }
 
     private func buildColumns(_ info: FileInfo) {
@@ -303,7 +330,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func stopLoading() {
         loadTask?.cancel()
         fitTask?.cancel()
-        matchTask?.cancel()
         pending.removeAll()
         loading = nil
     }
@@ -341,11 +367,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
         let kind = model.kinds[column]
         let index = row - Int(block.start)
-        let hit = index < block.matched.count && block.matched[index]
+        let hit = model.find.isMatch(row: row, column: column)
         cell.isLoading = false
         cell.wholeCellMatch = hit && kind != .text
         if let text = block.cells[index] {
-            if hit, kind == .text, let query = model.appliedState.search {
+            if hit, kind == .text, let query = model.find.activeQuery {
                 field.attributedStringValue = highlighted(text, query: query, font: fonts.font(for: kind))
             } else {
                 field.stringValue = text
@@ -382,6 +408,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     func tableView(_ tableView: NSTableView, shouldReorderColumn column: Int, toColumn newColumn: Int) -> Bool {
         table.tableColumns[column].identifier != rowHeaderID && newColumn > 0
+    }
+
+    func tableViewColumnDidMove(_ notification: Notification) {
+        model.findColumnsChanged()
+        requestHighlights()
     }
 
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
@@ -453,35 +484,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    func moveToMatch(by step: Int) {
-        let count = Int(model.current.rowCount)
-        guard model.appliedState.search != nil, count > 0 else { return }
-        let selected = table.selectedRow
-        let row = selected < 0 ? (step > 0 ? 0 : count - 1) : (selected + step + count) % count
+    func navigateToMatch(_ match: CellMatch) {
+        let row = Int(match.displayRow)
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         table.scrollRowToVisible(row)
-        let doc = model.doc
-        let version = model.current.version
-        let columns = model.info.columns.count
-        matchTask?.cancel()
-        let reader = reader
-        matchTask = Task { [weak self] in
-            do {
-                for start in stride(from: 0, to: columns, by: 64) {
-                    let block = try await reader.read(
-                        doc, version: version, start: UInt64(row), count: 1,
-                        columns: (start..<min(start + 64, columns)).map(UInt32.init))
-                    guard !Task.isCancelled, let self, self.version == version else { return }
-                    if let offset = block.matched.firstIndex(of: true) {
-                        self.scrollToColumn(start + offset)
-                        return
-                    }
-                }
-            } catch {
-                guard !Task.isCancelled, let self, self.version == version else { return }
-                self.model.reportError(error, prefix: "Could not locate match: ")
-            }
-        }
+        scrollToColumn(Int(match.column))
+        requestHighlights()
     }
 
     func showSelectedColumnFilter() {

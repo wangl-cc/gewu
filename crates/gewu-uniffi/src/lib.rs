@@ -11,6 +11,7 @@ mod error;
 mod export;
 mod file;
 mod filter;
+mod find;
 mod scale;
 mod scatter;
 mod text_choices;
@@ -30,6 +31,7 @@ pub use file::{
 pub use filter::{
     Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,
 };
+pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindOperation, FindSession};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};

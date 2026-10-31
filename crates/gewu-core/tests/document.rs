@@ -114,7 +114,6 @@ fn checkbox_filter_and_distinct() {
             column: 3,
             descending: true,
         }],
-        search: None,
     };
     let v = doc.apply_view(&state).unwrap();
     assert_eq!(v.row_count, 4);
@@ -130,7 +129,7 @@ fn checkbox_filter_and_distinct() {
 }
 
 #[test]
-fn null_contains_and_search() {
+fn null_contains_and_typed_equality() {
     let (path, doc) = sample();
     let state = ViewState {
         filters: vec![Filter::IsNull {
@@ -155,7 +154,10 @@ fn null_contains_and_search() {
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
     let state = ViewState {
-        search: Some("2.25".into()),
+        filters: vec![Filter::Equals {
+            column: 2,
+            value: "2.25".into(),
+        }],
         ..Default::default()
     };
     doc.apply_view(&state).unwrap();
@@ -319,13 +321,16 @@ fn temporal_sample() -> (PathBuf, Document) {
     (path, doc)
 }
 
-fn search(doc: &Document, text: &str) -> Vec<String> {
-    doc.apply_view(&ViewState {
-        search: Some(text.into()),
-        ..Default::default()
-    })
-    .unwrap();
-    names(doc)
+fn find_names(doc: &Document, text: &str) -> Vec<String> {
+    let names = names(doc);
+    let hits = doc
+        .prepare_find(doc.current_view().version, text, &[0, 1, 2, 3, 4])
+        .unwrap()
+        .next(None, 256)
+        .unwrap();
+    let mut rows: Vec<usize> = hits.iter().map(|hit| hit.display_row as usize).collect();
+    rows.dedup();
+    rows.into_iter().map(|row| names[row].clone()).collect()
 }
 
 // n: 7, 170, 1700, -7 · x: 0.5, 2.25, 17.0, NaN
@@ -334,11 +339,11 @@ fn search(doc: &Document, text: &str) -> Vec<String> {
 #[test]
 fn search_text_is_case_insensitive_substring() {
     let (path, doc) = temporal_sample();
-    assert_eq!(search(&doc, "ALPHA"), ["Alpha"]);
-    assert_eq!(search(&doc, "gam"), ["Gamma"]);
+    assert_eq!(find_names(&doc, "ALPHA"), ["Alpha"]);
+    assert_eq!(find_names(&doc, "gam"), ["Gamma"]);
     // Characters that are special in LIKE patterns match literally.
-    assert_eq!(search(&doc, "%"), Vec::<String>::new());
-    assert_eq!(search(&doc, "_"), Vec::<String>::new());
+    assert_eq!(find_names(&doc, "%"), Vec::<String>::new());
+    assert_eq!(find_names(&doc, "_"), Vec::<String>::new());
     std::fs::remove_file(path).ok();
 }
 
@@ -346,23 +351,23 @@ fn search_text_is_case_insensitive_substring() {
 fn search_integers_by_value() {
     let (path, doc) = temporal_sample();
     // Exact value, not a substring: 170 does not match 1700.
-    assert_eq!(search(&doc, "170"), ["beta"]);
-    assert_eq!(search(&doc, "-7"), ["delta"]);
-    assert_eq!(search(&doc, "+7"), ["Alpha"]);
+    assert_eq!(find_names(&doc, "170"), ["beta"]);
+    assert_eq!(find_names(&doc, "-7"), ["delta"]);
+    assert_eq!(find_names(&doc, "+7"), ["Alpha"]);
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn search_floats_by_typed_precision() {
     let (path, doc) = temporal_sample();
-    assert_eq!(search(&doc, "2.25"), ["beta"]);
+    assert_eq!(find_names(&doc, "2.25"), ["beta"]);
     // "2.3" means [2.25, 2.35): includes 2.25.
-    assert_eq!(search(&doc, "2.3"), ["beta"]);
-    assert_eq!(search(&doc, "2.2"), Vec::<String>::new());
+    assert_eq!(find_names(&doc, "2.3"), ["beta"]);
+    assert_eq!(find_names(&doc, "2.2"), Vec::<String>::new());
     // "17" means [16.5, 17.5) for floats; ints need exactly 17.
-    assert_eq!(search(&doc, "17"), ["Gamma"]);
-    assert_eq!(search(&doc, "5e-1"), ["Alpha"]);
-    assert_eq!(search(&doc, "NaN"), ["delta"]);
+    assert_eq!(find_names(&doc, "17"), ["Gamma"]);
+    assert_eq!(find_names(&doc, "5e-1"), ["Alpha"]);
+    assert_eq!(find_names(&doc, "NaN"), ["delta"]);
     std::fs::remove_file(path).ok();
 }
 
@@ -370,16 +375,18 @@ fn search_floats_by_typed_precision() {
 fn search_dates_by_period() {
     let (path, doc) = temporal_sample();
     // A month or day matches the whole period; null dates never match.
-    assert_eq!(search(&doc, "2024-03"), ["delta"]);
-    assert_eq!(search(&doc, "2024-01-02"), ["beta"]);
+    assert_eq!(find_names(&doc, "2024-03"), ["delta"]);
+    assert_eq!(find_names(&doc, "2024-01-02"), ["beta"]);
     // Every timestamp is in 2024, so the year matches all rows.
-    assert_eq!(search(&doc, "2024"), ["Alpha", "beta", "Gamma", "delta"]);
+    assert_eq!(find_names(&doc, "2024"), [
+        "Alpha", "beta", "Gamma", "delta"
+    ]);
     // Hours and minutes apply to timestamps only.
-    assert_eq!(search(&doc, "2024-01-01 10"), ["beta"]);
-    assert_eq!(search(&doc, "2024-01-01T11:00"), ["Gamma"]);
-    assert_eq!(search(&doc, "2024-01-01 11:01"), Vec::<String>::new());
+    assert_eq!(find_names(&doc, "2024-01-01 10"), ["beta"]);
+    assert_eq!(find_names(&doc, "2024-01-01T11:00"), ["Gamma"]);
+    assert_eq!(find_names(&doc, "2024-01-01 11:01"), Vec::<String>::new());
     // Not a date: skipped, not an error.
-    assert_eq!(search(&doc, "2024-13"), Vec::<String>::new());
+    assert_eq!(find_names(&doc, "2024-13"), Vec::<String>::new());
     std::fs::remove_file(path).ok();
 }
 
@@ -463,27 +470,19 @@ fn dates_format_parse_and_filter() {
 }
 
 #[test]
-fn rows_mark_matching_cells() {
+fn find_marks_matching_cells() {
     let (path, doc) = temporal_sample();
     // "170" matches n = 170 only; "2024-01-02" matches the day column.
     for (query, expected) in [("170", vec![(1, 3)]), ("2024-01-02", vec![(1, 1)])] {
-        let v = doc
-            .apply_view(&ViewState {
-                search: Some(query.into()),
-                ..Default::default()
-            })
-            .unwrap();
-        let block = doc.rows(v.version, 0, 10, &[0, 1, 2, 3, 4]).unwrap();
-        assert_eq!(block.n_rows, 1);
-        let hits: Vec<(u64, u32)> = (0..block.n_cols)
-            .filter(|&c| block.is_match(0, c))
-            .map(|c| (block.source_rows[0], c))
+        let find = doc.prepare_find(0, query, &[0, 1, 2, 3, 4]).unwrap();
+        let hits: Vec<(u64, u32)> = find
+            .next(None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|hit| (hit.display_row, hit.column))
             .collect();
         assert_eq!(hits, expected, "query {query}");
     }
-    // No search: no match flags.
-    let v = doc.apply_view(&ViewState::default()).unwrap();
-    assert!(doc.rows(v.version, 0, 10, &[0]).unwrap().matched.is_empty());
     std::fs::remove_file(path).ok();
 }
 
