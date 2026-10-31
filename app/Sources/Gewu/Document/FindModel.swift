@@ -55,7 +55,9 @@ final class FindModel: ObservableObject {
     var status: String? {
         guard session != nil else { return nil }
         if hasMatches == false { return "0 matches" }
-        if let match = currentMatch { return "match at row \(formatCount(match.displayRow + 1))" }
+        if let match = currentMatch {
+            return "match at view row \(formatCount(match.displayRow + 1))"
+        }
         return isFinding ? "Finding…" : "⏎ next match · ⇧⏎ previous"
     }
 
