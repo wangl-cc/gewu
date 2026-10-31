@@ -198,8 +198,8 @@ impl<'a> Column<'a> {
             return Ok(predicate);
         }
         Ok(match predicate {
-            Predicate::Rows(test) => {
-                Predicate::rows(Box::new(move |row| array.is_null(row) || test(row)))
+            Predicate::Scalar(is_match) => {
+                Predicate::scalar(Box::new(move |row| array.is_null(row) || is_match(row)))
             }
             predicate => Predicate::batch(Box::new(move |rows, hits, cancel| {
                 predicate.evaluate_selected(rows.clone(), hits, cancel)?;
@@ -221,7 +221,7 @@ impl<'a> Column<'a> {
         if let Filter::IsNull { negate, .. } = filter {
             let negate = *negate;
             let array = self.array;
-            return Ok(Predicate::rows(Box::new(move |row| {
+            return Ok(Predicate::scalar(Box::new(move |row| {
                 array.is_null(row) != negate
             })));
         }

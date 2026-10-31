@@ -23,7 +23,7 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
         LogicalType::Integer { .. } => integer::search(array, text),
         LogicalType::Float { .. } => float::search(array, text),
         LogicalType::Decimal { .. } => decimal::search(array, text),
-        LogicalType::Boolean => boolean(text).map(|target| bool_test(array, target)),
+        LogicalType::Boolean => boolean(text).map(|target| bool_predicate(array, target)),
         LogicalType::Date
         | LogicalType::Timestamp { .. }
         | LogicalType::Time
@@ -43,7 +43,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
     let text = text.trim();
     match LogicalType::from_arrow(array.data_type()) {
         LogicalType::Boolean => boolean(text)
-            .map(|target| bool_test(array, target))
+            .map(|target| bool_predicate(array, target))
             .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
         LogicalType::Float { .. } => float::equals(array, text),
         _ => {
@@ -63,9 +63,9 @@ fn boolean(text: &str) -> Option<bool> {
     }
 }
 
-fn bool_test(array: &ArrayRef, target: bool) -> Predicate<'_> {
+fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
     let array = array.as_boolean();
-    Predicate::rows(Box::new(move |row| {
+    Predicate::scalar(Box::new(move |row| {
         array.is_valid(row) && array.value(row) == target
     }))
 }

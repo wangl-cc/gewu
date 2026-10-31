@@ -45,7 +45,7 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
     macro_rules! native {
         ($ty:ty) => {{
             let array = array.as_primitive::<$ty>();
-            Predicate::rows(Box::new(move |row| {
+            Predicate::scalar(Box::new(move |row| {
                 if array.is_null(row) {
                     return false;
                 }
@@ -66,7 +66,7 @@ pub(super) fn nan(array: &ArrayRef) -> Predicate<'_> {
     macro_rules! native {
         ($ty:ty) => {{
             let a = array.as_primitive::<$ty>();
-            Predicate::rows(Box::new(move |r| a.is_valid(r) && a.value(r).is_nan()))
+            Predicate::scalar(Box::new(move |r| a.is_valid(r) && a.value(r).is_nan()))
         }};
     }
     match array.data_type() {
@@ -85,7 +85,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
             "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
         )
     {
-        return Ok(Predicate::rows(Box::new(|_| false)));
+        return Ok(Predicate::scalar(Box::new(|_| false)));
     }
     if target.is_nan() {
         return Ok(nan(array));
@@ -109,7 +109,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
         _ => unreachable!("float dispatch"),
     };
     if original.is_finite() && !target.is_finite() {
-        return Ok(Predicate::rows(Box::new(|_| false)));
+        return Ok(Predicate::scalar(Box::new(|_| false)));
     }
     Ok(bound_range(array, target, target))
 }

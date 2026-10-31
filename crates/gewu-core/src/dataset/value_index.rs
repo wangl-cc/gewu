@@ -200,7 +200,7 @@ impl ValueIndex {
             }
         }
         let index = Arc::clone(self);
-        Predicate::rows(Box::new(move |row| allowed[index.code(row) as usize]))
+        Predicate::scalar(Box::new(move |row| allowed[index.code(row) as usize]))
     }
 
     /// Prepare a row-based predicate for filtering by text values (`None` for null).
@@ -217,7 +217,7 @@ impl ValueIndex {
             }
         }
         let index = Arc::clone(self);
-        Predicate::rows(Box::new(move |row| allowed[index.code(row) as usize]))
+        Predicate::scalar(Box::new(move |row| allowed[index.code(row) as usize]))
     }
 }
 

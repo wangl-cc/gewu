@@ -50,7 +50,7 @@ pub(super) fn selected_values<'a>(
     let read = accessor(array)?;
     let null_selected = values.iter().any(Option::is_none);
     let selected: HashSet<String> = values.iter().filter_map(Clone::clone).collect();
-    Ok(Predicate::rows(Box::new(move |row| {
+    Ok(Predicate::scalar(Box::new(move |row| {
         let included = read(row).map_or(null_selected, |value| selected.contains(value));
         included != exclude
     })))
@@ -121,12 +121,12 @@ fn strings<'a>(
     }
 }
 
-fn bind<'a, A>(array: A, test: impl Fn(&str) -> bool + Send + Sync + 'a) -> Predicate<'a>
+fn bind<'a, A>(array: A, is_match: impl Fn(&str) -> bool + Send + Sync + 'a) -> Predicate<'a>
 where
     A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
 {
-    Predicate::rows(Box::new(move |row| {
-        array.is_valid(row) && test(array.value(row))
+    Predicate::scalar(Box::new(move |row| {
+        array.is_valid(row) && is_match(array.value(row))
     }))
 }
 

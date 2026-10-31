@@ -259,13 +259,13 @@ where
     let lo = lo.max(Endpoint::Finite(<T::Native as Coefficient>::MIN));
     let hi = hi.min(Endpoint::Finite(<T::Native as Coefficient>::MAX));
     if lo > hi {
-        return Predicate::rows(Box::new(|_| false));
+        return Predicate::scalar(Box::new(|_| false));
     }
     let (Endpoint::Finite(lo), Endpoint::Finite(hi)) = (lo, hi) else {
         unreachable!("native domain intersection");
     };
     let (lo, hi) = (T::Native::from_wide(lo), T::Native::from_wide(hi));
-    Predicate::rows(Box::new(move |row| {
+    Predicate::scalar(Box::new(move |row| {
         array.is_valid(row) && array.value(row) >= lo && array.value(row) <= hi
     }))
 }
