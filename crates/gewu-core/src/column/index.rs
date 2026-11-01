@@ -28,14 +28,6 @@ use crate::{
     selection::RowSelection, Result,
 };
 
-/// A column's value index, built on first use.
-#[derive(Clone)]
-pub(crate) enum Indexed {
-    Built(Arc<ValueIndex>),
-    /// More than [`INDEX_LIMIT`] distinct values: counted on demand instead.
-    TooMany,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
     /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
@@ -71,6 +63,7 @@ const CHUNK: usize = 64 * 1024;
 /// Only one row-conversion batch and at most `limit` distinct encoded values
 /// are retained. Unlike building an index, this does not allocate source-row
 /// codes or format labels. The first new value beyond the limit stops the scan.
+#[cfg(test)]
 pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
     let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
     let mut seen: HashSet<Box<[u8]>> = HashSet::new();
@@ -88,15 +81,6 @@ pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
         }
     }
     Ok(true)
-}
-
-/// Count the total number of distinct values in the array.
-pub(crate) fn count_distinct(array: &ArrayRef) -> Result<usize> {
-    if array.is_empty() {
-        return Ok(0);
-    }
-    let counts = count_values(array, &Selection::All(array.len()), 0)?;
-    Ok(counts.distinct as usize)
 }
 
 pub(crate) struct ValueIndex {

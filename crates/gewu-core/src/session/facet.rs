@@ -110,7 +110,14 @@ impl Session {
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
-        let is_low_cardinality = col.is_low_cardinality()?;
+        let supported = arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
+            col.array.data_type().clone(),
+        )]);
+        let value_idx = if supported { self.index(column)? } else { None };
+        let is_low_cardinality = value_idx
+            .as_ref()
+            .is_some_and(|idx| idx.len() <= crate::column::CHOICE_LIMIT);
+
         if *col.logical_type() == LogicalType::Text {
             return Ok(FilterSpec {
                 nullable: col.is_nullable(),
@@ -127,10 +134,12 @@ impl Session {
                 },
             });
         }
-        let editor = if is_low_cardinality {
+        let editor = if let Some(ref idx) =
+            value_idx.filter(|idx| idx.len() <= crate::column::CHOICE_LIMIT)
+        {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
             FilterEditor::Choices {
-                values: self.keyed_index(column)?.counts_all(&rows),
+                values: idx.counts_all(&rows),
             }
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;

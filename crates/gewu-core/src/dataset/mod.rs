@@ -12,7 +12,7 @@ use arrow::{
 };
 
 use crate::{
-    column::{format, index::ValueIndex, Column, ColumnCapabilities},
+    column::{format, Column, ColumnCapabilities},
     file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
 };
 
@@ -139,27 +139,5 @@ impl Dataset {
         };
         let f = format::formatter(typed.as_ref())?;
         Ok(f.value(0).to_string())
-    }
-
-    /// The column's value index, or `None` if it has too many values.
-    pub(crate) fn index(&self, c: u32) -> Result<Option<Arc<ValueIndex>>> {
-        self.column(c)?.index()
-    }
-
-    /// The column's value index, for filtering by key.
-    pub(crate) fn keyed_index(&self, c: u32) -> Result<Arc<ValueIndex>> {
-        self.column(c)?.keyed_index()
-    }
-
-    pub fn distinct_count(&self, column: u32) -> Result<usize> {
-        self.column(column)?.distinct_count()
-    }
-
-    pub fn distinct_count_at_most(&self, column: u32, limit: usize) -> Result<bool> {
-        self.column(column)?.distinct_count_at_most(limit)
-    }
-
-    pub fn is_low_cardinality(&self, column: u32) -> Result<bool> {
-        self.column(column)?.is_low_cardinality()
     }
 }
