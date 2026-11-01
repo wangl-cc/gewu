@@ -36,25 +36,38 @@ pub struct Column {
     pub name: String,
     pub logical_type: LogicalType,
     pub nullable: bool,
+    pub len: usize,
     pub array: ArrayRef,
     pub(crate) index: OnceLock<index::Indexed>,
     /// Lazily computed distinct count cache.
     ///
-    /// 0 indicates uncomputed (unless `array.is_empty()`, where distinct count is genuinely 0).
+    /// 0 indicates uncomputed (unless `len == 0`, where distinct count is genuinely 0).
     pub(crate) distinct_count: AtomicUsize,
 }
 
 impl Column {
     pub fn new(name: impl Into<String>, array: ArrayRef, nullable: bool) -> Self {
         let logical_type = LogicalType::from_arrow(array.data_type());
+        let len = array.len();
         Self {
             name: name.into(),
             logical_type,
             nullable,
+            len,
             array,
             index: OnceLock::new(),
             distinct_count: AtomicUsize::new(0),
         }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     #[inline]
@@ -154,21 +167,41 @@ impl Column {
         Bound::from_decimal(self.logical_data_type(), coeff, scale)
     }
 
-    pub(crate) fn index(&self) -> Result<Option<Arc<ValueIndex>>> {
-        let found = match self.index.get() {
-            Some(found) => found,
-            None => {
-                let built = match ValueIndex::build(&self.array, INDEX_LIMIT)? {
-                    Some(idx) => index::Indexed::Built(Arc::new(idx)),
-                    None => index::Indexed::TooMany,
-                };
-                self.index.get_or_init(|| built)
+    /// Ensure the column's index and cardinality are initialized in a unified step.
+    ///
+    /// When building the inverted index:
+    /// - If cardinality <= [`INDEX_LIMIT`], the index is built and its dictionary length is
+    ///   atomically saved to `distinct_count`.
+    /// - If cardinality > [`INDEX_LIMIT`], marked as `Indexed::TooMany`.
+    /// - If `distinct_count` is already known to exceed [`INDEX_LIMIT`], skips building immediately
+    ///   as `Indexed::TooMany`.
+    pub(crate) fn ensure_index(&self) -> Result<&index::Indexed> {
+        if let Some(indexed) = self.index.get() {
+            return Ok(indexed);
+        }
+
+        // Short-circuit: if distinct_count is already computed and exceeds limit, skip building
+        let cached = self.distinct_count.load(Ordering::Relaxed);
+        if cached > INDEX_LIMIT {
+            return Ok(self.index.get_or_init(|| index::Indexed::TooMany));
+        }
+
+        let built = match ValueIndex::build(&self.array, INDEX_LIMIT)? {
+            Some(idx) => {
+                let count = idx.len();
+                self.distinct_count.store(count, Ordering::Relaxed);
+                index::Indexed::Built(Arc::new(idx))
             }
+            None => index::Indexed::TooMany,
         };
-        Ok(match found {
-            index::Indexed::Built(idx) => Some(idx.clone()),
-            index::Indexed::TooMany => None,
-        })
+        Ok(self.index.get_or_init(|| built))
+    }
+
+    pub(crate) fn index(&self) -> Result<Option<Arc<ValueIndex>>> {
+        match self.ensure_index()? {
+            index::Indexed::Built(idx) => Ok(Some(idx.clone())),
+            index::Indexed::TooMany => Ok(None),
+        }
     }
 
     pub(crate) fn keyed_index(&self) -> Result<Arc<ValueIndex>> {
@@ -185,28 +218,30 @@ impl Column {
     /// If the column is empty, returns 0 immediately without scanning.
     /// If an inverted index is already built, returns its exact dictionary length.
     pub fn distinct_count(&self) -> Result<usize> {
-        if self.array.is_empty() {
+        if self.len == 0 {
             return Ok(0);
-        }
-        if let Some(index::Indexed::Built(index)) = self.index.get() {
-            return Ok(index.len());
         }
         let cached = self.distinct_count.load(Ordering::Relaxed);
         if cached > 0 {
             return Ok(cached);
         }
-        let count = index::count_distinct(&self.array)?;
-        self.distinct_count.store(count, Ordering::Relaxed);
-        Ok(count)
+        match self.ensure_index()? {
+            index::Indexed::Built(idx) => Ok(idx.len()),
+            index::Indexed::TooMany => {
+                let count = index::count_distinct(&self.array)?;
+                self.distinct_count.store(count, Ordering::Relaxed);
+                Ok(count)
+            }
+        }
     }
 
     /// Check whether the number of distinct values in the column is at most `limit`.
     ///
-    /// Short-circuits if the array is empty, if the inverted index is built, or if the
+    /// Short-circuits if the column is empty, if the inverted index is built, or if the
     /// exact distinct count has already been cached. Otherwise, uses a bounded probe
     /// that stops immediately upon encountering `limit + 1` distinct values.
     pub fn distinct_count_at_most(&self, limit: usize) -> Result<bool> {
-        if self.array.is_empty() {
+        if self.len == 0 {
             return Ok(true);
         }
         if let Some(index::Indexed::Built(index)) = self.index.get() {
@@ -513,6 +548,8 @@ mod tests {
     fn distinct_count_and_probe_caching() {
         // 1. Empty column
         let empty_col = col(Arc::new(Int32Array::from(Vec::<i32>::new())));
+        assert_eq!(empty_col.len(), 0);
+        assert!(empty_col.is_empty());
         assert_eq!(empty_col.distinct_count().unwrap(), 0);
         assert!(empty_col.distinct_count_at_most(0).unwrap());
 
@@ -524,13 +561,24 @@ mod tests {
             None,
         ]));
         let column = col(array);
+        assert_eq!(column.len(), 4);
+        assert!(!column.is_empty());
         assert_eq!(column.distinct_count.load(Ordering::Relaxed), 0);
         assert!(column.distinct_count_at_most(10).unwrap());
         assert!(!column.distinct_count_at_most(2).unwrap());
         assert_eq!(column.distinct_count().unwrap(), 3);
-        // After distinct_count(), it is cached in the AtomicUsize
+        // After distinct_count(), it is cached in the AtomicUsize and index is built
         assert_eq!(column.distinct_count.load(Ordering::Relaxed), 3);
+        assert!(column.index.get().is_some());
         // Repeated call reads the atomic cache directly
         assert_eq!(column.distinct_count().unwrap(), 3);
+
+        // 3. Building index first also initializes distinct_count
+        let col2 = col(Arc::new(Int32Array::from(vec![10, 20, 10, 30])));
+        assert_eq!(col2.distinct_count.load(Ordering::Relaxed), 0);
+        let idx = col2.index().unwrap().unwrap();
+        assert_eq!(idx.len(), 3);
+        assert_eq!(col2.distinct_count.load(Ordering::Relaxed), 3);
+        assert_eq!(col2.distinct_count().unwrap(), 3);
     }
 }
