@@ -3,7 +3,7 @@
 //! scan a normalized key, and text, binary and nested arrays use Arrow's row
 //! format.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, UInt32Array},
@@ -13,12 +13,11 @@ use arrow::{
 };
 
 use super::{
-    kernel::{build_distinct, finish_dictionary},
     primitive::{build_float_primitive, build_ordered_primitive},
-    ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
+    Dictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
 
-impl ValueDictionary {
+impl Dictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
     pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
@@ -71,6 +70,75 @@ impl ValueDictionary {
         }
     }
 
+    /// Build a dictionary from an array by extracting a key for each non-null row.
+    pub(super) fn from_array_with_keys<K: Copy + Eq + Ord + Hash>(
+        array: &dyn Array,
+        key_at: impl Fn(usize) -> K,
+    ) -> Option<Self> {
+        let len = array.len();
+        let mut seen: HashMap<K, u8> = HashMap::new();
+        let mut key_of: Vec<K> = Vec::new();
+        let mut representative_row: Vec<usize> = Vec::new();
+        let mut codes: Vec<u8> = Vec::with_capacity(len);
+        let mut has_null = false;
+
+        for row in 0..len {
+            if array.is_null(row) {
+                has_null = true;
+                codes.push(NULL_CODE);
+                continue;
+            }
+            let key = key_at(row);
+            let code = match seen.get(&key) {
+                Some(&code) => code,
+                None => {
+                    if key_of.len() == MAX_DISTINCT_VALUES {
+                        return None;
+                    }
+                    let code = key_of.len() as u8;
+                    seen.insert(key, code);
+                    key_of.push(key);
+                    representative_row.push(row);
+                    code
+                }
+            };
+            codes.push(code);
+        }
+
+        let mut order: Vec<u8> = (0..key_of.len() as u8).collect();
+        order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(&key_of[b as usize]));
+        Self::finish(codes, &representative_row, &order, has_null, array)
+    }
+
+    /// Renumber temporary codes into value order and assemble the finished dictionary.
+    fn finish(
+        mut codes: Vec<u8>,
+        representative_row: &[usize],
+        order: &[u8],
+        has_null: bool,
+        array: &dyn Array,
+    ) -> Option<Self> {
+        let mut remap = [0u8; MAX_DISTINCT_VALUES];
+        for (new, &old) in order.iter().enumerate() {
+            remap[old as usize] = new as u8;
+        }
+        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
+            *code = remap[*code as usize];
+        }
+        let rows = UInt32Array::from(
+            order
+                .iter()
+                .map(|&old| representative_row[old as usize] as u32)
+                .collect::<Vec<_>>(),
+        );
+        let values = take(array, &rows, None).ok()?;
+        Some(Self {
+            codes,
+            values,
+            has_null,
+        })
+    }
+
     /// Row-format fallback for text, binary and nested arrays: discover
     /// distinct values by hashing rows, then write one `u8` code per row.
     /// Row-format bytes give both equality and value order.
@@ -119,7 +187,7 @@ impl ValueDictionary {
         }
         let mut order: Vec<u8> = (0..representative_row.len() as u8).collect();
         order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(key_of[b as usize]));
-        finish_dictionary(codes, &representative_row, &order, has_null, array.as_ref())
+        Self::finish(codes, &representative_row, &order, has_null, array.as_ref())
     }
 
     /// Encode a native Dictionary. Arrow already encodes the values into
@@ -210,15 +278,9 @@ impl ValueDictionary {
 }
 
 /// Encode a boolean array. `false` sorts before `true`.
-fn build_boolean(array: &ArrayRef) -> Option<ValueDictionary> {
+fn build_boolean(array: &ArrayRef) -> Option<Dictionary> {
     let source = array.as_boolean();
-    build_distinct(
-        source.len(),
-        |row| source.is_null(row),
-        |row| u8::from(source.value(row)),
-        |_| false,
-        source,
-    )
+    Dictionary::from_array_with_keys(source, |row| u8::from(source.value(row)))
 }
 
 /// Visit every key of a native Dictionary array; `None` for a null key.

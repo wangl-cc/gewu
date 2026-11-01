@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use crate::{
-    column::{Column, ColumnCapabilities, ValueDictionary},
+    column::{Column, ColumnCapabilities, Dictionary},
     dataset::Dataset,
     engine::ViewEngine,
     FileInfo, OpenOptions, Result,
@@ -104,11 +104,11 @@ impl Session {
         Ok(&self.dataset.column(c)?.array)
     }
 
-    pub(crate) fn dictionary(&self, c: u32) -> Result<Option<Arc<ValueDictionary>>> {
+    pub(crate) fn dictionary(&self, c: u32) -> Result<Option<Arc<Dictionary>>> {
         Ok(self.column(c)?.dictionary().cloned())
     }
 
-    pub(crate) fn keyed_dictionary(&self, c: u32) -> Result<Arc<ValueDictionary>> {
+    pub(crate) fn keyed_dictionary(&self, c: u32) -> Result<Arc<Dictionary>> {
         let col = self.column(c)?;
         col.dictionary().cloned().ok_or_else(|| {
             crate::Error::InvalidArgument(format!(

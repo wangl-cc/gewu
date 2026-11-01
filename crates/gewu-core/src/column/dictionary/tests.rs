@@ -16,14 +16,14 @@ use crate::{
     session::facet::format_choices, DistinctValue, Result,
 };
 
-fn labels(dictionary: &ValueDictionary) -> Vec<Option<String>> {
+fn labels(dictionary: &Dictionary) -> Vec<Option<String>> {
     let formatter = format::formatter(dictionary.values.as_ref()).unwrap();
     (0..dictionary.values.len())
         .map(|code| format::cell(dictionary.values.as_ref(), &formatter, code))
         .collect()
 }
 
-impl ValueDictionary {
+impl Dictionary {
     fn counts(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
         format_choices(
             self.values.as_ref(),
@@ -114,7 +114,7 @@ fn codes_follow_value_order_and_reserve_the_null_code() {
         Some("cat"),
         Some("dog"),
     ]));
-    let dictionary = ValueDictionary::build(&a).unwrap();
+    let dictionary = Dictionary::build(&a).unwrap();
     assert_eq!(dictionary.n_values(), 2);
     assert!(dictionary.has_null());
     assert_eq!(labels(&dictionary), vec![
@@ -132,7 +132,7 @@ fn codes_follow_value_order_and_reserve_the_null_code() {
 #[test]
 fn numbers_sort_numerically() {
     let a: ArrayRef = Arc::new(Int32Array::from(vec![10, -3, 2, 10]));
-    let dictionary = ValueDictionary::build(&a).unwrap();
+    let dictionary = Dictionary::build(&a).unwrap();
     assert_eq!(labels(&dictionary), vec![
         Some("-3".into()),
         Some("2".into()),
@@ -144,9 +144,9 @@ fn numbers_sort_numerically() {
 #[test]
 fn too_many_values_are_not_encoded() {
     let at_limit: ArrayRef = Arc::new(Int32Array::from_iter_values(0..MAX_DISTINCT_VALUES as i32));
-    assert!(ValueDictionary::build(&at_limit).is_some());
+    assert!(Dictionary::build(&at_limit).is_some());
     let over: ArrayRef = Arc::new(Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32));
-    assert!(ValueDictionary::build(&over).is_none());
+    assert!(Dictionary::build(&over).is_none());
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn nulls_do_not_consume_value_codes() {
     let array: ArrayRef = Arc::new(Int32Array::from_iter(
         (0..MAX_DISTINCT_VALUES as i32).map(Some).chain([None]),
     ));
-    let dictionary = ValueDictionary::build(&array).unwrap();
+    let dictionary = Dictionary::build(&array).unwrap();
     assert_eq!(dictionary.n_values(), MAX_DISTINCT_VALUES);
     assert!(dictionary.has_null());
 }
@@ -167,7 +167,7 @@ fn all_counts_keep_zero_count_options_and_stable_keys() {
         None,
         Some("b"),
     ]));
-    let dictionary = ValueDictionary::build(&a).unwrap();
+    let dictionary = Dictionary::build(&a).unwrap();
     let selection = Selection::Rows(Arc::new(vec![0, 3]));
     let all = dictionary.counts_all(&selection).unwrap();
     assert_eq!(all, vec![
@@ -206,7 +206,7 @@ fn all_counts_keep_zero_count_options_and_stable_keys() {
 #[test]
 fn label_lookup_maps_null_to_the_reserved_key() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), Some("a"), None]));
-    let dictionary = ValueDictionary::build(&a).unwrap();
+    let dictionary = Dictionary::build(&a).unwrap();
     assert_eq!(
         dictionary
             .keys_for_labels(&[Some("a".into()), None])
@@ -222,12 +222,12 @@ fn label_lookup_maps_null_to_the_reserved_key() {
 #[test]
 fn empty_and_all_null_columns_still_encode() {
     let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
-    let dictionary = ValueDictionary::build(&empty).unwrap();
+    let dictionary = Dictionary::build(&empty).unwrap();
     assert_eq!(dictionary.n_values(), 0);
     assert!(!dictionary.has_null());
 
     let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
-    let dictionary = ValueDictionary::build(&nulls).unwrap();
+    let dictionary = Dictionary::build(&nulls).unwrap();
     assert_eq!(dictionary.n_values(), 0);
     assert!(dictionary.has_null());
     assert_eq!(dictionary.code_at(0), NULL_CODE);
@@ -243,7 +243,7 @@ fn empty_and_all_null_columns_still_encode() {
 #[test]
 fn predicates_match_null_through_the_reserved_code() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), None, Some("a")]));
-    let dictionary = Arc::new(ValueDictionary::build(&a).unwrap());
+    let dictionary = Arc::new(Dictionary::build(&a).unwrap());
     let mut hits = [false; 3];
     dictionary
         .prepare_predicate(&[u64::from(NULL_CODE)])
@@ -266,7 +266,7 @@ fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
     let values = StringArray::from(vec![Some("b"), None, Some("a")]);
     let array: ArrayRef =
         Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
-    let dictionary = ValueDictionary::build(&array).unwrap();
+    let dictionary = Dictionary::build(&array).unwrap();
     assert_eq!(dictionary.n_values(), 2);
     assert!(dictionary.has_null());
     assert_eq!(labels(&dictionary), vec![
@@ -304,7 +304,7 @@ fn native_dictionary_drops_duplicate_and_unused_entries() {
     let values = StringArray::from(vec![Some("b"), Some("a"), Some("a"), Some("z")]);
     let array: ArrayRef =
         Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
-    let dictionary = ValueDictionary::build(&array).unwrap();
+    let dictionary = Dictionary::build(&array).unwrap();
     assert_eq!(dictionary.n_values(), 2);
     assert!(!dictionary.has_null());
     assert_eq!(labels(&dictionary), vec![
@@ -324,7 +324,7 @@ fn native_dictionary_over_the_limit_falls_back() {
     let values: ArrayRef = Arc::new(Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32));
     let keys = Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32);
     let array: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
-    assert!(ValueDictionary::build(&array).is_none());
+    assert!(Dictionary::build(&array).is_none());
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn native_dictionary_value_width_does_not_matter() {
     let values = Int16Array::from(vec![Some(1), Some(2)]);
     let array: ArrayRef =
         Arc::new(DictionaryArray::<Int16Type>::try_new(keys, Arc::new(values)).unwrap());
-    let dictionary = ValueDictionary::build(&array).unwrap();
+    let dictionary = Dictionary::build(&array).unwrap();
     assert_eq!(dictionary.n_values(), 2);
     assert_eq!(
         (0..3)
@@ -351,7 +351,7 @@ fn predicates_cover_ranges_indices_and_incoming_masks() {
         Some("a"),
         Some("b"),
     ]));
-    let dictionary = Arc::new(ValueDictionary::build(&a).unwrap());
+    let dictionary = Arc::new(Dictionary::build(&a).unwrap());
     let keys = dictionary.keys_for_labels(&[Some("b".into())]).unwrap();
     let predicate = dictionary.prepare_predicate(&keys);
     let cancel = CancelToken::never();
@@ -390,8 +390,8 @@ fn plain_and_native_dictionaries_agree() {
     let values = StringArray::from(vec![Some("b"), Some("a")]);
     let native: ArrayRef =
         Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
-    let plain = ValueDictionary::build(&plain).unwrap();
-    let native = ValueDictionary::build(&native).unwrap();
+    let plain = Dictionary::build(&plain).unwrap();
+    let native = Dictionary::build(&native).unwrap();
     assert_eq!(plain.n_values(), native.n_values());
     assert_eq!(
         plain.counts_all(&Selection::All(5)).unwrap(),
@@ -423,7 +423,7 @@ fn float_values_group_signed_zero_and_nan_payloads() {
     ]);
     for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
         let array = arrow::compute::cast(&source, &data_type).unwrap();
-        let dictionary = ValueDictionary::build(&array).unwrap();
+        let dictionary = Dictionary::build(&array).unwrap();
         assert_eq!(dictionary.n_values(), 3, "{data_type:?}");
         assert!(dictionary.has_null(), "{data_type:?}");
 
@@ -476,7 +476,7 @@ fn counting_without_an_index() {
     assert_eq!(some.top[0].label, None);
 }
 
-fn codes_of(dictionary: &ValueDictionary) -> Vec<u8> {
+fn codes_of(dictionary: &Dictionary) -> Vec<u8> {
     (0..dictionary.codes.len())
         .map(|row| dictionary.code_at(row))
         .collect()
@@ -498,7 +498,7 @@ fn integer_arrays_group_and_order_natively() {
         DataType::Int64,
     ] {
         let array = cast(&signed, &data_type).expect("integer cast");
-        let dictionary = ValueDictionary::build(&array).expect("encoded");
+        let dictionary = Dictionary::build(&array).expect("encoded");
         assert_eq!(
             labels(&dictionary),
             [Some("-3".into()), Some("2".into()), Some("7".into())],
@@ -522,7 +522,7 @@ fn integer_arrays_group_and_order_natively() {
         DataType::UInt64,
     ] {
         let array = cast(&unsigned, &data_type).expect("unsigned cast");
-        let dictionary = ValueDictionary::build(&array).expect("encoded");
+        let dictionary = Dictionary::build(&array).expect("encoded");
         assert_eq!(
             labels(&dictionary),
             [Some("2".into()), Some("3".into()), Some("7".into())],
@@ -578,7 +578,7 @@ fn temporal_arrays_order_by_stored_unit() {
     ];
     for (array, data_type) in cases {
         assert_eq!(array.data_type(), &data_type);
-        let dictionary = ValueDictionary::build(&array).expect("encoded");
+        let dictionary = Dictionary::build(&array).expect("encoded");
         assert_eq!(dictionary.n_values(), 3, "{data_type}");
         assert_eq!(codes_of(&dictionary), [2, 0, 2, 255, 1], "{data_type}");
     }
@@ -591,7 +591,7 @@ fn decimal_arrays_order_by_coefficient() {
             .with_precision_and_scale(10, 2)
             .unwrap(),
     );
-    let dictionary = ValueDictionary::build(&d128).expect("encoded");
+    let dictionary = Dictionary::build(&d128).expect("encoded");
     assert_eq!(labels(&dictionary), [
         Some("-0.45".into()),
         Some("0.00".into()),
@@ -609,7 +609,7 @@ fn decimal_arrays_order_by_coefficient() {
         .with_precision_and_scale(76, 0)
         .unwrap(),
     );
-    let dictionary = ValueDictionary::build(&d256).expect("encoded");
+    let dictionary = Dictionary::build(&d256).expect("encoded");
     assert_eq!(dictionary.n_values(), 2);
     assert_eq!(codes_of(&dictionary), [1, 0, 255, 1]);
 }
@@ -622,7 +622,7 @@ fn boolean_arrays_order_false_before_true() {
         Some(true),
         None,
     ]));
-    let dictionary = ValueDictionary::build(&array).expect("encoded");
+    let dictionary = Dictionary::build(&array).expect("encoded");
     assert_eq!(labels(&dictionary), [
         Some("false".into()),
         Some("true".into())
@@ -633,7 +633,7 @@ fn boolean_arrays_order_false_before_true() {
 #[test]
 fn arrow_null_type_encodes_every_row_as_null() {
     let array: ArrayRef = Arc::new(NullArray::new(3));
-    let dictionary = ValueDictionary::build(&array).expect("encoded");
+    let dictionary = Dictionary::build(&array).expect("encoded");
     assert_eq!(dictionary.n_values(), 0);
     assert!(dictionary.has_null());
     assert_eq!(codes_of(&dictionary), [255, 255, 255]);

@@ -13,7 +13,7 @@ pub mod stats;
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-pub(crate) use dictionary::{ValueDictionary, MAX_DISTINCT_VALUES};
+pub(crate) use dictionary::{Dictionary, MAX_DISTINCT_VALUES};
 pub use filter::range::Bound;
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
@@ -32,7 +32,7 @@ pub struct Column {
     ty: Type,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
-    dictionary: OnceLock<Option<Arc<ValueDictionary>>>,
+    dictionary: OnceLock<Option<Arc<Dictionary>>>,
 }
 
 impl Column {
@@ -63,9 +63,9 @@ impl Column {
     /// The column's compact distinct-value encoding, built once and shared by
     /// every session over the same dataset. Columns that are too high
     /// cardinality (or whose type cannot be encoded) return `None`.
-    pub(crate) fn dictionary(&self) -> Option<&Arc<ValueDictionary>> {
+    pub(crate) fn dictionary(&self) -> Option<&Arc<Dictionary>> {
         self.dictionary
-            .get_or_init(|| ValueDictionary::build(&self.array).map(Arc::new))
+            .get_or_init(|| Dictionary::build(&self.array).map(Arc::new))
             .as_ref()
     }
 

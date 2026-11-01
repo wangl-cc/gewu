@@ -1,6 +1,6 @@
 //! Distinct values of a column as a compact `u8` code space.
 //!
-//! A [`ValueDictionary`] gives every source row a code naming its distinct
+//! A [`Dictionary`] gives every source row a code naming its distinct
 //! value: codes `0..=254` name the non-null values in value order, and
 //! [`NULL_CODE`] names null.
 //!
@@ -8,18 +8,16 @@
 //!
 //! Everything about how a physical Arrow array becomes that dictionary is
 //! organized into internal submodules:
-//! - [`build`]: Type-level router dispatching Arrow arrays to the appropriate encoding strategy
-//!   (native dictionary, primitives, boolean, row format).
-//! - [`kernel`]: Universal single-pass distinct extraction, sorting, and code renumbering
-//!   algorithms.
+//! - [`build`]: Type-level router and constructors on [`Dictionary`] (native dictionary,
+//!   primitives, boolean, row format).
 //! - [`primitive`]: Specialized native scanners for primitive types and normalized total-order
 //!   float keys.
 //! - [`streaming`]: Streaming distinct counts for columns exceeding [`MAX_DISTINCT_VALUES`] via
 //!   [`streaming::count_values`].
 //!
-//! Other modules consume the dictionary through [`ValueDictionary::tally`] for
-//! frequency counting, [`ValueDictionary::values`] for distinct value arrays,
-//! and [`ValueDictionary::prepare_predicate`] for filter generation.
+//! Other modules consume the dictionary through [`Dictionary::tally`] for
+//! frequency counting, [`Dictionary::values`] for distinct value arrays,
+//! and [`Dictionary::prepare_predicate`] for filter generation.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
 //! and cached by [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`]
@@ -32,7 +30,6 @@ use arrow::array::{Array, ArrayRef};
 use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
 
 mod build;
-mod kernel;
 mod primitive;
 pub(crate) mod streaming;
 
@@ -50,7 +47,7 @@ pub(crate) const NULL_CODE: u8 = 255;
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
 
-pub(crate) struct ValueDictionary {
+pub(crate) struct Dictionary {
     /// Code of each source row; [`NULL_CODE`] for null.
     codes: Vec<u8>,
     /// Non-null values in code order.
@@ -59,7 +56,7 @@ pub(crate) struct ValueDictionary {
     has_null: bool,
 }
 
-impl ValueDictionary {
+impl Dictionary {
     #[inline]
     pub(crate) fn values(&self) -> &ArrayRef {
         &self.values

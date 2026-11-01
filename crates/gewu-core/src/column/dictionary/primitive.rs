@@ -6,11 +6,11 @@
 use std::hash::Hash;
 
 use arrow::{
-    array::{Array, PrimitiveArray},
+    array::{AsArray, PrimitiveArray},
     datatypes::ArrowPrimitiveType,
 };
 
-use super::{kernel::build_distinct, ValueDictionary};
+use super::Dictionary;
 
 /// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
 /// every NaN payload groups into one NaN.
@@ -38,38 +38,40 @@ fn order_key(value: f64) -> u64 {
 /// Encode an array whose native values are already the dictionary keys.
 pub(super) fn build_ordered_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-) -> Option<ValueDictionary>
+) -> Option<Dictionary>
 where
     T::Native: Copy + Eq + Ord + Hash,
 {
-    build_distinct(
-        array.len(),
-        |row| array.is_null(row),
-        |row| array.value(row),
-        |_| false,
-        array,
-    )
+    Dictionary::from_array_with_keys(array, |row| array.value(row))
 }
 
 /// Encode a floating-point array. The key normalizes signed zeros and NaN
-/// payloads into one total order, and the zero group keeps positive zero as its
-/// representative so the option reads `0.0`.
+/// payloads into one total order, and any zero in the distinct values array
+/// is normalized to `+0.0`.
 pub(super) fn build_float_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-) -> Option<ValueDictionary>
+) -> Option<Dictionary>
 where
-    T::Native: Into<f64>,
+    T::Native: Into<f64> + std::ops::Neg<Output = T::Native>,
 {
-    build_distinct(
-        array.len(),
-        |row| array.is_null(row),
-        |row| order_key(array.value(row).into()),
-        |row| {
-            let value: f64 = array.value(row).into();
-            value == 0.0 && value.is_sign_positive()
-        },
-        array,
-    )
+    let mut dict =
+        Dictionary::from_array_with_keys(array, |row| order_key(array.value(row).into()))?;
+    let values = dict.values.as_primitive::<T>();
+    if values
+        .iter()
+        .any(|v| v.is_some_and(|x| x.into() == 0.0 && x.into().is_sign_negative()))
+    {
+        let sanitized: PrimitiveArray<T> = arrow::compute::unary(values, |v| {
+            let f: f64 = v.into();
+            if f == 0.0 && f.is_sign_negative() {
+                -v
+            } else {
+                v
+            }
+        });
+        dict.values = std::sync::Arc::new(sanitized);
+    }
+    Some(dict)
 }
 
 #[cfg(test)]
