@@ -24,14 +24,13 @@
 //! whose Arrow type has no model, so every column has a logical type.
 
 pub(crate) mod derive;
-pub(crate) mod identity;
 mod logical;
 
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 pub(crate) use derive::direct_domain;
-pub use derive::{AnalysisSection, FindStrategy, IndexStrategy, LengthUnit};
+pub use derive::{AnalysisSection, FindStrategy, LengthUnit};
 pub use logical::{ColumnCapabilities, ColumnInfo, LogicalType};
 
 /// A column type: one shape in one storage encoding.

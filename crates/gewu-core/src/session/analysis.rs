@@ -8,7 +8,7 @@ use arrow::{
 use super::Session;
 use crate::{
     analysis::numeric::Numeric,
-    column::{format, index::count_values, stats},
+    column::{dictionary::counted, format, stats},
     scope::{for_rows, RowScope, Selection},
     ColumnSummary, Histogram, Result,
 };
@@ -103,25 +103,20 @@ impl Session {
             Selection::All(_) => array.null_count() as u64,
             Selection::Rows(_) => rows.iter().filter(|&r| array.is_null(r)).count() as u64,
         };
-        let mut values = match self.dictionary(column)? {
-            Some(dictionary) => {
-                let values = dictionary.counts(&rows)?;
-                s.distinct_count = values.len() as u64;
-                // Value order: the first and last non-null are the extremes.
-                let mut present = values.iter().filter_map(|v| v.label.as_ref());
-                s.min_label = present.clone().next().cloned();
-                s.max_label = present.next_back().cloned();
-                values
-            }
-            None => {
-                // One spare in case null is among the most common.
-                let counted = count_values(array, &rows, top + 1)?;
-                s.distinct_count = counted.distinct;
-                let (lo, hi) = extremes(array, &rows)?;
-                (s.min_label, s.max_label) = (label(lo), label(hi));
-                counted.top
-            }
-        };
+        let dictionary = self.dictionary(column)?;
+        // One spare in case null is among the most common.
+        let counted = counted(dictionary.as_ref(), array, &rows, top + 1)?;
+        s.distinct_count = counted.distinct;
+        let mut values = counted.top;
+        if dictionary.is_some() {
+            // Value order: the first and last non-null are the extremes.
+            let mut present = values.iter().filter_map(|v| v.label.as_ref());
+            s.min_label = present.clone().next().cloned();
+            s.max_label = present.next_back().cloned();
+        } else {
+            let (lo, hi) = extremes(array, &rows)?;
+            (s.min_label, s.max_label) = (label(lo), label(hi));
+        }
         if s.null_count > 0 {
             s.distinct_count -= 1;
         }

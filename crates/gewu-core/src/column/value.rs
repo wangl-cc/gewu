@@ -1,5 +1,8 @@
 //! Value identity shared by every component that groups or orders values.
 //!
+//! The distinct-value codebook and the values analysis both group floating
+//! point values this way, so the rule has one definition.
+//!
 //! Floating-point value selection cannot distinguish signed zeros or NaN
 //! payloads meaningfully, so `-0.0`/`0.0` share one value and all NaNs share
 //! another. The distinct-value dictionary, streaming counts and the values
@@ -28,10 +31,6 @@ pub(crate) fn order_key(value: f64) -> u64 {
     }
 }
 
-/// Order key shared by `-0.0` and `0.0`; the representative value reads as
-/// `0.0` when both signed zeros occur.
-pub(crate) const ZERO_ORDER_KEY: u64 = 1 << 63;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,7 +39,7 @@ mod tests {
     fn signed_zeros_group_together() {
         assert_eq!(normalized_bits(0.0), normalized_bits(-0.0));
         assert_eq!(order_key(0.0), order_key(-0.0));
-        assert_eq!(order_key(0.0), ZERO_ORDER_KEY);
+        assert_eq!(order_key(0.0), 1 << 63);
     }
 
     #[test]

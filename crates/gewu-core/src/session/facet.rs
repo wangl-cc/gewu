@@ -2,7 +2,7 @@
 
 use super::Session;
 use crate::{
-    column::{index::count_values, stats, DistinctValue},
+    column::{dictionary::counted, stats, DistinctValue},
     predicate::Predicate,
     scope::RowScope,
     types::{Domain, LogicalType},
@@ -189,29 +189,16 @@ impl Session {
         spec: Option<&QuerySpec>,
         limit: u32,
     ) -> Result<DistinctResult> {
+        let col = self.column(column)?;
         let dictionary = self.dictionary(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
         let limit = limit as usize;
-        Ok(match dictionary {
-            Some(dictionary) => {
-                let present = dictionary.counts(&rows)?;
-                DistinctResult {
-                    total: present.len() as u64,
-                    truncated: present.len() > limit,
-                    values: present.into_iter().take(limit).collect(),
-                    keyed: true,
-                }
-            }
-            None => {
-                let col = self.column(column)?;
-                let counted = count_values(&col.array, &rows, limit)?;
-                DistinctResult {
-                    total: counted.distinct,
-                    truncated: counted.distinct > limit as u64,
-                    values: counted.top,
-                    keyed: false,
-                }
-            }
+        let counted = counted(dictionary.as_ref(), &col.array, &rows, limit)?;
+        Ok(DistinctResult {
+            total: counted.distinct,
+            truncated: counted.distinct > limit as u64,
+            values: counted.top.into_iter().take(limit).collect(),
+            keyed: dictionary.is_some(),
         })
     }
 

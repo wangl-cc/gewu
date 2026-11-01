@@ -46,17 +46,6 @@ pub enum FindStrategy {
     Dictionary,
 }
 
-/// How the distinct-value dictionary encodes a column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexStrategy {
-    /// Arrow row format: equality and value order from encoded rows.
-    RowEncoded,
-    /// Native float scan with signed-zero and NaN normalization.
-    NormalizedFloat,
-    /// Reuse the source dictionary's values and keys.
-    NativeDictionary,
-}
-
 /// Scalar class of a directly stored column. Ordered operations and typing of
 /// explicit inputs currently require native arrays rather than dictionary keys.
 pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
@@ -208,17 +197,6 @@ impl Type {
                     FindStrategy::Unsupported
                 }
             }
-        }
-    }
-
-    /// How the distinct-value dictionary encodes this column.
-    pub fn index_strategy(&self) -> IndexStrategy {
-        if self.is_dictionary() {
-            IndexStrategy::NativeDictionary
-        } else if self.domain() == Some(Domain::Float) {
-            IndexStrategy::NormalizedFloat
-        } else {
-            IndexStrategy::RowEncoded
         }
     }
 }
@@ -413,26 +391,6 @@ mod tests {
         assert_eq!(
             ty(&DataType::Struct(binary_only)).find_strategy(),
             FindStrategy::Unsupported
-        );
-    }
-
-    #[test]
-    fn index_strategies_follow_encoding_and_domain() {
-        assert_eq!(
-            ty(&DataType::Float32).index_strategy(),
-            IndexStrategy::NormalizedFloat
-        );
-        assert_eq!(
-            ty(&DataType::Int64).index_strategy(),
-            IndexStrategy::RowEncoded
-        );
-        assert_eq!(
-            ty(&dictionary(DataType::Float64)).index_strategy(),
-            IndexStrategy::NativeDictionary
-        );
-        assert_eq!(
-            ty(&DataType::Null).index_strategy(),
-            IndexStrategy::RowEncoded
         );
     }
 

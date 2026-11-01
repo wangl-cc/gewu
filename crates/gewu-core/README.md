@@ -97,7 +97,9 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 [types/](src/types) is the single place that answers what a column type supports. A type has four orthogonal dimensions: `Shape` (null, scalar, list, struct, map), `Scalar` (text, boolean, number, temporal, interval or binary, with its bit width, precision and scale, time unit and time zone), `Encoding` (direct or dictionary) and the parameter-free `Domain` that policy code matches on. `Type::from_arrow` builds the model and returns `None` for Arrow types without Gewu semantics; opening a document rejects such columns instead of degrading silently. `LogicalType` is derived from the model as the stable value projection used by the FFI, `ColumnInfo` and the app, while `ColumnInfo::encoding` separately reports direct or dictionary storage — a dictionary of text is still text.
 
-Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units, Find strategy, distinct-value index strategy, and shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN). `column/filter`, `column/index`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
+Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units and Find strategy. `column/filter`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
+
+[column/dictionary.rs](src/column/dictionary.rs) owns the compact distinct-value codebook: native dictionaries reuse their keys and values, primitive arrays scan natively through one `PrimitiveKey` key function per physical type, and only text, binary and nested arrays use Arrow's row format. Its consumers call `counts`, `keys_for_labels`, `prepare_predicate` or the `counted` facade for streaming fallback; they never see codes or encoding strategy. Shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN) lives in [column/value.rs](src/column/value.rs) and is used by both the codebook and the values analysis.
 
 ## Code map
 
@@ -112,13 +114,14 @@ Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `co
 | [view.rs](src/view.rs) | Query state, sort keys and formatted row blocks. |
 | [filter.rs](src/filter.rs) | Explicit filter inputs and filter-editor contracts. |
 | [engine.rs](src/engine.rs) | View snapshots, versions, cancellation and publication. |
-| [types/](src/types) | Four-dimension column type model and every capability, analysis, Find and index derivation. |
+| [types/](src/types) | Four-dimension column type model and the capability, analysis and Find derivations. |
 | [column/](src/column) | Per-type formatting, predicate preparation, distinct-value encoding and histograms. |
 | [column/bound.rs](src/column/bound.rs) | Exact typed endpoints and range preparation. |
 | [column/histogram.rs](src/column/histogram.rs) | Native bin membership, counts and exact filter bounds. |
 | [predicate.rs](src/predicate.rs) | Prepared predicates, batch evaluation and intersection. |
 | [scope.rs](src/scope.rs) | Source, current-view and facet row selections. |
-| [column/index.rs](src/column/index.rs) | Compact distinct-value encoding, stable keys and streaming counts. |
+| [column/dictionary.rs](src/column/dictionary.rs) | Distinct-value codebook, stable keys, streaming counts and the native primitive encoders. |
+| [column/value.rs](src/column/value.rs) | Value identity shared by codebook grouping and the values analysis. |
 | [analysis.rs](src/analysis.rs) and [analysis/](src/analysis) | Independent analysis jobs, result types, length analysis and shared native numeric statistics. |
 | [scatter.rs](src/scatter.rs) | Bounded, deterministic scatter sampling with independent cancellation. |
 | [text_choices.rs](src/text_choices.rs) | Bounded string candidate sessions, page results and cursors. |

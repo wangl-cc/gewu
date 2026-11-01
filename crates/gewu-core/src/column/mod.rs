@@ -2,23 +2,26 @@
 //!
 //! Type semantics live in [`crate::types`]; this module owns the column's data,
 //! its lazy distinct-value dictionary, and the per-column kernels:
-//! - [`filter`], [`index`], [`stats`] and [`format`]
+//! - [`dictionary`]: distinct-value codebook and streaming counts
+//! - [`value`]: value identity shared by grouping and analysis
+//! - [`filter`], [`stats`] and [`format`]
 //! - [`format`]: Cell and array formatting
 //! - [`index`]: Distinct value indexing and counting
 //! - [`stats`]: Histograms and distributions
 //! - [`filter`]: Single-column filter and Find predicate compilation
 
+pub mod dictionary;
 pub mod filter;
 pub mod format;
-pub mod index;
 pub mod stats;
+pub(crate) mod value;
 
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType, util::display::ArrayFormatter};
+pub use dictionary::{DistinctResult, DistinctValue};
+pub(crate) use dictionary::{ValueDictionary, MAX_DISTINCT_VALUES};
 pub use filter::range::Bound;
-pub use index::{DistinctResult, DistinctValue};
-pub(crate) use index::{ValueDictionary, MAX_DISTINCT_VALUES};
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};

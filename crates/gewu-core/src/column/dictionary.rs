@@ -2,16 +2,17 @@
 //!
 //! A [`ValueDictionary`] gives every source row a code naming its distinct
 //! value: codes `0..=254` name the non-null values in value order, and
-//! [`NULL_CODE`] names null. Plain columns are encoded by hashing their rows
-//! at build time. Native Arrow dictionary columns already carry keys and
-//! values, so they skip value detection and are converted into the same code
-//! array, reusing Arrow's encoded values. Float columns normalize for value
-//! selection: signed zeros share one option and every NaN payload shares one
-//! NaN option, matching streaming counts.
+//! [`NULL_CODE`] names null. Everything about how a physical Arrow array
+//! becomes that codebook lives here: native dictionaries reuse their keys and
+//! values, primitive arrays scan natively, and only text, binary and nested
+//! arrays fall back to Arrow's row format. Other modules consume the result
+//! through the methods below; they never see codes, values or encoding
+//! strategy.
 //!
 //! The codebook is a pure function of the column data and is cached by
 //! [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`] non-null
-//! values are not encoded; callers fall back to streaming counts.
+//! values are not encoded; callers fall back to streaming counts, which this
+//! module also provides through [`counted`].
 
 use std::{
     cmp::Reverse,
@@ -24,15 +25,24 @@ use arrow::{
     array::{Array, ArrayRef, AsArray, PrimitiveArray, UInt32Array},
     compute::take,
     datatypes::{
-        ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-        Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+        Decimal32Type, Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
+        DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type,
+        Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+        UInt32Type, UInt64Type, UInt8Type,
     },
     row::{RowConverter, SortField},
 };
 
 use crate::{
-    analysis::AnalysisContext, column::format, predicate::Predicate, scope::Selection,
-    selection::RowSelection, types::identity, Result,
+    analysis::AnalysisContext,
+    column::{format, value},
+    predicate::Predicate,
+    scope::Selection,
+    selection::RowSelection,
+    Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,20 +93,61 @@ impl ValueDictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
     pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
-        use crate::types::IndexStrategy;
-        let strategy = crate::types::Type::from_arrow(array.data_type())
-            .map_or(IndexStrategy::RowEncoded, |ty| ty.index_strategy());
-        match strategy {
-            IndexStrategy::NativeDictionary => Self::build_native(array),
-            // Only floats need their own scan: value selection cannot
-            // distinguish signed zeros or NaN payloads.
-            IndexStrategy::NormalizedFloat => match array.data_type() {
-                DataType::Float16 => Self::build_float::<Float16Type>(array),
-                DataType::Float32 => Self::build_float::<Float32Type>(array),
-                DataType::Float64 => Self::build_float::<Float64Type>(array),
-                _ => None,
-            },
-            IndexStrategy::RowEncoded => Self::build_encoded(array),
+        use DataType::*;
+        match array.data_type() {
+            Dictionary(..) => Self::build_native(array),
+            Boolean => build_boolean(array),
+            Null => build_null(array),
+            Int8 => build_keyed(array.as_primitive::<Int8Type>()),
+            Int16 => build_keyed(array.as_primitive::<Int16Type>()),
+            Int32 => build_keyed(array.as_primitive::<Int32Type>()),
+            Int64 => build_keyed(array.as_primitive::<Int64Type>()),
+            UInt8 => build_keyed(array.as_primitive::<UInt8Type>()),
+            UInt16 => build_keyed(array.as_primitive::<UInt16Type>()),
+            UInt32 => build_keyed(array.as_primitive::<UInt32Type>()),
+            UInt64 => build_keyed(array.as_primitive::<UInt64Type>()),
+            Float16 => build_keyed(array.as_primitive::<Float16Type>()),
+            Float32 => build_keyed(array.as_primitive::<Float32Type>()),
+            Float64 => build_keyed(array.as_primitive::<Float64Type>()),
+            Date32 => build_keyed(array.as_primitive::<Date32Type>()),
+            Date64 => build_keyed(array.as_primitive::<Date64Type>()),
+            Time32(TimeUnit::Second) => build_keyed(array.as_primitive::<Time32SecondType>()),
+            Time32(TimeUnit::Millisecond) => {
+                build_keyed(array.as_primitive::<Time32MillisecondType>())
+            }
+            Time64(TimeUnit::Microsecond) => {
+                build_keyed(array.as_primitive::<Time64MicrosecondType>())
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                build_keyed(array.as_primitive::<Time64NanosecondType>())
+            }
+            Timestamp(TimeUnit::Second, _) => {
+                build_keyed(array.as_primitive::<TimestampSecondType>())
+            }
+            Timestamp(TimeUnit::Millisecond, _) => {
+                build_keyed(array.as_primitive::<TimestampMillisecondType>())
+            }
+            Timestamp(TimeUnit::Microsecond, _) => {
+                build_keyed(array.as_primitive::<TimestampMicrosecondType>())
+            }
+            Timestamp(TimeUnit::Nanosecond, _) => {
+                build_keyed(array.as_primitive::<TimestampNanosecondType>())
+            }
+            Duration(TimeUnit::Second) => build_keyed(array.as_primitive::<DurationSecondType>()),
+            Duration(TimeUnit::Millisecond) => {
+                build_keyed(array.as_primitive::<DurationMillisecondType>())
+            }
+            Duration(TimeUnit::Microsecond) => {
+                build_keyed(array.as_primitive::<DurationMicrosecondType>())
+            }
+            Duration(TimeUnit::Nanosecond) => {
+                build_keyed(array.as_primitive::<DurationNanosecondType>())
+            }
+            Decimal32(..) => build_keyed(array.as_primitive::<Decimal32Type>()),
+            Decimal64(..) => build_keyed(array.as_primitive::<Decimal64Type>()),
+            Decimal128(..) => build_keyed(array.as_primitive::<Decimal128Type>()),
+            Decimal256(..) => build_keyed(array.as_primitive::<Decimal256Type>()),
+            _ => Self::build_encoded(array),
         }
     }
 
@@ -158,68 +209,7 @@ impl ValueDictionary {
 
         Some(Self {
             codes,
-            values: value_rows(array, &first_row, &order)?,
-            has_null,
-        })
-    }
-
-    /// Encode a float column. Value selection cannot distinguish signed zeros
-    /// or NaN payloads meaningfully, so `-0.0`/`0.0` share one code and all NaNs
-    /// share another, matching streaming counts and analysis.
-    fn build_float<T: ArrowPrimitiveType>(array: &ArrayRef) -> Option<Self>
-    where
-        T::Native: Into<f64>,
-    {
-        let source = array.as_primitive::<T>();
-        let mut seen: HashMap<u64, u8> = HashMap::new();
-        let mut first_row: Vec<usize> = Vec::new();
-        let mut codes: Vec<u8> = Vec::with_capacity(source.len());
-        let mut has_null = false;
-        for row in 0..source.len() {
-            if source.is_null(row) {
-                has_null = true;
-                codes.push(NULL_CODE);
-                continue;
-            }
-            let value: f64 = source.value(row).into();
-            let key = identity::order_key(value);
-            let code = match seen.get(&key) {
-                Some(&code) => code,
-                None => {
-                    if first_row.len() == MAX_DISTINCT_VALUES {
-                        return None;
-                    }
-                    let code = first_row.len() as u8;
-                    seen.insert(key, code);
-                    first_row.push(row);
-                    code
-                }
-            };
-            // Prefer a positive zero as the option's representative so it reads
-            // "0" when both signed zeros occur.
-            if key == identity::ZERO_ORDER_KEY && value.is_sign_positive() {
-                first_row[code as usize] = row;
-            }
-            codes.push(code);
-        }
-
-        let mut key_of = vec![0_u64; first_row.len()];
-        for (&key, &code) in &seen {
-            key_of[code as usize] = key;
-        }
-        let mut order: Vec<u8> = (0..first_row.len() as u8).collect();
-        order.sort_unstable_by_key(|&code| key_of[code as usize]);
-        let mut remap = [0u8; MAX_DISTINCT_VALUES];
-        for (new, &old) in order.iter().enumerate() {
-            remap[old as usize] = new as u8;
-        }
-        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
-            *code = remap[*code as usize];
-        }
-
-        Some(Self {
-            codes,
-            values: value_rows(array, &first_row, &order)?,
+            values: value_rows(array.as_ref(), &first_row, &order)?,
             has_null,
         })
     }
@@ -447,15 +437,195 @@ impl ValueDictionary {
     }
 }
 
+/// How a primitive value becomes a codebook key.
+///
+/// Contract: equal keys must mean "the same displayed value", and key order
+/// must equal value order, because codes are assigned in key order.
+trait PrimitiveKey: ArrowPrimitiveType {
+    type Key: Copy + Eq + Ord + Hash;
+
+    fn key(value: Self::Native) -> Self::Key;
+
+    /// Whether this value should replace the recorded representative of its
+    /// key. Floats prefer positive zero so the option reads `0.0`.
+    fn prefers_representative(_: Self::Native) -> bool {
+        false
+    }
+}
+
+macro_rules! identity_keys {
+    ($($array:ty => $native:ty),* $(,)?) => {$(
+        impl PrimitiveKey for $array {
+            type Key = $native;
+
+            fn key(value: $native) -> $native {
+                value
+            }
+        }
+    )*};
+}
+
+identity_keys!(
+    Int8Type => i8,
+    Int16Type => i16,
+    Int32Type => i32,
+    Int64Type => i64,
+    UInt8Type => u8,
+    UInt16Type => u16,
+    UInt32Type => u32,
+    UInt64Type => u64,
+    Date32Type => i32,
+    Date64Type => i64,
+    Time32SecondType => i32,
+    Time32MillisecondType => i32,
+    Time64MicrosecondType => i64,
+    Time64NanosecondType => i64,
+    TimestampSecondType => i64,
+    TimestampMillisecondType => i64,
+    TimestampMicrosecondType => i64,
+    TimestampNanosecondType => i64,
+    DurationSecondType => i64,
+    DurationMillisecondType => i64,
+    DurationMicrosecondType => i64,
+    DurationNanosecondType => i64,
+    Decimal32Type => i32,
+    Decimal64Type => i64,
+    Decimal128Type => i128,
+    Decimal256Type => arrow::datatypes::i256,
+);
+
+impl PrimitiveKey for Float16Type {
+    type Key = u64;
+
+    fn key(value: Self::Native) -> u64 {
+        value::order_key(f64::from(value))
+    }
+
+    fn prefers_representative(value: Self::Native) -> bool {
+        f64::from(value) == 0.0 && value.is_sign_positive()
+    }
+}
+
+impl PrimitiveKey for Float32Type {
+    type Key = u64;
+
+    fn key(value: Self::Native) -> u64 {
+        value::order_key(f64::from(value))
+    }
+
+    fn prefers_representative(value: Self::Native) -> bool {
+        f64::from(value) == 0.0 && value.is_sign_positive()
+    }
+}
+
+impl PrimitiveKey for Float64Type {
+    type Key = u64;
+
+    fn key(value: Self::Native) -> u64 {
+        value::order_key(value)
+    }
+
+    fn prefers_representative(value: Self::Native) -> bool {
+        value == 0.0 && value.is_sign_positive()
+    }
+}
+
+/// Encode a primitive array by scanning native values.
+fn build_keyed<T: PrimitiveKey>(array: &PrimitiveArray<T>) -> Option<ValueDictionary> {
+    build_distinct(
+        array.len(),
+        |row| array.is_null(row),
+        |row| T::key(array.value(row)),
+        |row| T::prefers_representative(array.value(row)),
+        array,
+    )
+}
+
+/// Encode a boolean array. `false` sorts before `true`.
+fn build_boolean(array: &ArrayRef) -> Option<ValueDictionary> {
+    let source = array.as_boolean();
+    build_distinct(
+        source.len(),
+        |row| source.is_null(row),
+        |row| u8::from(source.value(row)),
+        |_| false,
+        source,
+    )
+}
+
+/// Encode the Arrow null type: every row is null.
+fn build_null(array: &ArrayRef) -> Option<ValueDictionary> {
+    Some(ValueDictionary {
+        codes: vec![NULL_CODE; array.len()],
+        values: value_rows(array.as_ref(), &[], &[])?,
+        has_null: !array.is_empty(),
+    })
+}
+
+/// Shared codebook algorithm: one native pass, one code per distinct key, then
+/// codes renumbered into key order.
+fn build_distinct<K: Copy + Eq + Ord + Hash>(
+    len: usize,
+    is_null: impl Fn(usize) -> bool,
+    key_at: impl Fn(usize) -> K,
+    prefer_at: impl Fn(usize) -> bool,
+    array: &dyn Array,
+) -> Option<ValueDictionary> {
+    let mut seen: HashMap<K, u8> = HashMap::new();
+    let mut key_of: Vec<K> = Vec::new();
+    let mut first_row: Vec<usize> = Vec::new();
+    let mut codes: Vec<u8> = Vec::with_capacity(len);
+    let mut has_null = false;
+    for row in 0..len {
+        if is_null(row) {
+            has_null = true;
+            codes.push(NULL_CODE);
+            continue;
+        }
+        let key = key_at(row);
+        let code = match seen.get(&key) {
+            Some(&code) => code,
+            None => {
+                if key_of.len() == MAX_DISTINCT_VALUES {
+                    return None;
+                }
+                let code = key_of.len() as u8;
+                seen.insert(key, code);
+                key_of.push(key);
+                first_row.push(row);
+                code
+            }
+        };
+        if prefer_at(row) {
+            first_row[code as usize] = row;
+        }
+        codes.push(code);
+    }
+    let mut order: Vec<u8> = (0..key_of.len() as u8).collect();
+    order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(&key_of[b as usize]));
+    let mut remap = [0u8; MAX_DISTINCT_VALUES];
+    for (new, &old) in order.iter().enumerate() {
+        remap[old as usize] = new as u8;
+    }
+    for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
+        *code = remap[*code as usize];
+    }
+    Some(ValueDictionary {
+        codes,
+        values: value_rows(array, &first_row, &order)?,
+        has_null,
+    })
+}
+
 /// Build the `values` array in code order from the first row of each value.
-fn value_rows(array: &ArrayRef, first_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
+fn value_rows(array: &dyn Array, first_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
     let rows = UInt32Array::from(
         order
             .iter()
             .map(|&old| first_row[old as usize] as u32)
             .collect::<Vec<_>>(),
     );
-    take(array.as_ref(), &rows, None).ok()
+    take(array, &rows, None).ok()
 }
 
 /// Visit every key of a native Dictionary array; `None` for a null key.
@@ -620,12 +790,33 @@ where
             NULL_KEY
         } else {
             let value: f64 = array.value(row).into();
-            identity::normalized_bits(value)
+            value::normalized_bits(value)
         };
         counts.entry(key).or_insert((0, row as u32)).0 += 1;
     }
     context.check()?;
     Ok(counts)
+}
+
+/// Distinct values with counts over `rows`: the codebook when the column has
+/// one, streaming counts otherwise. `keep` bounds the streaming path's list; a
+/// codebook never holds more than [`MAX_DISTINCT_VALUES`] values itself.
+pub(crate) fn counted(
+    dictionary: Option<&Arc<ValueDictionary>>,
+    array: &ArrayRef,
+    rows: &Selection,
+    keep: usize,
+) -> Result<ValueCounts> {
+    match dictionary {
+        Some(dictionary) => {
+            let values = dictionary.counts(rows)?;
+            Ok(ValueCounts {
+                distinct: values.len() as u64,
+                top: values,
+            })
+        }
+        None => count_values(array, rows, keep),
+    }
 }
 
 #[cfg(test)]
@@ -634,10 +825,12 @@ mod tests {
 
     use arrow::{
         array::{
-            DictionaryArray, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-            StringArray,
+            BooleanArray, Date32Array, Decimal128Array, Decimal256Array, DictionaryArray,
+            DurationSecondArray, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+            NullArray, StringArray, Time32MillisecondArray, TimestampMicrosecondArray,
         },
-        datatypes::{Int16Type, Int32Type, Int8Type},
+        compute::cast,
+        datatypes::{i256, Int16Type, Int32Type, Int8Type},
     };
 
     use super::*;
@@ -1058,5 +1251,174 @@ mod tests {
         let some = count_values(&a, &Selection::Rows(Arc::new(vec![2, 4])), 10).unwrap();
         assert_eq!(some.distinct, 2);
         assert_eq!(some.top[0].label, None);
+    }
+
+    fn codes_of(dictionary: &ValueDictionary) -> Vec<u8> {
+        (0..dictionary.codes.len())
+            .map(|row| dictionary.code_at(row))
+            .collect()
+    }
+
+    #[test]
+    fn integer_arrays_group_and_order_natively() {
+        let signed: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(-3),
+            Some(7),
+            Some(-3),
+            None,
+            Some(2),
+        ]));
+        for data_type in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+        ] {
+            let array = cast(&signed, &data_type).expect("integer cast");
+            let dictionary = ValueDictionary::build(&array).expect("encoded");
+            assert_eq!(
+                labels(&dictionary),
+                [Some("-3".into()), Some("2".into()), Some("7".into())],
+                "{data_type}"
+            );
+            assert_eq!(codes_of(&dictionary), [0, 2, 0, 255, 1], "{data_type}");
+            assert!(dictionary.has_null());
+        }
+
+        let unsigned: ArrayRef = Arc::new(arrow::array::UInt64Array::from(vec![
+            Some(3),
+            Some(7),
+            Some(3),
+            None,
+            Some(2),
+        ]));
+        for data_type in [
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ] {
+            let array = cast(&unsigned, &data_type).expect("unsigned cast");
+            let dictionary = ValueDictionary::build(&array).expect("encoded");
+            assert_eq!(
+                labels(&dictionary),
+                [Some("2".into()), Some("3".into()), Some("7".into())],
+                "{data_type}"
+            );
+            assert_eq!(codes_of(&dictionary), [1, 2, 1, 255, 0], "{data_type}");
+        }
+    }
+
+    #[test]
+    fn temporal_arrays_order_by_stored_unit() {
+        let cases: [(ArrayRef, DataType); 4] = [
+            (
+                Arc::new(Date32Array::from(vec![
+                    Some(3),
+                    Some(1),
+                    Some(3),
+                    None,
+                    Some(2),
+                ])),
+                DataType::Date32,
+            ),
+            (
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(3_000),
+                    Some(1_000),
+                    Some(3_000),
+                    None,
+                    Some(2_000),
+                ])),
+                DataType::Time32(TimeUnit::Millisecond),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(3_000_000),
+                    Some(1_000_000),
+                    Some(3_000_000),
+                    None,
+                    Some(2_000_000),
+                ])),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                Arc::new(DurationSecondArray::from(vec![
+                    Some(3),
+                    Some(1),
+                    Some(3),
+                    None,
+                    Some(2),
+                ])),
+                DataType::Duration(TimeUnit::Second),
+            ),
+        ];
+        for (array, data_type) in cases {
+            assert_eq!(array.data_type(), &data_type);
+            let dictionary = ValueDictionary::build(&array).expect("encoded");
+            assert_eq!(dictionary.n_values(), 3, "{data_type}");
+            assert_eq!(codes_of(&dictionary), [2, 0, 2, 255, 1], "{data_type}");
+        }
+    }
+
+    #[test]
+    fn decimal_arrays_order_by_coefficient() {
+        let d128: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(123_i128), Some(-45), Some(123), None, Some(0)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        let dictionary = ValueDictionary::build(&d128).expect("encoded");
+        assert_eq!(labels(&dictionary), [
+            Some("-0.45".into()),
+            Some("0.00".into()),
+            Some("1.23".into())
+        ]);
+        assert_eq!(codes_of(&dictionary), [2, 0, 2, 255, 1]);
+
+        let d256: ArrayRef = Arc::new(
+            Decimal256Array::from(vec![
+                Some(i256::from_i128(5)),
+                Some(i256::from_i128(-2)),
+                None,
+                Some(i256::from_i128(5)),
+            ])
+            .with_precision_and_scale(76, 0)
+            .unwrap(),
+        );
+        let dictionary = ValueDictionary::build(&d256).expect("encoded");
+        assert_eq!(dictionary.n_values(), 2);
+        assert_eq!(codes_of(&dictionary), [1, 0, 255, 1]);
+    }
+
+    #[test]
+    fn boolean_arrays_order_false_before_true() {
+        let array: ArrayRef = Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+        ]));
+        let dictionary = ValueDictionary::build(&array).expect("encoded");
+        assert_eq!(labels(&dictionary), [
+            Some("false".into()),
+            Some("true".into())
+        ]);
+        assert_eq!(codes_of(&dictionary), [1, 0, 1, 255]);
+    }
+
+    #[test]
+    fn arrow_null_type_encodes_every_row_as_null() {
+        let array: ArrayRef = Arc::new(NullArray::new(3));
+        let dictionary = ValueDictionary::build(&array).expect("encoded");
+        assert_eq!(dictionary.n_values(), 0);
+        assert!(dictionary.has_null());
+        assert_eq!(codes_of(&dictionary), [255, 255, 255]);
+        let present = dictionary.counts(&Selection::All(3)).unwrap();
+        assert_eq!(present, [DistinctValue {
+            key: u64::from(NULL_CODE),
+            label: None,
+            count: 3
+        }]);
     }
 }
