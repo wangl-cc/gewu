@@ -32,7 +32,7 @@ use arrow::{
 
 use crate::{
     analysis::AnalysisContext, column::format, predicate::Predicate, scope::Selection,
-    selection::RowSelection, Result,
+    selection::RowSelection, types::identity, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,21 +83,20 @@ impl ValueDictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
     pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
-        if matches!(array.data_type(), DataType::Dictionary(_, _)) {
-            Self::build_native(array)
-        } else {
-            Self::build_plain(array)
-        }
-    }
-
-    /// Encode a plain column. Floats are normalized for value selection; every
-    /// other type uses the generic row-format encoder.
-    fn build_plain(array: &ArrayRef) -> Option<Self> {
-        match array.data_type() {
-            DataType::Float16 => Self::build_float::<Float16Type>(array),
-            DataType::Float32 => Self::build_float::<Float32Type>(array),
-            DataType::Float64 => Self::build_float::<Float64Type>(array),
-            _ => Self::build_encoded(array),
+        use crate::types::IndexStrategy;
+        let strategy = crate::types::Type::from_arrow(array.data_type())
+            .map_or(IndexStrategy::RowEncoded, |ty| ty.index_strategy());
+        match strategy {
+            IndexStrategy::NativeDictionary => Self::build_native(array),
+            // Only floats need their own scan: value selection cannot
+            // distinguish signed zeros or NaN payloads.
+            IndexStrategy::NormalizedFloat => match array.data_type() {
+                DataType::Float16 => Self::build_float::<Float16Type>(array),
+                DataType::Float32 => Self::build_float::<Float32Type>(array),
+                DataType::Float64 => Self::build_float::<Float64Type>(array),
+                _ => None,
+            },
+            IndexStrategy::RowEncoded => Self::build_encoded(array),
         }
     }
 
@@ -171,12 +170,6 @@ impl ValueDictionary {
     where
         T::Native: Into<f64>,
     {
-        /// Order key of `+0.0`; keeps the shared zero option between negative
-        /// and positive values.
-        const ZERO_KEY: u64 = 1 << 63;
-        /// NaN sorts after every number.
-        const NAN_KEY: u64 = u64::MAX;
-
         let source = array.as_primitive::<T>();
         let mut seen: HashMap<u64, u8> = HashMap::new();
         let mut first_row: Vec<usize> = Vec::new();
@@ -189,18 +182,7 @@ impl ValueDictionary {
                 continue;
             }
             let value: f64 = source.value(row).into();
-            let key = if value == 0.0 {
-                ZERO_KEY
-            } else if value.is_nan() {
-                NAN_KEY
-            } else {
-                let bits = value.to_bits();
-                if bits & (1 << 63) != 0 {
-                    !bits
-                } else {
-                    bits | (1 << 63)
-                }
-            };
+            let key = identity::order_key(value);
             let code = match seen.get(&key) {
                 Some(&code) => code,
                 None => {
@@ -215,7 +197,7 @@ impl ValueDictionary {
             };
             // Prefer a positive zero as the option's representative so it reads
             // "0" when both signed zeros occur.
-            if key == ZERO_KEY && value.is_sign_positive() {
+            if key == identity::ZERO_ORDER_KEY && value.is_sign_positive() {
                 first_row[code as usize] = row;
             }
             codes.push(code);
@@ -244,7 +226,7 @@ impl ValueDictionary {
 
     /// Encode a native Dictionary. Arrow already encodes the values into
     /// `keys`/`values`, so no row hashing is needed: collect the referenced
-    /// dictionary values, reuse [`Self::build_plain`] on that small array, then
+    /// dictionary values, reuse [`Self::build`] on that small array, then
     /// walk the keys once to write the shared per-row code array.
     fn build_native(array: &ArrayRef) -> Option<Self> {
         let dictionary = array.as_any_dictionary();
@@ -291,7 +273,7 @@ impl ValueDictionary {
             None,
         )
         .ok()?;
-        let encoded = Self::build_plain(&referenced_values)?;
+        let encoded = Self::build(&referenced_values)?;
 
         let mut key_to_code = vec![NULL_CODE; dictionary_values.len()];
         for (entry, &slot) in entry_slot.iter().enumerate() {
@@ -638,13 +620,7 @@ where
             NULL_KEY
         } else {
             let value: f64 = array.value(row).into();
-            if value == 0.0 {
-                0
-            } else if value.is_nan() {
-                NAN_KEY
-            } else {
-                value.to_bits()
-            }
+            identity::normalized_bits(value)
         };
         counts.entry(key).or_insert((0, row as u32)).0 += 1;
     }

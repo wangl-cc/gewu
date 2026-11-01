@@ -42,13 +42,7 @@ where
     Box::new(move |row| {
         array.is_valid(row).then(|| {
             let value: f64 = array.value(row).into();
-            hash(if value == 0.0 {
-                0
-            } else if value.is_nan() {
-                f64::NAN.to_bits()
-            } else {
-                value.to_bits()
-            })
+            hash(crate::types::identity::normalized_bits(value))
         })
     })
 }

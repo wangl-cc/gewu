@@ -16,10 +16,7 @@ use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
 use crate::{
-    column::{filter::prepare_find, LogicalType},
-    engine::CancelToken,
-    predicate::Predicate,
-    Error, Result,
+    column::filter::prepare_find, engine::CancelToken, predicate::Predicate, Error, Result,
 };
 
 /// Maximum number of cell cursors returned by one directional Find request.
@@ -131,10 +128,10 @@ impl Find {
         }
         let matcher = query.matcher()?;
         for (_, array) in &columns {
-            let logical_type = LogicalType::from_arrow(array.data_type());
+            let ty = crate::types::Type::from_arrow(array.data_type());
             drop(prepare_find(
                 array,
-                &logical_type,
+                ty.as_ref(),
                 query.text(),
                 Some(&matcher),
             )?);
@@ -331,8 +328,8 @@ impl Find {
         self.columns
             .iter()
             .map(|(_, array)| {
-                let logical_type = LogicalType::from_arrow(array.data_type());
-                prepare_find(array, &logical_type, self.query.text(), Some(&matcher))
+                let ty = crate::types::Type::from_arrow(array.data_type());
+                prepare_find(array, ty.as_ref(), self.query.text(), Some(&matcher))
             })
             .collect()
     }

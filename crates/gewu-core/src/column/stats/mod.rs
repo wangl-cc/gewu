@@ -169,8 +169,9 @@ fn statistics<H: Output>(
     context: &AnalysisContext,
 ) -> Result<H> {
     context.check()?;
-    let logical = crate::LogicalType::from_arrow(array.data_type());
-    if !logical.capabilities().histogram {
+    let histogram = crate::types::Type::from_arrow(array.data_type())
+        .is_some_and(|ty| ty.capabilities().histogram);
+    if !histogram {
         return Err(Error::InvalidArgument(format!(
             "{} does not support histograms",
             array.data_type()

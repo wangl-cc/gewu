@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{analysis::AnalysisContext, ColumnSummary, LogicalType, Result};
+use crate::{analysis::AnalysisContext, types::Type, ColumnSummary, Result};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -58,11 +58,11 @@ mod summary;
 
 impl<'a> Numeric<'a> {
     pub(crate) fn new(array: &'a ArrayRef) -> Option<Self> {
-        // `LogicalType` decides; the dispatch table above must cover every
-        // ordered kind (checked by a test in kind.rs).
-        LogicalType::from_arrow(array.data_type())
-            .is_ordered()
-            .then_some(Self(array))
+        // The type model decides; the dispatch table above must cover every
+        // ordered kind (checked by a test in `types/derive.rs`).
+        Type::from_arrow(array.data_type())
+            .filter(Type::is_ordered)
+            .map(|_| Self(array))
     }
 
     /// Fill in the numeric parts of `summary`; returns the rows holding

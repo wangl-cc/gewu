@@ -9,20 +9,7 @@ use super::{AnalysisContext, LengthSummary, LengthUnit};
 use crate::{scope::Selection, Error, Histogram, Result};
 
 pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
-    match data_type {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Some(LengthUnit::Characters),
-        DataType::Binary
-        | DataType::LargeBinary
-        | DataType::BinaryView
-        | DataType::FixedSizeBinary(_) => Some(LengthUnit::Bytes),
-        DataType::List(_)
-        | DataType::LargeList(_)
-        | DataType::ListView(_)
-        | DataType::LargeListView(_)
-        | DataType::FixedSizeList(..)
-        | DataType::Map(..) => Some(LengthUnit::Elements),
-        _ => None,
-    }
+    crate::types::Type::from_arrow(data_type).and_then(|ty| ty.length_unit())
 }
 
 pub(super) fn analyze(

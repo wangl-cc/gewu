@@ -8,9 +8,7 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use super::{Histogram, Output, RangeBounds};
-use crate::{
-    analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, LogicalType, Result,
-};
+use crate::{analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, Result};
 
 pub(super) fn build<H: Output>(
     array: &ArrayRef,
@@ -22,7 +20,7 @@ pub(super) fn build<H: Output>(
     if bins == 0 {
         return Err(Error::InvalidArgument("bins must be at least 1".into()));
     }
-    if !LogicalType::from_arrow(array.data_type()).supports_logarithmic() {
+    if !crate::types::Type::from_arrow(array.data_type()).is_some_and(|ty| ty.is_numeric()) {
         return Err(Error::InvalidArgument(format!(
             "{} does not support logarithmic histograms",
             array.data_type()

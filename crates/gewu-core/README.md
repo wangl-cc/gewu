@@ -93,6 +93,12 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 `FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
 
+## Type model
+
+[types/](src/types) is the single place that answers what a column type supports. A type has four orthogonal dimensions: `Shape` (null, scalar, list, struct, map), `Scalar` (text, boolean, number, temporal, interval or binary, with its bit width, precision and scale, time unit and time zone), `Encoding` (direct or dictionary) and the parameter-free `Domain` that policy code matches on. `Type::from_arrow` builds the model and returns `None` for Arrow types without Gewu semantics; `LogicalType` is derived from it as the stable display projection used by the FFI, `ColumnInfo` and the app.
+
+Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units, Find strategy, distinct-value index strategy, and shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN). `column/filter`, `column/index`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
+
 ## Code map
 
 | Path | Responsibility |
@@ -106,7 +112,8 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 | [view.rs](src/view.rs) | Query state, sort keys and formatted row blocks. |
 | [filter.rs](src/filter.rs) | Explicit filter inputs and filter-editor contracts. |
 | [engine.rs](src/engine.rs) | View snapshots, versions, cancellation and publication. |
-| [column/](src/column) | Per-type capabilities, formatting and search/filter preparation; scalar, text and nested behavior. |
+| [types/](src/types) | Four-dimension column type model and every capability, analysis, Find and index derivation. |
+| [column/](src/column) | Per-type formatting, predicate preparation, distinct-value encoding and histograms. |
 | [column/bound.rs](src/column/bound.rs) | Exact typed endpoints and range preparation. |
 | [column/histogram.rs](src/column/histogram.rs) | Native bin membership, counts and exact filter bounds. |
 | [predicate.rs](src/predicate.rs) | Prepared predicates, batch evaluation and intersection. |

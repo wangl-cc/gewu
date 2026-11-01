@@ -14,6 +14,7 @@ use arrow::{
 use crate::{
     column::{format, stats},
     scope::Selection,
+    types::Type,
     DistinctValue, Error, Histogram, LogicalType, Result,
 };
 
@@ -49,22 +50,7 @@ pub struct ColumnSummary {
     pub top_values: Vec<DistinctValue>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AnalysisSection {
-    Overview,
-    Statistics,
-    Distribution,
-    Values,
-    Lengths,
-    Structure,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LengthUnit {
-    Characters,
-    Bytes,
-    Elements,
-}
+pub use crate::types::{AnalysisSection, LengthUnit};
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -217,7 +203,7 @@ impl ColumnAnalysis {
     pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
         if scale == crate::AxisScale::Log10
             && (self.section != AnalysisSection::Distribution
-                || !LogicalType::from_arrow(self.array.data_type()).supports_logarithmic())
+                || !Type::from_arrow(self.array.data_type()).is_some_and(|ty| ty.is_numeric()))
         {
             return Err(Error::InvalidArgument(
                 "logarithmic binning requires a numeric distribution".into(),
@@ -312,39 +298,10 @@ impl ColumnAnalysis {
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
 pub(crate) fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
-    use AnalysisSection::*;
-    let mut sections = vec![Overview];
-    let logical = LogicalType::from_arrow(data_type);
-    if logical.is_ordered() {
-        sections.extend([Statistics, Distribution]);
-    }
-    let value_type = match data_type {
-        DataType::Dictionary(_, value) => value.as_ref(),
-        _ => data_type,
-    };
-    let value_logical = LogicalType::from_arrow(value_type);
-    if value_logical.is_ordered()
-        || matches!(value_logical, LogicalType::Text | LogicalType::Boolean)
-    {
-        sections.push(Values);
-    }
-    if lengths::unit(data_type).is_some() {
-        sections.push(Lengths);
-    }
-    if matches!(
-        data_type,
-        DataType::Struct(_)
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::FixedSizeList(..)
-            | DataType::Map(..)
-            | DataType::Dictionary(..)
-    ) {
-        sections.push(Structure);
-    }
-    sections
+    Type::from_arrow(data_type).map_or_else(
+        || vec![AnalysisSection::Overview],
+        |ty| ty.analysis_sections(),
+    )
 }
 
 fn structure(data_type: &DataType) -> Vec<AnalysisField> {

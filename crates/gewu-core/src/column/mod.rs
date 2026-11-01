@@ -1,8 +1,8 @@
 //! First-class persistent Column model and column-level operations.
 //!
-//! Logical semantics, indexing, formatting, statistics and predicate compilation
-//! are organized into five orthogonal modules:
-//! - [`kind`]: LogicalType, ColumnCapabilities and ColumnInfo
+//! Type semantics live in [`crate::types`]; this module owns the column's data,
+//! its lazy distinct-value dictionary, and the per-column kernels:
+//! - [`filter`], [`index`], [`stats`] and [`format`]
 //! - [`format`]: Cell and array formatting
 //! - [`index`]: Distinct value indexing and counting
 //! - [`stats`]: Histograms and distributions
@@ -11,7 +11,6 @@
 pub mod filter;
 pub mod format;
 pub mod index;
-pub mod kind;
 pub mod stats;
 
 use std::sync::{Arc, OnceLock};
@@ -20,10 +19,10 @@ use arrow::{array::ArrayRef, datatypes::DataType, util::display::ArrayFormatter}
 pub use filter::range::Bound;
 pub use index::{DistinctResult, DistinctValue};
 pub(crate) use index::{ValueDictionary, MAX_DISTINCT_VALUES};
-pub use kind::{ColumnCapabilities, ColumnInfo, LogicalType};
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
-use crate::{predicate::Predicate, Filter, Result};
+pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
+use crate::{predicate::Predicate, types::Type, Filter, Result};
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {
@@ -32,6 +31,9 @@ pub struct Column {
     pub nullable: bool,
     pub len: usize,
     pub array: ArrayRef,
+    /// The four-dimension type model, `None` for Arrow types Gewu has no
+    /// semantics for. Every capability and policy question derives from it.
+    ty: Option<Type>,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
     dictionary: OnceLock<Option<Arc<ValueDictionary>>>,
@@ -40,6 +42,7 @@ pub struct Column {
 impl Column {
     pub fn new(name: impl Into<String>, array: ArrayRef) -> Self {
         let logical_type = LogicalType::from_arrow(array.data_type());
+        let ty = Type::from_arrow(array.data_type());
         let len = array.len();
         let nullable = array.is_nullable();
         Self {
@@ -48,6 +51,7 @@ impl Column {
             nullable,
             len,
             array,
+            ty,
             dictionary: OnceLock::new(),
         }
     }
@@ -93,7 +97,10 @@ impl Column {
 
     #[inline]
     pub fn capabilities(&self) -> ColumnCapabilities {
-        self.logical_type.capabilities()
+        self.ty.as_ref().map_or_else(
+            crate::types::derive::untyped_capabilities,
+            Type::capabilities,
+        )
     }
 
     pub fn logical_data_type(&self) -> &DataType {
@@ -129,11 +136,11 @@ impl Column {
         query: &str,
         matcher: Option<&regex::Regex>,
     ) -> Result<Option<Predicate<'a>>> {
-        filter::prepare_find(&self.array, &self.logical_type, query, matcher)
+        filter::prepare_find(&self.array, self.ty.as_ref(), query, matcher)
     }
 
     pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
-        filter::prepare_filter(&self.array, &self.logical_type, self.capabilities(), filter)
+        filter::prepare_filter(&self.array, self.ty.as_ref(), self.capabilities(), filter)
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {

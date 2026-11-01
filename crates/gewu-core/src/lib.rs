@@ -11,6 +11,7 @@ mod file;
 pub(crate) mod query;
 pub mod session;
 pub mod task;
+pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
 pub use column::{

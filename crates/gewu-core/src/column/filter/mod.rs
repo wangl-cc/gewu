@@ -1,4 +1,9 @@
 //! Column-level predicate compilation for explicit filters and Find queries.
+//!
+//! Type policy comes from the column's [`Type`] model: Find asks
+//! [`Type::find_strategy`] and explicit filters are gated by
+//! [`crate::types::ColumnCapabilities`]. The modules below own the native
+//! kernels, not the decision of which types support which operation.
 
 pub mod nested;
 pub mod range;
@@ -9,38 +14,36 @@ use arrow::array::{Array, ArrayRef};
 pub use range::Bound;
 
 use crate::{
-    column::kind::{ColumnCapabilities, LogicalType},
     predicate::Predicate,
     selection::RowSelection,
+    types::{ColumnCapabilities, Domain, FindStrategy, Type},
     Error, Filter, Result,
 };
 
 /// Type-aware search for Find operations across all columns.
 pub(crate) fn prepare_find<'a>(
     array: &'a ArrayRef,
-    logical_type: &LogicalType,
+    ty: Option<&Type>,
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
     if query.is_empty() {
         return Ok(None);
     }
-    match logical_type {
-        LogicalType::Dictionary { .. } => nested::dictionary_find(array, |values| {
-            let child_logical = LogicalType::from_arrow(values.data_type());
-            prepare_find(values, &child_logical, query, matcher)
+    let Some(ty) = ty else {
+        return Ok(None);
+    };
+    match ty.find_strategy() {
+        FindStrategy::Unsupported => Ok(None),
+        FindStrategy::Text => text::contains(array, query, false, matcher).map(Some),
+        FindStrategy::Scalar => scalar::search(array, query),
+        FindStrategy::List | FindStrategy::Struct => nested::search(array, query, matcher),
+        FindStrategy::Dictionary => nested::dictionary_find(array, |values| {
+            // The value type comes from the array itself so nested dictionaries
+            // keep following keys level by level.
+            let child = Type::from_arrow(values.data_type());
+            prepare_find(values, child.as_ref(), query, matcher)
         }),
-        LogicalType::Text => text::contains(array, query, false, matcher).map(Some),
-        LogicalType::Integer { .. }
-        | LogicalType::Float { .. }
-        | LogicalType::Decimal { .. }
-        | LogicalType::Boolean
-        | LogicalType::Date
-        | LogicalType::Time
-        | LogicalType::Timestamp { .. }
-        | LogicalType::Duration { .. } => scalar::search(array, query),
-        LogicalType::List | LogicalType::Struct => nested::search(array, query, matcher),
-        LogicalType::Binary | LogicalType::Interval | LogicalType::Other { .. } => Ok(None),
     }
 }
 
@@ -48,11 +51,11 @@ pub(crate) fn prepare_find<'a>(
 /// column or document has obtained its lazy value index.
 pub(crate) fn prepare_filter<'a>(
     array: &'a ArrayRef,
-    logical_type: &LogicalType,
+    ty: Option<&Type>,
     capabilities: ColumnCapabilities,
     filter: &Filter,
 ) -> Result<Predicate<'a>> {
-    let predicate = prepare_value_filter(array, logical_type, capabilities, filter)?;
+    let predicate = prepare_value_filter(array, ty, capabilities, filter)?;
     let include_nulls = matches!(
         filter,
         Filter::Range {
@@ -88,7 +91,7 @@ pub(crate) fn prepare_filter<'a>(
 
 fn prepare_value_filter<'a>(
     array: &'a ArrayRef,
-    logical_type: &LogicalType,
+    ty: Option<&Type>,
     capabilities: ColumnCapabilities,
     filter: &Filter,
 ) -> Result<Predicate<'a>> {
@@ -98,11 +101,14 @@ fn prepare_value_filter<'a>(
     if let Filter::IsNull { negate } = filter {
         return Ok(is_null_predicate(array, *negate));
     }
-    if matches!(logical_type, LogicalType::Dictionary { .. }) {
+    if ty.is_some_and(Type::is_dictionary) {
         return nested::dictionary(array, |values| {
-            let child_logical = LogicalType::from_arrow(values.data_type());
-            let child_caps = child_logical.capabilities();
-            prepare_filter(values, &child_logical, child_caps, filter).map(Some)
+            let child = Type::from_arrow(values.data_type());
+            let child_caps = child.as_ref().map_or_else(
+                crate::types::derive::untyped_capabilities,
+                Type::capabilities,
+            );
+            prepare_filter(values, child.as_ref(), child_caps, filter).map(Some)
         })?
         .ok_or_else(|| {
             Error::InvalidArgument("filter cannot be applied to dictionary values".into())
@@ -118,7 +124,7 @@ fn prepare_value_filter<'a>(
             range::prepare_range(array, min.as_ref(), max.as_ref())
         }
         Filter::Equals { value } if capabilities.equals => {
-            if *logical_type == LogicalType::Text {
+            if is_text(ty) {
                 Ok(text::equals(array, value))
             } else {
                 scalar::equals(array, value)
@@ -128,7 +134,7 @@ fn prepare_value_filter<'a>(
             let predicates = values
                 .iter()
                 .map(|value| {
-                    if *logical_type == LogicalType::Text {
+                    if is_text(ty) {
                         Ok(text::equals(array, value))
                     } else {
                         scalar::equals(array, value)
@@ -142,6 +148,11 @@ fn prepare_value_filter<'a>(
             array.data_type()
         ))),
     }
+}
+
+/// Whether equality on this column compares strings rather than parsed values.
+fn is_text(ty: Option<&Type>) -> bool {
+    ty.is_some_and(|ty| ty.domain() == Some(Domain::Text))
 }
 
 fn is_null_predicate<'a>(array: &'a ArrayRef, negate: bool) -> Predicate<'a> {

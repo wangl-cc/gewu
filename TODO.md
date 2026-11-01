@@ -302,3 +302,8 @@
   - **依据**：Rust 侧已删除 `Document` 别名，App 中 `GewuDocument` 出现 24 次（含 `DocumentModel.swift` 中的 `typealias` 定义本身）、`GewuSession` 出现 11 次，同一类型存在两个名字；若不处理，T53 无法确定文档应使用哪个名字，后续 UI 改动也会继续分叉。
   - **方向**：在 FFI 命名定案后统一为一个名字（优先 `GewuSession`），同步 `DocumentModel`、`WorkbookModel`、`FindModel`、`InspectorModel`、`Table/` 与 `Charts/` 等消费方及 `app/README.md` 的说明；如确有保留理由，写明原因与期限，不默认长期并存。只改 Swift 消费方，不手工编辑生成的绑定。
   - **验收**：App 中同一类型只出现一个公开名字（或别名有明确记录的理由）；`xcodebuild` 构建与 `GewuTests` 通过，`swift-format` lint 通过；`app/README.md`、FFI README 与 Swift 代码的命名一致。
+
+- [ ] **T55 — 把字典编码移出 `LogicalType`（类型模型第二阶段）**【重构】
+  - **依据**：`LogicalType::Dictionary { value_type }` 仍把存储编码当逻辑类型：下游需递归穿透，`dictionary<int64>` 因编码被剥夺 range／直方图／散点能力，`display_name` 输出 `dict<string>`，且 `Other { raw_name }` 仍兜住 `Null`／`Map`／`Union` 等类型。第一阶段已把四维模型和派生集中到 `types/`，FFI 契约未动。
+  - **方向**：编码独立为 `ColumnInfo`／FFI 的独立字段（或 `Encoding` 枚举），`LogicalType` 收敛为值语义投影；`Null`／`Map` 显式化，未支持的 Arrow 类型在读取边界显式报错或跳过列，不再静默降级；当 range／直方图内核支持字典数组后，再按“值域有序 + 可解码”放开 `dictionary` 列的 ordered 能力。解析层 `column/filter/{range,scalar,temporal}` 改用 `Domain` 分派，使 `LogicalType` 只承担显示投影；同步改 `gewu-uniffi` 镜像、Swift 消费方与 `docs/data-types.md`。
+  - **验收**：`cargo test`／`clippy`／`cargo deny` 通过；App `xcodebuild test` 通过；Core／FFI 文档与 `docs/data-types.md` 不再出现 `dict<...>` 形式的类型描述；公开契约变更在交付说明中列出。
