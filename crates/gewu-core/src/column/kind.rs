@@ -64,14 +64,6 @@ pub struct ColumnInfo {
     pub nullable: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum FilterEditorKind {
-    Range,
-    Choices,
-    Contains,
-    NullOnly,
-}
-
 impl LogicalType {
     /// From Arrow DataType conversion (masks storage differences while retaining logical
     /// parameters).
@@ -189,23 +181,6 @@ impl LogicalType {
             scatter: self.supports_range() && !is_dictionary,
             logarithmic: self.supports_logarithmic() && !is_dictionary,
             equals: self.supports_equals(),
-        }
-    }
-
-    /// Preferred filter editor kind for this logical type.
-    pub(crate) fn filter_editor(
-        &self,
-        low_cardinality: bool,
-        _is_dictionary: bool,
-    ) -> FilterEditorKind {
-        if low_cardinality {
-            FilterEditorKind::Choices
-        } else if self.supports_range() {
-            FilterEditorKind::Range
-        } else if self.supports_contains() {
-            FilterEditorKind::Contains
-        } else {
-            FilterEditorKind::NullOnly
         }
     }
 

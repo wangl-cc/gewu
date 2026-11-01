@@ -2,7 +2,7 @@
 
 use super::Session;
 use crate::{
-    column::{index::count_values, stats, DistinctValue, FilterEditorKind, LogicalType},
+    column::{index::count_values, stats, DistinctValue, LogicalType},
     predicate::Predicate,
     scope::RowScope,
     DistinctResult, Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
@@ -110,7 +110,7 @@ impl Session {
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
-        let editor_kind = self.dataset.filter_editor_kind(column)?;
+        let is_low_cardinality = col.is_low_cardinality()?;
         if *col.logical_type() == LogicalType::Text {
             return Ok(FilterSpec {
                 nullable: col.is_nullable(),
@@ -119,7 +119,7 @@ impl Session {
                         crate::TextFilterMode::Choices,
                         crate::TextFilterMode::Contains,
                     ],
-                    recommended: if matches!(editor_kind, FilterEditorKind::Choices) {
+                    recommended: if is_low_cardinality {
                         crate::TextFilterMode::Choices
                     } else {
                         crate::TextFilterMode::Contains
@@ -127,22 +127,21 @@ impl Session {
                 },
             });
         }
-        let editor = match editor_kind {
-            FilterEditorKind::Choices => {
-                let rows = self.rows_in(RowScope::facet(spec, column))?;
-                FilterEditor::Choices {
-                    values: self.keyed_index(column)?.counts_all(&rows),
-                }
+        let editor = if is_low_cardinality {
+            let rows = self.rows_in(RowScope::facet(spec, column))?;
+            FilterEditor::Choices {
+                values: self.keyed_index(column)?.counts_all(&rows),
             }
-            FilterEditorKind::Range => {
-                let rows = self.rows_in(RowScope::facet(spec, column))?;
-                FilterEditor::Range {
-                    logical_type: col.logical_type().clone(),
-                    distribution: stats::build_scaled(&col.array, &rows, bins, scale)?,
-                }
+        } else if col.capabilities().range {
+            let rows = self.rows_in(RowScope::facet(spec, column))?;
+            FilterEditor::Range {
+                logical_type: col.logical_type().clone(),
+                distribution: stats::build_scaled(&col.array, &rows, bins, scale)?,
             }
-            FilterEditorKind::Contains => FilterEditor::Contains,
-            FilterEditorKind::NullOnly => FilterEditor::NullOnly,
+        } else if col.capabilities().contains {
+            FilterEditor::Contains
+        } else {
+            FilterEditor::NullOnly
         };
         Ok(FilterSpec {
             nullable: col.is_nullable(),

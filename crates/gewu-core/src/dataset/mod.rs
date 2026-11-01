@@ -12,7 +12,7 @@ use arrow::{
 };
 
 use crate::{
-    column::{format, index::ValueIndex, Column, ColumnCapabilities, FilterEditorKind},
+    column::{format, index::ValueIndex, Column, ColumnCapabilities},
     file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
 };
 
@@ -151,7 +151,15 @@ impl Dataset {
         self.column(c)?.keyed_index()
     }
 
-    pub(crate) fn filter_editor_kind(&self, column: u32) -> Result<FilterEditorKind> {
-        self.column(column)?.filter_editor_kind()
+    pub fn distinct_count(&self, column: u32) -> Result<usize> {
+        self.column(column)?.distinct_count()
+    }
+
+    pub fn distinct_count_at_most(&self, column: u32, limit: usize) -> Result<bool> {
+        self.column(column)?.distinct_count_at_most(limit)
+    }
+
+    pub fn is_low_cardinality(&self, column: u32) -> Result<bool> {
+        self.column(column)?.is_low_cardinality()
     }
 }

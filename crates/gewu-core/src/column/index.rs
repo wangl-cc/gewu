@@ -90,6 +90,15 @@ pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
     Ok(true)
 }
 
+/// Count the total number of distinct values in the array.
+pub(crate) fn count_distinct(array: &ArrayRef) -> Result<usize> {
+    if array.is_empty() {
+        return Ok(0);
+    }
+    let counts = count_values(array, &Selection::All(array.len()), 0)?;
+    Ok(counts.distinct as usize)
+}
+
 pub(crate) struct ValueIndex {
     /// Code of each source row.
     codes: Vec<u32>,

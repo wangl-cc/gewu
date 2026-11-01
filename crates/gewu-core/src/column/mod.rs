@@ -14,20 +14,22 @@ pub mod index;
 pub mod kind;
 pub mod stats;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, OnceLock,
+};
 
 use arrow::{array::ArrayRef, datatypes::DataType, util::display::ArrayFormatter};
 pub use filter::range::Bound;
 pub use index::{DistinctResult, DistinctValue};
 pub(crate) use index::{ValueIndex, INDEX_LIMIT};
-pub(crate) use kind::FilterEditorKind;
 pub use kind::{ColumnCapabilities, ColumnInfo, LogicalType};
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 use crate::{predicate::Predicate, Filter, Result};
 
-/// Maximum source cardinality offered as a checkbox list.
-pub(crate) const CHOICE_LIMIT: usize = 500;
+/// Suggested cardinality threshold for displaying choices in interactive filters.
+pub const CHOICE_LIMIT: usize = 500;
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {
@@ -36,7 +38,10 @@ pub struct Column {
     pub nullable: bool,
     pub array: ArrayRef,
     pub(crate) index: OnceLock<index::Indexed>,
-    pub(crate) editor_kind: OnceLock<FilterEditorKind>,
+    /// Lazily computed distinct count cache.
+    ///
+    /// 0 indicates uncomputed (unless `array.is_empty()`, where distinct count is genuinely 0).
+    pub(crate) distinct_count: AtomicUsize,
 }
 
 impl Column {
@@ -48,7 +53,7 @@ impl Column {
             nullable,
             array,
             index: OnceLock::new(),
-            editor_kind: OnceLock::new(),
+            distinct_count: AtomicUsize::new(0),
         }
     }
 
@@ -175,26 +180,55 @@ impl Column {
         })
     }
 
-    pub(crate) fn filter_editor_kind(&self) -> Result<FilterEditorKind> {
-        if let Some(kind) = self.editor_kind.get() {
-            return Ok(*kind);
+    /// Return the exact number of distinct values in the column, lazily computed and cached.
+    ///
+    /// If the column is empty, returns 0 immediately without scanning.
+    /// If an inverted index is already built, returns its exact dictionary length.
+    pub fn distinct_count(&self) -> Result<usize> {
+        if self.array.is_empty() {
+            return Ok(0);
+        }
+        if let Some(index::Indexed::Built(index)) = self.index.get() {
+            return Ok(index.len());
+        }
+        let cached = self.distinct_count.load(Ordering::Relaxed);
+        if cached > 0 {
+            return Ok(cached);
+        }
+        let count = index::count_distinct(&self.array)?;
+        self.distinct_count.store(count, Ordering::Relaxed);
+        Ok(count)
+    }
+
+    /// Check whether the number of distinct values in the column is at most `limit`.
+    ///
+    /// Short-circuits if the array is empty, if the inverted index is built, or if the
+    /// exact distinct count has already been cached. Otherwise, uses a bounded probe
+    /// that stops immediately upon encountering `limit + 1` distinct values.
+    pub fn distinct_count_at_most(&self, limit: usize) -> Result<bool> {
+        if self.array.is_empty() {
+            return Ok(true);
+        }
+        if let Some(index::Indexed::Built(index)) = self.index.get() {
+            return Ok(index.len() <= limit);
+        }
+        let cached = self.distinct_count.load(Ordering::Relaxed);
+        if cached > 0 {
+            return Ok(cached <= limit);
         }
         let supported = arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
             self.array.data_type().clone(),
         )]);
-        let low_cardinality = if !supported {
-            false
-        } else {
-            match self.index.get() {
-                Some(index::Indexed::Built(index)) => index.len() <= CHOICE_LIMIT,
-                Some(index::Indexed::TooMany) => false,
-                None => index::has_at_most(&self.array, CHOICE_LIMIT)?,
-            }
-        };
-        Ok(*self.editor_kind.get_or_init(|| {
-            self.logical_type
-                .filter_editor(low_cardinality, self.is_dictionary())
-        }))
+        if !supported {
+            return Ok(false);
+        }
+        index::has_at_most(&self.array, limit)
+    }
+
+    /// Check whether the column has low cardinality (at most [`CHOICE_LIMIT`] distinct values).
+    #[inline]
+    pub fn is_low_cardinality(&self) -> Result<bool> {
+        self.distinct_count_at_most(CHOICE_LIMIT)
     }
 }
 
@@ -473,5 +507,30 @@ mod tests {
                 Err(Error::Cancelled)
             ));
         }
+    }
+
+    #[test]
+    fn distinct_count_and_probe_caching() {
+        // 1. Empty column
+        let empty_col = col(Arc::new(Int32Array::from(Vec::<i32>::new())));
+        assert_eq!(empty_col.distinct_count().unwrap(), 0);
+        assert!(empty_col.distinct_count_at_most(0).unwrap());
+
+        // 2. Non-empty column lazy distinct count and atomic cache
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("apple"),
+            Some("banana"),
+            Some("apple"),
+            None,
+        ]));
+        let column = col(array);
+        assert_eq!(column.distinct_count.load(Ordering::Relaxed), 0);
+        assert!(column.distinct_count_at_most(10).unwrap());
+        assert!(!column.distinct_count_at_most(2).unwrap());
+        assert_eq!(column.distinct_count().unwrap(), 3);
+        // After distinct_count(), it is cached in the AtomicUsize
+        assert_eq!(column.distinct_count.load(Ordering::Relaxed), 3);
+        // Repeated call reads the atomic cache directly
+        assert_eq!(column.distinct_count().unwrap(), 3);
     }
 }
