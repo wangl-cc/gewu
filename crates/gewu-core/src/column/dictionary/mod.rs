@@ -1,15 +1,15 @@
-//! Distinct values of a column as a compact `u8` codebook.
+//! Distinct values of a column as a compact `u8` code space.
 //!
 //! A [`ValueDictionary`] gives every source row a code naming its distinct
 //! value: codes `0..=254` name the non-null values in value order, and
 //! [`NULL_CODE`] names null. Everything about how a physical Arrow array
-//! becomes that codebook lives here: native dictionaries reuse their keys and
+//! becomes that dictionary lives here: native dictionaries reuse their keys and
 //! values, primitive arrays scan natively, and only text, binary and nested
 //! arrays fall back to Arrow's row format. Other modules consume the result
 //! through the methods below; they never see codes, values or encoding
 //! strategy.
 //!
-//! The codebook is a pure function of the column data and is cached by
+//! The dictionary is a pure function of the column data and is cached by
 //! [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`] non-null
 //! values are not encoded; callers fall back to streaming counts, which this
 //! module also provides through [`counted`].
@@ -224,7 +224,7 @@ impl ValueDictionary {
     }
 }
 
-/// Build the codebook's `values` array in code order from the first row of
+/// Build the dictionary's `values` array in code order from the first row of
 /// each value.
 pub(super) fn value_rows(array: &dyn Array, first_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
     let rows = UInt32Array::from(
@@ -236,9 +236,9 @@ pub(super) fn value_rows(array: &dyn Array, first_row: &[usize], order: &[u8]) -
     take(array, &rows, None).ok()
 }
 
-/// Distinct values with counts over `rows`: the codebook when the column has
+/// Distinct values with counts over `rows`: the dictionary when the column has
 /// one, streaming counts otherwise. `keep` bounds the streaming path's list; a
-/// codebook never holds more than [`MAX_DISTINCT_VALUES`] values itself.
+/// dictionary never holds more than [`MAX_DISTINCT_VALUES`] values itself.
 pub(crate) fn counted(
     dictionary: Option<&Arc<ValueDictionary>>,
     array: &ArrayRef,

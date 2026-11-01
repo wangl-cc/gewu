@@ -1,5 +1,5 @@
 //! Native primitive encoders. Every Arrow primitive type names the key it
-//! produces in the codebook, plus the floating-point value-identity rule those
+//! produces in the dictionary, plus the floating-point value-identity rule those
 //! keys share.
 
 use std::{collections::HashMap, hash::Hash};
@@ -19,7 +19,7 @@ use arrow::{
 
 use super::{value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
 
-/// How an Arrow primitive type's values become codebook keys.
+/// How an Arrow primitive type's values become dictionary keys.
 ///
 /// Contract: equal keys must mean "the same displayed value", and key order
 /// must equal value order, because codes are assigned in key order. Integers,
@@ -137,7 +137,7 @@ impl DictionaryKey for Float64Type {
     }
 }
 
-/// Shared codebook algorithm: one native pass, one code per distinct key, then
+/// Shared dictionary algorithm: one native pass, one code per distinct key, then
 /// codes renumbered into key order.
 pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
     len: usize,

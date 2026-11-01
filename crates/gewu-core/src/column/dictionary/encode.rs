@@ -1,4 +1,4 @@
-//! Turning a physical Arrow array into the codebook: native dictionaries reuse
+//! Turning a physical Arrow array into the dictionary: native dictionaries reuse
 //! their keys and values, and plain arrays use native primitive scans or
 //! Arrow's row format.
 
@@ -24,7 +24,7 @@ use super::{
     value_rows, ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
 
-/// An array kind that can enumerate its own values into a codebook.
+/// An array kind that can enumerate its own values into a dictionary.
 pub(super) trait BuildDictionary {
     fn build_dictionary(&self) -> Option<ValueDictionary>;
 }

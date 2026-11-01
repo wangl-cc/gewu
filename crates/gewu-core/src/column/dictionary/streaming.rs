@@ -1,4 +1,4 @@
-//! Streaming distinct counts for columns without a codebook. Values are told
+//! Streaming distinct counts for columns without a dictionary. Values are told
 //! apart by hashing; floats use the shared normalized bit keys.
 
 use std::{
