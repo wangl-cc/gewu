@@ -67,8 +67,8 @@ impl Column {
     }
 
     #[inline]
-    pub fn array(&self) -> &ArrayRef {
-        &self.array
+    pub fn array(&self) -> ArrayRef {
+        self.array.clone()
     }
 
     #[inline]
