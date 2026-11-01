@@ -91,13 +91,9 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Equals {
-                column: 1,
-                value: "true".into(),
-            }],
-            ..Default::default()
-        })
+        .apply_view(&ViewState::single(1, Filter::Equals {
+            value: "true".into(),
+        }))
         .unwrap();
     assert_eq!(filtered.row_count, 20_000);
     let dictionary_find = dictionary_doc

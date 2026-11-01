@@ -201,8 +201,17 @@ impl<'a> Column<'a> {
         Ok(Predicate::new(Box::new(
             move |rows, incoming, output, cancel| {
                 predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
-                for (index, row) in rows.iter().enumerate() {
-                    output[index] |= array.is_null(row);
+                match incoming {
+                    Some(mask) => {
+                        for (index, row) in rows.iter().enumerate() {
+                            output[index] |= array.is_null(row) & mask[index];
+                        }
+                    }
+                    None => {
+                        for (index, row) in rows.iter().enumerate() {
+                            output[index] |= array.is_null(row);
+                        }
+                    }
                 }
                 Ok(())
             },
@@ -210,13 +219,10 @@ impl<'a> Column<'a> {
     }
 
     fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
-        if let Filter::TextValues {
-            values, exclude, ..
-        } = filter
-        {
+        if let Filter::TextValues { values, exclude } = filter {
             return text::selected_values(self.array, values, *exclude);
         }
-        if let Filter::IsNull { negate, .. } = filter {
+        if let Filter::IsNull { negate } = filter {
             let negate = *negate;
             let array = self.array;
             return Ok(Predicate::new(Box::new(
@@ -267,8 +273,8 @@ impl<'a> Column<'a> {
             Filter::Range { min, max, .. } if capabilities.range => {
                 bound::prepare_range(self.array, min.as_ref(), max.as_ref())
             }
-            Filter::Equals { value, .. } if capabilities.equals => self.prepare_equals(value),
-            Filter::EqualsAny { values, .. } if capabilities.equals => {
+            Filter::Equals { value } if capabilities.equals => self.prepare_equals(value),
+            Filter::EqualsAny { values } if capabilities.equals => {
                 let predicates = values
                     .iter()
                     .map(|value| self.prepare_equals(value))
@@ -329,10 +335,7 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
         let column = Column::new(&array);
         let test = column
-            .prepare_filter(&Filter::EqualsAny {
-                column: 0,
-                values: Vec::new(),
-            })
+            .prepare_filter(&Filter::EqualsAny { values: Vec::new() })
             .unwrap();
         let mut hits = [true; 3];
         test.evaluate(0..3, &mut hits, &CancelToken::never())
@@ -340,7 +343,6 @@ mod tests {
         assert_eq!(hits, [false; 3]);
         assert!(matches!(
             column.prepare_filter(&Filter::EqualsAny {
-                column: 0,
                 values: vec!["1".into(), "invalid".into()],
             }),
             Err(Error::InvalidArgument(_))
@@ -355,7 +357,6 @@ mod tests {
         );
         let test = Column::new(&array)
             .prepare_filter(&Filter::EqualsAny {
-                column: 0,
                 values: vec!["01".into(), "2".into()],
             })
             .unwrap();
@@ -376,7 +377,6 @@ mod tests {
         assert_eq!(matches(&array, "%_\\z", 1..4), [true, false, true]);
         let test = Column::new(&array)
             .prepare_filter(&Filter::Equals {
-                column: 0,
                 value: "A%_\\z".into(),
             })
             .unwrap();
@@ -413,7 +413,6 @@ mod tests {
             for (include_nulls, expected) in [(false, excluded), (true, included)] {
                 let test = Column::new(&array)
                     .prepare_filter(&Filter::Contains {
-                        column: 0,
                         text: text.into(),
                         case_sensitive: true,
                         include_nulls,
@@ -437,7 +436,6 @@ mod tests {
         let test = Column::new(&array)
             .prepare_filter(&Filter::Contains {
                 include_nulls: false,
-                column: 0,
                 text: String::new(),
                 case_sensitive: false,
             })
@@ -507,10 +505,7 @@ mod tests {
         );
         assert_eq!(matches(&array, "2", 1..4), [true, false, true]);
         let test = Column::new(&array)
-            .prepare_filter(&Filter::Equals {
-                column: 0,
-                value: "2".into(),
-            })
+            .prepare_filter(&Filter::Equals { value: "2".into() })
             .unwrap();
         let mut first = [false; 2];
         let mut second = [false; 2];

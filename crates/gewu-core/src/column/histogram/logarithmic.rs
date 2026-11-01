@@ -476,7 +476,6 @@ mod tests {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = Column::new(&array)
                 .prepare_filter(&Filter::Range {
-                    column: 0,
                     min: range.min.clone(),
                     max: range.max.clone(),
                     include_nulls: false,

@@ -87,12 +87,10 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
                     }
                     (RowSelection::Indices(indices), Some(mask)) => {
                         for (i, &row) in indices.iter().enumerate() {
-                            output[i] = mask[i]
-                                && (!has_nulls || array.is_valid(row))
-                                && {
-                                    let v = f64::from(values[row]);
-                                    v >= lo && v <= hi
-                                };
+                            output[i] = mask[i] && (!has_nulls || array.is_valid(row)) && {
+                                let v = f64::from(values[row]);
+                                v >= lo && v <= hi
+                            };
                         }
                     }
                 }

@@ -20,7 +20,12 @@ impl<'a> RowScope<'a> {
     /// allocating a source-row list just because a UI supplied a state.
     pub fn facet(state: Option<&'a ViewState>, column: u32) -> Self {
         match state {
-            Some(state) if state.filters.iter().any(|filter| filter.column() != column) => {
+            Some(state)
+                if state
+                    .filters
+                    .iter()
+                    .any(|(&col, filters)| col != column && !filters.is_empty()) =>
+            {
                 Self::Facet {
                     state,
                     except: column,

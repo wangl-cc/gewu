@@ -31,16 +31,16 @@ struct TextChoiceDraft {
     init(_ filters: [Filter]) {
         for filter in filters {
             switch filter {
-            case .textValues(_, let values, let exclude):
+            case .textValues(let values, let exclude):
                 self.values = Set(values.map { LiteralTextValue(value: $0) })
                 self.exclude = exclude
-            case .isNull(_, let negate):
+            case .isNull(let negate):
                 values = [LiteralTextValue(value: nil)]
                 exclude = negate
-            case .equals(_, let value):
+            case .equals(let value):
                 values = [LiteralTextValue(value: value)]
                 exclude = false
-            case .equalsAny(_, let values):
+            case .equalsAny(let values):
                 self.values = Set(values.map { LiteralTextValue(value: $0) })
                 exclude = false
             default: break
@@ -59,7 +59,7 @@ struct TextChoiceDraft {
         values.removeAll()
     }
 
-    func filters(column: UInt32) -> [Filter] {
+    func filters() -> [Filter] {
         if exclude && values.isEmpty { return [] }
         let sorted = values.map(\.value).sorted { lhs, rhs in
             switch (lhs, rhs) {
@@ -68,7 +68,7 @@ struct TextChoiceDraft {
             default: false
             }
         }
-        return [.textValues(column: column, values: sorted, exclude: exclude)]
+        return [.textValues(values: sorted, exclude: exclude)]
     }
 }
 
@@ -79,21 +79,21 @@ struct TextContainsDraft {
 
     init(_ filters: [Filter]) {
         nullMode = NullMode(filters)
-        for case .contains(_, let text, let caseSensitive, _) in filters {
+        for case .contains(let text, let caseSensitive, _) in filters {
             self.text = text
             self.caseSensitive = caseSensitive
         }
     }
 
-    func filters(column: UInt32) -> [Filter] {
+    func filters() -> [Filter] {
         if nullMode != .only && !text.isEmpty {
             return [
                 .contains(
-                    column: column, text: text, caseSensitive: caseSensitive,
+                    text: text, caseSensitive: caseSensitive,
                     includeNulls: nullMode == .include)
             ]
         }
-        return nullMode.filter(column: column).map { [$0] } ?? []
+        return nullMode.filter.map { [$0] } ?? []
     }
 }
 
@@ -101,7 +101,7 @@ struct TextFilterView: View {
     let document: GewuDocument
     let column: UInt32
     let nullable: Bool
-    let state: ViewState
+    let state: QuerySpec
     let modes: [TextFilterMode]
     let onApply: ([Filter]) -> Void
     @State private var mode: TextFilterMode
@@ -113,7 +113,7 @@ struct TextFilterView: View {
     @StateObject private var choices = TextChoicesModel()
 
     init(
-        document: GewuDocument, column: UInt32, nullable: Bool, state: ViewState,
+        document: GewuDocument, column: UInt32, nullable: Bool, state: QuerySpec,
         modes: [TextFilterMode], recommended: TextFilterMode, current: [Filter],
         onApply: @escaping ([Filter]) -> Void
     ) {
@@ -221,7 +221,7 @@ struct TextFilterView: View {
             HStack {
                 Text(selectionSummary).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Apply") { onApply(choiceDraft.filters(column: column)) }
+                Button("Apply") { onApply(choiceDraft.filters()) }
                     .keyboardShortcut(.defaultAction)
             }
         }

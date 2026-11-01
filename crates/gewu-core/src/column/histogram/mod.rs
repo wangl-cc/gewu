@@ -634,7 +634,6 @@ mod tests {
             let predicate = Column::new(&array)
                 .prepare_filter(&Filter::Range {
                     include_nulls: false,
-                    column: 0,
                     min: bounds.min.clone(),
                     max: bounds.max.clone(),
                 })

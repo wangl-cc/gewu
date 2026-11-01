@@ -83,16 +83,15 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
-        .apply_view(&ViewState {
-            sort: vec![SortKey {
+        .apply_view(
+            &ViewState::single(2, Filter::Equals {
+                value: "true".into(),
+            })
+            .with_sort(vec![SortKey {
                 column: 0,
                 descending: true,
-            }],
-            filters: vec![Filter::Equals {
-                column: 2,
-                value: "true".into(),
-            }],
-        })
+            }]),
+        )
         .unwrap();
     let find = doc.prepare_find(view.version, "12", &[0, 1]).unwrap();
     assert_eq!(find.next(None, 10).unwrap(), vec![

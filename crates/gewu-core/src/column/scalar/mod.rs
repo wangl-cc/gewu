@@ -76,8 +76,9 @@ fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
             }
             (RowSelection::Range(range), Some(mask)) => {
                 for (i, row) in range.enumerate() {
-                    output[i] =
-                        mask[i] && (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                    output[i] = mask[i]
+                        && (!has_nulls || array.is_valid(row))
+                        && array.value(row) == target;
                 }
             }
             (RowSelection::Indices(indices), None) => {
@@ -87,8 +88,9 @@ fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
             }
             (RowSelection::Indices(indices), Some(mask)) => {
                 for (i, &row) in indices.iter().enumerate() {
-                    output[i] =
-                        mask[i] && (!has_nulls || array.is_valid(row)) && array.value(row) == target;
+                    output[i] = mask[i]
+                        && (!has_nulls || array.is_valid(row))
+                        && array.value(row) == target;
                 }
             }
         }

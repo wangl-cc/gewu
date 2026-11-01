@@ -6,8 +6,8 @@ use gewu_core as core;
 
 use crate::{
     AnalysisSection, AxisScale, Bound, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
-    FilterSpec, FindSession, GewuError, GewuExport, Histogram, RowBlock, TextChoices, ViewInfo,
-    ViewState,
+    FilterSpec, FindSession, GewuError, GewuExport, Histogram, QuerySpec, RowBlock, TextChoices,
+    ViewInfo,
 };
 
 /// One open viewing session over a table.
@@ -108,8 +108,8 @@ impl GewuSession {
 
     /// Sort and filter. Slow: call off the main thread. A newer call makes
     /// this one return `Cancelled`.
-    pub fn apply_view(&self, state: ViewState) -> Result<ViewInfo, GewuError> {
-        Ok(self.inner.apply_view(&state.into())?.into())
+    pub fn apply_view(&self, spec: QuerySpec) -> Result<ViewInfo, GewuError> {
+        Ok(self.inner.apply_view(&spec.into())?.into())
     }
 
     pub fn cancel_pending(&self) {
@@ -204,24 +204,24 @@ impl GewuSession {
     pub fn filter_spec(
         &self,
         column: u32,
-        state: Option<ViewState>,
+        spec: Option<QuerySpec>,
     ) -> Result<FilterSpec, GewuError> {
-        let state = state.map(Into::into);
-        Ok(self.inner.filter_spec(column, state.as_ref())?.into())
+        let spec = spec.map(Into::into);
+        Ok(self.inner.filter_spec(column, spec.as_ref())?.into())
     }
 
     /// Filter editor with a caller-selected histogram resolution (1 through 60).
     pub fn filter_spec_with_bins(
         &self,
         column: u32,
-        state: Option<ViewState>,
+        spec: Option<QuerySpec>,
         bins: u32,
         scale: AxisScale,
     ) -> Result<FilterSpec, GewuError> {
-        let state = state.map(Into::into);
+        let spec = spec.map(Into::into);
         Ok(self
             .inner
-            .filter_spec_with_scale(column, state.as_ref(), bins, scale.into())?
+            .filter_spec_with_scale(column, spec.as_ref(), bins, scale.into())?
             .into())
     }
 
@@ -230,11 +230,11 @@ impl GewuSession {
     pub fn prepare_text_choices(
         &self,
         column: u32,
-        state: Option<ViewState>,
+        spec: Option<QuerySpec>,
     ) -> Result<Arc<TextChoices>, GewuError> {
-        let state = state.map(Into::into);
+        let spec = spec.map(Into::into);
         Ok(Arc::new(TextChoices {
-            inner: self.inner.prepare_text_choices(column, state.as_ref())?,
+            inner: self.inner.prepare_text_choices(column, spec.as_ref())?,
         }))
     }
 
@@ -269,8 +269,8 @@ impl GewuSession {
     }
 
     /// Validate a filter without changing the current view.
-    pub fn validate_filter(&self, filter: Filter) -> Result<(), GewuError> {
-        Ok(self.inner.validate_filter(&filter.into())?)
+    pub fn validate_filter(&self, column: u32, filter: Filter) -> Result<(), GewuError> {
+        Ok(self.inner.validate_filter(column, &filter.into())?)
     }
 
     /// Summary of a column over the current view (explicit filters apply).
@@ -339,26 +339,23 @@ mod tests {
 
         for filter in [
             Filter::Equals {
-                column: 0,
                 value: "9007199254740993".into(),
             },
             Filter::Range {
                 include_nulls: false,
-                column: 0,
                 min: Some(large),
                 max: None,
             },
             Filter::Range {
                 include_nulls: false,
-                column: 0,
                 min: Some(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()),
                 max: None,
             },
         ] {
             let view = doc
-                .apply_view(ViewState {
+                .apply_view(QuerySpec {
                     sort: Vec::new(),
-                    filters: vec![filter],
+                    filters: [(0, vec![filter])].into_iter().collect(),
                 })
                 .unwrap();
             let rows = doc.rows(view.version, 0, 10, vec![0]).unwrap();
@@ -385,12 +382,11 @@ mod tests {
             TextFilterMode::Contains
         ]));
         assert!(matches!(recommended, TextFilterMode::Choices));
-        let state = ViewState {
+        let state = QuerySpec {
             sort: vec![],
-            filters: vec![Filter::Equals {
-                column: 1,
-                value: "10".into(),
-            }],
+            filters: [(1, vec![Filter::Equals { value: "10".into() }])]
+                .into_iter()
+                .collect(),
         };
         let choices = doc.prepare_text_choices(0, Some(state)).unwrap();
         let first = choices.page(String::new(), None, 1).unwrap();
@@ -403,13 +399,14 @@ mod tests {
         assert_eq!(second.values[0].count, 0);
         assert!(second.next.is_none());
         let view = doc
-            .apply_view(ViewState {
+            .apply_view(QuerySpec {
                 sort: vec![],
-                filters: vec![Filter::TextValues {
-                    column: 0,
+                filters: [(0, vec![Filter::TextValues {
                     values: vec![Some("dog".into())],
                     exclude: false,
-                }],
+                }])]
+                .into_iter()
+                .collect(),
             })
             .unwrap();
         assert_eq!(doc.rows(view.version, 0, 10, vec![0]).unwrap().cells, [
@@ -477,14 +474,15 @@ mod tests {
         ] {
             let bounds = &distribution.ranges[bin];
             let view = doc
-                .apply_view(ViewState {
+                .apply_view(QuerySpec {
                     sort: vec![],
-                    filters: vec![Filter::Range {
+                    filters: [(0, vec![Filter::Range {
                         include_nulls: false,
-                        column: 0,
                         min: bounds.min.clone(),
                         max: bounds.max.clone(),
-                    }],
+                    }])]
+                    .into_iter()
+                    .collect(),
                 })
                 .unwrap();
             assert_eq!(view.row_count, distribution.histogram.counts[bin]);
@@ -538,12 +536,13 @@ mod tests {
                     "cat".into()
                 )]);
                 selected
-                    .apply_view(ViewState {
+                    .apply_view(QuerySpec {
                         sort: vec![],
-                        filters: vec![Filter::Equals {
-                            column: 0,
+                        filters: [(0, vec![Filter::Equals {
                             value: "cat".into(),
-                        }],
+                        }])]
+                        .into_iter()
+                        .collect(),
                     })
                     .unwrap();
                 assert_eq!(selected.current_view().row_count, 1);

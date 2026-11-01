@@ -18,15 +18,11 @@ fn analysis_keeps_its_snapshot_and_cancels_independently_of_queries() {
         .unwrap();
     cancelled.cancel();
     let current = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Contains {
-                column: 1,
-                text: "b".into(),
-                case_sensitive: true,
-                include_nulls: false,
-            }],
-            ..Default::default()
-        })
+        .apply_view(&ViewState::single(1, Filter::Contains {
+            text: "b".into(),
+            case_sensitive: true,
+            include_nulls: false,
+        }))
         .unwrap();
     assert_eq!(current.row_count, 2);
     assert!(matches!(cancelled.run(), Err(Error::Cancelled)));

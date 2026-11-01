@@ -10,7 +10,7 @@ final class TextChoicesModel: ObservableObject {
     private let session = TextChoiceSession()
 
     func load(
-        document: GewuDocument, column: UInt32, state: ViewState,
+        document: GewuDocument, column: UInt32, state: QuerySpec,
         query: String, after: TextChoiceCursor?
     ) async {
         guard !Task.isCancelled else { return }
@@ -78,14 +78,14 @@ private final class TextChoiceSession: @unchecked Sendable {
         job?.cancel()
     }
 
-    private func prepared(document: GewuDocument, column: UInt32, state: ViewState) throws -> TextChoices {
+    private func prepared(document: GewuDocument, column: UInt32, state: QuerySpec) throws -> TextChoices {
         lock.lock()
         let existing = job
         lock.unlock()
         if let existing { return existing }
         // Preparation computes the facet and currently has no cancellation handle.
         // If closed meanwhile, cancel the returned job before starting any page.
-        let prepared = try document.prepareTextChoices(column: column, state: state)
+        let prepared = try document.prepareTextChoices(column: column, spec: state)
         lock.lock()
         let closed = closed
         if !closed {
@@ -108,7 +108,7 @@ private final class TextChoiceSession: @unchecked Sendable {
     }
 
     func page(
-        document: GewuDocument, column: UInt32, state: ViewState,
+        document: GewuDocument, column: UInt32, state: QuerySpec,
         query: String, after: TextChoiceCursor?, ticket: UInt64
     ) async throws -> TextChoicePage {
         try await withCheckedThrowingContinuation { continuation in

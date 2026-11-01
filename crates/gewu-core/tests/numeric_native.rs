@@ -20,15 +20,11 @@ fn document(array: ArrayRef) -> Document {
 }
 
 fn check_range(doc: &Document, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min,
-            max,
-        }],
-        ..Default::default()
-    };
+    let state = ViewState::single(0, Filter::Range {
+        include_nulls: false,
+        min,
+        max,
+    });
     let view = doc.apply_view(&state).unwrap();
     assert_eq!(
         doc.rows(view.version, 0, 100, &[0]).unwrap().source_rows,

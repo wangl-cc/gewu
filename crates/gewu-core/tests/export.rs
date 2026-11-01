@@ -158,18 +158,17 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
 }
 
 fn filtered(doc: &Document) -> u64 {
-    doc.apply_view(&ViewState {
-        sort: vec![SortKey {
-            column: 0,
-            descending: true,
-        }],
-        filters: vec![Filter::Range {
+    doc.apply_view(
+        &ViewState::single(0, Filter::Range {
             include_nulls: false,
-            column: 0,
             min: Some(doc.parse_bound(0, "2").unwrap()),
             max: None,
-        }],
-    })
+        })
+        .with_sort(vec![SortKey {
+            column: 0,
+            descending: true,
+        }]),
+    )
     .unwrap()
     .version
 }
@@ -293,13 +292,7 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let version = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Equals {
-                column: 0,
-                value: "-1".into(),
-            }],
-            ..Default::default()
-        })
+        .apply_view(&ViewState::single(0, Filter::Equals { value: "-1".into() }))
         .unwrap()
         .version;
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
@@ -427,15 +420,11 @@ fn source_file_and_aliases_cannot_be_overwritten() {
 #[test]
 fn view_histogram_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.parse_bound(0, "2").unwrap()),
-            max: Some(doc.parse_bound(0, "4").unwrap()),
-        }],
-        ..Default::default()
-    };
+    let state = ViewState::single(0, Filter::Range {
+        include_nulls: false,
+        min: Some(doc.parse_bound(0, "2").unwrap()),
+        max: Some(doc.parse_bound(0, "4").unwrap()),
+    });
     let view = doc.apply_view(&state).unwrap();
     let filter_histogram = doc.histogram(0, Some(&state), 8).unwrap();
     let view_histogram = doc.view_histogram(view.version, 0, 8).unwrap();

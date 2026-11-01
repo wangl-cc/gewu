@@ -19,7 +19,7 @@ final class DocumentModel: ObservableObject {
     let kinds: [ColumnKind]
     let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedState = ViewState(sort: [], filters: [])
+    @Published private(set) var appliedState = QuerySpec(sort: [], filters: [:])
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -69,10 +69,10 @@ final class DocumentModel: ObservableObject {
         export.choose(document: doc, view: current, columns: table.displayedColumns, source: url, window: window)
     }
 
-    var state: ViewState {
-        ViewState(
+    var state: QuerySpec {
+        QuerySpec(
             sort: sort,
-            filters: columnFilters.sorted { $0.key < $1.key }.flatMap(\.value))
+            filters: columnFilters)
     }
 
     var subtitle: String {
@@ -135,7 +135,7 @@ final class DocumentModel: ObservableObject {
                             continuation.resume(throwing: CancellationError())
                             return
                         }
-                        do { continuation.resume(returning: try doc.applyView(state: state)) } catch {
+                        do { continuation.resume(returning: try doc.applyView(spec: state)) } catch {
                             continuation.resume(throwing: error)
                         }
                     }

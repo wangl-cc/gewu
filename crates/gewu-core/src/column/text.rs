@@ -213,7 +213,6 @@ mod tests {
         let array: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
         for exclude in [false, true] {
             let filter = Filter::TextValues {
-                column: 0,
                 values: vec![Some("a".into()), None, Some("a".into()), None],
                 exclude,
             };

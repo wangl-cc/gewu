@@ -45,7 +45,6 @@ fn document() -> Document {
 
 fn range(doc: &Document, include_nulls: bool) -> Filter {
     Filter::Range {
-        column: 0,
         min: Some(doc.parse_bound(0, "1").unwrap()),
         max: Some(doc.parse_bound(0, "2").unwrap()),
         include_nulls,
@@ -54,7 +53,6 @@ fn range(doc: &Document, include_nulls: bool) -> Filter {
 
 fn contains(include_nulls: bool) -> Filter {
     Filter::Contains {
-        column: 1,
         text: "ALPHA".into(),
         case_sensitive: false,
         include_nulls,
@@ -72,28 +70,10 @@ fn range_null_policy_keeps_nulls_without_matching_nan_or_outside_values() {
     for (filter, expected) in [
         (range(&doc, false), vec![1, 2, 6]),
         (range(&doc, true), vec![0, 1, 2, 4, 6]),
-        (
-            Filter::IsNull {
-                column: 0,
-                negate: false,
-            },
-            vec![0, 4],
-        ),
-        (
-            Filter::IsNull {
-                column: 0,
-                negate: true,
-            },
-            vec![1, 2, 3, 5, 6],
-        ),
+        (Filter::IsNull { negate: false }, vec![0, 4]),
+        (Filter::IsNull { negate: true }, vec![1, 2, 3, 5, 6]),
     ] {
-        assert_eq!(
-            rows(&doc, ViewState {
-                filters: vec![filter],
-                ..Default::default()
-            }),
-            expected
-        );
+        assert_eq!(rows(&doc, ViewState::single(0, filter)), expected);
     }
 }
 
@@ -105,28 +85,15 @@ fn contains_null_policy_preserves_case_matching_and_only_nulls() {
         (contains(true), vec![0, 1, 3, 4, 5, 6]),
         (
             Filter::Contains {
-                column: 1,
                 text: "ALPHA".into(),
                 case_sensitive: true,
                 include_nulls: true,
             },
             vec![0, 6],
         ),
-        (
-            Filter::IsNull {
-                column: 1,
-                negate: false,
-            },
-            vec![0, 6],
-        ),
+        (Filter::IsNull { negate: false }, vec![0, 6]),
     ] {
-        assert_eq!(
-            rows(&doc, ViewState {
-                filters: vec![filter],
-                ..Default::default()
-            }),
-            expected
-        );
+        assert_eq!(rows(&doc, ViewState::single(1, filter)), expected);
     }
 }
 
@@ -137,23 +104,22 @@ fn included_nulls_still_obey_other_column_filters() {
         (range(&doc, true), vec![0, 1]),
         (contains(true), vec![0, 1, 5]),
     ] {
+        let col = if matches!(filter, Filter::Range { .. }) {
+            0
+        } else {
+            1
+        };
         assert_eq!(
-            rows(&doc, ViewState {
-                filters: vec![
-                    filter,
-                    Filter::Equals {
-                        column: 2,
-                        value: "A".into(),
-                    },
-                    Filter::Contains {
+            rows(
+                &doc,
+                ViewState::single(col, filter)
+                    .with_filter(2, Filter::Equals { value: "A".into() })
+                    .with_filter(3, Filter::Contains {
                         include_nulls: false,
-                        column: 3,
                         text: "needle".into(),
                         case_sensitive: false,
-                    }
-                ],
-                ..Default::default()
-            }),
+                    },),
+            ),
             expected
         );
     }
@@ -162,22 +128,13 @@ fn included_nulls_still_obey_other_column_filters() {
 #[test]
 fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
     let doc = document();
-    let state = ViewState {
-        filters: vec![
-            range(&doc, true),
-            Filter::Equals {
-                column: 2,
-                value: "A".into(),
-            },
-            Filter::Contains {
-                include_nulls: false,
-                column: 3,
-                text: "needle".into(),
-                case_sensitive: false,
-            },
-        ],
-        ..Default::default()
-    };
+    let state = ViewState::single(0, range(&doc, true))
+        .with_filter(2, Filter::Equals { value: "A".into() })
+        .with_filter(3, Filter::Contains {
+            include_nulls: false,
+            text: "needle".into(),
+            case_sensitive: false,
+        });
     let values = doc
         .prepare_text_choices(2, Some(&state))
         .unwrap()

@@ -35,6 +35,6 @@ pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
 pub use session::GewuSession;
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use view::{RowBlock, SortKey, ViewInfo, ViewState};
+pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo};
 
 uniffi::setup_scaffolding!();

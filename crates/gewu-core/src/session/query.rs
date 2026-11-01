@@ -101,16 +101,21 @@ impl Session {
     /// Filters are reordered by estimated cost to maximize batch-level short-circuiting.
     fn select(
         &self,
-        filters: &[Filter],
+        filters: &std::collections::HashMap<u32, Vec<Filter>>,
         skip: Option<u32>,
         token: &CancelToken,
     ) -> Result<Vec<u32>> {
         token.check()?;
         let total_rows = self.dataset.n_rows;
-        let mut active_filters: Vec<&Filter> = filters
-            .iter()
-            .filter(|f| Some(f.column()) != skip)
-            .collect();
+        let mut active_filters: Vec<(u32, &Filter)> = Vec::new();
+        for (&col, col_filters) in filters {
+            if Some(col) == skip {
+                continue;
+            }
+            for f in col_filters {
+                active_filters.push((col, f));
+            }
+        }
         if active_filters.is_empty() {
             let rows = (0..total_rows as u32).collect();
             token.check()?;
@@ -121,11 +126,11 @@ impl Session {
         // Execute cheap, highly selective filters (null checks, indexed values, range bounds)
         // before expensive string or substring scans. In bounded batch execution, this zeroes
         // out matching rows early and triggers `break` before evaluating costlier predicates.
-        active_filters.sort_by_key(|f| f.estimated_cost());
+        active_filters.sort_by_key(|(_, f)| f.estimated_cost());
 
         let prepared_filters = active_filters
             .iter()
-            .map(|f| self.prepare_filter(f))
+            .map(|&(col, f)| self.prepare_filter(col, f))
             .collect::<Result<Vec<_>>>()?;
 
         let batch_len = total_rows.min(CHUNK);

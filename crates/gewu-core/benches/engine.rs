@@ -54,61 +54,49 @@ fn apply_view(c: &mut Criterion) {
 
     let cases: Vec<(&str, ViewState)> = vec![
         ("no_filter", ViewState::default()),
-        ("range_1", ViewState {
-            filters: vec![Filter::Range {
+        (
+            "range_1",
+            ViewState::default().with_filter(price, Filter::Range {
                 include_nulls: false,
-                column: price,
                 min: Some(doc.make_bound_i64(price, 100).unwrap()),
                 max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-            }],
-            ..Default::default()
-        }),
-        ("range_3", ViewState {
-            filters: vec![
-                Filter::Range {
+            }),
+        ),
+        (
+            "range_3",
+            ViewState::default()
+                .with_filter(price, Filter::Range {
                     include_nulls: false,
-                    column: price,
                     min: Some(doc.make_bound_i64(price, 100).unwrap()),
                     max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-                },
-                Filter::Range {
+                })
+                .with_filter(score, Filter::Range {
                     include_nulls: false,
-                    column: score,
                     min: Some(doc.make_bound_i64(score, 80).unwrap()),
                     max: Some(doc.make_bound_i64(score, 120).unwrap()),
-                },
-                Filter::Range {
+                })
+                .with_filter(rating, Filter::Range {
                     include_nulls: false,
-                    column: rating,
                     min: Some(doc.make_bound_i64(rating, 20).unwrap()),
                     max: Some(doc.make_bound_i64(rating, 40).unwrap()),
-                },
-            ],
-            ..Default::default()
-        }),
-        ("in_values_label", ViewState {
-            filters: vec![Filter::InValues {
-                column: label,
-                keys: cat,
-            }],
-            ..Default::default()
-        }),
-        ("contains_city", ViewState {
-            filters: vec![Filter::Contains {
+                }),
+        ),
+        (
+            "in_values_label",
+            ViewState::default().with_filter(label, Filter::InValues { keys: cat }),
+        ),
+        (
+            "contains_city",
+            ViewState::default().with_filter(city, Filter::Contains {
                 include_nulls: false,
-                column: city,
                 text: "city-12".into(),
                 case_sensitive: false,
-            }],
-            ..Default::default()
-        }),
-        ("is_null_label", ViewState {
-            filters: vec![Filter::IsNull {
-                column: label,
-                negate: false,
-            }],
-            ..Default::default()
-        }),
+            }),
+        ),
+        (
+            "is_null_label",
+            ViewState::default().with_filter(label, Filter::IsNull { negate: false }),
+        ),
         ("sort_price", ViewState {
             sort: vec![SortKey {
                 column: price,
@@ -129,15 +117,14 @@ fn apply_view(c: &mut Criterion) {
             ],
             ..Default::default()
         }),
-        ("range_decimal", ViewState {
-            filters: vec![Filter::Range {
+        (
+            "range_decimal",
+            ViewState::default().with_filter(amount, Filter::Range {
                 include_nulls: false,
-                column: amount,
                 min: Some(doc.make_bound_i64(amount, 50).unwrap()),
                 max: Some(doc.make_bound_i64(amount, 500).unwrap()),
-            }],
-            ..Default::default()
-        }),
+            }),
+        ),
         ("sort_uuid", ViewState {
             sort: vec![SortKey {
                 column: uuid,
@@ -145,18 +132,19 @@ fn apply_view(c: &mut Criterion) {
             }],
             ..Default::default()
         }),
-        ("range_then_sort", ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: price,
-                min: Some(doc.make_bound_i64(price, 100).unwrap()),
-                max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-            }],
-            sort: vec![SortKey {
-                column: score,
-                descending: false,
-            }],
-        }),
+        (
+            "range_then_sort",
+            ViewState::default()
+                .with_filter(price, Filter::Range {
+                    include_nulls: false,
+                    min: Some(doc.make_bound_i64(price, 100).unwrap()),
+                    max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                })
+                .with_sort(vec![SortKey {
+                    column: score,
+                    descending: false,
+                }]),
+        ),
     ];
 
     let mut g = c.benchmark_group("apply_view");
@@ -197,15 +185,11 @@ fn facets(c: &mut Criterion) {
         col(&doc, "id"),
         col(&doc, "price"),
     );
-    let other_filter = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: price,
-            min: Some(doc.make_bound_i64(price, 100).unwrap()),
-            max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-        }],
-        ..Default::default()
-    };
+    let other_filter = ViewState::single(price, Filter::Range {
+        include_nulls: false,
+        min: Some(doc.make_bound_i64(price, 100).unwrap()),
+        max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+    });
 
     let mut g = c.benchmark_group("facets");
     g.sample_size(10).measurement_time(Duration::from_secs(8));
@@ -238,13 +222,7 @@ fn facets(c: &mut Criterion) {
     g.bench_function("histogram_price", |b| {
         b.iter(|| doc.histogram(price, None, 60).unwrap())
     });
-    let label_filter = ViewState {
-        filters: vec![Filter::IsNull {
-            column: label,
-            negate: true,
-        }],
-        ..Default::default()
-    };
+    let label_filter = ViewState::single(label, Filter::IsNull { negate: true });
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| doc.histogram(price, Some(&label_filter), 60).unwrap())
     });

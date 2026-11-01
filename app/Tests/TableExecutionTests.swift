@@ -94,7 +94,7 @@ struct TableExecutionTests {
                 calls += 1
                 if calls == 2 {
                     _ = try doc.applyView(
-                        state: ViewState(sort: [SortKey(column: 0, descending: true)], filters: []))
+                        spec: QuerySpec(sort: [SortKey(column: 0, descending: true)], filters: [:]))
                 }
                 return try doc.rows(version: version, start: UInt64(start), count: UInt32(count), columns: columns)
             }

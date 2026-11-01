@@ -15,15 +15,15 @@ struct ChoiceFilterView: View {
         var checked = Set(values.map(\.key))
         for filter in current {
             switch filter {
-            case .textValues(_, let vals, let exclude):
+            case .textValues(let vals, let exclude):
                 let valSet = Set(vals)
                 if exclude {
                     checked.formIntersection(values.filter { !valSet.contains($0.label) }.map(\.key))
                 } else {
                     checked.formIntersection(values.filter { valSet.contains($0.label) }.map(\.key))
                 }
-            case .inValues(_, let keys): checked.formIntersection(keys)
-            case .isNull(_, let negate):
+            case .inValues(let keys): checked.formIntersection(keys)
+            case .isNull(let negate):
                 checked.formIntersection(values.filter { ($0.label == nil) != negate }.map(\.key))
             default: break
             }
@@ -80,6 +80,6 @@ struct ChoiceFilterView: View {
             return
         }
         let selectedValues = values.filter { checked.contains($0.key) }.map(\.label)
-        onApply([.textValues(column: column, values: selectedValues, exclude: false)])
+        onApply([.textValues(values: selectedValues, exclude: false)])
     }
 }

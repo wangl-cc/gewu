@@ -212,8 +212,8 @@ impl Session {
 
     /// Validate and prepare an explicit filter without scanning data. Value-list
     /// filters may build the column's lazy index; other filters only parse scalars.
-    pub fn validate_filter(&self, filter: &Filter) -> Result<()> {
-        self.prepare_filter(filter).map(|_| ())
+    pub fn validate_filter(&self, column: u32, filter: &Filter) -> Result<()> {
+        self.prepare_filter(column, filter).map(|_| ())
     }
 
     /// Keys for the given displayed labels (`None` = null). Unknown labels
@@ -223,23 +223,21 @@ impl Session {
         Ok(idx.keys_for_labels(labels))
     }
 
-    pub(super) fn prepare_filter(&self, filter: &Filter) -> Result<Predicate<'_>> {
-        let column = Column::new(self.column(filter.column())?);
+    pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {
+        let column = Column::new(self.column(column_idx)?);
         match filter {
-            Filter::InValues { keys, .. } => {
-                Ok(column.prepare_values(self.keyed_index(filter.column())?, keys))
+            Filter::InValues { keys } => {
+                Ok(column.prepare_values(self.keyed_index(column_idx)?, keys))
             }
-            Filter::TextValues {
-                values, exclude, ..
-            } => {
-                let array = self.column(filter.column())?;
+            Filter::TextValues { values, exclude } => {
+                let array = self.column(column_idx)?;
                 if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
                     return Err(Error::InvalidArgument(format!(
                         "{} is not a string column",
                         array.data_type()
                     )));
                 }
-                if let Some(index) = self.index(filter.column())? {
+                if let Some(index) = self.index(column_idx)? {
                     return Ok(index.prepare_text_predicate(values, *exclude));
                 }
                 column.prepare_filter(filter)

@@ -4,7 +4,7 @@ struct ColumnFilterView: View {
     let doc: GewuDocument
     let column: UInt32
     let info: ColumnInfo
-    let state: ViewState
+    let state: QuerySpec
     let current: [Filter]
     let onApply: ([Filter]) -> Void
 
@@ -70,7 +70,7 @@ struct ColumnFilterView: View {
             let column = column
             let state = state
             let spec = try await Task.detached {
-                try doc.filterSpecWithBins(column: column, state: state, bins: bins, scale: scale)
+                try doc.filterSpecWithBins(column: column, spec: state, bins: bins, scale: scale)
             }
             .value
             guard !Task.isCancelled else { return }

@@ -172,18 +172,17 @@ mod delimited {
         fs::write(&source, "id,label,enabled\n3,\"雪,\"\"quoted\"\"\nline\",true\n1,omit,false\n2,\"tab\tcell\",false\n").unwrap();
         let doc = Document::open(source).unwrap();
         let version = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::Range {
+            .apply_view(
+                &ViewState::single(0, Filter::Range {
                     include_nulls: false,
-                    column: 0,
                     min: Some(doc.parse_bound(0, "2").unwrap()),
                     max: None,
-                }],
-                sort: vec![SortKey {
+                })
+                .with_sort(vec![SortKey {
                     column: 0,
                     descending: true,
-                }],
-            })
+                }]),
+            )
             .unwrap()
             .version;
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
@@ -204,13 +203,9 @@ mod delimited {
             );
         }
         let empty = doc
-            .apply_view(&ViewState {
-                filters: vec![gewu_core::Filter::Equals {
-                    column: 1,
-                    value: "absent-value".into(),
-                }],
-                ..Default::default()
-            })
+            .apply_view(&ViewState::single(1, Filter::Equals {
+                value: "absent-value".into(),
+            }))
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
@@ -231,7 +226,7 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, SortKey, ViewState};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
@@ -364,13 +359,9 @@ mod xlsx {
             doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .apply_view(&ViewState {
-                filters: vec![gewu_core::Filter::Equals {
-                    column: 1,
-                    value: "absent-value".into(),
-                }],
-                ..Default::default()
-            })
+            .apply_view(&ViewState::single(1, Filter::Equals {
+                value: "absent-value".into(),
+            }))
             .unwrap();
         doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
             .unwrap()

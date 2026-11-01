@@ -27,24 +27,18 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     writer.close().unwrap();
     let doc = Document::open(file.path()).unwrap();
     let keys = doc.keys_for_labels(1, &[Some("2".into())]).unwrap();
-    let state = ViewState {
-        filters: vec![
-            Filter::InValues { column: 1, keys },
-            Filter::Range {
-                include_nulls: false,
-                column: 0,
-                min: Some(doc.parse_bound(0, "65530.5").unwrap()),
-                max: Some(doc.parse_bound(0, "131080").unwrap()),
-            },
-            Filter::Contains {
-                include_nulls: false,
-                column: 2,
-                text: "keep".into(),
-                case_sensitive: false,
-            },
-        ],
-        ..Default::default()
-    };
+    let state = ViewState::default()
+        .with_filter(1, Filter::InValues { keys })
+        .with_filter(0, Filter::Range {
+            include_nulls: false,
+            min: Some(doc.parse_bound(0, "65530.5").unwrap()),
+            max: Some(doc.parse_bound(0, "131080").unwrap()),
+        })
+        .with_filter(2, Filter::Contains {
+            include_nulls: false,
+            text: "keep".into(),
+            case_sensitive: false,
+        });
     let view = doc.apply_view(&state).unwrap();
     let rows = doc.rows(view.version, 0, len as u32, &[0, 1, 2]).unwrap();
     let expected = (65531..=131080)
@@ -53,15 +47,11 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         .collect::<Vec<_>>();
     assert_eq!(rows.source_rows, expected);
 
-    let invalid = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.parse_bound(0, "20").unwrap()),
-            max: Some(doc.parse_bound(0, "10").unwrap()),
-        }],
-        ..Default::default()
-    };
+    let invalid = ViewState::single(0, Filter::Range {
+        include_nulls: false,
+        min: Some(doc.parse_bound(0, "20").unwrap()),
+        max: Some(doc.parse_bound(0, "10").unwrap()),
+    });
     assert!(matches!(
         doc.apply_view(&invalid),
         Err(Error::InvalidArgument(_))
@@ -98,27 +88,18 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
 
     // Pass filters in reverse cost order: expensive text search first, cheap range second, null
     // check third
-    let expensive_first = gewu_core::QuerySpec {
-        sort: vec![],
-        filters: vec![
-            Filter::Contains {
-                column: 1,
-                text: "match_target".into(),
-                case_sensitive: true,
-                include_nulls: false,
-            },
-            Filter::Range {
-                column: 0,
-                min: Some(doc.parse_bound(0, "100").unwrap()),
-                max: Some(doc.parse_bound(0, "200").unwrap()),
-                include_nulls: false,
-            },
-            Filter::IsNull {
-                column: 0,
-                negate: true,
-            },
-        ],
-    };
+    let expensive_first = gewu_core::QuerySpec::default()
+        .with_filter(1, Filter::Contains {
+            text: "match_target".into(),
+            case_sensitive: true,
+            include_nulls: false,
+        })
+        .with_filter(0, Filter::Range {
+            min: Some(doc.parse_bound(0, "100").unwrap()),
+            max: Some(doc.parse_bound(0, "200").unwrap()),
+            include_nulls: false,
+        })
+        .with_filter(0, Filter::IsNull { negate: true });
 
     let view = doc.apply_view(&expensive_first).unwrap();
     let expected: Vec<u64> = (100..=200)

@@ -68,15 +68,13 @@ fn busy_state(doc: &Document) -> ViewState {
     let keys = doc
         .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
         .unwrap();
-    ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }, Filter::Range {
+    ViewState::default()
+        .with_filter(1, Filter::InValues { keys })
+        .with_filter(2, Filter::Range {
             include_nulls: false,
-            column: 2,
             min: Some(doc.parse_bound(2, "2.0").unwrap()),
             max: None,
-        }],
-        ..Default::default()
-    }
+        })
 }
 
 #[test]
@@ -110,13 +108,9 @@ fn distinct_ignores_only_its_own_column() {
 fn distinct_and_histogram_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
-    let state = ViewState {
-        filters: vec![Filter::Equals {
-            column: 1,
-            value: "cat".into(),
-        }],
-        ..Default::default()
-    };
+    let state = ViewState::single(1, Filter::Equals {
+        value: "cat".into(),
+    });
     let names: Vec<String> = labels_of(&doc, 0, Some(&state))
         .into_iter()
         .map(|(l, _)| l)
@@ -132,10 +126,8 @@ fn distinct_and_histogram_apply_column_filters() {
 #[test]
 fn histogram_ignores_only_its_own_column() {
     let (path, doc) = sample("hist");
-    let mut state = busy_state(&doc);
-    state.filters.push(Filter::Range {
+    let state = busy_state(&doc).with_filter(3, Filter::Range {
         include_nulls: false,
-        column: 3,
         min: Some(doc.parse_bound(3, "60").unwrap()),
         max: None,
     });
@@ -177,15 +169,11 @@ fn view_histogram_and_summary_follow_the_current_view() {
 fn failed_apply_keeps_the_old_view() {
     let (path, doc) = sample("failed");
     let before = doc.current_view();
-    let bad = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.make_bound_i64(3, 1).unwrap()),
-            max: None,
-        }],
-        ..Default::default()
-    };
+    let bad = ViewState::single(0, Filter::Range {
+        include_nulls: false,
+        min: Some(doc.make_bound_i64(3, 1).unwrap()),
+        max: None,
+    });
     assert!(doc.apply_view(&bad).is_err());
     assert_eq!(doc.current_view(), before);
     std::fs::remove_file(path).ok();
@@ -220,16 +208,13 @@ fn cancelled_apply_never_replaces_the_view() {
     let doc = Arc::new(doc);
     let before = doc.current_view();
 
-    let state = ViewState {
-        filters: vec![Filter::Equals {
-            column: 0,
-            value: "12345".into(),
-        }],
-        sort: vec![gewu_core::SortKey {
-            column: 0,
-            descending: true,
-        }],
-    };
+    let state = ViewState::single(0, Filter::Equals {
+        value: "12345".into(),
+    })
+    .with_sort(vec![gewu_core::SortKey {
+        column: 0,
+        descending: true,
+    }]);
     let worker = {
         let doc = doc.clone();
         std::thread::spawn(move || doc.apply_view(&state))
@@ -272,13 +257,7 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
         doc.keys_for_labels(0, &[Some("x".into())]),
         Err(Error::InvalidArgument(_))
     ));
-    let by_key = ViewState {
-        filters: vec![Filter::InValues {
-            column: 0,
-            keys: vec![0],
-        }],
-        ..Default::default()
-    };
+    let by_key = ViewState::single(0, Filter::InValues { keys: vec![0] });
     assert!(matches!(
         doc.apply_view(&by_key),
         Err(Error::InvalidArgument(_))
@@ -344,33 +323,19 @@ fn summary_extrema_cover_single_values_nulls_and_filtered_views() {
     // exercise the same summary contract, without separate files for each case.
     for (filter, expected) in [
         (None, [Some(("cat", "dog")), Some(("true", "true")), None]),
-        (
-            Some(Filter::InValues {
-                column: 0,
-                keys: cat,
-            }),
-            [Some(("cat", "cat")), Some(("true", "true")), None],
-        ),
-        (
-            Some(Filter::IsNull {
-                column: 0,
-                negate: false,
-            }),
-            [None; 3],
-        ),
-        (
-            Some(Filter::InValues {
-                column: 0,
-                keys: vec![],
-            }),
-            [None; 3],
-        ),
+        (Some(Filter::InValues { keys: cat }), [
+            Some(("cat", "cat")),
+            Some(("true", "true")),
+            None,
+        ]),
+        (Some(Filter::IsNull { negate: false }), [None; 3]),
+        (Some(Filter::InValues { keys: vec![] }), [None; 3]),
     ] {
-        doc.apply_view(&ViewState {
-            filters: filter.into_iter().collect(),
-            ..Default::default()
-        })
-        .unwrap();
+        let mut state = ViewState::default();
+        if let Some(f) = filter {
+            state = state.with_filter(0, f);
+        }
+        doc.apply_view(&state).unwrap();
         for (column, extremes) in expected.into_iter().enumerate() {
             let summary = doc.column_summary(column as u32, 2).unwrap();
             assert_eq!(

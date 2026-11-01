@@ -1,5 +1,7 @@
 //! Query state and formatted view results.
 
+use std::collections::HashMap;
+
 use crate::Filter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,12 +12,32 @@ pub struct SortKey {
 
 /// Declarative specification of what rows to show and how to order them.
 ///
-/// Filters are combined with AND. This is an immutable ruleset / query definition,
-/// rather than mutable UI state.
+/// Filters are organized per column (`column_index -> [Filter]`).
+/// Across columns and multiple filters on the same column, filters are combined with AND.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QuerySpec {
     pub sort: Vec<SortKey>,
-    pub filters: Vec<Filter>,
+    pub filters: HashMap<u32, Vec<Filter>>,
+}
+
+impl QuerySpec {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn single(column: u32, filter: Filter) -> Self {
+        Self::default().with_filter(column, filter)
+    }
+
+    pub fn with_sort(mut self, sort: Vec<SortKey>) -> Self {
+        self.sort = sort;
+        self
+    }
+
+    pub fn with_filter(mut self, column: u32, filter: Filter) -> Self {
+        self.filters.entry(column).or_default().push(filter);
+        self
+    }
 }
 
 /// Backward-compatible alias for [`QuerySpec`].
