@@ -158,8 +158,44 @@ fn typed_bounds_reject_mismatched_columns_without_replacing_view() {
 }
 
 #[test]
+fn float_choices_group_signed_zero_and_nan_payloads() {
+    use arrow::array::Float64Array;
+
+    let score = Float64Array::from(vec![
+        Some(-0.0),
+        Some(0.0),
+        Some(f64::NAN),
+        Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+        Some(1.0),
+        None,
+    ]);
+    let doc = document(vec![("score", Arc::new(score))]);
+    let FilterEditor::Choices { values } = doc.filter_spec(0, None).unwrap().editor else {
+        panic!("small float column should offer choices")
+    };
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| (value.label.as_deref(), value.count))
+            .collect::<Vec<_>>(),
+        [
+            (None, 1),
+            (Some("0.0"), 2),
+            (Some("1.0"), 1),
+            (Some("NaN"), 2)
+        ]
+    );
+
+    let keys = doc.keys_for_labels(0, &[Some("NaN".into())]).unwrap();
+    let view = doc
+        .apply_view(&QuerySpec::single(0, Filter::InValues { keys }))
+        .unwrap();
+    assert_eq!(view.row_count, 2);
+}
+
+#[test]
 fn choice_limit_counts_null_and_empty_columns_remain_valid() {
-    for (count, choices) in [(499, true), (500, false)] {
+    for (count, choices) in [(255, true), (256, false)] {
         let array = Int32Array::from_iter((0..count).map(Some).chain([None]));
         let doc = document(vec![("value", Arc::new(array))]);
         let spec = doc.filter_spec(0, None).unwrap();

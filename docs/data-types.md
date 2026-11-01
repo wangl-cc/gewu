@@ -20,7 +20,7 @@ Float16, Float32 and Float64 Find uses the precision of the input:
 | `3` | `[2.5, 3.5)` |
 | `1e3` | `[500, 1500)` |
 
-The lower edge is included and the upper edge is excluded. Matching also includes the exact parsed target, so a precision interval that collapses at the column's floating-point resolution still finds that value. Find accepts `nan` and `inf`.
+The lower edge is included and the upper edge is excluded. Matching also includes the exact parsed target, so a precision interval that collapses at the column's floating-point resolution still finds that value. Find accepts `nan` and `inf`. Value selection groups `-0.0` with `0.0` and every NaN payload into one NaN option, so a column never shows duplicate zero or NaN choices.
 
 Explicit equality parses to the native floating-point type, including Float32 rounding for a Float32 column. Explicit range filters use inclusive endpoints and do not widen with input precision. NaN is distinct from null; histograms count it separately. Linear histograms include infinities in the outer bins; logarithmic histograms exclude them and report their count.
 

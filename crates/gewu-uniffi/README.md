@@ -67,7 +67,7 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 | `info`, `current_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
 | `parse_bound`, `make_bound_*`, `Bound` methods, `format_value` | Scalar operations. |
-| `validate_filter` | Scalar preparation for most filters; `InValues` may build a lazy index, so allow background execution. |
+| `validate_filter` | Scalar preparation for most filters; `InValues` may build the column's compact encoding, so allow background execution. |
 | Cancellation methods and export `progress` | Control calls that can be made while background work runs. |
 
 Cancellation has independent scopes:
@@ -98,13 +98,15 @@ Core chooses the editor using type capabilities and cardinality. Do not infer it
 
 String choices use `prepare_text_choices(column, state)` followed by `TextChoices::page(query, after, limit)`, both off the UI thread. Reuse the captured session across searches and pages. Pages use an exclusive value cursor, retain bounded candidate storage, and include zero-count source values. Preparation is not cancellable. For a new search, call `invalidate_pages()` when accepting the request, then pass the returned generation to `page_for_generation`; this interrupts obsolete scans while retaining the facet. Queued requests must not advance generations themselves. `cancel()` permanently closes the session independently of table queries. Debounce requests, serialize scans, and reject obsolete results before publishing them.
 
-`Filter::EqualsAny` accepts multiple text inputs interpreted using the column's typed equality rules without building a value index.
+`Filter::EqualsAny` accepts multiple text inputs interpreted using the column's typed equality rules without building the column's value encoding.
 
-Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the value-index limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
+Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the 255-value encoding limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
 
 For text endpoints, call `parse_bound(column, text)`. Native controls can call `make_bound_int`, `make_bound_uint`, `make_bound_float` or `make_bound_decimal`; decimal coefficients cross the boundary as integer strings with an explicit scale. These constructors validate against the column's logical type.
 
 Preserve `Bound` objects when submitting `Filter::Range`. Its endpoints are inclusive, and `None` means an open end. `display()` supplies text, `same_value()` compares exact typed values, and `axis_value()` is only an approximate plotting coordinate. Never rebuild a filter from histogram coordinates or a rounded floating-point value. Use the supplied histogram bin bounds directly.
+
+`Filter::InValues` takes the keys reported for a column's distinct values. Non-null values use stable small codes; null uses the reserved key `255`. A column with more than 255 non-null distinct values has no keys, so its value selection fails with `InvalidArgument`; use `TextValues`, `Range` or `Contains` instead.
 
 `Range` and `Contains` can include nulls through `include_nulls`; `IsNull` handles null-only filtering. `validate_filter` checks a candidate without applying a view. Invalid filter inputs become `InvalidArgument`. Find instead skips columns whose types cannot interpret its query, according to the [type-specific semantics](../../docs/data-types.md).
 

@@ -126,6 +126,35 @@ fn included_nulls_still_obey_other_column_filters() {
 }
 
 #[test]
+fn in_values_keys_name_nulls_with_the_reserved_key() {
+    let doc = document();
+    let null_keys = doc.keys_for_labels(1, &[None]).unwrap();
+    // The reserved null key is part of the filter contract.
+    assert_eq!(null_keys, [255]);
+    assert_eq!(
+        rows(
+            &doc,
+            QuerySpec::single(1, Filter::InValues { keys: null_keys })
+        ),
+        vec![0, 6]
+    );
+
+    let alpha = doc.keys_for_labels(1, &[Some("alpha".into())]).unwrap();
+    assert_eq!(
+        rows(&doc, QuerySpec::single(1, Filter::InValues { keys: alpha })),
+        vec![1, 4]
+    );
+
+    let both = doc
+        .keys_for_labels(1, &[None, Some("beta".into())])
+        .unwrap();
+    assert_eq!(
+        rows(&doc, QuerySpec::single(1, Filter::InValues { keys: both })),
+        vec![0, 2, 6]
+    );
+}
+
+#[test]
 fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
     let doc = document();
     let spec = QuerySpec::single(0, range(&doc, true))

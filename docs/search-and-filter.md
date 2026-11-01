@@ -30,11 +30,13 @@ For example, a price range and a city selection require both conditions to match
 
 Parsing, precision, case sensitivity and nested-value behavior are defined once in [data types](data-types.md). In particular, the period or precision expansion used by Find does not apply to explicit range filters.
 
+Key-based value selection (`InValues`) is available for columns with at most 255 non-null distinct values. Larger text columns keep exact text selection (`TextValues`), and other large columns use range or text matching instead.
+
 ## Editor selection
 
-Text columns offer both value selection and text matching. Up to 500 distinct source values, including null, recommends value selection initially; otherwise text matching is recommended. Users can switch modes regardless of this threshold.
+Text columns offer both value selection and text matching. Up to 255 non-null distinct source values (plus null) recommends value selection initially; otherwise text matching is recommended. Users can switch modes regardless of this threshold.
 
-Other columns with up to 500 distinct values use a value list. Higher-cardinality ordered columns use a range editor. Remaining columns use text matching where supported, or null-only filtering. The recommendation comes from the source column and stays stable as filters change.
+Other columns with up to 255 non-null distinct values use a value list. Higher-cardinality ordered columns use a range editor. Remaining columns use text matching where supported, or null-only filtering. The recommendation comes from the source column and stays stable as filters change.
 
 ## Candidate values and counts
 

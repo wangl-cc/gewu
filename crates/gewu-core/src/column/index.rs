@@ -1,13 +1,17 @@
-//! Distinct values of a column: an index for columns with few of them, and
-//! a one-off count for columns with many.
+//! Distinct values of a column as a compact `u8` codebook.
 //!
-//! The index gives every row a code (`u32`) naming its distinct value.
-//! Codes are ordered like the values themselves (nulls first), so code order
-//! is display order. The checkbox filter keeps a set of codes, and counting
-//! values is a single pass over the codes. The index is kept for the life of
-//! the document, so it is only built for columns with at most
-//! [`INDEX_LIMIT`] distinct values; a column of ids or UUIDs would cost
-//! hundreds of megabytes.
+//! A [`ValueDictionary`] gives every source row a code naming its distinct
+//! value: codes `0..=254` name the non-null values in value order, and
+//! [`NULL_CODE`] names null. Plain columns are encoded by hashing their rows
+//! at build time. Native Arrow dictionary columns already carry keys and
+//! values, so they skip value detection and are converted into the same code
+//! array, reusing Arrow's encoded values. Float columns normalize for value
+//! selection: signed zeros share one option and every NaN payload shares one
+//! NaN option, matching streaming counts.
+//!
+//! The codebook is a pure function of the column data and is cached by
+//! [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`] non-null
+//! values are not encoded; callers fall back to streaming counts.
 
 use std::{
     cmp::Reverse,
@@ -19,7 +23,10 @@ use std::{
 use arrow::{
     array::{Array, ArrayRef, AsArray, PrimitiveArray, UInt32Array},
     compute::take,
-    datatypes::{ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type},
+    datatypes::{
+        ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+        Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
     row::{RowConverter, SortField},
 };
 
@@ -31,6 +38,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
     /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
+    /// Codes `0..=254` name non-null values and [`NULL_CODE`] names null.
     pub key: u64,
     /// Displayed text; `None` is the null value.
     pub label: Option<String>,
@@ -45,188 +53,391 @@ pub struct DistinctResult {
     pub total: u64,
     pub truncated: bool,
     /// Whether the keys name values for [`crate::Filter::InValues`]. False for
-    /// columns with too many distinct values to index; `values` then holds
+    /// columns with too many distinct values to encode; `values` then holds
     /// the most common ones.
     pub keyed: bool,
 }
 
-/// Most distinct values a column may have and still be indexed.
-/// Aligned with UI choices limit (CHOICE_LIMIT = 500) with a safe headroom.
-/// Columns with higher cardinality bypass the index and use streaming counts/searches.
-pub(crate) const INDEX_LIMIT: usize = 1_000;
+/// Most non-null values a column may have and still be encoded. Non-null
+/// values use codes `0..=254`; [`NULL_CODE`] is reserved for null, so one
+/// `u8` code space covers 255 values plus null. Columns with more values are
+/// counted without an encoding and use streaming counts/searches.
+pub(crate) const MAX_DISTINCT_VALUES: usize = 255;
+
+/// Code reserved for null. Non-null values use codes `0..=254`.
+pub(crate) const NULL_CODE: u8 = 255;
 
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
 
-/// Whether the whole column has at most `limit` distinct values, null included.
-///
-/// Only one row-conversion batch and at most `limit` distinct encoded values
-/// are retained. Unlike building an index, this does not allocate source-row
-/// codes or format labels. The first new value beyond the limit stops the scan.
-#[cfg(test)]
-pub(crate) fn has_at_most(array: &ArrayRef, limit: usize) -> Result<bool> {
-    let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
-    let mut seen: HashSet<Box<[u8]>> = HashSet::new();
-    for start in (0..array.len()).step_by(CHUNK) {
-        let len = CHUNK.min(array.len() - start);
-        let rows = converter.convert_columns(&[array.slice(start, len)])?;
-        for row in rows.iter() {
-            let bytes: &[u8] = row.as_ref();
-            if !seen.contains(bytes) {
-                if seen.len() == limit {
-                    return Ok(false);
-                }
-                seen.insert(bytes.into());
-            }
+pub(crate) struct ValueDictionary {
+    /// Code of each source row; [`NULL_CODE`] for null.
+    codes: Vec<u8>,
+    /// Non-null values in code order; index `code` formats that value.
+    values: ArrayRef,
+    /// Whether the source column contains at least one null.
+    has_null: bool,
+}
+
+impl ValueDictionary {
+    /// Encode `array`, or `None` for unsupported types and columns with more
+    /// than [`MAX_DISTINCT_VALUES`] non-null values.
+    pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
+        if matches!(array.data_type(), DataType::Dictionary(_, _)) {
+            Self::build_native(array)
+        } else {
+            Self::build_plain(array)
         }
     }
-    Ok(true)
-}
 
-pub(crate) struct ValueIndex {
-    /// Code of each source row.
-    codes: Vec<u32>,
-    /// Display label of each code, `None` for null.
-    labels: Vec<Option<String>>,
-}
+    /// Encode a plain column. Floats are normalized for value selection; every
+    /// other type uses the generic row-format encoder.
+    fn build_plain(array: &ArrayRef) -> Option<Self> {
+        match array.data_type() {
+            DataType::Float16 => Self::build_float::<Float16Type>(array),
+            DataType::Float32 => Self::build_float::<Float32Type>(array),
+            DataType::Float64 => Self::build_float::<Float64Type>(array),
+            _ => Self::build_encoded(array),
+        }
+    }
 
-impl ValueIndex {
-    /// Index `array`, or `None` if it has more than `limit` distinct values.
-    pub fn build(array: &ArrayRef, limit: usize) -> Result<Option<Self>> {
-        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())])?;
+    /// Generic encoder: discover distinct values by hashing rows, then write
+    /// one `u8` code per row. Row-format bytes give both equality and value
+    /// order.
+    fn build_encoded(array: &ArrayRef) -> Option<Self> {
+        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
 
-        // Codes in order of first appearance; each distinct value's row-format
-        // bytes (which sort like the values, nulls first) and first row.
-        let mut seen: HashMap<Box<[u8]>, u32> = HashMap::new();
+        // Temporary codes in order of first appearance, and each value's first
+        // source row. Row-format bytes sort like the values themselves.
+        let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
         let mut first_row: Vec<usize> = Vec::new();
-        let mut codes = Vec::with_capacity(array.len());
+        let mut codes: Vec<u8> = Vec::with_capacity(array.len());
+        let mut has_null = false;
         for start in (0..array.len()).step_by(CHUNK) {
             let len = CHUNK.min(array.len() - start);
-            let rows = converter.convert_columns(&[array.slice(start, len)])?;
+            let rows = converter
+                .convert_columns(std::slice::from_ref(&array.slice(start, len)))
+                .ok()?;
             for (i, row) in rows.iter().enumerate() {
+                let source_row = start + i;
+                if array.is_null(source_row) {
+                    has_null = true;
+                    codes.push(NULL_CODE);
+                    continue;
+                }
                 let bytes: &[u8] = row.as_ref();
                 let code = match seen.get(bytes) {
-                    Some(&c) => c,
+                    Some(&code) => code,
                     None => {
-                        if first_row.len() == limit {
-                            return Ok(None);
+                        if first_row.len() == MAX_DISTINCT_VALUES {
+                            return None;
                         }
-                        let c = first_row.len() as u32;
-                        seen.insert(bytes.into(), c);
-                        first_row.push(start + i);
-                        c
+                        let code = first_row.len() as u8;
+                        seen.insert(bytes.into(), code);
+                        first_row.push(source_row);
+                        code
                     }
                 };
                 codes.push(code);
             }
         }
 
-        let mut by_code: Vec<(&[u8], u32)> = seen.iter().map(|(b, &c)| (&b[..], c)).collect();
-        by_code.sort_unstable();
-        let mut remap = vec![0u32; by_code.len()];
-        for (new, &(_, old)) in by_code.iter().enumerate() {
-            remap[old as usize] = new as u32;
+        // Renumber codes into value order; null keeps its reserved code.
+        let mut key_of: Vec<&[u8]> = vec![&[]; first_row.len()];
+        for (bytes, &code) in &seen {
+            key_of[code as usize] = bytes;
         }
-        for c in codes.iter_mut() {
-            *c = remap[*c as usize];
+        let mut order: Vec<u8> = (0..first_row.len() as u8).collect();
+        order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(key_of[b as usize]));
+        let mut remap = [0u8; MAX_DISTINCT_VALUES];
+        for (new, &old) in order.iter().enumerate() {
+            remap[old as usize] = new as u8;
+        }
+        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
+            *code = remap[*code as usize];
         }
 
-        let f = format::formatter(array.as_ref())?;
-        let labels = by_code
-            .iter()
-            .map(|&(_, old)| format::cell(array.as_ref(), &f, first_row[old as usize]))
-            .collect();
-
-        Ok(Some(Self { codes, labels }))
+        Some(Self {
+            codes,
+            values: value_rows(array, &first_row, &order)?,
+            has_null,
+        })
     }
 
-    pub fn len(&self) -> usize {
-        self.labels.len()
-    }
+    /// Encode a float column. Value selection cannot distinguish signed zeros
+    /// or NaN payloads meaningfully, so `-0.0`/`0.0` share one code and all NaNs
+    /// share another, matching streaming counts and analysis.
+    fn build_float<T: ArrowPrimitiveType>(array: &ArrayRef) -> Option<Self>
+    where
+        T::Native: Into<f64>,
+    {
+        /// Order key of `+0.0`; keeps the shared zero option between negative
+        /// and positive values.
+        const ZERO_KEY: u64 = 1 << 63;
+        /// NaN sorts after every number.
+        const NAN_KEY: u64 = u64::MAX;
 
-    /// Each distinct value with its count over `rows`, in value order,
-    /// leaving out values with no rows.
-    pub fn counts(&self, rows: &Selection) -> Vec<DistinctValue> {
-        self.counts_with_zero(rows, false)
-    }
-
-    /// Every source-column value in value order, including those absent from
-    /// `rows`. Stable options remain selectable as other filters change.
-    pub fn counts_all(&self, rows: &Selection) -> Vec<DistinctValue> {
-        self.counts_with_zero(rows, true)
-    }
-
-    fn counts_with_zero(&self, rows: &Selection, include_zero: bool) -> Vec<DistinctValue> {
-        let mut counts = vec![0u64; self.len()];
-        match rows {
-            Selection::All(_) => self.codes.iter().for_each(|&c| counts[c as usize] += 1),
-            Selection::Rows(rows) => rows
-                .iter()
-                .for_each(|&r| counts[self.codes[r as usize] as usize] += 1),
+        let source = array.as_primitive::<T>();
+        let mut seen: HashMap<u64, u8> = HashMap::new();
+        let mut first_row: Vec<usize> = Vec::new();
+        let mut codes: Vec<u8> = Vec::with_capacity(source.len());
+        let mut has_null = false;
+        for row in 0..source.len() {
+            if source.is_null(row) {
+                has_null = true;
+                codes.push(NULL_CODE);
+                continue;
+            }
+            let value: f64 = source.value(row).into();
+            let key = if value == 0.0 {
+                ZERO_KEY
+            } else if value.is_nan() {
+                NAN_KEY
+            } else {
+                let bits = value.to_bits();
+                if bits & (1 << 63) != 0 {
+                    !bits
+                } else {
+                    bits | (1 << 63)
+                }
+            };
+            let code = match seen.get(&key) {
+                Some(&code) => code,
+                None => {
+                    if first_row.len() == MAX_DISTINCT_VALUES {
+                        return None;
+                    }
+                    let code = first_row.len() as u8;
+                    seen.insert(key, code);
+                    first_row.push(row);
+                    code
+                }
+            };
+            // Prefer a positive zero as the option's representative so it reads
+            // "0" when both signed zeros occur.
+            if key == ZERO_KEY && value.is_sign_positive() {
+                first_row[code as usize] = row;
+            }
+            codes.push(code);
         }
-        counts
-            .into_iter()
-            .enumerate()
-            .filter(|&(_, n)| include_zero || n > 0)
-            .map(|(code, count)| DistinctValue {
-                key: code as u64,
-                label: self.labels[code].clone(),
-                count,
-            })
-            .collect()
+
+        let mut key_of = vec![0_u64; first_row.len()];
+        for (&key, &code) in &seen {
+            key_of[code as usize] = key;
+        }
+        let mut order: Vec<u8> = (0..first_row.len() as u8).collect();
+        order.sort_unstable_by_key(|&code| key_of[code as usize]);
+        let mut remap = [0u8; MAX_DISTINCT_VALUES];
+        for (new, &old) in order.iter().enumerate() {
+            remap[old as usize] = new as u8;
+        }
+        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
+            *code = remap[*code as usize];
+        }
+
+        Some(Self {
+            codes,
+            values: value_rows(array, &first_row, &order)?,
+            has_null,
+        })
     }
 
-    /// Returns the internal code for the given row index.
-    #[inline]
-    pub fn code(&self, row: usize) -> u32 {
+    /// Encode a native Dictionary. Arrow already encodes the values into
+    /// `keys`/`values`, so no row hashing is needed: collect the referenced
+    /// dictionary values, reuse [`Self::build_plain`] on that small array, then
+    /// walk the keys once to write the shared per-row code array.
+    fn build_native(array: &ArrayRef) -> Option<Self> {
+        let dictionary = array.as_any_dictionary();
+        let keys = dictionary.keys();
+        let dictionary_values = dictionary.values().clone();
+        // A dictionary with more entries than the code space cannot be compact.
+        if dictionary_values.len() > MAX_DISTINCT_VALUES + 1 {
+            return None;
+        }
+
+        // Which dictionary entries are referenced, and are there logical nulls
+        // (a null key, or a key pointing at a null value)?
+        let value_nulls = dictionary_values.logical_nulls();
+        let mut has_null = false;
+        let mut referenced: Vec<u32> = Vec::new();
+        let mut entry_slot = vec![u32::MAX; dictionary_values.len()];
+        if !scan_keys(keys, |key| {
+            let Some(entry) = key else {
+                has_null = true;
+                return;
+            };
+            if value_nulls
+                .as_ref()
+                .is_some_and(|nulls| nulls.is_null(entry))
+            {
+                has_null = true;
+                return;
+            }
+            let Some(slot) = entry_slot.get_mut(entry) else {
+                return;
+            };
+            if *slot == u32::MAX {
+                *slot = referenced.len() as u32;
+                referenced.push(entry as u32);
+            }
+        }) {
+            return None;
+        }
+
+        // Encode the referenced values with the same path as a plain column.
+        let referenced_values = take(
+            dictionary_values.as_ref(),
+            &UInt32Array::from(referenced),
+            None,
+        )
+        .ok()?;
+        let encoded = Self::build_plain(&referenced_values)?;
+
+        let mut key_to_code = vec![NULL_CODE; dictionary_values.len()];
+        for (entry, &slot) in entry_slot.iter().enumerate() {
+            if slot != u32::MAX {
+                key_to_code[entry] = encoded.codes[slot as usize];
+            }
+        }
+
+        // One key walk writes the shared per-row code array.
+        let mut codes = Vec::with_capacity(array.len());
+        if !scan_keys(keys, |key| {
+            codes.push(match key {
+                None => NULL_CODE,
+                Some(entry) => key_to_code.get(entry).copied().unwrap_or(NULL_CODE),
+            });
+        }) {
+            return None;
+        }
+
+        Some(Self {
+            codes,
+            values: encoded.values,
+            has_null,
+        })
+    }
+
+    #[cfg(test)]
+    fn n_values(&self) -> usize {
+        self.values.len()
+    }
+
+    #[cfg(test)]
+    fn has_null(&self) -> bool {
+        self.has_null
+    }
+
+    #[cfg(test)]
+    fn code_at(&self, row: usize) -> u8 {
         self.codes[row]
     }
 
-    /// Resolve matching keys for a list of displayed labels (`None` = null).
-    pub fn keys_for_labels(&self, labels: &[Option<String>]) -> Vec<u64> {
-        let target: HashSet<&Option<String>> = labels.iter().collect();
-        self.labels
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| target.contains(l))
-            .map(|(k, _)| k as u64)
-            .collect()
+    /// Each distinct value with its count over `rows`, in value order with
+    /// null first, leaving out values with no rows.
+    pub(crate) fn counts(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
+        self.counts_with_zero(rows, false)
     }
 
-    fn make_chunk_predicate(self: &Arc<Self>, allowed: Vec<bool>) -> Predicate<'static> {
-        let index = Arc::clone(self);
-        Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
-            match (rows, incoming) {
-                (RowSelection::Range(range), None) => {
-                    let slice = &index.codes[range];
-                    for (i, &code) in slice.iter().enumerate() {
-                        output[i] = allowed[code as usize];
-                    }
-                }
-                (RowSelection::Range(range), Some(mask)) => {
-                    let slice = &index.codes[range];
-                    for (i, &code) in slice.iter().enumerate() {
-                        output[i] = allowed[code as usize] & mask[i];
-                    }
-                }
-                (RowSelection::Indices(indices), None) => {
-                    for (i, &row) in indices.iter().enumerate() {
-                        output[i] = allowed[index.code(row) as usize];
-                    }
-                }
-                (RowSelection::Indices(indices), Some(mask)) => {
-                    for (i, &row) in indices.iter().enumerate() {
-                        output[i] = allowed[index.code(row) as usize] & mask[i];
-                    }
+    /// Every source-column value in value order with null first, including
+    /// those absent from `rows`. Stable options remain selectable as other
+    /// filters change.
+    pub(crate) fn counts_all(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
+        self.counts_with_zero(rows, true)
+    }
+
+    fn counts_with_zero(&self, rows: &Selection, include_zero: bool) -> Result<Vec<DistinctValue>> {
+        let mut counts = [0u64; 256];
+        match rows {
+            Selection::All(_) => self
+                .codes
+                .iter()
+                .for_each(|&code| counts[code as usize] += 1),
+            Selection::Rows(rows) => rows
+                .iter()
+                .for_each(|&row| counts[self.codes[row as usize] as usize] += 1),
+        }
+
+        let formatter = format::formatter(self.values.as_ref())?;
+        let mut values = Vec::with_capacity(self.values.len() + 1);
+        if self.has_null && (include_zero || counts[NULL_CODE as usize] > 0) {
+            values.push(DistinctValue {
+                key: u64::from(NULL_CODE),
+                label: None,
+                count: counts[NULL_CODE as usize],
+            });
+        }
+        for (code, &count) in counts.iter().enumerate().take(self.values.len()) {
+            if include_zero || count > 0 {
+                values.push(DistinctValue {
+                    key: code as u64,
+                    label: format::cell(self.values.as_ref(), &formatter, code),
+                    count,
+                });
+            }
+        }
+        Ok(values)
+    }
+
+    /// Resolve matching keys for a list of displayed labels (`None` = null).
+    pub(crate) fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
+        let target: HashSet<&Option<String>> = labels.iter().collect();
+        let mut keys = Vec::new();
+        if self.has_null && labels.iter().any(Option::is_none) {
+            keys.push(u64::from(NULL_CODE));
+        }
+        let formatter = format::formatter(self.values.as_ref())?;
+        for code in 0..self.values.len() {
+            let label = format::cell(self.values.as_ref(), &formatter, code);
+            if target.contains(&label) {
+                keys.push(code as u64);
+            }
+        }
+        Ok(keys)
+    }
+
+    fn fill_matches(
+        &self,
+        rows: RowSelection<'_>,
+        incoming: Option<&[bool]>,
+        output: &mut [bool],
+        allowed: &[bool; 256],
+    ) {
+        match (rows, incoming) {
+            (RowSelection::Range(range), None) => {
+                for (i, &code) in self.codes[range].iter().enumerate() {
+                    output[i] = allowed[code as usize];
                 }
             }
+            (RowSelection::Range(range), Some(mask)) => {
+                for (i, &code) in self.codes[range].iter().enumerate() {
+                    output[i] = allowed[code as usize] & mask[i];
+                }
+            }
+            (RowSelection::Indices(indices), None) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = allowed[self.codes[row] as usize];
+                }
+            }
+            (RowSelection::Indices(indices), Some(mask)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = allowed[self.codes[row] as usize] & mask[i];
+                }
+            }
+        }
+    }
+
+    fn predicate_from_allowed(self: &Arc<Self>, allowed: [bool; 256]) -> Predicate<'static> {
+        let dictionary = Arc::clone(self);
+        Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+            dictionary.fill_matches(rows, incoming, output, &allowed);
             Ok(())
         }))
     }
 
     /// Prepare a row-based predicate for filtering by key codes.
-    pub fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
-        let mut allowed = vec![false; self.len()];
+    pub(crate) fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
+        let mut allowed = [false; 256];
         for &key in keys {
             if let Ok(key) = usize::try_from(key) {
                 if let Some(slot) = allowed.get_mut(key) {
@@ -234,24 +445,63 @@ impl ValueIndex {
                 }
             }
         }
-        self.make_chunk_predicate(allowed)
+        self.predicate_from_allowed(allowed)
     }
 
     /// Prepare a row-based predicate for filtering by text values (`None` for null).
-    pub fn prepare_text_predicate(
+    pub(crate) fn prepare_text_predicate(
         self: &Arc<Self>,
         values: &[Option<String>],
         exclude: bool,
-    ) -> Predicate<'static> {
-        let keys = self.keys_for_labels(values);
-        let mut allowed = vec![exclude; self.len()];
-        for k in keys {
-            if let Some(slot) = allowed.get_mut(k as usize) {
+    ) -> Result<Predicate<'static>> {
+        let keys = self.keys_for_labels(values)?;
+        let mut allowed = [exclude; 256];
+        for key in keys {
+            if let Some(slot) = allowed.get_mut(key as usize) {
                 *slot = !exclude;
             }
         }
-        self.make_chunk_predicate(allowed)
+        Ok(self.predicate_from_allowed(allowed))
     }
+}
+
+/// Build the `values` array in code order from the first row of each value.
+fn value_rows(array: &ArrayRef, first_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
+    let rows = UInt32Array::from(
+        order
+            .iter()
+            .map(|&old| first_row[old as usize] as u32)
+            .collect::<Vec<_>>(),
+    );
+    take(array.as_ref(), &rows, None).ok()
+}
+
+/// Visit every key of a native Dictionary array; `None` for a null key.
+/// Returns false if the key type is not an Arrow dictionary index type.
+fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
+    macro_rules! visit {
+        ($array:expr) => {{
+            for row in 0..$array.len() {
+                f(if $array.is_null(row) {
+                    None
+                } else {
+                    Some($array.value(row) as usize)
+                });
+            }
+        }};
+    }
+    match keys.data_type() {
+        DataType::Int8 => visit!(keys.as_primitive::<Int8Type>()),
+        DataType::Int16 => visit!(keys.as_primitive::<Int16Type>()),
+        DataType::Int32 => visit!(keys.as_primitive::<Int32Type>()),
+        DataType::Int64 => visit!(keys.as_primitive::<Int64Type>()),
+        DataType::UInt8 => visit!(keys.as_primitive::<UInt8Type>()),
+        DataType::UInt16 => visit!(keys.as_primitive::<UInt16Type>()),
+        DataType::UInt32 => visit!(keys.as_primitive::<UInt32Type>()),
+        DataType::UInt64 => visit!(keys.as_primitive::<UInt64Type>()),
+        _ => return false,
+    }
+    true
 }
 
 /// Distinct values counted once, without keeping an index.
@@ -406,9 +656,23 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Float64Array, Int32Array, Int64Array, StringArray};
+    use arrow::{
+        array::{
+            DictionaryArray, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+            StringArray,
+        },
+        datatypes::{Int16Type, Int32Type, Int8Type},
+    };
 
     use super::*;
+    use crate::{column::format, engine::CancelToken, scope::Selection};
+
+    fn labels(dictionary: &ValueDictionary) -> Vec<Option<String>> {
+        let formatter = format::formatter(dictionary.values.as_ref()).unwrap();
+        (0..dictionary.values.len())
+            .map(|code| format::cell(dictionary.values.as_ref(), &formatter, code))
+            .collect()
+    }
 
     #[test]
     fn float_counts_group_signed_zero_and_nan_payloads_separately_from_null() {
@@ -448,71 +712,57 @@ mod tests {
     }
 
     #[test]
-    fn codes_follow_value_order() {
+    fn codes_follow_value_order_and_reserve_the_null_code() {
         let a: ArrayRef = Arc::new(StringArray::from(vec![
             Some("dog"),
             None,
             Some("cat"),
             Some("dog"),
         ]));
-        let idx = ValueIndex::build(&a, INDEX_LIMIT).unwrap().unwrap();
-        assert_eq!(idx.labels, vec![
-            None,
+        let dictionary = ValueDictionary::build(&a).unwrap();
+        assert_eq!(dictionary.n_values(), 2);
+        assert!(dictionary.has_null());
+        assert_eq!(labels(&dictionary), vec![
             Some("cat".into()),
             Some("dog".into())
         ]);
-        assert_eq!(idx.codes, vec![2, 0, 1, 2]);
+        assert_eq!(
+            (0..4)
+                .map(|row| dictionary.code_at(row))
+                .collect::<Vec<_>>(),
+            [1, NULL_CODE, 0, 1]
+        );
     }
 
     #[test]
     fn numbers_sort_numerically() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![10, -3, 2, 10]));
-        let idx = ValueIndex::build(&a, INDEX_LIMIT).unwrap().unwrap();
-        assert_eq!(idx.labels, vec![
+        let dictionary = ValueDictionary::build(&a).unwrap();
+        assert_eq!(labels(&dictionary), vec![
             Some("-3".into()),
             Some("2".into()),
             Some("10".into())
         ]);
+        assert_eq!(dictionary.n_values(), 3);
     }
 
     #[test]
-    fn too_many_values_are_not_indexed() {
-        let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000));
-        assert!(ValueIndex::build(&a, 999).unwrap().is_none());
-        assert!(ValueIndex::build(&a, 1000).unwrap().is_some());
+    fn too_many_values_are_not_encoded() {
+        let at_limit: ArrayRef =
+            Arc::new(Int32Array::from_iter_values(0..MAX_DISTINCT_VALUES as i32));
+        assert!(ValueDictionary::build(&at_limit).is_some());
+        let over: ArrayRef = Arc::new(Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32));
+        assert!(ValueDictionary::build(&over).is_none());
     }
 
     #[test]
-    fn cardinality_probe_counts_null_and_duplicates_at_the_limit() {
-        let a: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("b"),
-            None,
-            Some("a"),
-            Some("b"),
-            None,
-        ]));
-        assert!(!has_at_most(&a, 2).unwrap());
-        assert!(has_at_most(&a, 3).unwrap());
-        assert!(has_at_most(&a, 4).unwrap());
-
-        let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
-        assert!(has_at_most(&empty, 0).unwrap());
-        let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
-        assert!(!has_at_most(&nulls, 0).unwrap());
-        assert!(has_at_most(&nulls, 1).unwrap());
-    }
-
-    #[test]
-    fn cardinality_probe_visits_later_batches() {
-        let a: ArrayRef = Arc::new(Int64Array::from_iter_values(
-            (0..CHUNK * 2 + 1).map(|row| i64::from(row == CHUNK * 2)),
+    fn nulls_do_not_consume_value_codes() {
+        let array: ArrayRef = Arc::new(Int32Array::from_iter(
+            (0..MAX_DISTINCT_VALUES as i32).map(Some).chain([None]),
         ));
-        assert!(!has_at_most(&a, 1).unwrap());
-        assert!(has_at_most(&a, 2).unwrap());
-
-        let many: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000));
-        assert!(!has_at_most(&many, 999).unwrap());
-        assert!(has_at_most(&many, 1000).unwrap());
+        let dictionary = ValueDictionary::build(&array).unwrap();
+        assert_eq!(dictionary.n_values(), MAX_DISTINCT_VALUES);
+        assert!(dictionary.has_null());
     }
 
     #[test]
@@ -523,36 +773,290 @@ mod tests {
             None,
             Some("b"),
         ]));
-        let index = ValueIndex::build(&a, 3).unwrap().unwrap();
+        let dictionary = ValueDictionary::build(&a).unwrap();
         let selection = Selection::Rows(Arc::new(vec![0, 3]));
-        let all = index.counts_all(&selection);
+        let all = dictionary.counts_all(&selection).unwrap();
         assert_eq!(all, vec![
             DistinctValue {
-                key: 0,
+                key: u64::from(NULL_CODE),
                 label: None,
                 count: 0
             },
             DistinctValue {
-                key: 1,
+                key: 0,
                 label: Some("a".into()),
                 count: 0
             },
             DistinctValue {
-                key: 2,
+                key: 1,
                 label: Some("b".into()),
                 count: 2
             },
         ]);
-        assert_eq!(index.counts(&selection), vec![all[2].clone()]);
-        let empty = index.counts_all(&Selection::Rows(Arc::new(vec![])));
+        assert_eq!(dictionary.counts(&selection).unwrap(), vec![all[2].clone()]);
+        let empty = dictionary
+            .counts_all(&Selection::Rows(Arc::new(vec![])))
+            .unwrap();
         assert_eq!(empty.iter().map(|value| value.key).collect::<Vec<_>>(), [
-            0, 1, 2
+            u64::from(NULL_CODE),
+            0,
+            1
         ]);
         assert!(empty.iter().all(|value| value.count == 0));
         assert_eq!(
-            index.counts_all(&Selection::All(a.len())),
-            index.counts(&Selection::All(a.len()))
+            dictionary.counts_all(&Selection::All(a.len())).unwrap(),
+            dictionary.counts(&Selection::All(a.len())).unwrap()
         );
+    }
+
+    #[test]
+    fn label_lookup_maps_null_to_the_reserved_key() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), Some("a"), None]));
+        let dictionary = ValueDictionary::build(&a).unwrap();
+        assert_eq!(
+            dictionary
+                .keys_for_labels(&[Some("a".into()), None])
+                .unwrap(),
+            vec![u64::from(NULL_CODE), 0]
+        );
+        assert!(dictionary
+            .keys_for_labels(&[Some("missing".into())])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn empty_and_all_null_columns_still_encode() {
+        let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
+        let dictionary = ValueDictionary::build(&empty).unwrap();
+        assert_eq!(dictionary.n_values(), 0);
+        assert!(!dictionary.has_null());
+
+        let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
+        let dictionary = ValueDictionary::build(&nulls).unwrap();
+        assert_eq!(dictionary.n_values(), 0);
+        assert!(dictionary.has_null());
+        assert_eq!(dictionary.code_at(0), NULL_CODE);
+        assert_eq!(dictionary.counts(&Selection::All(2)).unwrap(), vec![
+            DistinctValue {
+                key: u64::from(NULL_CODE),
+                label: None,
+                count: 2
+            }
+        ]);
+    }
+
+    #[test]
+    fn predicates_match_null_through_the_reserved_code() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), None, Some("a")]));
+        let dictionary = Arc::new(ValueDictionary::build(&a).unwrap());
+        let mut hits = [false; 3];
+        dictionary
+            .prepare_predicate(&[u64::from(NULL_CODE)])
+            .evaluate(0..3, &mut hits, &CancelToken::never())
+            .unwrap();
+        assert_eq!(hits, [false, true, false]);
+
+        let mut hits = [false; 3];
+        dictionary
+            .prepare_text_predicate(&[None], false)
+            .unwrap()
+            .evaluate(0..3, &mut hits, &CancelToken::never())
+            .unwrap();
+        assert_eq!(hits, [false, true, false]);
+    }
+
+    #[test]
+    fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
+        let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(2), Some(2), Some(0)]);
+        let values = StringArray::from(vec![Some("b"), None, Some("a")]);
+        let array: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
+        let dictionary = ValueDictionary::build(&array).unwrap();
+        assert_eq!(dictionary.n_values(), 2);
+        assert!(dictionary.has_null());
+        assert_eq!(labels(&dictionary), vec![
+            Some("a".into()),
+            Some("b".into())
+        ]);
+        assert_eq!(
+            (0..6)
+                .map(|row| dictionary.code_at(row))
+                .collect::<Vec<_>>(),
+            [1, NULL_CODE, NULL_CODE, 0, 0, 1]
+        );
+        assert_eq!(dictionary.counts(&Selection::All(6)).unwrap(), vec![
+            DistinctValue {
+                key: u64::from(NULL_CODE),
+                label: None,
+                count: 2
+            },
+            DistinctValue {
+                key: 0,
+                label: Some("a".into()),
+                count: 2
+            },
+            DistinctValue {
+                key: 1,
+                label: Some("b".into()),
+                count: 2
+            },
+        ]);
+    }
+
+    #[test]
+    fn native_dictionary_drops_duplicate_and_unused_entries() {
+        let keys = Int8Array::from(vec![Some(0), Some(1), Some(2)]);
+        let values = StringArray::from(vec![Some("b"), Some("a"), Some("a"), Some("z")]);
+        let array: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
+        let dictionary = ValueDictionary::build(&array).unwrap();
+        assert_eq!(dictionary.n_values(), 2);
+        assert!(!dictionary.has_null());
+        assert_eq!(labels(&dictionary), vec![
+            Some("a".into()),
+            Some("b".into())
+        ]);
+        assert_eq!(
+            (0..3)
+                .map(|row| dictionary.code_at(row))
+                .collect::<Vec<_>>(),
+            [1, 0, 0]
+        );
+    }
+
+    #[test]
+    fn native_dictionary_over_the_limit_falls_back() {
+        let values: ArrayRef =
+            Arc::new(Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32));
+        let keys = Int32Array::from_iter_values(0..=MAX_DISTINCT_VALUES as i32);
+        let array: ArrayRef =
+            Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+        assert!(ValueDictionary::build(&array).is_none());
+    }
+
+    #[test]
+    fn native_dictionary_value_width_does_not_matter() {
+        let keys = Int16Array::from(vec![Some(0), Some(1), Some(0)]);
+        let values = Int16Array::from(vec![Some(1), Some(2)]);
+        let array: ArrayRef =
+            Arc::new(DictionaryArray::<Int16Type>::try_new(keys, Arc::new(values)).unwrap());
+        let dictionary = ValueDictionary::build(&array).unwrap();
+        assert_eq!(dictionary.n_values(), 2);
+        assert_eq!(
+            (0..3)
+                .map(|row| dictionary.code_at(row))
+                .collect::<Vec<_>>(),
+            [0, 1, 0]
+        );
+    }
+
+    #[test]
+    fn predicates_cover_ranges_indices_and_incoming_masks() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("b"),
+            None,
+            Some("a"),
+            Some("b"),
+        ]));
+        let dictionary = Arc::new(ValueDictionary::build(&a).unwrap());
+        let keys = dictionary.keys_for_labels(&[Some("b".into())]).unwrap();
+        let predicate = dictionary.prepare_predicate(&keys);
+        let cancel = CancelToken::never();
+
+        let mut range_hits = [false; 4];
+        predicate.evaluate(0..4, &mut range_hits, &cancel).unwrap();
+        assert_eq!(range_hits, [true, false, false, true]);
+
+        // Rows selected out of order by index.
+        let rows = [3usize, 1, 2, 0];
+        let mut index_hits = [false; 4];
+        predicate
+            .evaluate(rows.as_slice(), &mut index_hits, &cancel)
+            .unwrap();
+        assert_eq!(index_hits, [true, false, false, true]);
+
+        // Incoming mask intersects existing matches.
+        let mut matched = [true; 4];
+        let mut scratch = [false; 4];
+        predicate
+            .intersect(0..4, &mut matched, &mut scratch, &cancel)
+            .unwrap();
+        assert_eq!(matched, [true, false, false, true]);
+    }
+
+    #[test]
+    fn plain_and_native_dictionaries_agree() {
+        let plain: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("b"),
+            None,
+            Some("a"),
+            Some("b"),
+            Some("a"),
+        ]));
+        let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(0), Some(1)]);
+        let values = StringArray::from(vec![Some("b"), Some("a")]);
+        let native: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
+        let plain = ValueDictionary::build(&plain).unwrap();
+        let native = ValueDictionary::build(&native).unwrap();
+        assert_eq!(plain.n_values(), native.n_values());
+        assert_eq!(
+            plain.counts_all(&Selection::All(5)).unwrap(),
+            native.counts_all(&Selection::All(5)).unwrap()
+        );
+        for labels in [
+            vec![Some("a".into())],
+            vec![Some("b".into())],
+            vec![None],
+            vec![Some("a".into()), None],
+        ] {
+            assert_eq!(
+                plain.keys_for_labels(&labels).unwrap(),
+                native.keys_for_labels(&labels).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn float_values_group_signed_zero_and_nan_payloads() {
+        let source = Float64Array::from(vec![
+            Some(-0.0),
+            Some(0.0),
+            Some(f64::NAN),
+            Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+            Some(f64::from_bits(0xfff8_2000_0000_0000)),
+            None,
+            Some(1.0),
+        ]);
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let array = arrow::compute::cast(&source, &data_type).unwrap();
+            let dictionary = ValueDictionary::build(&array).unwrap();
+            assert_eq!(dictionary.n_values(), 3, "{data_type:?}");
+            assert!(dictionary.has_null(), "{data_type:?}");
+
+            let labels = labels(&dictionary);
+            let parsed: Vec<Option<f64>> = labels
+                .iter()
+                .map(|label| label.as_deref().map(|text| text.parse::<f64>().unwrap()))
+                .collect();
+            assert_eq!(parsed[0], Some(0.0), "{data_type:?}");
+            assert_eq!(parsed[1], Some(1.0), "{data_type:?}");
+            assert!(parsed[2].unwrap().is_nan(), "{data_type:?}");
+
+            let counts = dictionary.counts(&Selection::All(array.len())).unwrap();
+            assert_eq!(counts.len(), 4, "{data_type:?}");
+            assert_eq!(counts[0].label, None, "{data_type:?}");
+            assert_eq!(counts[0].count, 1, "{data_type:?}");
+            assert_eq!(counts[1].count, 2, "{data_type:?}");
+            assert_eq!(counts[2].count, 1, "{data_type:?}");
+            assert_eq!(counts[3].label.as_deref(), Some("NaN"), "{data_type:?}");
+            assert_eq!(counts[3].count, 3, "{data_type:?}");
+
+            // The streaming fallback must group the same way.
+            let counted = count_values(&array, &Selection::All(array.len()), 10).unwrap();
+            assert_eq!(counted.distinct as usize, counts.len(), "{data_type:?}");
+        }
     }
 
     #[test]

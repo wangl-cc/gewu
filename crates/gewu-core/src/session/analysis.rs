@@ -103,9 +103,9 @@ impl Session {
             Selection::All(_) => array.null_count() as u64,
             Selection::Rows(_) => rows.iter().filter(|&r| array.is_null(r)).count() as u64,
         };
-        let mut values = match self.index(column)? {
-            Some(idx) => {
-                let values = idx.counts(&rows);
+        let mut values = match self.dictionary(column)? {
+            Some(dictionary) => {
+                let values = dictionary.counts(&rows)?;
                 s.distinct_count = values.len() as u64;
                 // Value order: the first and last non-null are the extremes.
                 let mut present = values.iter().filter_map(|v| v.label.as_ref());

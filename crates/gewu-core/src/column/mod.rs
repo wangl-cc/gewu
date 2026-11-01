@@ -14,19 +14,16 @@ pub mod index;
 pub mod kind;
 pub mod stats;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType, util::display::ArrayFormatter};
 pub use filter::range::Bound;
 pub use index::{DistinctResult, DistinctValue};
-pub(crate) use index::{ValueIndex, INDEX_LIMIT};
+pub(crate) use index::{ValueDictionary, MAX_DISTINCT_VALUES};
 pub use kind::{ColumnCapabilities, ColumnInfo, LogicalType};
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 use crate::{predicate::Predicate, Filter, Result};
-
-/// Suggested cardinality threshold for displaying choices in interactive filters.
-pub const CHOICE_LIMIT: usize = 500;
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {
@@ -35,6 +32,9 @@ pub struct Column {
     pub nullable: bool,
     pub len: usize,
     pub array: ArrayRef,
+    /// Lazy compact encoding of the column's distinct values. `None` is
+    /// cached when the type cannot be encoded or has too many values.
+    dictionary: OnceLock<Option<Arc<ValueDictionary>>>,
 }
 
 impl Column {
@@ -48,7 +48,17 @@ impl Column {
             nullable,
             len,
             array,
+            dictionary: OnceLock::new(),
         }
+    }
+
+    /// The column's compact distinct-value encoding, built once and shared by
+    /// every session over the same dataset. Columns that are too high
+    /// cardinality (or whose type cannot be encoded) return `None`.
+    pub(crate) fn dictionary(&self) -> Option<&Arc<ValueDictionary>> {
+        self.dictionary
+            .get_or_init(|| ValueDictionary::build(&self.array).map(Arc::new))
+            .as_ref()
     }
 
     #[inline]
@@ -124,10 +134,6 @@ impl Column {
 
     pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
         filter::prepare_filter(&self.array, &self.logical_type, self.capabilities(), filter)
-    }
-
-    pub(crate) fn prepare_values<'a>(&self, index: Arc<ValueIndex>, keys: &[u64]) -> Predicate<'a> {
-        index.prepare_predicate(keys)
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {
@@ -429,6 +435,21 @@ mod tests {
                 Err(Error::Cancelled)
             ));
         }
+    }
+
+    #[test]
+    fn dictionary_is_built_once_and_cached() {
+        let column = col(Arc::new(StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+        ])));
+        let first = column.dictionary().cloned().expect("dictionary");
+        let second = column.dictionary().cloned().expect("dictionary");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let high_cardinality: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1000));
+        assert!(col(high_cardinality).dictionary().is_none());
     }
 
     #[test]

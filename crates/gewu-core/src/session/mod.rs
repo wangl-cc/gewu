@@ -1,14 +1,11 @@
 //! User viewing session combining immutable dataset and active view engine.
 
-use std::{
-    path::Path,
-    sync::{Arc, OnceLock},
-};
+use std::{path::Path, sync::Arc};
 
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use crate::{
-    column::{Column, ColumnCapabilities, ValueIndex},
+    column::{Column, ColumnCapabilities, ValueDictionary},
     dataset::Dataset,
     engine::ViewEngine,
     FileInfo, OpenOptions, Result,
@@ -27,7 +24,6 @@ pub use facet::{FilterEditor, FilterSpec, TextFilterMode};
 pub struct Session {
     dataset: Arc<Dataset>,
     views: ViewEngine,
-    facet_indices: Vec<OnceLock<Option<Arc<ValueIndex>>>>,
 }
 
 impl Session {
@@ -36,11 +32,9 @@ impl Session {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let dataset = Arc::new(Dataset::open(path)?);
         let n_rows = dataset.n_rows;
-        let n_cols = dataset.columns().len();
         Ok(Self {
             dataset,
             views: ViewEngine::new(n_rows),
-            facet_indices: (0..n_cols).map(|_| OnceLock::new()).collect(),
         })
     }
 
@@ -48,22 +42,18 @@ impl Session {
     pub fn open_with_options(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Self> {
         let dataset = Arc::new(Dataset::open_with_options(path, options)?);
         let n_rows = dataset.n_rows;
-        let n_cols = dataset.columns().len();
         Ok(Self {
             dataset,
             views: ViewEngine::new(n_rows),
-            facet_indices: (0..n_cols).map(|_| OnceLock::new()).collect(),
         })
     }
 
     /// Create a viewing session from an existing in-memory dataset.
     pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
         let n_rows = dataset.n_rows;
-        let n_cols = dataset.columns().len();
         Self {
             dataset,
             views: ViewEngine::new(n_rows),
-            facet_indices: (0..n_cols).map(|_| OnceLock::new()).collect(),
         }
     }
 
@@ -114,25 +104,17 @@ impl Session {
         Ok(&self.dataset.column(c)?.array)
     }
 
-    pub(crate) fn index(&self, c: u32) -> Result<Option<Arc<ValueIndex>>> {
-        let col = self.column(c)?;
-        let lock = self.facet_indices.get(c as usize).ok_or_else(|| {
-            crate::Error::InvalidArgument(format!("column index {c} out of bounds"))
-        })?;
-        if let Some(cached) = lock.get() {
-            return Ok(cached.clone());
-        }
-        let built = ValueIndex::build(&col.array, crate::column::INDEX_LIMIT)?.map(Arc::new);
-        let _ = lock.set(built.clone());
-        Ok(built)
+    pub(crate) fn dictionary(&self, c: u32) -> Result<Option<Arc<ValueDictionary>>> {
+        Ok(self.column(c)?.dictionary().cloned())
     }
 
-    pub(crate) fn keyed_index(&self, c: u32) -> Result<Arc<ValueIndex>> {
-        let col_name = self.column(c)?.name.clone();
-        self.index(c)?.ok_or_else(|| {
+    pub(crate) fn keyed_dictionary(&self, c: u32) -> Result<Arc<ValueDictionary>> {
+        let col = self.column(c)?;
+        col.dictionary().cloned().ok_or_else(|| {
             crate::Error::InvalidArgument(format!(
-                "column {col_name} has more than {} distinct values; filter it with contains or a range",
-                crate::column::INDEX_LIMIT,
+                "column {} has more than {} non-null distinct values; filter it with contains or a range",
+                col.name,
+                crate::column::MAX_DISTINCT_VALUES,
             ))
         })
     }

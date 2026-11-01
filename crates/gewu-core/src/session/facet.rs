@@ -110,13 +110,7 @@ impl Session {
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
-        let supported = arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
-            col.array.data_type().clone(),
-        )]);
-        let value_idx = if supported { self.index(column)? } else { None };
-        let is_low_cardinality = value_idx
-            .as_ref()
-            .is_some_and(|idx| idx.len() <= crate::column::CHOICE_LIMIT);
+        let dictionary = self.dictionary(column)?;
 
         if *col.logical_type() == LogicalType::Text {
             return Ok(FilterSpec {
@@ -126,7 +120,7 @@ impl Session {
                         crate::TextFilterMode::Choices,
                         crate::TextFilterMode::Contains,
                     ],
-                    recommended: if is_low_cardinality {
+                    recommended: if dictionary.is_some() {
                         crate::TextFilterMode::Choices
                     } else {
                         crate::TextFilterMode::Contains
@@ -134,12 +128,10 @@ impl Session {
                 },
             });
         }
-        let editor = if let Some(ref idx) =
-            value_idx.filter(|idx| idx.len() <= crate::column::CHOICE_LIMIT)
-        {
+        let editor = if let Some(dictionary) = &dictionary {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
             FilterEditor::Choices {
-                values: idx.counts_all(&rows),
+                values: dictionary.counts_all(&rows)?,
             }
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
@@ -187,23 +179,23 @@ impl Session {
     /// With `spec`, counts only rows that pass the filters on *other*
     /// columns (like Excel), and leaves out values with no such rows.
     ///
-    /// A column with at most 100,000 distinct values is indexed: the result
-    /// is the first `limit` values in value order, and their keys work in
-    /// [`Filter::InValues`]. A column with more is counted without an index:
-    /// the result is the `limit` most common values (still in value order),
-    /// `keyed` is false and the keys only number them.
+    /// A column with at most 255 non-null distinct values is encoded: the
+    /// result is the first `limit` values in value order, and their keys work
+    /// in [`Filter::InValues`]. A column with more is counted without an
+    /// encoding: the result is the `limit` most common values (still in value
+    /// order), `keyed` is false and the keys only number them.
     pub fn distinct_values(
         &self,
         column: u32,
         spec: Option<&QuerySpec>,
         limit: u32,
     ) -> Result<DistinctResult> {
-        let index = self.index(column)?;
+        let dictionary = self.dictionary(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
         let limit = limit as usize;
-        Ok(match index {
-            Some(idx) => {
-                let present = idx.counts(&rows);
+        Ok(match dictionary {
+            Some(dictionary) => {
+                let present = dictionary.counts(&rows)?;
                 DistinctResult {
                     total: present.len() as u64,
                     truncated: present.len() > limit,
@@ -257,15 +249,14 @@ impl Session {
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used when filtering by displayed value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        let idx = self.keyed_index(column)?;
-        Ok(idx.keys_for_labels(labels))
+        self.keyed_dictionary(column)?.keys_for_labels(labels)
     }
 
     pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {
         let col = self.column(column_idx)?;
         match filter {
             Filter::InValues { keys } => {
-                Ok(col.prepare_values(self.keyed_index(column_idx)?, keys))
+                Ok(self.keyed_dictionary(column_idx)?.prepare_predicate(keys))
             }
             Filter::TextValues { values, exclude } => {
                 if *col.logical_type() != LogicalType::Text {
@@ -274,8 +265,8 @@ impl Session {
                         col.array.data_type()
                     )));
                 }
-                if let Some(index) = self.index(column_idx)? {
-                    return Ok(index.prepare_text_predicate(values, *exclude));
+                if let Some(dictionary) = self.dictionary(column_idx)? {
+                    return dictionary.prepare_text_predicate(values, *exclude);
                 }
                 col.prepare_filter(filter)
             }

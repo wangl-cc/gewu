@@ -57,7 +57,8 @@ impl Filter {
             Filter::IsNull { .. } => 0,
             // InValues: bitmask or small integer code comparison against pre-indexed keys.
             Filter::InValues { .. } => 1,
-            // TextValues: exact value-set selection (accelerated by ValueIndex when available).
+            // TextValues: exact value-set selection (accelerated by the column dictionary when
+            // available).
             Filter::TextValues { .. } => 1,
             // Range: primitive numeric / temporal bounds comparison.
             Filter::Range { .. } => 2,
