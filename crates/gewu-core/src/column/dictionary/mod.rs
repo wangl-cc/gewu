@@ -224,13 +224,17 @@ impl ValueDictionary {
     }
 }
 
-/// Build the dictionary's `values` array in code order from the first row of
-/// each value.
-pub(super) fn value_rows(array: &dyn Array, first_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
+/// Build the dictionary's `values` array in code order from each value's
+/// representative row.
+pub(super) fn value_rows(
+    array: &dyn Array,
+    representative_row: &[usize],
+    order: &[u8],
+) -> Option<ArrayRef> {
     let rows = UInt32Array::from(
         order
             .iter()
-            .map(|&old| first_row[old as usize] as u32)
+            .map(|&old| representative_row[old as usize] as u32)
             .collect::<Vec<_>>(),
     );
     take(array, &rows, None).ok()

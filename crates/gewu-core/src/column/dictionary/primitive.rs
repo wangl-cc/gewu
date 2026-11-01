@@ -30,8 +30,8 @@ pub(super) trait DictionaryKey: ArrowPrimitiveType {
 
     fn key(value: Self::Native) -> Self::Key;
 
-    /// Whether this value should replace the recorded representative of its
-    /// key. Floats prefer positive zero so the option reads `0.0`.
+    /// Whether this value should replace the representative row recorded for
+    /// its key. Floats prefer positive zero so the option reads `0.0`.
     fn prefers_representative(_: Self::Native) -> bool {
         false
     }
@@ -148,7 +148,7 @@ pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
 ) -> Option<ValueDictionary> {
     let mut seen: HashMap<K, u8> = HashMap::new();
     let mut key_of: Vec<K> = Vec::new();
-    let mut first_row: Vec<usize> = Vec::new();
+    let mut representative_row: Vec<usize> = Vec::new();
     let mut codes: Vec<u8> = Vec::with_capacity(len);
     let mut has_null = false;
     for row in 0..len {
@@ -167,12 +167,12 @@ pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
                 let code = key_of.len() as u8;
                 seen.insert(key, code);
                 key_of.push(key);
-                first_row.push(row);
+                representative_row.push(row);
                 code
             }
         };
         if prefer_at(row) {
-            first_row[code as usize] = row;
+            representative_row[code as usize] = row;
         }
         codes.push(code);
     }
@@ -187,7 +187,7 @@ pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
     }
     Some(ValueDictionary {
         codes,
-        values: value_rows(array, &first_row, &order)?,
+        values: value_rows(array, &representative_row, &order)?,
         has_null,
     })
 }
