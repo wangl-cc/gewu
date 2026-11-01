@@ -45,8 +45,8 @@ impl LogicalType {
     pub fn from_arrow(data_type: &DataType) -> Self {
         use DataType::*;
         match data_type {
+            Dictionary(_, value) => Self::from_arrow(value),
             Utf8 | LargeUtf8 | Utf8View => Self::Text,
-            Dictionary(_, value) if Self::from_arrow(value) == Self::Text => Self::Text,
             Int8 => Self::Integer {
                 bits: 8,
                 signed: true,
@@ -246,6 +246,11 @@ mod tests {
     fn dictionary_strings_are_text() {
         let t = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::LargeUtf8));
         assert_eq!(LogicalType::from_arrow(&t), LogicalType::Text);
+        let int_dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64));
+        assert_eq!(LogicalType::from_arrow(&int_dict), LogicalType::Integer {
+            bits: 64,
+            signed: true
+        });
     }
 
     #[test]

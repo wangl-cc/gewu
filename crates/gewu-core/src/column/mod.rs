@@ -106,28 +106,22 @@ impl<'a> Column<'a> {
         Self { array }
     }
 
+    pub(crate) fn logical_type(self) -> LogicalType {
+        LogicalType::from_arrow(self.array.data_type())
+    }
+
     pub(crate) fn capabilities(self) -> ColumnCapabilities {
-        fn of(data_type: &DataType) -> ColumnCapabilities {
-            if let DataType::Dictionary(_, values) = data_type {
-                return ColumnCapabilities {
-                    histogram: false,
-                    scatter: false,
-                    logarithmic: false,
-                    ..of(values)
-                };
-            }
-            let logical_type = LogicalType::from_arrow(data_type);
-            ColumnCapabilities {
-                contains: !logical_type.is_ordered() && logical_type != LogicalType::Boolean,
-                range: logical_type.is_ordered(),
-                histogram: logical_type.is_ordered(),
-                scatter: logical_type.is_ordered(),
-                logarithmic: logical_type.supports_logarithmic(),
-                equals: logical_type.is_ordered()
-                    || matches!(logical_type, LogicalType::Boolean | LogicalType::Text),
-            }
+        let logical = self.logical_type();
+        let is_dict = matches!(self.array.data_type(), DataType::Dictionary(..));
+        ColumnCapabilities {
+            contains: !logical.is_ordered() && logical != LogicalType::Boolean,
+            range: logical.is_ordered(),
+            histogram: logical.is_ordered() && !is_dict,
+            scatter: logical.is_ordered() && !is_dict,
+            logarithmic: logical.supports_logarithmic() && !is_dict,
+            equals: logical.is_ordered()
+                || matches!(logical, LogicalType::Boolean | LogicalType::Text),
         }
-        of(self.array.data_type())
     }
 
     pub(crate) fn logical_data_type(self) -> &'a DataType {
@@ -141,12 +135,15 @@ impl<'a> Column<'a> {
     pub(crate) fn filter_editor(self, low_cardinality: bool) -> FilterEditorKind {
         if low_cardinality {
             FilterEditorKind::Choices
-        } else if self.capabilities().range {
-            FilterEditorKind::Range
-        } else if self.capabilities().contains {
-            FilterEditorKind::Contains
         } else {
-            FilterEditorKind::NullOnly
+            let cap = self.capabilities();
+            if cap.range {
+                FilterEditorKind::Range
+            } else if cap.contains {
+                FilterEditorKind::Contains
+            } else {
+                FilterEditorKind::NullOnly
+            }
         }
     }
 
@@ -158,25 +155,25 @@ impl<'a> Column<'a> {
         if query.text().is_empty() {
             return Ok(None);
         }
-        match self.array.data_type() {
-            DataType::Dictionary(..)
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(..)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::Struct(_) => nested::search(self.array, query),
-            DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_) => Ok(None),
-            data_type
-                if LogicalType::from_arrow(data_type).is_ordered()
-                    || *data_type == DataType::Boolean =>
-            {
-                scalar::search(self.array, query.text())
+        if matches!(self.array.data_type(), DataType::Dictionary(..)) {
+            return nested::dictionary_find(self.array, |values| {
+                Column::new(values).prepare_search(query)
+            });
+        }
+        match self.logical_type() {
+            LogicalType::Text => {
+                text::contains(self.array, query.text(), false, Some(query.matcher()?)).map(Some)
             }
-            _ => text::contains(self.array, query, false).map(Some),
+            LogicalType::Integer { .. }
+            | LogicalType::Float { .. }
+            | LogicalType::Decimal { .. }
+            | LogicalType::Boolean
+            | LogicalType::Date
+            | LogicalType::Time
+            | LogicalType::Timestamp { .. }
+            | LogicalType::Duration { .. } => scalar::search(self.array, query.text()),
+            LogicalType::List | LogicalType::Struct => nested::search(self.array, query),
+            LogicalType::Binary | LogicalType::Interval | LogicalType::Other { .. } => Ok(None),
         }
     }
 
@@ -218,40 +215,41 @@ impl<'a> Column<'a> {
         )))
     }
 
+    fn is_null_predicate(self, negate: bool) -> Predicate<'a> {
+        let array = self.array;
+        Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+            match (rows, incoming) {
+                (RowSelection::Range(range), None) => {
+                    for (i, row) in range.enumerate() {
+                        output[i] = array.is_null(row) != negate;
+                    }
+                }
+                (RowSelection::Range(range), Some(mask)) => {
+                    for (i, row) in range.enumerate() {
+                        output[i] = (array.is_null(row) != negate) & mask[i];
+                    }
+                }
+                (RowSelection::Indices(indices), None) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        output[i] = array.is_null(row) != negate;
+                    }
+                }
+                (RowSelection::Indices(indices), Some(mask)) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        output[i] = (array.is_null(row) != negate) & mask[i];
+                    }
+                }
+            }
+            Ok(())
+        }))
+    }
+
     fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
         if let Filter::TextValues { values, exclude } = filter {
             return text::selected_values(self.array, values, *exclude);
         }
         if let Filter::IsNull { negate } = filter {
-            let negate = *negate;
-            let array = self.array;
-            return Ok(Predicate::new(Box::new(
-                move |rows, incoming, output, _cancel| {
-                    match (rows, incoming) {
-                        (RowSelection::Range(range), None) => {
-                            for (i, row) in range.enumerate() {
-                                output[i] = array.is_null(row) != negate;
-                            }
-                        }
-                        (RowSelection::Range(range), Some(mask)) => {
-                            for (i, row) in range.enumerate() {
-                                output[i] = (array.is_null(row) != negate) & mask[i];
-                            }
-                        }
-                        (RowSelection::Indices(indices), None) => {
-                            for (i, &row) in indices.iter().enumerate() {
-                                output[i] = array.is_null(row) != negate;
-                            }
-                        }
-                        (RowSelection::Indices(indices), Some(mask)) => {
-                            for (i, &row) in indices.iter().enumerate() {
-                                output[i] = (array.is_null(row) != negate) & mask[i];
-                            }
-                        }
-                    }
-                    Ok(())
-                },
-            )));
+            return Ok(self.is_null_predicate(*negate));
         }
         if matches!(self.array.data_type(), DataType::Dictionary(..)) {
             return nested::dictionary(self.array, |values| {
@@ -267,9 +265,7 @@ impl<'a> Column<'a> {
                 text: value,
                 case_sensitive,
                 ..
-            } if capabilities.contains => {
-                text::contains(self.array, &SearchQuery::new(value), *case_sensitive)
-            }
+            } if capabilities.contains => text::contains(self.array, value, *case_sensitive, None),
             Filter::Range { min, max, .. } if capabilities.range => {
                 bound::prepare_range(self.array, min.as_ref(), max.as_ref())
             }
@@ -289,7 +285,7 @@ impl<'a> Column<'a> {
     }
 
     fn prepare_equals(self, value: &str) -> Result<Predicate<'a>> {
-        if LogicalType::from_arrow(self.array.data_type()) == LogicalType::Text {
+        if self.logical_type() == LogicalType::Text {
             Ok(text::equals(self.array, value))
         } else {
             scalar::equals(self.array, value)

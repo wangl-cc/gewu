@@ -102,7 +102,7 @@ pub(super) fn search<'a>(
 /// Find follows only dictionary keys referenced by the selected parent rows.
 /// This applies recursively, including dictionaries nested inside lists. No
 /// dictionary-sized mask or decoded values column is built.
-fn dictionary_find<'a>(
+pub(super) fn dictionary_find<'a>(
     array: &'a ArrayRef,
     prepare: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
 ) -> Result<Option<Predicate<'a>>> {

@@ -1,13 +1,13 @@
 //! Text predicates prepare their pattern once and scan only execution batches.
 
-use std::{collections::HashSet, fmt::Write};
+use std::{collections::HashSet, fmt::Write, sync::Arc};
 
 use arrow::{
     array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
     datatypes::{ArrowNativeType, DataType},
 };
+use regex::RegexBuilder;
 
-use super::SearchQuery;
 use crate::{format, predicate::Predicate, selection::RowSelection, Error, Result};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
@@ -97,26 +97,36 @@ pub(super) fn selected_values<'a>(
 
 pub(super) fn contains<'a>(
     array: &'a ArrayRef,
-    query: &SearchQuery,
+    text: &str,
     case_sensitive: bool,
+    matcher: Option<Arc<regex::Regex>>,
 ) -> Result<Predicate<'a>> {
     if matches!(
         array.data_type(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         if case_sensitive {
-            let text = query.text().to_owned();
+            let text = text.to_owned();
             return Ok(strings(array, move |value| value.contains(&text)));
         }
-        // The session compiles one matcher and every column reuses it, so pages
-        // and highlights never rebuild the same literal pattern.
-        let matcher = query.matcher()?;
+        // If a session-wide matcher was provided, reuse it; otherwise compile one.
+        let matcher = match matcher {
+            Some(m) => m,
+            None => Arc::new(
+                RegexBuilder::new(&regex::escape(text))
+                    .case_insensitive(true)
+                    .build()
+                    .map_err(|error| {
+                        Error::InvalidArgument(format!("cannot prepare text search: {error}"))
+                    })?,
+            ),
+        };
         return Ok(strings(array, move |value| matcher.is_match(value)));
     }
 
     // A formatted fallback retains existing Contains semantics for non-ordered
     // values. One buffer per batch, reused across cells, never a column of strings.
-    let text = query.text().to_owned();
+    let text = text.to_owned();
     let lower = (!case_sensitive && !text.is_ascii()).then(|| text.to_lowercase());
     Ok(Predicate::new(Box::new(move |rows, incoming, hits, _| {
         let f = format::formatter(array.as_ref())?;
@@ -272,7 +282,7 @@ mod tests {
                 let pattern: ArrayRef = Arc::new(StringArray::from(vec![format!("%{escaped}%")]));
                 let pattern = cast(&pattern, &data_type).unwrap();
                 let expected = ilike(&array, &Scalar::new(pattern)).unwrap();
-                let test = contains(&array, &SearchQuery::new(query), false).unwrap();
+                let test = contains(&array, query, false, None).unwrap();
                 let mut actual = vec![false; array.len()];
                 test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
                     .unwrap();
