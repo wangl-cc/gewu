@@ -470,7 +470,7 @@ mod tests {
             assert_eq!(histogram.hi, histogram.bin_edges.last().copied());
         }
         let mut memberships = vec![0; array.len()];
-        let column = Column::new("test", array.clone());
+        let column = Column::new("test", array.clone()).unwrap();
         for (range, &expected) in result.ranges.iter().zip(&histogram.counts) {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = column

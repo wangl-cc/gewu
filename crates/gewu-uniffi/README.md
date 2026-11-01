@@ -84,7 +84,7 @@ For detached analysis work, connect a Swift task cancellation handler to the Rus
 
 ## Filters and exact bounds
 
-Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
+`ColumnInfo.logical_type` is value semantics only; `ColumnInfo.encoding` is `Direct` or `Dictionary`, and dictionary columns are discrete (choices rather than ordered filters or charts). Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
 
 | `FilterEditor` | UI contract |
 | --- | --- |

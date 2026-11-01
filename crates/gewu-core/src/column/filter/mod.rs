@@ -23,16 +23,13 @@ use crate::{
 /// Type-aware search for Find operations across all columns.
 pub(crate) fn prepare_find<'a>(
     array: &'a ArrayRef,
-    ty: Option<&Type>,
+    ty: &Type,
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
     if query.is_empty() {
         return Ok(None);
     }
-    let Some(ty) = ty else {
-        return Ok(None);
-    };
     match ty.find_strategy() {
         FindStrategy::Unsupported => Ok(None),
         FindStrategy::Text => text::contains(array, query, false, matcher).map(Some),
@@ -41,8 +38,9 @@ pub(crate) fn prepare_find<'a>(
         FindStrategy::Dictionary => nested::dictionary_find(array, |values| {
             // The value type comes from the array itself so nested dictionaries
             // keep following keys level by level.
-            let child = Type::from_arrow(values.data_type());
-            prepare_find(values, child.as_ref(), query, matcher)
+            let child = Type::from_arrow(values.data_type())
+                .ok_or_else(|| Error::Unsupported("dictionary value type is not modeled".into()))?;
+            prepare_find(values, &child, query, matcher)
         }),
     }
 }
@@ -51,7 +49,7 @@ pub(crate) fn prepare_find<'a>(
 /// column or document has obtained its lazy value index.
 pub(crate) fn prepare_filter<'a>(
     array: &'a ArrayRef,
-    ty: Option<&Type>,
+    ty: &Type,
     capabilities: ColumnCapabilities,
     filter: &Filter,
 ) -> Result<Predicate<'a>> {
@@ -91,7 +89,7 @@ pub(crate) fn prepare_filter<'a>(
 
 fn prepare_value_filter<'a>(
     array: &'a ArrayRef,
-    ty: Option<&Type>,
+    ty: &Type,
     capabilities: ColumnCapabilities,
     filter: &Filter,
 ) -> Result<Predicate<'a>> {
@@ -101,14 +99,12 @@ fn prepare_value_filter<'a>(
     if let Filter::IsNull { negate } = filter {
         return Ok(is_null_predicate(array, *negate));
     }
-    if ty.is_some_and(Type::is_dictionary) {
+    if ty.is_dictionary() {
         return nested::dictionary(array, |values| {
-            let child = Type::from_arrow(values.data_type());
-            let child_caps = child.as_ref().map_or_else(
-                crate::types::derive::untyped_capabilities,
-                Type::capabilities,
-            );
-            prepare_filter(values, child.as_ref(), child_caps, filter).map(Some)
+            let child = Type::from_arrow(values.data_type())
+                .ok_or_else(|| Error::Unsupported("dictionary value type is not modeled".into()))?;
+            let child_caps = child.capabilities();
+            prepare_filter(values, &child, child_caps, filter).map(Some)
         })?
         .ok_or_else(|| {
             Error::InvalidArgument("filter cannot be applied to dictionary values".into())
@@ -151,8 +147,8 @@ fn prepare_value_filter<'a>(
 }
 
 /// Whether equality on this column compares strings rather than parsed values.
-fn is_text(ty: Option<&Type>) -> bool {
-    ty.is_some_and(|ty| ty.domain() == Some(Domain::Text))
+fn is_text(ty: &Type) -> bool {
+    ty.domain() == Some(Domain::Text)
 }
 
 fn is_null_predicate<'a>(array: &'a ArrayRef, negate: bool) -> Predicate<'a> {

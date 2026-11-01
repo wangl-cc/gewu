@@ -635,7 +635,7 @@ mod tests {
         assert!(result.ranges.first().unwrap().min.is_none());
         assert!(result.ranges.last().unwrap().max.is_none());
         let mut selected = vec![0_u32; array.len()];
-        let column = Column::new("test", array.clone());
+        let column = Column::new("test", array.clone()).unwrap();
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
             let predicate = column
                 .prepare_filter(&Filter::Range {

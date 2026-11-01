@@ -295,7 +295,7 @@
 
 - [ ] **T53 — 按最终命名重写 Core 与 FFI 文档**【文档、脆弱性】
   - **依据**：重构期间文档未随代码同步。`crates/gewu-core/README.md` 仍有 8 处 `Document::` 接口名和 1 处“以 `Document` 别名保留”的说明（Rust 侧别名已删除），Code map 的 23 条路径引用中 21 条已指向不存在的路径（仅 `column/`、`file/` 仍存在）；`crates/gewu-uniffi/README.md` 只做了机械改名，尚未与最终契约核对。`docs/data-types.md`、`search-and-filter.md`、`file-formats.md` 描述的是重构未改变的行为，目前没有旧符号残留，不需要重写。
-  - **方向**：在命名冻结之后再动笔：Rust 侧确定使用 `Session` 且不复留 `Document` 别名，按 T54 处理 Swift／FFI 的 `GewuDocument` 过渡别名，并确认 `QuerySpec`、`Filter`、`Column` 的公开面及 `LogicalType::Dictionary`。Core README 按执行路径组织（打开 `Dataset` → 视图 `Session` 与版本发布 → `QuerySpec` 与谓词执行 → 行读取与导出 → `task/` 长任务及其取消），Code map 按新目录重画，`pub(crate)` 模块不作为公开契约描述；FFI README 的对象表、调用顺序和取消作用域与 Core 对齐；`docs/*.md` 只校订受影响的表述，不重写产品行为说明。同一次变更改正错误的别名说明，并把该文档重写作为重构收尾的完成条件。
+  - **方向**：在命名冻结之后再动笔：Rust 侧确定使用 `Session` 且不复留 `Document` 别名，按 T54 处理 Swift／FFI 的 `GewuDocument` 过渡别名，并确认 `QuerySpec`、`Filter`、`Column` 的公开面（`LogicalType` 已收敛为值语义，存储编码由 `ColumnInfo::encoding` 单独报告）。Core README 按执行路径组织（打开 `Dataset` → 视图 `Session` 与版本发布 → `QuerySpec` 与谓词执行 → 行读取与导出 → `task/` 长任务及其取消），Code map 按新目录重画，`pub(crate)` 模块不作为公开契约描述；FFI README 的对象表、调用顺序和取消作用域与 Core 对齐；`docs/*.md` 只校订受影响的表述，不重写产品行为说明。同一次变更改正错误的别名说明，并把该文档重写作为重构收尾的完成条件。
   - **验收**：markdownlint 通过；旧符号清单（`Document::`、`GewuDocument`、`ViewState`、`FilterEditorKind`、`is_dictionary`、`value_index` 及不存在的 `src/*.rs` 路径）grep 结果为零；README 中的相对链接和锚点可达；文档中的 API 名与模块路径和最终代码一一对应；交付说明中列出刻意未改动的用户文档及理由。
 
 - [ ] **T54 — 收敛 Swift 端 `GewuDocument` 过渡别名**【脆弱性】
@@ -303,7 +303,8 @@
   - **方向**：在 FFI 命名定案后统一为一个名字（优先 `GewuSession`），同步 `DocumentModel`、`WorkbookModel`、`FindModel`、`InspectorModel`、`Table/` 与 `Charts/` 等消费方及 `app/README.md` 的说明；如确有保留理由，写明原因与期限，不默认长期并存。只改 Swift 消费方，不手工编辑生成的绑定。
   - **验收**：App 中同一类型只出现一个公开名字（或别名有明确记录的理由）；`xcodebuild` 构建与 `GewuTests` 通过，`swift-format` lint 通过；`app/README.md`、FFI README 与 Swift 代码的命名一致。
 
-- [ ] **T55 — 把字典编码移出 `LogicalType`（类型模型第二阶段）**【重构】
+- [x] **T55 — 把字典编码移出 `LogicalType`（类型模型第二阶段）**【重构】
   - **依据**：`LogicalType::Dictionary { value_type }` 仍把存储编码当逻辑类型：下游需递归穿透，`dictionary<int64>` 因编码被剥夺 range／直方图／散点能力，`display_name` 输出 `dict<string>`，且 `Other { raw_name }` 仍兜住 `Null`／`Map`／`Union` 等类型。第一阶段已把四维模型和派生集中到 `types/`，FFI 契约未动。
   - **方向**：编码独立为 `ColumnInfo`／FFI 的独立字段（或 `Encoding` 枚举），`LogicalType` 收敛为值语义投影；`Null`／`Map` 显式化，未支持的 Arrow 类型在读取边界显式报错或跳过列，不再静默降级；当 range／直方图内核支持字典数组后，再按“值域有序 + 可解码”放开 `dictionary` 列的 ordered 能力。解析层 `column/filter/{range,scalar,temporal}` 改用 `Domain` 分派，使 `LogicalType` 只承担显示投影；同步改 `gewu-uniffi` 镜像、Swift 消费方与 `docs/data-types.md`。
   - **验收**：`cargo test`／`clippy`／`cargo deny` 通过；App `xcodebuild test` 通过；Core／FFI 文档与 `docs/data-types.md` 不再出现 `dict<...>` 形式的类型描述；公开契约变更在交付说明中列出。
+  - **完成记录**：`LogicalType` 已收敛为值语义（新增 `Null`／`Map`，删除 `Dictionary`／`Other`），`ColumnInfo.encoding` 与 FFI `ColumnEncoding` 单独报告存储编码；无模型的 Arrow 类型在 `Column::new` 处返回 `Unsupported`；解析层 `range`／`scalar`／`temporal` 改用 `Domain` 分派。FFI 枚举与 `ColumnInfo` 字段变更属公开契约破坏，已同步 Swift 生成绑定与文档。

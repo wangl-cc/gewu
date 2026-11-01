@@ -5,6 +5,8 @@
 //! answered here from the four dimensions of [`Type`]. Consumers call these
 //! methods instead of matching Arrow types or re-deriving rules.
 
+use arrow::datatypes::DataType;
+
 use super::{Domain, Encoding, Scalar, Shape, Type};
 use crate::types::logical::ColumnCapabilities;
 
@@ -55,21 +57,24 @@ pub enum IndexStrategy {
     NativeDictionary,
 }
 
-/// Capabilities for an Arrow type Gewu has no semantics for. Such columns can
-/// still be displayed and search their displayed text, but support no typed
-/// operation; this keeps their behavior identical to the pre-model engine.
-pub(crate) fn untyped_capabilities() -> ColumnCapabilities {
-    ColumnCapabilities {
-        contains: true,
-        range: false,
-        equals: false,
-        histogram: false,
-        scatter: false,
-        logarithmic: false,
-    }
+/// Scalar class of a directly stored column. Ordered operations and typing of
+/// explicit inputs currently require native arrays rather than dictionary keys.
+pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
+    Type::from_arrow(data_type)?.direct_domain()
 }
 
 impl Type {
+    /// The scalar class when the values are stored directly. Ordered operations
+    /// and typed explicit inputs currently require native arrays, not
+    /// dictionary keys.
+    pub fn direct_domain(&self) -> Option<Domain> {
+        if self.encoding == Encoding::Direct {
+            self.domain()
+        } else {
+            None
+        }
+    }
+
     /// Ordered single values: sorting, range filters, statistics, histograms
     /// and charts work on these. Dictionary-encoded columns stay discrete.
     pub fn is_ordered(&self) -> bool {
@@ -443,7 +448,7 @@ mod tests {
             let model = ty(&data_type);
             assert_eq!(
                 LogicalType::from_arrow(&data_type),
-                model.logical().unwrap(),
+                Some(model.logical()),
                 "{data_type}"
             );
         }

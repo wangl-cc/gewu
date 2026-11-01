@@ -35,3 +35,4 @@ pub use task::{
     TextChoiceCursor, TextChoicePage, TextChoices, ValueSummary, MAX_FIND_HIGHLIGHT_ROWS,
     MAX_FIND_PAGE_SIZE, MAX_SCATTER_POINTS,
 };
+pub use types::{Encoding, Type};

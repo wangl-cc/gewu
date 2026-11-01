@@ -15,7 +15,12 @@ use super::scalar::{
     decimal::{Endpoint, Literal},
     float, integer, temporal,
 };
-use crate::{column::format, predicate::Predicate, Error, LogicalType, Result};
+use crate::{
+    column::format,
+    predicate::Predicate,
+    types::{direct_domain, Domain},
+    Error, Result,
+};
 
 /// A parsed endpoint for one column's logical type. Construct through [`Self::parse`]
 /// for text inputs or a native constructor for numerical controls. Bounds are
@@ -62,17 +67,15 @@ impl Bound {
     /// Invalid inputs, NaN and unsupported types return an error.
     pub fn parse(data_type: &DataType, text: &str) -> Result<Self> {
         let text = text.trim();
-        match LogicalType::from_arrow(data_type) {
-            LogicalType::Integer { .. }
-            | LogicalType::Decimal { .. }
-            | LogicalType::Duration { .. } => {
+        match direct_domain(data_type) {
+            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
                 let literal = Literal::parse(text).ok_or_else(|| invalid_text(data_type, text))?;
                 let axis = text
                     .parse::<f64>()
                     .map_err(|_| invalid_text(data_type, text))?;
                 Self::exact(data_type, literal, text.to_owned(), axis)
             }
-            LogicalType::Float { .. } => {
+            Some(Domain::Float) => {
                 let value = text
                     .parse::<f64>()
                     .map_err(|_| invalid_text(data_type, text))?;
@@ -91,7 +94,7 @@ impl Bound {
                     axis: value,
                 }))
             }
-            LogicalType::Date | LogicalType::Time | LogicalType::Timestamp { .. } => {
+            Some(Domain::Date | Domain::Time | Domain::Timestamp) => {
                 let value = temporal::parse_value(data_type, text)?;
                 Ok(Self::new(BoundData {
                     data_type: data_type.clone(),
@@ -107,21 +110,17 @@ impl Bound {
     /// Construct an exact integer endpoint. For dates/times the integer is in
     /// the column's physical unit. Negative bounds on unsigned columns are valid.
     pub fn from_i64(data_type: &DataType, value: i64) -> Result<Self> {
-        match LogicalType::from_arrow(data_type) {
-            LogicalType::Integer { .. }
-            | LogicalType::Decimal { .. }
-            | LogicalType::Duration { .. } => {
+        match direct_domain(data_type) {
+            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
                 Self::native_exact(data_type, value.into(), 0, value.to_string(), value as f64)
             }
-            LogicalType::Float { .. } => Self::float_integer(data_type, i128::from(value)),
-            LogicalType::Date | LogicalType::Time | LogicalType::Timestamp { .. } => {
-                Ok(Self::new(BoundData {
-                    data_type: data_type.clone(),
-                    value: Value::Temporal(value),
-                    display: format_temporal(data_type, value)?,
-                    axis: value as f64,
-                }))
-            }
+            Some(Domain::Float) => Self::float_integer(data_type, i128::from(value)),
+            Some(Domain::Date | Domain::Time | Domain::Timestamp) => Ok(Self::new(BoundData {
+                data_type: data_type.clone(),
+                value: Value::Temporal(value),
+                display: format_temporal(data_type, value)?,
+                axis: value as f64,
+            })),
             _ => Err(invalid_type(data_type)),
         }
     }
@@ -129,23 +128,19 @@ impl Bound {
     /// Construct an unsigned integer endpoint without passing through f64.
     /// Temporal physical values must still fit their signed representation.
     pub fn from_u64(data_type: &DataType, value: u64) -> Result<Self> {
-        match LogicalType::from_arrow(data_type) {
-            LogicalType::Integer { .. }
-            | LogicalType::Decimal { .. }
-            | LogicalType::Duration { .. } => Self::native_exact(
+        match direct_domain(data_type) {
+            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => Self::native_exact(
                 data_type,
                 i256::from_i128(i128::from(value)),
                 0,
                 value.to_string(),
                 value as f64,
             ),
-            LogicalType::Float { .. } => Self::float_integer(data_type, i128::from(value)),
-            LogicalType::Date | LogicalType::Time | LogicalType::Timestamp { .. } => {
-                Self::from_i64(
-                    data_type,
-                    i64::try_from(value).map_err(|_| invalid_type(data_type))?,
-                )
-            }
+            Some(Domain::Float) => Self::float_integer(data_type, i128::from(value)),
+            Some(Domain::Date | Domain::Time | Domain::Timestamp) => Self::from_i64(
+                data_type,
+                i64::try_from(value).map_err(|_| invalid_type(data_type))?,
+            ),
             _ => Err(invalid_type(data_type)),
         }
     }
@@ -183,10 +178,7 @@ impl Bound {
     /// The input scale need not equal the column's scale; range preparation
     /// rounds inward to the column's native coefficient grid.
     pub fn from_decimal(data_type: &DataType, coefficient: i256, scale: i8) -> Result<Self> {
-        if !matches!(
-            LogicalType::from_arrow(data_type),
-            LogicalType::Decimal { .. }
-        ) {
+        if !matches!(direct_domain(data_type), Some(Domain::Decimal)) {
             return Err(invalid_type(data_type));
         }
         let axis =
@@ -320,13 +312,12 @@ pub(crate) fn prepare_range<'a>(
         Value::Temporal(v) => Endpoint::Finite(v.into()),
         _ => unreachable!("bound constructors validate type"),
     });
-    Ok(match LogicalType::from_arrow(data_type) {
-        LogicalType::Integer { .. } => integer::bind(array, lower, upper),
-        LogicalType::Decimal { .. } => super::scalar::decimal::bind(array, lower, upper),
-        LogicalType::Date
-        | LogicalType::Time
-        | LogicalType::Timestamp { .. }
-        | LogicalType::Duration { .. } => temporal::bind(array, lower, upper),
+    Ok(match direct_domain(data_type) {
+        Some(Domain::Integer) => integer::bind(array, lower, upper),
+        Some(Domain::Decimal) => super::scalar::decimal::bind(array, lower, upper),
+        Some(Domain::Date | Domain::Time | Domain::Timestamp | Domain::Duration) => {
+            temporal::bind(array, lower, upper)
+        }
         _ => return Err(invalid_type(data_type)),
     })
 }
@@ -338,8 +329,8 @@ fn coefficient_scale(data_type: &DataType) -> Result<i8> {
         | DataType::Decimal128(_, s)
         | DataType::Decimal256(_, s) => Ok(*s),
         _ if matches!(
-            LogicalType::from_arrow(data_type),
-            LogicalType::Integer { .. } | LogicalType::Duration { .. }
+            direct_domain(data_type),
+            Some(Domain::Integer | Domain::Duration)
         ) =>
         {
             Ok(0)

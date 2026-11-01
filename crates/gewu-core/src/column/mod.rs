@@ -31,29 +31,37 @@ pub struct Column {
     pub nullable: bool,
     pub len: usize,
     pub array: ArrayRef,
-    /// The four-dimension type model, `None` for Arrow types Gewu has no
-    /// semantics for. Every capability and policy question derives from it.
-    ty: Option<Type>,
+    /// The four-dimension type model. Every capability and policy question
+    /// derives from it.
+    ty: Type,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
     dictionary: OnceLock<Option<Arc<ValueDictionary>>>,
 }
 
 impl Column {
-    pub fn new(name: impl Into<String>, array: ArrayRef) -> Self {
-        let logical_type = LogicalType::from_arrow(array.data_type());
-        let ty = Type::from_arrow(array.data_type());
+    /// Build a column. Fails for Arrow types without Gewu semantics rather
+    /// than exposing a column no operation can describe.
+    pub fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
+        let name = name.into();
+        let Some(ty) = Type::from_arrow(array.data_type()) else {
+            return Err(crate::Error::Unsupported(format!(
+                "column {name:?} has unsupported type {}",
+                array.data_type()
+            )));
+        };
+        let logical_type = ty.logical();
         let len = array.len();
         let nullable = array.is_nullable();
-        Self {
-            name: name.into(),
+        Ok(Self {
+            name,
             logical_type,
             nullable,
             len,
             array,
             ty,
             dictionary: OnceLock::new(),
-        }
+        })
     }
 
     /// The column's compact distinct-value encoding, built once and shared by
@@ -95,12 +103,15 @@ impl Column {
         self.nullable
     }
 
+    /// The column's four-dimension type model.
+    #[inline]
+    pub(crate) fn ty(&self) -> &Type {
+        &self.ty
+    }
+
     #[inline]
     pub fn capabilities(&self) -> ColumnCapabilities {
-        self.ty.as_ref().map_or_else(
-            crate::types::derive::untyped_capabilities,
-            Type::capabilities,
-        )
+        self.ty.capabilities()
     }
 
     pub fn logical_data_type(&self) -> &DataType {
@@ -117,6 +128,7 @@ impl Column {
             display_type: self.logical_type.display_name(),
             technical_type: self.array.data_type().to_string(),
             logical_type: self.logical_type.clone(),
+            encoding: self.ty.encoding(),
             nullable: self.nullable,
         }
     }
@@ -136,11 +148,11 @@ impl Column {
         query: &str,
         matcher: Option<&regex::Regex>,
     ) -> Result<Option<Predicate<'a>>> {
-        filter::prepare_find(&self.array, self.ty.as_ref(), query, matcher)
+        filter::prepare_find(&self.array, &self.ty, query, matcher)
     }
 
     pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
-        filter::prepare_filter(&self.array, self.ty.as_ref(), self.capabilities(), filter)
+        filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter)
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {
@@ -186,7 +198,7 @@ mod tests {
     };
 
     fn col(array: ArrayRef) -> Column {
-        Column::new("test", array)
+        Column::new("test", array).unwrap()
     }
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {

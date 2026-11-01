@@ -9,22 +9,24 @@ pub(super) mod temporal;
 use arrow::array::{Array, ArrayRef, AsArray};
 
 use super::range::{prepare_range, Bound};
-use crate::{predicate::Predicate, selection::RowSelection, Error, LogicalType, Result};
+use crate::{
+    predicate::Predicate,
+    selection::RowSelection,
+    types::{direct_domain, Domain},
+    Error, Result,
+};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    Ok(match LogicalType::from_arrow(array.data_type()) {
-        LogicalType::Integer { .. } => integer::search(array, text),
-        LogicalType::Float { .. } => float::search(array, text),
-        LogicalType::Decimal { .. } => decimal::search(array, text),
-        LogicalType::Boolean => boolean(text).map(|target| bool_predicate(array, target)),
-        LogicalType::Date
-        | LogicalType::Timestamp { .. }
-        | LogicalType::Time
-        | LogicalType::Duration { .. } => {
+    Ok(match direct_domain(array.data_type()) {
+        Some(Domain::Integer) => integer::search(array, text),
+        Some(Domain::Float) => float::search(array, text),
+        Some(Domain::Decimal) => decimal::search(array, text),
+        Some(Domain::Boolean) => boolean(text).map(|target| bool_predicate(array, target)),
+        Some(Domain::Date | Domain::Timestamp | Domain::Time | Domain::Duration) => {
             return temporal::search(array, text);
         }
         _ => {
@@ -38,11 +40,11 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
 
 pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a>> {
     let text = text.trim();
-    match LogicalType::from_arrow(array.data_type()) {
-        LogicalType::Boolean => boolean(text)
+    match direct_domain(array.data_type()) {
+        Some(Domain::Boolean) => boolean(text)
             .map(|target| bool_predicate(array, target))
             .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
-        LogicalType::Float { .. } => float::equals(array, text),
+        Some(Domain::Float) => float::equals(array, text),
         _ => {
             let bound = Bound::parse(array.data_type(), text)?;
             prepare_range(array, Some(&bound), Some(&bound))

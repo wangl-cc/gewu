@@ -54,9 +54,9 @@ Find and equality accept `true` or `false`, ignoring ASCII case. They compare th
 
 ## Nested and other values
 
-Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a supported nested or fallback type instead searches its displayed text, so it can differ from recursive typed Find.
+Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a nested type instead searches its displayed text, so it can differ from recursive typed Find.
 
-Binary columns are excluded from Find. Other fallback types use a substring of their displayed value. Available filter operations depend on the logical type; a displayed string does not imply every filter operation is supported.
+Binary columns are excluded from Find, and map columns are not searched. Available filter operations depend on the logical type and its encoding: a dictionary-encoded column is discrete, so it offers value choices instead of range filters, and a displayed string does not imply every filter operation is supported. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
 
 ## Nulls
 

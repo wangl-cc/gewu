@@ -19,9 +19,9 @@
 //! apply" has exactly one definition. Kernels still match [`DataType`] to pick
 //! a monomorphized native path; that is a physical decision, not a policy one.
 //!
-//! [`LogicalType`] remains the stable, display-oriented projection used by the
-//! FFI and [`ColumnInfo`]; it is derived from this model instead of duplicating
-//! its classification.
+//! [`LogicalType`] is the stable, display-oriented value projection used by the
+//! FFI and [`ColumnInfo`]; encoding stays out of it. Documents reject columns
+//! whose Arrow type has no model, so every column has a logical type.
 
 pub(crate) mod derive;
 pub(crate) mod identity;
@@ -30,6 +30,7 @@ mod logical;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+pub(crate) use derive::direct_domain;
 pub use derive::{AnalysisSection, FindStrategy, IndexStrategy, LengthUnit};
 pub use logical::{ColumnCapabilities, ColumnInfo, LogicalType};
 
@@ -195,8 +196,7 @@ impl Scalar {
 impl Type {
     /// Build the type model for an Arrow type, or `None` when the type has no
     /// Gewu semantics (unions, run-end encoded, and future Arrow additions).
-    /// Callers decide policy for unsupported types; [`LogicalType::from_arrow`]
-    /// keeps them visible as [`LogicalType::Other`].
+    /// Opening a document rejects such columns instead of degrading silently.
     pub fn from_arrow(data_type: &DataType) -> Option<Self> {
         use DataType::*;
         let shape = match data_type {
@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_types_keep_their_logical_projection() {
+    fn unsupported_types_are_rejected() {
         for data_type in [
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends", DataType::Int32, false)),
@@ -403,9 +403,7 @@ mod tests {
             DataType::Union(UnionFields::empty(), arrow::datatypes::UnionMode::Sparse),
         ] {
             assert_eq!(Type::from_arrow(&data_type), None, "{data_type}");
-            assert_eq!(LogicalType::from_arrow(&data_type), LogicalType::Other {
-                raw_name: data_type.to_string()
-            });
+            assert_eq!(LogicalType::from_arrow(&data_type), None);
         }
     }
 

@@ -2,9 +2,10 @@
 
 use super::Session;
 use crate::{
-    column::{index::count_values, stats, DistinctValue, LogicalType},
+    column::{index::count_values, stats, DistinctValue},
     predicate::Predicate,
     scope::RowScope,
+    types::{Domain, LogicalType},
     DistinctResult, Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
 };
 
@@ -112,7 +113,9 @@ impl Session {
         }
         let dictionary = self.dictionary(column)?;
 
-        if *col.logical_type() == LogicalType::Text {
+        // Dictionary-encoded text keeps its choices editor rather than the
+        // text editor; encoding and value semantics are separate here.
+        if col.ty().direct_domain() == Some(Domain::Text) {
             return Ok(FilterSpec {
                 nullable: col.is_nullable(),
                 editor: FilterEditor::Text {
@@ -160,11 +163,7 @@ impl Session {
         spec: Option<&QuerySpec>,
     ) -> Result<crate::TextChoices> {
         let col = self.column(column)?;
-        let is_text = match col.logical_type() {
-            LogicalType::Text => true,
-            LogicalType::Dictionary { value_type } => **value_type == LogicalType::Text,
-            _ => false,
-        };
+        let is_text = col.ty().domain() == Some(Domain::Text);
         if !is_text {
             return Err(Error::InvalidArgument(
                 "text choices require a string column".into(),
@@ -259,7 +258,7 @@ impl Session {
                 Ok(self.keyed_dictionary(column_idx)?.prepare_predicate(keys))
             }
             Filter::TextValues { values, exclude } => {
-                if *col.logical_type() != LogicalType::Text {
+                if col.ty().direct_domain() != Some(Domain::Text) {
                     return Err(Error::InvalidArgument(format!(
                         "{} is not a string column",
                         col.array.data_type()

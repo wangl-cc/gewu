@@ -11,20 +11,22 @@ use arrow::{
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
 use super::decimal::{native_range, Endpoint, Literal};
-use crate::{predicate::Predicate, Error, LogicalType, Result};
+use crate::{
+    predicate::Predicate,
+    types::{direct_domain, Domain},
+    Error, Result,
+};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let data_type = array.data_type();
-    let period = match LogicalType::from_arrow(data_type) {
-        LogicalType::Date | LogicalType::Timestamp { .. } => date_period(
-            text,
-            matches!(LogicalType::from_arrow(data_type), LogicalType::Date),
-        ),
-        LogicalType::Time => time_period(text).map(|(start, step)| {
+    let domain = direct_domain(data_type);
+    let period = match domain {
+        Some(Domain::Date | Domain::Timestamp) => date_period(text, domain == Some(Domain::Date)),
+        Some(Domain::Time) => time_period(text).map(|(start, step)| {
             let start = NaiveDate::default().and_time(start);
             (start, start + step)
         }),
-        LogicalType::Duration { .. } => {
+        Some(Domain::Duration) => {
             let Some(literal) = Literal::parse_integer(text) else {
                 return Ok(None);
             };

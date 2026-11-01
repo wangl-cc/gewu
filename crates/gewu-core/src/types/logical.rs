@@ -1,18 +1,23 @@
 //! The stable, display-oriented projection of [`Type`].
 //!
-//! [`LogicalType`] is what the FFI, [`ColumnInfo`] and the app see: it keeps
-//! semantic parameters and the dictionary encoding so type badges and labels
-//! stay informative. It is derived from [`Type`] and must not be used for
-//! policy decisions — those live in [`super::derive`].
+//! [`LogicalType`] is the value semantics of a column: what the FFI, the app
+//! and [`ColumnInfo`] show. Storage encoding is deliberately not part of it —
+//! a dictionary of text is text with [`Encoding::Dictionary`] — so type badges
+//! and value editors do not need to recurse through storage wrappers.
+//!
+//! It is derived from [`Type`] and must not be used for policy decisions;
+//! those live in [`super::derive`].
 
 use arrow::datatypes::{DataType, TimeUnit};
 
 use super::{Domain, Encoding, Scalar, Shape, Type};
 
-/// A logical data type with semantic parameters preserved from Arrow.
+/// A column's value semantics with the parameters that make it display exact.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogicalType {
-    /// Strings, including dictionary-encoded strings.
+    /// The Arrow null type: every value is missing.
+    Null,
+    /// Strings.
     Text,
     /// Signed or unsigned integer with bit width (8, 16, 32, 64).
     Integer { bits: u8, signed: bool },
@@ -41,13 +46,11 @@ pub enum LogicalType {
     List,
     /// Nested structures.
     Struct,
-    /// Categorical enumeration encoded as a dictionary of distinct values.
-    Dictionary { value_type: Box<LogicalType> },
-    /// Unknown or rare physical types, preserving raw type name.
-    Other { raw_name: String },
+    /// Key/value entries.
+    Map,
 }
 
-/// Operations supported by a column's logical type. Value-list availability
+/// Operations supported by a column's type. Value-list availability
 /// additionally depends on cardinality and is reported by `DistinctResult`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColumnCapabilities {
@@ -67,24 +70,23 @@ pub struct ColumnCapabilities {
 pub struct ColumnInfo {
     pub name: String,
     pub logical_type: LogicalType,
+    /// How Arrow stores the values. A dictionary column is discrete: it offers
+    /// value choices rather than ordered filters or charts.
+    pub encoding: Encoding,
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
 }
 
 impl LogicalType {
-    /// Build the display projection from Arrow, preserving parameters and the
-    /// dictionary encoding. Types the model does not support remain visible as
-    /// [`Self::Other`], exactly as before the model existed.
-    pub fn from_arrow(data_type: &DataType) -> Self {
-        Type::from_arrow(data_type)
-            .and_then(|ty| ty.logical())
-            .unwrap_or_else(|| Self::Other {
-                raw_name: data_type.to_string(),
-            })
+    /// Build the display projection from Arrow, or `None` when the type has no
+    /// Gewu semantics. Documents reject such columns when they are opened, so
+    /// a column that exists always has a logical type.
+    pub fn from_arrow(data_type: &DataType) -> Option<Self> {
+        Type::from_arrow(data_type).map(|ty| ty.logical())
     }
 
-    /// This projection's parameter-free domain, ignoring the encoding.
+    /// This projection's parameter-free scalar class.
     pub fn domain(&self) -> Option<Domain> {
         Some(match self {
             Self::Text => Domain::Text,
@@ -98,15 +100,14 @@ impl LogicalType {
             Self::Duration { .. } => Domain::Duration,
             Self::Interval => Domain::Interval,
             Self::Binary => Domain::Binary,
-            Self::Dictionary { value_type } => return value_type.domain(),
-            Self::List | Self::Struct | Self::Other { .. } => return None,
+            Self::Null | Self::List | Self::Struct | Self::Map => return None,
         })
     }
 
     /// Normalized, concise display text for UI badges and type labels.
     pub fn display_name(&self) -> String {
         match self {
-            Self::Dictionary { value_type } => format!("dict<{}>", value_type.display_name()),
+            Self::Null => "null".into(),
             Self::Text => "string".into(),
             Self::Integer { bits, signed } => {
                 format!("{}{bits}", if *signed { "int" } else { "uint" })
@@ -125,27 +126,22 @@ impl LogicalType {
             Self::Binary => "binary".into(),
             Self::List => "list".into(),
             Self::Struct => "struct".into(),
-            Self::Other { raw_name } => raw_name.clone(),
+            Self::Map => "map".into(),
         }
     }
 }
 
 impl Type {
-    /// The display projection of this type, or `None` for shapes that only have
-    /// an [`LogicalType::Other`] representation (null, map).
-    pub fn logical(&self) -> Option<LogicalType> {
-        let value = match &self.shape {
-            Shape::Null | Shape::Map { .. } => return None,
+    /// The display projection of this type. Every supported Arrow type has one;
+    /// storage encoding is left out on purpose.
+    pub fn logical(&self) -> LogicalType {
+        match &self.shape {
+            Shape::Null => LogicalType::Null,
             Shape::Scalar(scalar) => scalar_logical(scalar),
             Shape::List { .. } => LogicalType::List,
             Shape::Struct { .. } => LogicalType::Struct,
-        };
-        Some(match self.encoding {
-            Encoding::Direct => value,
-            Encoding::Dictionary => LogicalType::Dictionary {
-                value_type: Box::new(value),
-            },
-        })
+            Shape::Map { .. } => LogicalType::Map,
+        }
     }
 }
 
@@ -191,91 +187,66 @@ mod tests {
     fn from_arrow_parameters_preserved() {
         use DataType::*;
 
-        assert_eq!(LogicalType::from_arrow(&Utf8), LogicalType::Text);
-        assert_eq!(LogicalType::from_arrow(&LargeUtf8), LogicalType::Text);
-        assert_eq!(LogicalType::from_arrow(&Utf8View), LogicalType::Text);
-        assert_eq!(LogicalType::from_arrow(&Int8), LogicalType::Integer {
-            bits: 8,
-            signed: true
-        });
-        assert_eq!(LogicalType::from_arrow(&UInt32), LogicalType::Integer {
-            bits: 32,
-            signed: false
-        });
-        assert_eq!(LogicalType::from_arrow(&Float16), LogicalType::Float {
-            bits: 16
-        });
+        assert_eq!(LogicalType::from_arrow(&Utf8), Some(LogicalType::Text));
+        assert_eq!(
+            LogicalType::from_arrow(&UInt32),
+            Some(LogicalType::Integer {
+                bits: 32,
+                signed: false
+            })
+        );
+        assert_eq!(
+            LogicalType::from_arrow(&Float16),
+            Some(LogicalType::Float { bits: 16 })
+        );
         assert_eq!(
             LogicalType::from_arrow(&Decimal256(76, -4)),
-            LogicalType::Decimal {
+            Some(LogicalType::Decimal {
                 precision: 76,
                 scale: -4
-            }
-        );
-        assert_eq!(LogicalType::from_arrow(&Boolean), LogicalType::Boolean);
-        assert_eq!(LogicalType::from_arrow(&Date32), LogicalType::Date);
-        assert_eq!(LogicalType::from_arrow(&Date64), LogicalType::Date);
-        assert_eq!(
-            LogicalType::from_arrow(&Time32(TimeUnit::Second)),
-            LogicalType::Time
+            })
         );
         assert_eq!(
             LogicalType::from_arrow(&Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
-            LogicalType::Timestamp {
+            Some(LogicalType::Timestamp {
                 unit: TimeUnit::Microsecond,
                 timezone: Some("UTC".into())
-            }
-        );
-        assert_eq!(
-            LogicalType::from_arrow(&Duration(TimeUnit::Millisecond)),
-            LogicalType::Duration {
-                unit: TimeUnit::Millisecond
-            }
+            })
         );
         assert_eq!(
             LogicalType::from_arrow(&Interval(IntervalUnit::DayTime)),
-            LogicalType::Interval
+            Some(LogicalType::Interval)
         );
-        assert_eq!(LogicalType::from_arrow(&Binary), LogicalType::Binary);
         assert_eq!(
             LogicalType::from_arrow(&List(field("item", Int32))),
-            LogicalType::List
+            Some(LogicalType::List)
         );
         assert_eq!(
             LogicalType::from_arrow(&Struct(Fields::from(vec![field("f", Int32)]))),
-            LogicalType::Struct
+            Some(LogicalType::Struct)
         );
-        assert_eq!(LogicalType::from_arrow(&Null), LogicalType::Other {
-            raw_name: "Null".into()
-        });
+        assert_eq!(LogicalType::from_arrow(&Null), Some(LogicalType::Null));
     }
 
     #[test]
-    fn dictionary_projection_keeps_the_value_type() {
-        for (data_type, expected) in [
-            (
-                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::LargeUtf8)),
-                LogicalType::Text,
-            ),
-            (
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64)),
-                LogicalType::Integer {
-                    bits: 64,
-                    signed: true,
-                },
-            ),
-        ] {
-            assert_eq!(
-                LogicalType::from_arrow(&data_type),
-                LogicalType::Dictionary {
-                    value_type: Box::new(expected)
-                }
-            );
-        }
+    fn dictionary_encoding_is_not_part_of_the_display_type() {
+        let dictionary = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        assert_eq!(
+            LogicalType::from_arrow(&dictionary),
+            Some(LogicalType::Text)
+        );
+        assert_eq!(
+            Type::from_arrow(&dictionary).unwrap().encoding(),
+            Encoding::Dictionary
+        );
+        assert_eq!(
+            LogicalType::from_arrow(&dictionary),
+            LogicalType::from_arrow(&DataType::Utf8)
+        );
     }
 
     #[test]
-    fn map_projects_to_other_and_keeps_its_raw_name() {
+    fn map_has_its_own_display_type() {
         let map = DataType::Map(
             Arc::new(Field::new(
                 "entries",
@@ -287,10 +258,7 @@ mod tests {
             )),
             false,
         );
-        assert_eq!(LogicalType::from_arrow(&map), LogicalType::Other {
-            raw_name: map.to_string()
-        });
-        // The model itself still knows the shape, so analysis can follow it.
+        assert_eq!(LogicalType::from_arrow(&map), Some(LogicalType::Map));
         assert!(matches!(
             Type::from_arrow(&map).unwrap().shape(),
             Shape::Map { .. }
@@ -299,14 +267,8 @@ mod tests {
 
     #[test]
     fn display_name_formatting() {
+        assert_eq!(LogicalType::Null.display_name(), "null");
         assert_eq!(LogicalType::Text.display_name(), "string");
-        assert_eq!(
-            LogicalType::Dictionary {
-                value_type: Box::new(LogicalType::Text)
-            }
-            .display_name(),
-            "dict<string>"
-        );
         assert_eq!(
             LogicalType::Integer {
                 bits: 64,
@@ -343,12 +305,36 @@ mod tests {
         assert_eq!(LogicalType::Interval.display_name(), "interval");
         assert_eq!(LogicalType::List.display_name(), "list");
         assert_eq!(LogicalType::Struct.display_name(), "struct");
-        assert_eq!(
-            LogicalType::Other {
-                raw_name: "Null".into()
-            }
-            .display_name(),
-            "Null"
-        );
+        assert_eq!(LogicalType::Map.display_name(), "map");
+    }
+
+    #[test]
+    fn scalar_domains_are_parameter_free() {
+        use DataType::*;
+        for (data_type, domain) in [
+            (Utf8, Domain::Text),
+            (Boolean, Domain::Boolean),
+            (Int8, Domain::Integer),
+            (Float64, Domain::Float),
+            (Decimal128(10, 2), Domain::Decimal),
+            (Date32, Domain::Date),
+            (Time32(TimeUnit::Second), Domain::Time),
+            (Timestamp(TimeUnit::Second, None), Domain::Timestamp),
+            (Duration(TimeUnit::Second), Domain::Duration),
+            (Binary, Domain::Binary),
+        ] {
+            assert_eq!(
+                LogicalType::from_arrow(&data_type).unwrap().domain(),
+                Some(domain),
+                "{data_type}"
+            );
+        }
+        for nothing in [
+            Null,
+            List(field("item", Int32)),
+            Struct(Fields::from(vec![field("f", Int32)])),
+        ] {
+            assert_eq!(LogicalType::from_arrow(&nothing).unwrap().domain(), None);
+        }
     }
 }

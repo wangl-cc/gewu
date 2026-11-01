@@ -269,7 +269,7 @@ impl ColumnAnalysis {
                 )?,
             },
             AnalysisSection::Structure => AnalysisData::Structure {
-                fields: structure(self.array.data_type()),
+                fields: structure(self.array.data_type())?,
             },
         };
         self.context.check()?;
@@ -304,46 +304,35 @@ pub(crate) fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
     )
 }
 
-fn structure(data_type: &DataType) -> Vec<AnalysisField> {
-    let field = |f: &arrow::datatypes::Field| {
-        let logical = LogicalType::from_arrow(f.data_type());
-        AnalysisField {
-            name: f.name().clone(),
+fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
+    let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
+        let logical = Type::from_arrow(data_type)
+            .ok_or_else(|| Error::Unsupported(format!("unsupported nested type {data_type}")))?
+            .logical();
+        Ok(AnalysisField {
+            name: name.to_owned(),
             display_type: logical.display_name(),
-            technical_type: f.data_type().to_string(),
+            technical_type: data_type.to_string(),
             logical_type: logical,
-            nullable: f.is_nullable(),
-        }
+            nullable,
+        })
     };
     match data_type {
-        DataType::Struct(fields) => fields.iter().map(|f| field(f)).collect(),
+        DataType::Struct(fields) => fields
+            .iter()
+            .map(|f| field(f.name(), f.data_type(), f.is_nullable()))
+            .collect(),
         DataType::List(f)
         | DataType::LargeList(f)
         | DataType::ListView(f)
         | DataType::LargeListView(f)
         | DataType::FixedSizeList(f, _)
-        | DataType::Map(f, _) => vec![field(f)],
-        DataType::Dictionary(key, value) => {
-            let key_logical = LogicalType::from_arrow(key);
-            let value_logical = LogicalType::from_arrow(value);
-            vec![
-                AnalysisField {
-                    name: "Key".into(),
-                    display_type: key_logical.display_name(),
-                    technical_type: key.to_string(),
-                    logical_type: key_logical,
-                    nullable: false,
-                },
-                AnalysisField {
-                    name: "Value".into(),
-                    display_type: value_logical.display_name(),
-                    technical_type: value.to_string(),
-                    logical_type: value_logical,
-                    nullable: true,
-                },
-            ]
-        }
-        _ => Vec::new(),
+        | DataType::Map(f, _) => Ok(vec![field(f.name(), f.data_type(), f.is_nullable())?]),
+        DataType::Dictionary(key, value) => Ok(vec![
+            field("Key", key, false)?,
+            field("Value", value, true)?,
+        ]),
+        _ => Ok(Vec::new()),
     }
 }
 

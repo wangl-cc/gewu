@@ -56,7 +56,7 @@ impl Dataset {
                 let field = schema.field(i);
                 Column::new(field.name(), batch.column(i).clone())
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             source_path,

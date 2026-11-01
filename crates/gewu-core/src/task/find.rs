@@ -128,13 +128,8 @@ impl Find {
         }
         let matcher = query.matcher()?;
         for (_, array) in &columns {
-            let ty = crate::types::Type::from_arrow(array.data_type());
-            drop(prepare_find(
-                array,
-                ty.as_ref(),
-                query.text(),
-                Some(&matcher),
-            )?);
+            let ty = column_type(array)?;
+            drop(prepare_find(array, &ty, query.text(), Some(&matcher))?);
         }
         let (token, cancellation) = CancelToken::independent();
         Ok(Self {
@@ -328,8 +323,8 @@ impl Find {
         self.columns
             .iter()
             .map(|(_, array)| {
-                let ty = crate::types::Type::from_arrow(array.data_type());
-                prepare_find(array, ty.as_ref(), self.query.text(), Some(&matcher))
+                let ty = column_type(array)?;
+                prepare_find(array, &ty, self.query.text(), Some(&matcher))
             })
             .collect()
     }
@@ -418,6 +413,14 @@ fn check_page_limit(limit: u32) -> Result<()> {
             "find page size must be between 1 and {MAX_FIND_PAGE_SIZE}"
         )))
     }
+}
+
+/// The modeled type of a column array. Documents validate column types when
+/// they open; this only fails for a hand-built array.
+fn column_type(array: &arrow::array::ArrayRef) -> Result<crate::types::Type> {
+    crate::types::Type::from_arrow(array.data_type()).ok_or_else(|| {
+        Error::Unsupported(format!("column has unsupported type {}", array.data_type()))
+    })
 }
 
 #[cfg(test)]

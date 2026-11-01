@@ -31,9 +31,11 @@ impl From<core::TimeUnit> for TimeUnit {
     }
 }
 
-/// A logical data type with semantic parameters; mirrors `gewu_core::LogicalType`.
+/// A column's value semantics with its parameters; mirrors `gewu_core::LogicalType`.
+/// Storage encoding is reported separately by [`ColumnEncoding`].
 #[derive(uniffi::Enum, Clone, PartialEq, Eq)]
 pub enum LogicalType {
+    Null,
     Text,
     Integer {
         bits: u8,
@@ -60,17 +62,31 @@ pub enum LogicalType {
     Binary,
     List,
     Struct,
-    Dictionary {
-        value_type: Box<LogicalType>,
-    },
-    Other {
-        raw_name: String,
-    },
+    Map,
+}
+
+/// How Arrow stores a column's values; mirrors `gewu_core::Encoding`.
+/// Dictionary-encoded columns are discrete: they offer value choices rather
+/// than ordered filters or charts.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnEncoding {
+    Direct,
+    Dictionary,
+}
+
+impl From<core::Encoding> for ColumnEncoding {
+    fn from(encoding: core::Encoding) -> Self {
+        match encoding {
+            core::Encoding::Direct => Self::Direct,
+            core::Encoding::Dictionary => Self::Dictionary,
+        }
+    }
 }
 
 impl From<core::LogicalType> for LogicalType {
     fn from(t: core::LogicalType) -> Self {
         match t {
+            core::LogicalType::Null => Self::Null,
             core::LogicalType::Text => Self::Text,
             core::LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
             core::LogicalType::Float { bits } => Self::Float { bits },
@@ -87,10 +103,7 @@ impl From<core::LogicalType> for LogicalType {
             core::LogicalType::Binary => Self::Binary,
             core::LogicalType::List => Self::List,
             core::LogicalType::Struct => Self::Struct,
-            core::LogicalType::Dictionary { value_type } => Self::Dictionary {
-                value_type: Box::new((*value_type).into()),
-            },
-            core::LogicalType::Other { raw_name } => Self::Other { raw_name },
+            core::LogicalType::Map => Self::Map,
         }
     }
 }
@@ -122,6 +135,7 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
 pub struct ColumnInfo {
     pub name: String,
     pub logical_type: LogicalType,
+    pub encoding: ColumnEncoding,
     pub display_type: String,
     pub technical_type: String,
     pub capabilities: ColumnCapabilities,
@@ -186,6 +200,7 @@ impl From<&core::Session> for FileInfo {
                     ColumnInfo {
                         name: c.name.clone(),
                         logical_type: c.logical_type.clone().into(),
+                        encoding: c.encoding.into(),
                         display_type: c.display_type.clone(),
                         technical_type: c.technical_type.clone(),
                         capabilities: capabilities.into(),
