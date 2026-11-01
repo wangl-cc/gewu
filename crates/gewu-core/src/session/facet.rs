@@ -245,8 +245,7 @@ impl Session {
                 })
             }
             None => {
-                let counted =
-                    crate::column::dictionary::streaming::count_values(&col.array, &rows, limit)?;
+                let counted = crate::analysis::count_values(&col.array, &rows, limit)?;
                 Ok(DistinctResult {
                     total: counted.distinct,
                     truncated: counted.distinct > limit as u64,

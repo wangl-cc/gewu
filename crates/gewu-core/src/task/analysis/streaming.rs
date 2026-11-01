@@ -17,8 +17,10 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use super::CHUNK;
-use crate::{analysis::AnalysisContext, format, scope::Selection, DistinctValue, Result};
+use super::AnalysisContext;
+use crate::{format, scope::Selection, DistinctValue, Result};
+
+const CHUNK: usize = 64 * 1024;
 
 /// Distinct values counted once, without keeping an index.
 pub(crate) struct ValueCounts {
@@ -39,7 +41,7 @@ pub(crate) fn count_values(array: &ArrayRef, rows: &Selection, keep: usize) -> R
     count_values_with_context(array, rows, keep, &AnalysisContext::default())
 }
 
-pub(crate) fn count_values_with_context(
+fn count_values_with_context(
     array: &ArrayRef,
     rows: &Selection,
     keep: usize,
@@ -169,5 +171,76 @@ fn normalized_bits(value: f64) -> u64 {
         f64::NAN.to_bits()
     } else {
         value.to_bits()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{Float64Array, StringArray};
+
+    use super::*;
+
+    #[test]
+    fn float_counts_group_signed_zero_and_nan_payloads_separately_from_null() {
+        let source = Float64Array::from(vec![
+            Some(-0.0),
+            Some(0.0),
+            Some(f64::NAN),
+            Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+            Some(f64::from_bits(0xfff8_2000_0000_0000)),
+            None,
+            None,
+            Some(1.0),
+        ]);
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let array = arrow::compute::cast(&source, &data_type).unwrap();
+            for rows in [
+                Selection::All(array.len()),
+                Selection::Rows(Arc::new(vec![7, 6, 5, 4, 3, 2, 1, 0])),
+            ] {
+                let result = count_values(&array, &rows, 8).unwrap();
+                assert_eq!(result.distinct, 4);
+                assert_eq!(result.top.len(), 4);
+                for value in result.top {
+                    let expected = match value.label {
+                        None => 2,
+                        Some(label) => match label.parse::<f64>().unwrap() {
+                            value if value.is_nan() => 3,
+                            0.0 => 2,
+                            1.0 => 1,
+                            value => panic!("unexpected value {value}"),
+                        },
+                    };
+                    assert_eq!(value.count, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn counting_without_an_index() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("b"),
+            Some("a"),
+            None,
+            Some("b"),
+            Some("c"),
+            Some("b"),
+            Some("a"),
+        ]));
+        let all = count_values(&a, &Selection::All(a.len()), 2).unwrap();
+        assert_eq!(all.distinct, 4);
+        let top: Vec<_> = all
+            .top
+            .iter()
+            .map(|v| (v.label.clone().unwrap(), v.count))
+            .collect();
+        assert_eq!(top, [("a".to_string(), 2), ("b".to_string(), 3)]);
+
+        let some = count_values(&a, &Selection::Rows(Arc::new(vec![2, 4])), 10).unwrap();
+        assert_eq!(some.distinct, 2);
+        assert_eq!(some.top[0].label, None);
     }
 }

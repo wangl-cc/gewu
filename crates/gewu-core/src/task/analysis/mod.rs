@@ -19,9 +19,11 @@ use crate::{
 mod lengths;
 mod median;
 pub(crate) mod numeric;
+pub(crate) mod streaming;
 mod values;
 
 use numeric::Numeric;
+pub(crate) use streaming::count_values;
 
 /// Facts about one column over the rows of the current view (so explicit
 /// filters apply), for aggregate reporting.

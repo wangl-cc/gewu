@@ -1,8 +1,7 @@
 //! Distinct values of a column as a compact `u8` code space.
 //!
 //! A [`Dictionary`] gives every source row a code naming its distinct
-//! value: codes `0..=254` name the non-null values in value order, and
-//! [`NULL_CODE`] names null.
+//! value: codes `0..=254` name the non-null values, and [`NULL_CODE`] names null.
 //!
 //! # Architecture
 //!
@@ -12,8 +11,6 @@
 //!   primitives, boolean, row format).
 //! - [`primitive`]: Specialized native scanners for primitive types and normalized total-order
 //!   float keys.
-//! - [`streaming`]: Streaming distinct counts for columns exceeding [`MAX_DISTINCT_VALUES`] via
-//!   [`streaming::count_values`].
 //!
 //! Other modules consume the dictionary through [`Dictionary::tally`] for
 //! frequency counting, [`Dictionary::values`] for distinct value arrays,
@@ -21,7 +18,7 @@
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
 //! and cached by [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`]
-//! non-null values are not encoded; callers fall back to streaming counts.
+//! non-null values are not encoded.
 
 use std::sync::Arc;
 
@@ -31,14 +28,13 @@ use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
 
 mod build;
 mod primitive;
-pub(crate) mod streaming;
 
 pub(crate) use primitive::normalized_bits;
 
 /// Most non-null values a column may have and still be encoded. Non-null
 /// values use codes `0..=254`; [`NULL_CODE`] is reserved for null, so one
 /// `u8` code space covers 255 values plus null. Columns with more values are
-/// counted without an encoding and use streaming counts.
+/// not encoded.
 pub(crate) const MAX_DISTINCT_VALUES: usize = 255;
 
 /// Code reserved for null. Non-null values use codes `0..=254`.

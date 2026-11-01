@@ -127,8 +127,7 @@ impl Session {
             s.top_values = choices;
         } else {
             // One spare in case null is among the most common.
-            let counted =
-                crate::column::dictionary::streaming::count_values(array, &rows, top + 1)?;
+            let counted = crate::analysis::count_values(array, &rows, top + 1)?;
             s.distinct_count = counted.distinct;
             let (lo, hi) = extremes(array, &rows)?;
             (s.min_label, s.max_label) = (label(lo), label(hi));

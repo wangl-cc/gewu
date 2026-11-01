@@ -2,7 +2,7 @@
 //!
 //! Type semantics live in [`crate::types`]; this module owns the column's data,
 //! its lazy distinct-value dictionary, and the per-column kernels:
-//! - [`dictionary`]: distinct-value dictionary and streaming counts
+//! - [`dictionary`]: compact distinct-value dictionary encoding
 //! - [`filter`]: Single-column filter and Find predicate compilation
 //! - [`stats`]: Histograms and distributions
 
