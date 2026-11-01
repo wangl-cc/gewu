@@ -25,7 +25,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 1. Call `GewuSession::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuSession::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
 2. Read `info()` for schema and file metadata, and `current_view()` for the initial `ViewInfo`.
-3. Construct a `ViewState` containing sort keys and explicit column filters. Run `apply_view(state)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
+3. Construct a `QuerySpec` containing sort keys and explicit column filters. Run `apply_view(spec)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
 4. Pass that view's `version` to `rows(version, start, count, columns)`. Column indexes refer to the source schema, even when the UI reorders columns; the returned cells follow the requested column order.
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.

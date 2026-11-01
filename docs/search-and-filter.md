@@ -6,7 +6,7 @@ Explicit column filters narrow the displayed rows. Toolbar Find is separate: it 
 
 Find searches all columns in the current filtered row set, including columns outside the rendered viewport. Matches follow display row and column order; Next and Previous wrap, and navigation reveals the row and column. Highlight storage is limited to visible blocks, but navigation pages continue through the complete view without a hit-count ceiling. Find does not report an exact total unless one is computed separately.
 
-Changing Find does not alter `ViewState`, row contents, export contents or inspector statistics. Sorting, filtering, changing the query or closing the document invalidates the captured Find session.
+Changing Find does not alter `QuerySpec`, row contents, export contents or inspector statistics. Sorting, filtering, changing the query or closing the document invalidates the captured Find session.
 
 ## Combining filter conditions
 

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Filter, FilterEditor, ViewState};
+use gewu_core::{Document, Filter, FilterEditor, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 fn document() -> Document {
@@ -59,8 +59,8 @@ fn contains(include_nulls: bool) -> Filter {
     }
 }
 
-fn rows(doc: &Document, state: ViewState) -> Vec<u64> {
-    let view = doc.apply_view(&state).unwrap();
+fn rows(doc: &Document, spec: QuerySpec) -> Vec<u64> {
+    let view = doc.apply_view(&spec).unwrap();
     doc.rows(view.version, 0, 20, &[0, 1]).unwrap().source_rows
 }
 
@@ -73,7 +73,7 @@ fn range_null_policy_keeps_nulls_without_matching_nan_or_outside_values() {
         (Filter::IsNull { negate: false }, vec![0, 4]),
         (Filter::IsNull { negate: true }, vec![1, 2, 3, 5, 6]),
     ] {
-        assert_eq!(rows(&doc, ViewState::single(0, filter)), expected);
+        assert_eq!(rows(&doc, QuerySpec::single(0, filter)), expected);
     }
 }
 
@@ -93,7 +93,7 @@ fn contains_null_policy_preserves_case_matching_and_only_nulls() {
         ),
         (Filter::IsNull { negate: false }, vec![0, 6]),
     ] {
-        assert_eq!(rows(&doc, ViewState::single(1, filter)), expected);
+        assert_eq!(rows(&doc, QuerySpec::single(1, filter)), expected);
     }
 }
 
@@ -112,7 +112,7 @@ fn included_nulls_still_obey_other_column_filters() {
         assert_eq!(
             rows(
                 &doc,
-                ViewState::single(col, filter)
+                QuerySpec::single(col, filter)
                     .with_filter(2, Filter::Equals { value: "A".into() })
                     .with_filter(3, Filter::Contains {
                         include_nulls: false,
@@ -128,7 +128,7 @@ fn included_nulls_still_obey_other_column_filters() {
 #[test]
 fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
     let doc = document();
-    let state = ViewState::single(0, range(&doc, true))
+    let spec = QuerySpec::single(0, range(&doc, true))
         .with_filter(2, Filter::Equals { value: "A".into() })
         .with_filter(3, Filter::Contains {
             include_nulls: false,
@@ -136,7 +136,7 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
             case_sensitive: false,
         });
     let values = doc
-        .prepare_text_choices(2, Some(&state))
+        .prepare_text_choices(2, Some(&spec))
         .unwrap()
         .page("", None, 100)
         .unwrap()
@@ -151,7 +151,7 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
 
     // Removing only score's own filter leaves source rows 0, 1 and 5: null,
     // one finite value, and NaN. The UI must not conflate those last two classes.
-    let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&state)).unwrap().editor else {
+    let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&spec)).unwrap().editor else {
         panic!("small numeric column should offer choices")
     };
     assert_eq!(values.iter().map(|value| value.count).sum::<u64>(), 3);

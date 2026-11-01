@@ -6,7 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, ViewState};
+use gewu_core::{Document, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -53,8 +53,8 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Document) {
     (path, doc)
 }
 
-fn labels_of(doc: &Document, column: u32, state: Option<&ViewState>) -> Vec<(String, u64)> {
-    doc.distinct_values(column, state, 100)
+fn labels_of(doc: &Document, column: u32, spec: Option<&QuerySpec>) -> Vec<(String, u64)> {
+    doc.distinct_values(column, spec, 100)
         .unwrap()
         .values
         .into_iter()
@@ -64,11 +64,11 @@ fn labels_of(doc: &Document, column: u32, state: Option<&ViewState>) -> Vec<(Str
 
 /// label in {cat, dog}, price >= 2, and a search for "a" (names a only;
 /// labels cat; no prices or ids contain it as a value).
-fn busy_state(doc: &Document) -> ViewState {
+fn busy_spec(doc: &Document) -> QuerySpec {
     let keys = doc
         .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
         .unwrap();
-    ViewState::default()
+    QuerySpec::default()
         .with_filter(1, Filter::InValues { keys })
         .with_filter(2, Filter::Range {
             include_nulls: false,
@@ -80,23 +80,23 @@ fn busy_state(doc: &Document) -> ViewState {
 #[test]
 fn distinct_ignores_only_its_own_column() {
     let (path, doc) = sample("distinct");
-    let state = busy_state(&doc);
+    let spec = busy_spec(&doc);
 
     // label: only the price filter applies -> rows a, c, e, f
-    assert_eq!(labels_of(&doc, 1, Some(&state)), [
+    assert_eq!(labels_of(&doc, 1, Some(&spec)), [
         ("<null>".into(), 1),
         ("bird".into(), 1),
         ("cat".into(), 1),
         ("dog".into(), 1),
     ]);
     // price: only the label filter applies -> rows a, b, d, f
-    let prices: Vec<String> = labels_of(&doc, 2, Some(&state))
+    let prices: Vec<String> = labels_of(&doc, 2, Some(&spec))
         .into_iter()
         .map(|(l, _)| l)
         .collect();
     assert_eq!(prices, ["<null>", "1.0", "3.5", "7.0"]);
     // name: both filters apply -> rows a, f
-    let names: Vec<String> = labels_of(&doc, 0, Some(&state))
+    let names: Vec<String> = labels_of(&doc, 0, Some(&spec))
         .into_iter()
         .map(|(l, _)| l)
         .collect();
@@ -108,16 +108,16 @@ fn distinct_ignores_only_its_own_column() {
 fn distinct_and_histogram_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
-    let state = ViewState::single(1, Filter::Equals {
+    let spec = QuerySpec::single(1, Filter::Equals {
         value: "cat".into(),
     });
-    let names: Vec<String> = labels_of(&doc, 0, Some(&state))
+    let names: Vec<String> = labels_of(&doc, 0, Some(&spec))
         .into_iter()
         .map(|(l, _)| l)
         .collect();
     assert_eq!(names, ["a", "d"]);
 
-    let h = doc.histogram(3, Some(&state), 6).unwrap();
+    let h = doc.histogram(3, Some(&spec), 6).unwrap();
     assert_eq!(h.total, 2);
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
     std::fs::remove_file(path).ok();
@@ -126,16 +126,16 @@ fn distinct_and_histogram_apply_column_filters() {
 #[test]
 fn histogram_ignores_only_its_own_column() {
     let (path, doc) = sample("hist");
-    let state = busy_state(&doc).with_filter(3, Filter::Range {
+    let spec = busy_spec(&doc).with_filter(3, Filter::Range {
         include_nulls: false,
         min: Some(doc.parse_bound(3, "60").unwrap()),
         max: None,
     });
     // id: label and price filters apply -> rows a, f; its own range does not.
-    let h = doc.histogram(3, Some(&state), 6).unwrap();
+    let h = doc.histogram(3, Some(&spec), 6).unwrap();
     assert_eq!(h.total, 2);
     // price: label and id filters apply -> row f only.
-    let h = doc.histogram(2, Some(&state), 4).unwrap();
+    let h = doc.histogram(2, Some(&spec), 4).unwrap();
     assert_eq!(h.total, 1);
     // Axis always spans the whole column.
     assert_eq!(h.lo, Some(1.0));
@@ -146,8 +146,8 @@ fn histogram_ignores_only_its_own_column() {
 #[test]
 fn view_histogram_and_summary_follow_the_current_view() {
     let (path, doc) = sample("view");
-    let state = busy_state(&doc);
-    let v = doc.apply_view(&state).unwrap();
+    let spec = busy_spec(&doc);
+    let v = doc.apply_view(&spec).unwrap();
     assert_eq!(v.row_count, 2); // a, f
 
     let h = doc.view_histogram(v.version, 3, 6).unwrap();
@@ -157,7 +157,7 @@ fn view_histogram_and_summary_follow_the_current_view() {
     assert_eq!(s.min, Some(3.5));
     assert_eq!(s.max, Some(7.0));
 
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert!(matches!(
         doc.view_histogram(v.version, 3, 6),
         Err(Error::StaleVersion { .. })
@@ -169,7 +169,7 @@ fn view_histogram_and_summary_follow_the_current_view() {
 fn failed_apply_keeps_the_old_view() {
     let (path, doc) = sample("failed");
     let before = doc.current_view();
-    let bad = ViewState::single(0, Filter::Range {
+    let bad = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
         min: Some(doc.make_bound_i64(3, 1).unwrap()),
         max: None,
@@ -208,7 +208,7 @@ fn cancelled_apply_never_replaces_the_view() {
     let doc = Arc::new(doc);
     let before = doc.current_view();
 
-    let state = ViewState::single(0, Filter::Equals {
+    let spec = QuerySpec::single(0, Filter::Equals {
         value: "12345".into(),
     })
     .with_sort(vec![gewu_core::SortKey {
@@ -217,7 +217,7 @@ fn cancelled_apply_never_replaces_the_view() {
     }]);
     let worker = {
         let doc = doc.clone();
-        std::thread::spawn(move || doc.apply_view(&state))
+        std::thread::spawn(move || doc.apply_view(&spec))
     };
     doc.cancel_pending();
     match worker.join().unwrap() {
@@ -257,7 +257,7 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
         doc.keys_for_labels(0, &[Some("x".into())]),
         Err(Error::InvalidArgument(_))
     ));
-    let by_key = ViewState::single(0, Filter::InValues { keys: vec![0] });
+    let by_key = QuerySpec::single(0, Filter::InValues { keys: vec![0] });
     assert!(matches!(
         doc.apply_view(&by_key),
         Err(Error::InvalidArgument(_))
@@ -331,11 +331,11 @@ fn summary_extrema_cover_single_values_nulls_and_filtered_views() {
         (Some(Filter::IsNull { negate: false }), [None; 3]),
         (Some(Filter::InValues { keys: vec![] }), [None; 3]),
     ] {
-        let mut state = ViewState::default();
+        let mut spec = QuerySpec::default();
         if let Some(f) = filter {
-            state = state.with_filter(0, f);
+            spec = spec.with_filter(0, f);
         }
-        doc.apply_view(&state).unwrap();
+        doc.apply_view(&spec).unwrap();
         for (column, extremes) in expected.into_iter().enumerate() {
             let summary = doc.column_summary(column as u32, 2).unwrap();
             assert_eq!(

@@ -11,7 +11,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use gewu_core::{
-    Document, Error, ExportOptions, FileType, Filter, ParquetCompression, SortKey, ViewState,
+    Document, Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, SortKey,
 };
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
@@ -159,7 +159,7 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
 
 fn filtered(doc: &Document) -> u64 {
     doc.apply_view(
-        &ViewState::single(0, Filter::Range {
+        &QuerySpec::single(0, Filter::Range {
             include_nulls: false,
             min: Some(doc.parse_bound(0, "2").unwrap()),
             max: None,
@@ -216,7 +216,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
         .prepare_export(version, &[1, 0, 2, 3], FileType::Parquet)
         .unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     doc.cancel_pending();
     let path = directory.path().join("result.parquet");
     export.write(&path).unwrap();
@@ -292,7 +292,7 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let version = doc
-        .apply_view(&ViewState::single(0, Filter::Equals { value: "-1".into() }))
+        .apply_view(&QuerySpec::single(0, Filter::Equals { value: "-1".into() }))
         .unwrap()
         .version;
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
@@ -420,18 +420,18 @@ fn source_file_and_aliases_cannot_be_overwritten() {
 #[test]
 fn view_histogram_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
-    let state = ViewState::single(0, Filter::Range {
+    let spec = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
         min: Some(doc.parse_bound(0, "2").unwrap()),
         max: Some(doc.parse_bound(0, "4").unwrap()),
     });
-    let view = doc.apply_view(&state).unwrap();
-    let filter_histogram = doc.histogram(0, Some(&state), 8).unwrap();
+    let view = doc.apply_view(&spec).unwrap();
+    let filter_histogram = doc.histogram(0, Some(&spec), 8).unwrap();
     let view_histogram = doc.view_histogram(view.version, 0, 8).unwrap();
     assert_eq!(filter_histogram.total, 5);
     assert_eq!(view_histogram.total, 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert!(matches!(
         doc.view_histogram(view.version, 0, 8),
         Err(Error::StaleVersion { .. })

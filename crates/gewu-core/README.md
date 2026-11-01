@@ -13,7 +13,7 @@ For builds, tests and formatting, follow the [Rust development guide](../../DEVE
 - `Session::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
 - `Session::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
 - `Session::from_dataset` creates a fresh viewing session sharing an existing loaded dataset.
-- `Session::apply_view` evaluates a `QuerySpec` (or `ViewState`) and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
+- `Session::apply_view` evaluates a `QuerySpec` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
 - `Session::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
 - `Session::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
 - `Session::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
@@ -22,7 +22,7 @@ The whole input is decoded into memory. Query execution reads native Arrow array
 
 ## Query preparation and execution
 
-`ViewState` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
+`QuerySpec` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
 `Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
 

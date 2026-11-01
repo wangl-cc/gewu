@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, ViewState};
+use gewu_core::{Document, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 #[test]
@@ -27,7 +27,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     writer.close().unwrap();
     let doc = Document::open(file.path()).unwrap();
     let keys = doc.keys_for_labels(1, &[Some("2".into())]).unwrap();
-    let state = ViewState::default()
+    let spec = QuerySpec::default()
         .with_filter(1, Filter::InValues { keys })
         .with_filter(0, Filter::Range {
             include_nulls: false,
@@ -39,7 +39,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
             text: "keep".into(),
             case_sensitive: false,
         });
-    let view = doc.apply_view(&state).unwrap();
+    let view = doc.apply_view(&spec).unwrap();
     let rows = doc.rows(view.version, 0, len as u32, &[0, 1, 2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
@@ -47,7 +47,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         .collect::<Vec<_>>();
     assert_eq!(rows.source_rows, expected);
 
-    let invalid = ViewState::single(0, Filter::Range {
+    let invalid = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
         min: Some(doc.parse_bound(0, "20").unwrap()),
         max: Some(doc.parse_bound(0, "10").unwrap()),

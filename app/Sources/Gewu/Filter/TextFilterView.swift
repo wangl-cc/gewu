@@ -101,7 +101,7 @@ struct TextFilterView: View {
     let document: GewuDocument
     let column: UInt32
     let nullable: Bool
-    let state: QuerySpec
+    let querySpec: QuerySpec
     let modes: [TextFilterMode]
     let onApply: ([Filter]) -> Void
     @State private var mode: TextFilterMode
@@ -113,14 +113,14 @@ struct TextFilterView: View {
     @StateObject private var choices = TextChoicesModel()
 
     init(
-        document: GewuDocument, column: UInt32, nullable: Bool, state: QuerySpec,
+        document: GewuDocument, column: UInt32, nullable: Bool, querySpec: QuerySpec,
         modes: [TextFilterMode], recommended: TextFilterMode, current: [Filter],
         onApply: @escaping ([Filter]) -> Void
     ) {
         self.document = document
         self.column = column
         self.nullable = nullable
-        self.state = state
+        self.querySpec = querySpec
         self.modes = modes
         self.onApply = onApply
         var initial = recommended
@@ -158,7 +158,7 @@ struct TextFilterView: View {
                 choices.pause()
                 return
             }
-            await choices.load(document: document, column: column, state: state, query: query, after: after)
+            await choices.load(document: document, column: column, querySpec: querySpec, query: query, after: after)
         }
         .onDisappear { choices.cancel() }
     }

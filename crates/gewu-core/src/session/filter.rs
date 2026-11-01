@@ -6,7 +6,7 @@ use crate::{
     predicate::Predicate,
     scope::RowScope,
     value_index::count_values,
-    DistinctResult, Error, Filter, Histogram, LogicalType, Result, ViewState,
+    DistinctResult, Error, Filter, Histogram, LogicalType, QuerySpec, Result,
 };
 
 impl Session {
@@ -46,25 +46,25 @@ impl Session {
 
     /// Describe the filter editor using whole-column cardinality. Facet counts
     /// respect other columns' explicit filters without changing the editor.
-    pub fn filter_spec(&self, column: u32, state: Option<&ViewState>) -> Result<crate::FilterSpec> {
-        self.filter_spec_with_bins(column, state, 60)
+    pub fn filter_spec(&self, column: u32, spec: Option<&QuerySpec>) -> Result<crate::FilterSpec> {
+        self.filter_spec_with_bins(column, spec, 60)
     }
 
     /// Like filter_spec, with a requested histogram resolution (1 through 60).
     pub fn filter_spec_with_bins(
         &self,
         column: u32,
-        state: Option<&ViewState>,
+        spec: Option<&QuerySpec>,
         bins: u32,
     ) -> Result<crate::FilterSpec> {
-        self.filter_spec_with_scale(column, state, bins, crate::AxisScale::Linear)
+        self.filter_spec_with_scale(column, spec, bins, crate::AxisScale::Linear)
     }
 
     /// Like `filter_spec_with_bins`, with an explicit numeric binning scale.
     pub fn filter_spec_with_scale(
         &self,
         column: u32,
-        state: Option<&ViewState>,
+        spec: Option<&QuerySpec>,
         bins: u32,
         scale: crate::AxisScale,
     ) -> Result<crate::FilterSpec> {
@@ -100,13 +100,13 @@ impl Session {
         }
         let editor = match editor_kind {
             FilterEditorKind::Choices => {
-                let rows = self.rows_in(RowScope::facet(state, column))?;
+                let rows = self.rows_in(RowScope::facet(spec, column))?;
                 FilterEditor::Choices {
                     values: self.keyed_index(column)?.counts_all(&rows),
                 }
             }
             FilterEditorKind::Range => {
-                let rows = self.rows_in(RowScope::facet(state, column))?;
+                let rows = self.rows_in(RowScope::facet(spec, column))?;
                 FilterEditor::Range {
                     logical_type: LogicalType::from_arrow(typed.logical_data_type()),
                     distribution: histogram::build_scaled(array, &rows, bins, scale)?,
@@ -128,7 +128,7 @@ impl Session {
     pub fn prepare_text_choices(
         &self,
         column: u32,
-        state: Option<&ViewState>,
+        spec: Option<&QuerySpec>,
     ) -> Result<crate::TextChoices> {
         let array = self.column(column)?;
         if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
@@ -136,13 +136,13 @@ impl Session {
                 "text choices require a string column".into(),
             ));
         }
-        let rows = self.rows_in(RowScope::facet(state, column))?;
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
         crate::TextChoices::new(array.clone(), rows)
     }
 
     /// Distinct values of a column with their counts, for the checkbox filter.
     ///
-    /// With `filters`, counts only rows that pass the filters on *other*
+    /// With `spec`, counts only rows that pass the filters on *other*
     /// columns (like Excel), and leaves out values with no such rows.
     ///
     /// A column with at most 100,000 distinct values is indexed: the result
@@ -153,11 +153,11 @@ impl Session {
     pub fn distinct_values(
         &self,
         column: u32,
-        filters: Option<&ViewState>,
+        spec: Option<&QuerySpec>,
         limit: u32,
     ) -> Result<DistinctResult> {
         let index = self.index(column)?;
-        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
         let limit = limit as usize;
         Ok(match index {
             Some(idx) => {
@@ -182,16 +182,11 @@ impl Session {
     }
 
     /// Distribution of a numeric, date or time column in `bins` bins, for
-    /// the range filter. With `filters`, counts only rows that pass the
+    /// the range filter. With `spec`, counts only rows that pass the
     /// filters on *other* columns, like [`Self::distinct_values`].
-    pub fn histogram(
-        &self,
-        column: u32,
-        filters: Option<&ViewState>,
-        bins: u32,
-    ) -> Result<Histogram> {
+    pub fn histogram(&self, column: u32, spec: Option<&QuerySpec>, bins: u32) -> Result<Histogram> {
         let array = self.column(column)?;
-        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
         histogram::counts(array, &rows, bins)
     }
 
@@ -202,11 +197,11 @@ impl Session {
     pub fn histogram_ranges(
         &self,
         column: u32,
-        filters: Option<&ViewState>,
+        spec: Option<&QuerySpec>,
         bins: u32,
     ) -> Result<crate::RangeHistogram> {
         let array = self.column(column)?;
-        let rows = self.rows_in(RowScope::facet(filters, column))?;
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
         histogram::ranges(array, &rows, bins)
     }
 

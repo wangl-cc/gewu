@@ -53,7 +53,7 @@ fn assert_disabled_exports(doc: &Document) {
 #[cfg(feature = "csv")]
 mod delimited {
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
 
     use super::*;
 
@@ -173,7 +173,7 @@ mod delimited {
         let doc = Document::open(source).unwrap();
         let version = doc
             .apply_view(
-                &ViewState::single(0, Filter::Range {
+                &QuerySpec::single(0, Filter::Range {
                     include_nulls: false,
                     min: Some(doc.parse_bound(0, "2").unwrap()),
                     max: None,
@@ -203,7 +203,7 @@ mod delimited {
             );
         }
         let empty = doc
-            .apply_view(&ViewState::single(1, Filter::Equals {
+            .apply_view(&QuerySpec::single(1, Filter::Equals {
                 value: "absent-value".into(),
             }))
             .unwrap();
@@ -226,7 +226,7 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
@@ -336,7 +336,7 @@ mod xlsx {
         workbook(&source);
         let doc = Document::open(source).unwrap();
         let version = doc
-            .apply_view(&ViewState {
+            .apply_view(&QuerySpec {
                 sort: vec![SortKey {
                     column: 0,
                     descending: false,
@@ -359,7 +359,7 @@ mod xlsx {
             doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .apply_view(&ViewState::single(1, Filter::Equals {
+            .apply_view(&QuerySpec::single(1, Filter::Equals {
                 value: "absent-value".into(),
             }))
             .unwrap();

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, Document, Error, Filter, SortKey, ViewState, MAX_FIND_HIGHLIGHT_ROWS,
+    CellMatch, Document, Error, Filter, QuerySpec, SortKey, MAX_FIND_HIGHLIGHT_ROWS,
     MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
@@ -84,7 +84,7 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
         .apply_view(
-            &ViewState::single(2, Filter::Equals {
+            &QuerySpec::single(2, Filter::Equals {
                 value: "true".into(),
             })
             .with_sort(vec![SortKey {
@@ -118,7 +118,7 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     ]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert_eq!(find.highlight(0, 3).unwrap().matched, highlight.matched);
 }
 

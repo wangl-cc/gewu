@@ -8,4 +8,4 @@ pub(crate) mod sort;
 pub(crate) mod view;
 
 pub(crate) use sort::sort_rows;
-pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo, ViewState};
+pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo};

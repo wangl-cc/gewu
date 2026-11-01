@@ -15,7 +15,7 @@ use crate::{
     predicate::CHUNK,
     query::sort_rows,
     scope::{RowScope, Selection},
-    Filter, Result, RowBlock, ViewInfo, ViewState,
+    Filter, QuerySpec, Result, RowBlock, ViewInfo,
 };
 
 impl Session {
@@ -30,12 +30,12 @@ impl Session {
 
     /// Compute and switch to a new view. A newer call cancels this one, in
     /// which case it returns [`crate::Error::Cancelled`] and the old view stays.
-    pub fn apply_view(&self, state: &ViewState) -> Result<ViewInfo> {
+    pub fn apply_view(&self, spec: &QuerySpec) -> Result<ViewInfo> {
         let token = self.views.begin();
-        let mut rows = self.select(&state.filters, None, &token)?;
+        let mut rows = self.select(&spec.filters, None, &token)?;
         token.check()?;
-        if !state.sort.is_empty() {
-            rows = self.sort(rows, state, &token)?;
+        if !spec.sort.is_empty() {
+            rows = self.sort(rows, spec, &token)?;
         }
         self.views.commit(&token, rows)
     }
@@ -88,9 +88,9 @@ impl Session {
             // every row, and counting in file order is faster.
             RowScope::Rows(rows) if rows.len() == total_rows => Selection::All(total_rows),
             RowScope::Rows(rows) => Selection::Rows(rows),
-            RowScope::Facet { state, except } => {
+            RowScope::Facet { spec, except } => {
                 self.column(except)?;
-                let rows = self.select(&state.filters, Some(except), &CancelToken::never())?;
+                let rows = self.select(&spec.filters, Some(except), &CancelToken::never())?;
                 Selection::Rows(Arc::new(rows))
             }
         })
@@ -160,9 +160,9 @@ impl Session {
         Ok(rows)
     }
 
-    fn sort(&self, rows: Vec<u32>, state: &ViewState, token: &CancelToken) -> Result<Vec<u32>> {
-        let mut comparators = Vec::with_capacity(state.sort.len());
-        for key in &state.sort {
+    fn sort(&self, rows: Vec<u32>, spec: &QuerySpec, token: &CancelToken) -> Result<Vec<u32>> {
+        let mut comparators = Vec::with_capacity(spec.sort.len());
+        for key in &spec.sort {
             token.check()?;
             let array = self.column(key.column)?;
             comparators.push(make_comparator(
@@ -175,8 +175,8 @@ impl Session {
                 },
             )?);
         }
-        let primitive = if state.sort.len() == 1 {
-            let key = &state.sort[0];
+        let primitive = if spec.sort.len() == 1 {
+            let key = &spec.sort[0];
             let array = self.column(key.column)?;
             array
                 .data_type()

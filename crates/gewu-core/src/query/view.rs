@@ -40,9 +40,6 @@ impl QuerySpec {
     }
 }
 
-/// Backward-compatible alias for [`QuerySpec`].
-pub type ViewState = QuerySpec;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewInfo {
     pub version: u64,

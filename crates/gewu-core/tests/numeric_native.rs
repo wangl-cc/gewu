@@ -7,7 +7,7 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Document, Error, Filter, ViewState};
+use gewu_core::{Bound, Document, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 fn document(array: ArrayRef) -> Document {
@@ -20,16 +20,16 @@ fn document(array: ArrayRef) -> Document {
 }
 
 fn check_range(doc: &Document, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
-    let state = ViewState::single(0, Filter::Range {
+    let spec = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
         min,
         max,
     });
-    let view = doc.apply_view(&state).unwrap();
+    let view = doc.apply_view(&spec).unwrap();
     assert_eq!(
         doc.rows(view.version, 0, 100, &[0]).unwrap().source_rows,
         expected,
-        "type {:?}, state {state:?}",
+        "type {:?}, spec {spec:?}",
         doc.schema().field(0).data_type()
     );
 }
@@ -177,8 +177,8 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
         &[0, 1, 2, 3],
     );
 
-    signed.apply_view(&ViewState::default()).unwrap();
-    unsigned.apply_view(&ViewState::default()).unwrap();
+    signed.apply_view(&QuerySpec::default()).unwrap();
+    unsigned.apply_view(&QuerySpec::default()).unwrap();
     assert_eq!(signed.column_summary(0, 0).unwrap().distinct_count, 4);
     assert_eq!(unsigned.column_summary(0, 0).unwrap().distinct_count, 4);
 }

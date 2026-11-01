@@ -19,7 +19,7 @@ final class DocumentModel: ObservableObject {
     let kinds: [ColumnKind]
     let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedState = QuerySpec(sort: [], filters: [:])
+    @Published private(set) var appliedSpec = QuerySpec(sort: [], filters: [:])
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -69,7 +69,7 @@ final class DocumentModel: ObservableObject {
         export.choose(document: doc, view: current, columns: table.displayedColumns, source: url, window: window)
     }
 
-    var state: QuerySpec {
+    var spec: QuerySpec {
         QuerySpec(
             sort: sort,
             filters: columnFilters)
@@ -120,7 +120,7 @@ final class DocumentModel: ObservableObject {
         request &+= 1
         let mine = request
         gate.set(mine)
-        let state = state
+        let spec = spec
         let filterColumns = Set(columnFilters.keys)
         let worker = worker
         let gate = gate
@@ -135,7 +135,7 @@ final class DocumentModel: ObservableObject {
                             continuation.resume(throwing: CancellationError())
                             return
                         }
-                        do { continuation.resume(returning: try doc.applyView(spec: state)) } catch {
+                        do { continuation.resume(returning: try doc.applyView(spec: spec)) } catch {
                             continuation.resume(throwing: error)
                         }
                     }
@@ -143,7 +143,7 @@ final class DocumentModel: ObservableObject {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.copying.cancel()
                 self.appliedFilterColumns = filterColumns
-                self.appliedState = state
+                self.appliedSpec = spec
                 self.current = view
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil

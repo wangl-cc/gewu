@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::ViewState;
+use crate::QuerySpec;
 
 pub(crate) enum RowScope<'a> {
     /// Every row of the file.
@@ -10,24 +10,24 @@ pub(crate) enum RowScope<'a> {
     /// Exactly these source rows, e.g. a view's, each at most once. Their
     /// order does not matter to anything that counts them.
     Rows(Arc<Vec<u32>>),
-    /// Rows that pass `state`'s filters, ignoring the filters on column
+    /// Rows that pass `spec`'s filters, ignoring the filters on column
     /// `except` (like Excel: a column's own filter does not hide its values).
-    Facet { state: &'a ViewState, except: u32 },
+    Facet { spec: &'a QuerySpec, except: u32 },
 }
 
 impl<'a> RowScope<'a> {
     /// A facet with no other-column filters is the whole source; avoid
-    /// allocating a source-row list just because a UI supplied a state.
-    pub fn facet(state: Option<&'a ViewState>, column: u32) -> Self {
-        match state {
-            Some(state)
-                if state
+    /// allocating a source-row list just because a UI supplied a spec.
+    pub fn facet(spec: Option<&'a QuerySpec>, column: u32) -> Self {
+        match spec {
+            Some(spec)
+                if spec
                     .filters
                     .iter()
                     .any(|(&col, filters)| col != column && !filters.is_empty()) =>
             {
                 Self::Facet {
-                    state,
+                    spec,
                     except: column,
                 }
             }

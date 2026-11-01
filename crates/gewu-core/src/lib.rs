@@ -29,7 +29,7 @@ pub use file::{
 };
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
 pub(crate) use query::{engine, predicate, scope, selection};
-pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo, ViewState};
+pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo};
 pub use session::{Document, Session};
 pub(crate) use task::analysis;
 pub use task::{
