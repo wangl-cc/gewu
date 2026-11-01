@@ -42,7 +42,7 @@ where
     Box::new(move |row| {
         array.is_valid(row).then(|| {
             let value: f64 = array.value(row).into();
-            hash(crate::column::value::normalized_bits(value))
+            hash(crate::column::float::normalized_bits(value))
         })
     })
 }

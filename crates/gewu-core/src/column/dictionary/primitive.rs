@@ -4,7 +4,7 @@
 use std::{collections::HashMap, hash::Hash};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, PrimitiveArray},
+    array::Array,
     datatypes::{
         ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
         Decimal64Type, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -16,8 +16,8 @@ use arrow::{
     },
 };
 
-use super::{encode::value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
-use crate::column::value;
+use super::{value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
+use crate::column::float;
 
 /// How a primitive value becomes a codebook key.
 ///
@@ -80,7 +80,7 @@ impl PrimitiveKey for Float16Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        value::order_key(f64::from(value))
+        float::order_key(f64::from(value))
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -92,7 +92,7 @@ impl PrimitiveKey for Float32Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        value::order_key(f64::from(value))
+        float::order_key(f64::from(value))
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -104,7 +104,7 @@ impl PrimitiveKey for Float64Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        value::order_key(value)
+        float::order_key(value)
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -112,43 +112,9 @@ impl PrimitiveKey for Float64Type {
     }
 }
 
-/// Encode a primitive array by scanning its native values.
-pub(super) fn build_primitive<T: PrimitiveKey>(
-    array: &PrimitiveArray<T>,
-) -> Option<ValueDictionary> {
-    build_distinct(
-        array.len(),
-        |row| array.is_null(row),
-        |row| T::key(array.value(row)),
-        |row| T::prefers_representative(array.value(row)),
-        array,
-    )
-}
-
-/// Encode a boolean array. `false` sorts before `true`.
-pub(super) fn build_boolean(array: &ArrayRef) -> Option<ValueDictionary> {
-    let source = array.as_boolean();
-    build_distinct(
-        source.len(),
-        |row| source.is_null(row),
-        |row| u8::from(source.value(row)),
-        |_| false,
-        source,
-    )
-}
-
-/// Encode the Arrow null type: every row is null.
-pub(super) fn build_null(array: &ArrayRef) -> Option<ValueDictionary> {
-    Some(ValueDictionary {
-        codes: vec![NULL_CODE; array.len()],
-        values: value_rows(array.as_ref(), &[], &[])?,
-        has_null: !array.is_empty(),
-    })
-}
-
 /// Shared codebook algorithm: one native pass, one code per distinct key, then
 /// codes renumbered into key order.
-fn build_distinct<K: Copy + Eq + Ord + Hash>(
+pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
     len: usize,
     is_null: impl Fn(usize) -> bool,
     key_at: impl Fn(usize) -> K,

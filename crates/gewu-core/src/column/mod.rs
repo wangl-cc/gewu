@@ -3,7 +3,7 @@
 //! Type semantics live in [`crate::types`]; this module owns the column's data,
 //! its lazy distinct-value dictionary, and the per-column kernels:
 //! - [`dictionary`]: distinct-value codebook and streaming counts
-//! - [`value`]: value identity shared by grouping and analysis
+//! - [`float`]: floating-point value identity (signed zeros, NaN payloads)
 //! - [`filter`], [`stats`] and [`format`]
 //! - [`format`]: Cell and array formatting
 //! - [`index`]: Distinct value indexing and counting
@@ -12,9 +12,9 @@
 
 pub mod dictionary;
 pub mod filter;
+pub(crate) mod float;
 pub mod format;
 pub mod stats;
-pub(crate) mod value;
 
 use std::sync::{Arc, OnceLock};
 

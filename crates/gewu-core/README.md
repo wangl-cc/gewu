@@ -99,7 +99,7 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units and Find strategy. `column/filter`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
 
-[column/dictionary/](src/column/dictionary) owns the compact distinct-value codebook: native dictionaries reuse their keys and values, primitive arrays scan natively through one `PrimitiveKey` key function per physical type, and only text, binary and nested arrays use Arrow's row format. Its consumers call `counts`, `keys_for_labels`, `prepare_predicate` or the `counted` facade for streaming fallback; they never see codes or encoding strategy. Shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN) lives in [column/value.rs](src/column/value.rs) and is used by both the codebook and the values analysis.
+[column/dictionary/](src/column/dictionary) owns the compact distinct-value codebook: native dictionaries reuse their keys and values, primitive arrays scan natively through one `PrimitiveKey` key function per physical type, and only text, binary and nested arrays use Arrow's row format. Its consumers call `counts`, `keys_for_labels`, `prepare_predicate` or the `counted` facade for streaming fallback; they never see codes or encoding strategy. Shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN) lives in [column/float.rs](src/column/float.rs) and is used by both the codebook and the values analysis.
 
 ## Code map
 
@@ -121,7 +121,7 @@ Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `co
 | [predicate.rs](src/predicate.rs) | Prepared predicates, batch evaluation and intersection. |
 | [scope.rs](src/scope.rs) | Source, current-view and facet row selections. |
 | [column/dictionary/](src/column/dictionary) | Distinct-value codebook, stable keys, streaming counts and the native primitive encoders. |
-| [column/value.rs](src/column/value.rs) | Value identity shared by codebook grouping and the values analysis. |
+| [column/float.rs](src/column/float.rs) | Floating-point value identity (signed zeros, NaN payloads) shared by the codebook and the values analysis. |
 | [analysis.rs](src/analysis.rs) and [analysis/](src/analysis) | Independent analysis jobs, result types, length analysis and shared native numeric statistics. |
 | [scatter.rs](src/scatter.rs) | Bounded, deterministic scatter sampling with independent cancellation. |
 | [text_choices.rs](src/text_choices.rs) | Bounded string candidate sessions, page results and cursors. |

@@ -20,7 +20,7 @@ use arrow::{
 use super::{DistinctValue, CHUNK};
 use crate::{
     analysis::AnalysisContext,
-    column::{format, value},
+    column::{float, format},
     scope::Selection,
     Result,
 };
@@ -159,7 +159,7 @@ where
             NULL_KEY
         } else {
             let value: f64 = array.value(row).into();
-            value::normalized_bits(value)
+            float::normalized_bits(value)
         };
         counts.entry(key).or_insert((0, row as u32)).0 += 1;
     }

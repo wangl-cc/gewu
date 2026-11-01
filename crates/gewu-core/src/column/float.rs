@@ -1,12 +1,10 @@
-//! Value identity shared by every component that groups or orders values.
+//! Floating-point value identity: how floats group and order.
 //!
-//! The distinct-value codebook and the values analysis both group floating
-//! point values this way, so the rule has one definition.
-//!
-//! Floating-point value selection cannot distinguish signed zeros or NaN
-//! payloads meaningfully, so `-0.0`/`0.0` share one value and all NaNs share
-//! another. The distinct-value dictionary, streaming counts and the values
-//! analysis all use these functions instead of repeating the normalization.
+//! Value selection cannot distinguish signed zeros or NaN payloads
+//! meaningfully, so `-0.0`/`0.0` share one value and every NaN payload shares
+//! one NaN, which sorts after every number. The distinct-value codebook, its
+//! streaming counts and the values analysis all use these functions, so the
+//! rule has one definition.
 
 /// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
 /// every NaN payload groups into one NaN.
