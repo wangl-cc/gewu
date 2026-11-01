@@ -112,8 +112,10 @@ impl PrimitiveKey for Float64Type {
     }
 }
 
-/// Encode a primitive array by scanning native values.
-pub(super) fn build_keyed<T: PrimitiveKey>(array: &PrimitiveArray<T>) -> Option<ValueDictionary> {
+/// Encode a primitive array by scanning its native values.
+pub(super) fn build_primitive<T: PrimitiveKey>(
+    array: &PrimitiveArray<T>,
+) -> Option<ValueDictionary> {
     build_distinct(
         array.len(),
         |row| array.is_null(row),

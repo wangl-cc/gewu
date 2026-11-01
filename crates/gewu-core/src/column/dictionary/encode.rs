@@ -20,7 +20,7 @@ use arrow::{
 };
 
 use super::{
-    primitive::{build_boolean, build_keyed, build_null},
+    primitive::{build_boolean, build_null, build_primitive},
     ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
 
@@ -33,63 +33,65 @@ impl ValueDictionary {
             Dictionary(..) => Self::build_native(array),
             Boolean => build_boolean(array),
             Null => build_null(array),
-            Int8 => build_keyed(array.as_primitive::<Int8Type>()),
-            Int16 => build_keyed(array.as_primitive::<Int16Type>()),
-            Int32 => build_keyed(array.as_primitive::<Int32Type>()),
-            Int64 => build_keyed(array.as_primitive::<Int64Type>()),
-            UInt8 => build_keyed(array.as_primitive::<UInt8Type>()),
-            UInt16 => build_keyed(array.as_primitive::<UInt16Type>()),
-            UInt32 => build_keyed(array.as_primitive::<UInt32Type>()),
-            UInt64 => build_keyed(array.as_primitive::<UInt64Type>()),
-            Float16 => build_keyed(array.as_primitive::<Float16Type>()),
-            Float32 => build_keyed(array.as_primitive::<Float32Type>()),
-            Float64 => build_keyed(array.as_primitive::<Float64Type>()),
-            Date32 => build_keyed(array.as_primitive::<Date32Type>()),
-            Date64 => build_keyed(array.as_primitive::<Date64Type>()),
-            Time32(TimeUnit::Second) => build_keyed(array.as_primitive::<Time32SecondType>()),
+            Int8 => build_primitive(array.as_primitive::<Int8Type>()),
+            Int16 => build_primitive(array.as_primitive::<Int16Type>()),
+            Int32 => build_primitive(array.as_primitive::<Int32Type>()),
+            Int64 => build_primitive(array.as_primitive::<Int64Type>()),
+            UInt8 => build_primitive(array.as_primitive::<UInt8Type>()),
+            UInt16 => build_primitive(array.as_primitive::<UInt16Type>()),
+            UInt32 => build_primitive(array.as_primitive::<UInt32Type>()),
+            UInt64 => build_primitive(array.as_primitive::<UInt64Type>()),
+            Float16 => build_primitive(array.as_primitive::<Float16Type>()),
+            Float32 => build_primitive(array.as_primitive::<Float32Type>()),
+            Float64 => build_primitive(array.as_primitive::<Float64Type>()),
+            Date32 => build_primitive(array.as_primitive::<Date32Type>()),
+            Date64 => build_primitive(array.as_primitive::<Date64Type>()),
+            Time32(TimeUnit::Second) => build_primitive(array.as_primitive::<Time32SecondType>()),
             Time32(TimeUnit::Millisecond) => {
-                build_keyed(array.as_primitive::<Time32MillisecondType>())
+                build_primitive(array.as_primitive::<Time32MillisecondType>())
             }
             Time64(TimeUnit::Microsecond) => {
-                build_keyed(array.as_primitive::<Time64MicrosecondType>())
+                build_primitive(array.as_primitive::<Time64MicrosecondType>())
             }
             Time64(TimeUnit::Nanosecond) => {
-                build_keyed(array.as_primitive::<Time64NanosecondType>())
+                build_primitive(array.as_primitive::<Time64NanosecondType>())
             }
             Timestamp(TimeUnit::Second, _) => {
-                build_keyed(array.as_primitive::<TimestampSecondType>())
+                build_primitive(array.as_primitive::<TimestampSecondType>())
             }
             Timestamp(TimeUnit::Millisecond, _) => {
-                build_keyed(array.as_primitive::<TimestampMillisecondType>())
+                build_primitive(array.as_primitive::<TimestampMillisecondType>())
             }
             Timestamp(TimeUnit::Microsecond, _) => {
-                build_keyed(array.as_primitive::<TimestampMicrosecondType>())
+                build_primitive(array.as_primitive::<TimestampMicrosecondType>())
             }
             Timestamp(TimeUnit::Nanosecond, _) => {
-                build_keyed(array.as_primitive::<TimestampNanosecondType>())
+                build_primitive(array.as_primitive::<TimestampNanosecondType>())
             }
-            Duration(TimeUnit::Second) => build_keyed(array.as_primitive::<DurationSecondType>()),
+            Duration(TimeUnit::Second) => {
+                build_primitive(array.as_primitive::<DurationSecondType>())
+            }
             Duration(TimeUnit::Millisecond) => {
-                build_keyed(array.as_primitive::<DurationMillisecondType>())
+                build_primitive(array.as_primitive::<DurationMillisecondType>())
             }
             Duration(TimeUnit::Microsecond) => {
-                build_keyed(array.as_primitive::<DurationMicrosecondType>())
+                build_primitive(array.as_primitive::<DurationMicrosecondType>())
             }
             Duration(TimeUnit::Nanosecond) => {
-                build_keyed(array.as_primitive::<DurationNanosecondType>())
+                build_primitive(array.as_primitive::<DurationNanosecondType>())
             }
-            Decimal32(..) => build_keyed(array.as_primitive::<Decimal32Type>()),
-            Decimal64(..) => build_keyed(array.as_primitive::<Decimal64Type>()),
-            Decimal128(..) => build_keyed(array.as_primitive::<Decimal128Type>()),
-            Decimal256(..) => build_keyed(array.as_primitive::<Decimal256Type>()),
-            _ => Self::build_encoded(array),
+            Decimal32(..) => build_primitive(array.as_primitive::<Decimal32Type>()),
+            Decimal64(..) => build_primitive(array.as_primitive::<Decimal64Type>()),
+            Decimal128(..) => build_primitive(array.as_primitive::<Decimal128Type>()),
+            Decimal256(..) => build_primitive(array.as_primitive::<Decimal256Type>()),
+            _ => Self::build_row_format(array),
         }
     }
 
-    /// Generic encoder: discover distinct values by hashing rows, then write
-    /// one `u8` code per row. Row-format bytes give both equality and value
-    /// order.
-    fn build_encoded(array: &ArrayRef) -> Option<Self> {
+    /// Row-format fallback for text, binary and nested arrays: discover
+    /// distinct values by hashing rows, then write one `u8` code per row.
+    /// Row-format bytes give both equality and value order.
+    fn build_row_format(array: &ArrayRef) -> Option<Self> {
         let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
 
         // Temporary codes in order of first appearance, and each value's first
