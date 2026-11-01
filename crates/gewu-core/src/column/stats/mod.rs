@@ -170,8 +170,7 @@ fn statistics<H: Output>(
 ) -> Result<H> {
     context.check()?;
     let logical = crate::LogicalType::from_arrow(array.data_type());
-    let is_dict = matches!(array.data_type(), DataType::Dictionary(..));
-    if !logical.capabilities(is_dict).histogram {
+    if !logical.capabilities().histogram {
         return Err(Error::InvalidArgument(format!(
             "{} does not support histograms",
             array.data_type()

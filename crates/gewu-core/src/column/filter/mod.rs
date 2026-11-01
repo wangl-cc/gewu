@@ -5,10 +5,7 @@ pub mod range;
 pub mod scalar;
 pub mod text;
 
-use arrow::{
-    array::{Array, ArrayRef},
-    datatypes::DataType,
-};
+use arrow::array::{Array, ArrayRef};
 pub use range::Bound;
 
 use crate::{
@@ -28,13 +25,11 @@ pub(crate) fn prepare_find<'a>(
     if query.is_empty() {
         return Ok(None);
     }
-    if matches!(array.data_type(), DataType::Dictionary(..)) {
-        return nested::dictionary_find(array, |values| {
+    match logical_type {
+        LogicalType::Dictionary { .. } => nested::dictionary_find(array, |values| {
             let child_logical = LogicalType::from_arrow(values.data_type());
             prepare_find(values, &child_logical, query, matcher)
-        });
-    }
-    match logical_type {
+        }),
         LogicalType::Text => text::contains(array, query, false, matcher).map(Some),
         LogicalType::Integer { .. }
         | LogicalType::Float { .. }
@@ -103,11 +98,10 @@ fn prepare_value_filter<'a>(
     if let Filter::IsNull { negate } = filter {
         return Ok(is_null_predicate(array, *negate));
     }
-    if matches!(array.data_type(), DataType::Dictionary(..)) {
+    if matches!(logical_type, LogicalType::Dictionary { .. }) {
         return nested::dictionary(array, |values| {
             let child_logical = LogicalType::from_arrow(values.data_type());
-            let child_caps =
-                child_logical.capabilities(matches!(values.data_type(), DataType::Dictionary(..)));
+            let child_caps = child_logical.capabilities();
             prepare_filter(values, &child_logical, child_caps, filter).map(Some)
         })?
         .ok_or_else(|| {

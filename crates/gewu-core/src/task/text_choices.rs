@@ -47,7 +47,12 @@ impl TextChoices {
     /// Facet row IDs must be unique and ascending, as returned by Session's
     /// source-order filter scan. The selection and Arrow buffers are shared.
     pub(crate) fn new(array: ArrayRef, rows: Selection) -> Result<Self> {
-        if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
+        let is_text = match LogicalType::from_arrow(array.data_type()) {
+            LogicalType::Text => true,
+            LogicalType::Dictionary { value_type } => *value_type == LogicalType::Text,
+            _ => false,
+        };
+        if !is_text {
             return Err(Error::InvalidArgument(format!(
                 "{} is not a string column",
                 array.data_type()

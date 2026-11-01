@@ -35,6 +35,8 @@ pub enum LogicalType {
     List,
     /// Nested structures.
     Struct,
+    /// Categorical enumeration encoded as a dictionary of distinct values.
+    Dictionary { value_type: Box<LogicalType> },
     /// Unknown or rare physical types, preserving raw type name.
     Other { raw_name: String },
 }
@@ -70,7 +72,9 @@ impl LogicalType {
     pub fn from_arrow(data_type: &DataType) -> Self {
         use DataType::*;
         match data_type {
-            Dictionary(_, value) => Self::from_arrow(value),
+            Dictionary(_, value) => Self::Dictionary {
+                value_type: Box::new(Self::from_arrow(value)),
+            },
             Utf8 | LargeUtf8 | Utf8View => Self::Text,
             Int8 => Self::Integer {
                 bits: 8,
@@ -169,24 +173,38 @@ impl LogicalType {
 
     /// Whether this type supports equals or equals_any filters.
     pub fn supports_equals(&self) -> bool {
-        self.is_ordered() || matches!(self, Self::Boolean | Self::Text)
+        match self {
+            Self::Dictionary { value_type } => value_type.supports_equals(),
+            _ => self.is_ordered() || matches!(self, Self::Boolean | Self::Text),
+        }
     }
 
-    /// Complete capabilities for this logical type given whether physical storage is a dictionary.
-    pub fn capabilities(&self, is_dictionary: bool) -> ColumnCapabilities {
-        ColumnCapabilities {
-            contains: self.supports_contains(),
-            range: self.supports_range(),
-            histogram: self.supports_range() && !is_dictionary,
-            scatter: self.supports_range() && !is_dictionary,
-            logarithmic: self.supports_logarithmic() && !is_dictionary,
-            equals: self.supports_equals(),
+    /// Complete capabilities for this logical type.
+    pub fn capabilities(&self) -> ColumnCapabilities {
+        match self {
+            Self::Dictionary { value_type } => ColumnCapabilities {
+                contains: value_type.supports_contains(),
+                range: false,
+                histogram: false,
+                scatter: false,
+                logarithmic: false,
+                equals: value_type.supports_equals(),
+            },
+            _ => ColumnCapabilities {
+                contains: self.supports_contains(),
+                range: self.supports_range(),
+                histogram: self.supports_range(),
+                scatter: self.supports_range(),
+                logarithmic: self.supports_logarithmic(),
+                equals: self.supports_equals(),
+            },
         }
     }
 
     /// Normalized, concise display text for UI badges and type labels.
     pub fn display_name(&self) -> String {
         match self {
+            Self::Dictionary { value_type } => format!("dict<{}>", value_type.display_name()),
             Self::Text => "string".into(),
             Self::Integer { bits, signed } => {
                 format!("{}{bits}", if *signed { "int" } else { "uint" })
@@ -295,14 +313,21 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_strings_are_text() {
+    fn dictionary_types() {
         let t = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::LargeUtf8));
-        assert_eq!(LogicalType::from_arrow(&t), LogicalType::Text);
-        let int_dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64));
-        assert_eq!(LogicalType::from_arrow(&int_dict), LogicalType::Integer {
-            bits: 64,
-            signed: true
+        assert_eq!(LogicalType::from_arrow(&t), LogicalType::Dictionary {
+            value_type: Box::new(LogicalType::Text)
         });
+        let int_dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64));
+        assert_eq!(
+            LogicalType::from_arrow(&int_dict),
+            LogicalType::Dictionary {
+                value_type: Box::new(LogicalType::Integer {
+                    bits: 64,
+                    signed: true
+                })
+            }
+        );
     }
 
     #[test]
@@ -402,6 +427,13 @@ mod tests {
     #[test]
     fn display_name_formatting() {
         assert_eq!(LogicalType::Text.display_name(), "string");
+        assert_eq!(
+            LogicalType::Dictionary {
+                value_type: Box::new(LogicalType::Text)
+            }
+            .display_name(),
+            "dict<string>"
+        );
         assert_eq!(
             LogicalType::Integer {
                 bits: 64,

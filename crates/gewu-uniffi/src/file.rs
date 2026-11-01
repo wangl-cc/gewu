@@ -60,6 +60,9 @@ pub enum LogicalType {
     Binary,
     List,
     Struct,
+    Dictionary {
+        value_type: Box<LogicalType>,
+    },
     Other {
         raw_name: String,
     },
@@ -84,6 +87,9 @@ impl From<core::LogicalType> for LogicalType {
             core::LogicalType::Binary => Self::Binary,
             core::LogicalType::List => Self::List,
             core::LogicalType::Struct => Self::Struct,
+            core::LogicalType::Dictionary { value_type } => Self::Dictionary {
+                value_type: Box::new((*value_type).into()),
+            },
             core::LogicalType::Other { raw_name } => Self::Other { raw_name },
         }
     }

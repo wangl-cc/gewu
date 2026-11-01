@@ -82,13 +82,8 @@ impl Column {
     }
 
     #[inline]
-    pub fn is_dictionary(&self) -> bool {
-        matches!(self.array.data_type(), DataType::Dictionary(..))
-    }
-
-    #[inline]
     pub fn capabilities(&self) -> ColumnCapabilities {
-        self.logical_type.capabilities(self.is_dictionary())
+        self.logical_type.capabilities()
     }
 
     pub fn logical_data_type(&self) -> &DataType {
@@ -397,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_range_support_does_not_claim_histogram_support() {
+    fn dictionary_capabilities_are_discrete() {
         let array: ArrayRef = Arc::new(
             DictionaryArray::<Int8Type>::try_new(
                 Int8Array::from(vec![0]),
@@ -407,7 +402,7 @@ mod tests {
         );
         assert_eq!(col(array).capabilities(), ColumnCapabilities {
             contains: false,
-            range: true,
+            range: false,
             equals: true,
             histogram: false,
             scatter: false,

@@ -168,7 +168,12 @@ impl Session {
         spec: Option<&QuerySpec>,
     ) -> Result<crate::TextChoices> {
         let col = self.column(column)?;
-        if *col.logical_type() != LogicalType::Text {
+        let is_text = match col.logical_type() {
+            LogicalType::Text => true,
+            LogicalType::Dictionary { value_type } => **value_type == LogicalType::Text,
+            _ => false,
+        };
+        if !is_text {
             return Err(Error::InvalidArgument(
                 "text choices require a string column".into(),
             ));
