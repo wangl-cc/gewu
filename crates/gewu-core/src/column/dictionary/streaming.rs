@@ -18,12 +18,7 @@ use arrow::{
 };
 
 use super::{DistinctValue, CHUNK};
-use crate::{
-    analysis::AnalysisContext,
-    column::{float, format},
-    scope::Selection,
-    Result,
-};
+use crate::{analysis::AnalysisContext, column::format, scope::Selection, Result};
 
 /// Distinct values counted once, without keeping an index.
 pub(crate) struct ValueCounts {
@@ -159,7 +154,7 @@ where
             NULL_KEY
         } else {
             let value: f64 = array.value(row).into();
-            float::normalized_bits(value)
+            super::primitive::normalized_bits(value)
         };
         counts.entry(key).or_insert((0, row as u32)).0 += 1;
     }

@@ -30,6 +30,8 @@ mod encode;
 mod primitive;
 mod streaming;
 
+pub(crate) use primitive::normalized_bits;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
     /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].

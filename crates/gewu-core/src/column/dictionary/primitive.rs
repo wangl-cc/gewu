@@ -1,5 +1,5 @@
 //! Native primitive encoders. One `PrimitiveKey` key function per physical
-//! type; floats normalize signed zeros and NaN payloads.
+//! type, plus the floating-point value-identity rule those keys share.
 
 use std::{collections::HashMap, hash::Hash};
 
@@ -17,7 +17,6 @@ use arrow::{
 };
 
 use super::{value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
-use crate::column::float;
 
 /// How a primitive value becomes a codebook key.
 ///
@@ -76,11 +75,34 @@ identity_keys!(
     Decimal256Type => arrow::datatypes::i256,
 );
 
+/// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
+/// every NaN payload groups into one NaN.
+pub(crate) fn normalized_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0
+    } else if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+/// Order key of a normalized value. Unsigned comparison matches IEEE total
+/// order, with the shared zero between negatives and positives and NaN last.
+fn order_key(value: f64) -> u64 {
+    let bits = normalized_bits(value);
+    if bits & (1 << 63) != 0 {
+        !bits
+    } else {
+        bits | (1 << 63)
+    }
+}
+
 impl PrimitiveKey for Float16Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        float::order_key(f64::from(value))
+        order_key(f64::from(value))
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -92,7 +114,7 @@ impl PrimitiveKey for Float32Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        float::order_key(f64::from(value))
+        order_key(f64::from(value))
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -104,7 +126,7 @@ impl PrimitiveKey for Float64Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
-        float::order_key(value)
+        order_key(value)
     }
 
     fn prefers_representative(value: Self::Native) -> bool {
@@ -165,4 +187,49 @@ pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
         values: value_rows(array, &first_row, &order)?,
         has_null,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signed_zeros_group_together() {
+        assert_eq!(normalized_bits(0.0), normalized_bits(-0.0));
+        assert_eq!(order_key(0.0), order_key(-0.0));
+        assert_eq!(order_key(0.0), 1 << 63);
+    }
+
+    #[test]
+    fn nan_payloads_group_together() {
+        let payloads = [
+            f64::NAN,
+            f64::from_bits(f64::NAN.to_bits() | 1),
+            f64::from_bits(0x7ff8_0000_0000_0001),
+            f64::from_bits(0xfff8_0000_0000_0000),
+        ];
+        for value in payloads {
+            assert_eq!(normalized_bits(value), f64::NAN.to_bits());
+            assert_eq!(order_key(value), order_key(f64::NAN));
+        }
+    }
+
+    #[test]
+    fn order_key_orders_like_the_values() {
+        let values = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let keys: Vec<u64> = values.iter().copied().map(order_key).collect();
+        // Signed zeros share one option, so the sequence is non-decreasing
+        // rather than strictly increasing.
+        assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "{keys:?}");
+        assert_eq!(keys[2], keys[3]);
+        assert!(keys[0] < keys[1] && keys[4] < keys[5] && keys[5] < keys[6]);
+    }
 }
