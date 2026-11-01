@@ -2,17 +2,28 @@
 //!
 //! A [`ValueDictionary`] gives every source row a code naming its distinct
 //! value: codes `0..=254` name the non-null values in value order, and
-//! [`NULL_CODE`] names null. Everything about how a physical Arrow array
-//! becomes that dictionary lives here: native dictionaries reuse their keys and
-//! values, primitive arrays scan natively, and only text, binary and nested
-//! arrays fall back to Arrow's row format. Other modules consume the result
-//! through the methods below; they never see codes, values or encoding
-//! strategy.
+//! [`NULL_CODE`] names null.
 //!
-//! The dictionary is a pure function of the column data and is cached by
-//! [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`] non-null
-//! values are not encoded; callers fall back to streaming counts, which this
-//! module also provides through [`counted`].
+//! # Architecture
+//!
+//! Everything about how a physical Arrow array becomes that dictionary is
+//! organized into internal submodules:
+//! - [`build`]: Type-level router dispatching Arrow arrays to the appropriate encoding strategy
+//!   (native dictionary, primitives, boolean, row format).
+//! - [`kernel`]: Universal single-pass distinct extraction, sorting, and code renumbering
+//!   algorithms.
+//! - [`primitive`]: Specialized native scanners for primitive types and normalized total-order
+//!   float keys.
+//! - [`streaming`]: Streaming distinct counts for columns exceeding [`MAX_DISTINCT_VALUES`] via
+//!   [`streaming::count_values`].
+//!
+//! Other modules consume the dictionary through [`ValueDictionary::tally`] for
+//! frequency counting, [`ValueDictionary::values`] for distinct value arrays,
+//! and [`ValueDictionary::prepare_predicate`] for filter generation.
+//!
+//! The dictionary is a pure function of the column data and is lazily computed
+//! and cached by [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`]
+//! non-null values are not encoded; callers fall back to streaming counts.
 
 use std::sync::Arc;
 
@@ -20,7 +31,8 @@ use arrow::array::{Array, ArrayRef};
 
 use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
 
-mod encode;
+mod build;
+mod kernel;
 mod primitive;
 pub(crate) mod streaming;
 

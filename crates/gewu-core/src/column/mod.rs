@@ -3,11 +3,8 @@
 //! Type semantics live in [`crate::types`]; this module owns the column's data,
 //! its lazy distinct-value dictionary, and the per-column kernels:
 //! - [`dictionary`]: distinct-value dictionary and streaming counts
-//! - [`filter`], [`stats`] and [`format`]
-//! - [`format`]: Cell and array formatting
-//! - [`index`]: Distinct value indexing and counting
-//! - [`stats`]: Histograms and distributions
 //! - [`filter`]: Single-column filter and Find predicate compilation
+//! - [`stats`]: Histograms and distributions
 
 pub mod dictionary;
 pub mod filter;

@@ -10,7 +10,7 @@ use arrow::{
     datatypes::ArrowPrimitiveType,
 };
 
-use super::{encode::build_distinct, ValueDictionary};
+use super::{kernel::build_distinct, ValueDictionary};
 
 /// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
 /// every NaN payload groups into one NaN.
