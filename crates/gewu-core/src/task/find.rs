@@ -8,18 +8,14 @@ use std::{
     ops::Range,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
 };
 
 use arrow::array::ArrayRef;
+use regex::RegexBuilder;
 
-use crate::{
-    column::{Column, SearchQuery},
-    engine::CancelToken,
-    predicate::Predicate,
-    Error, Result,
-};
+use crate::{column::Column, engine::CancelToken, predicate::Predicate, Error, Result};
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;
@@ -60,6 +56,43 @@ impl FindOperation {
     }
 }
 
+/// A Find query prepared once per captured session. The parsed literal matcher
+/// is shared across text columns, so a page or highlight never recompiles it.
+pub(crate) struct FindQuery {
+    text: String,
+    matcher: OnceLock<std::result::Result<Arc<regex::Regex>, String>>,
+}
+
+impl FindQuery {
+    pub(crate) fn new(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            matcher: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Case-insensitive literal matcher for text columns, compiled at most once.
+    pub(crate) fn matcher(&self) -> Result<Arc<regex::Regex>> {
+        let matcher = self.matcher.get_or_init(|| {
+            RegexBuilder::new(&regex::escape(&self.text))
+                .case_insensitive(true)
+                .build()
+                .map(Arc::new)
+                .map_err(|error| error.to_string())
+        });
+        match matcher {
+            Ok(matcher) => Ok(matcher.clone()),
+            Err(error) => Err(Error::InvalidArgument(format!(
+                "cannot prepare text search: {error}"
+            ))),
+        }
+    }
+}
+
 /// A prepared query over a captured view and ordered column scope.
 ///
 /// The snapshot shares Arrow buffers and row IDs with its document. Cancellation
@@ -68,7 +101,7 @@ pub struct Find {
     columns: Vec<(u32, ArrayRef)>,
     rows: Arc<Vec<u32>>,
     version: u64,
-    query: SearchQuery,
+    query: FindQuery,
     cancellation: Arc<AtomicU64>,
     token: CancelToken,
 }
@@ -87,12 +120,13 @@ impl Find {
         version: u64,
         query: String,
     ) -> Result<Self> {
-        let query = SearchQuery::new(query.trim());
+        let query = FindQuery::new(query.trim());
         if query.text().is_empty() {
             return Err(Error::InvalidArgument("find query cannot be empty".into()));
         }
+        let matcher = query.matcher()?;
         for (_, array) in &columns {
-            drop(Column::new(array).prepare_search(&query)?);
+            drop(Column::new(array).prepare_find(query.text(), Some(&matcher))?);
         }
         let (token, cancellation) = CancelToken::independent();
         Ok(Self {
@@ -282,9 +316,10 @@ impl Find {
     }
 
     fn predicates(&self) -> Result<Vec<Option<Predicate<'_>>>> {
+        let matcher = self.query.matcher()?;
         self.columns
             .iter()
-            .map(|(_, array)| Column::new(array).prepare_search(&self.query))
+            .map(|(_, array)| Column::new(array).prepare_find(self.query.text(), Some(&matcher)))
             .collect()
     }
 

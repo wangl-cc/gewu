@@ -99,7 +99,7 @@ pub(super) fn contains<'a>(
     array: &'a ArrayRef,
     text: &str,
     case_sensitive: bool,
-    matcher: Option<Arc<regex::Regex>>,
+    matcher: Option<&regex::Regex>,
 ) -> Result<Predicate<'a>> {
     if matches!(
         array.data_type(),
@@ -111,7 +111,7 @@ pub(super) fn contains<'a>(
         }
         // If a session-wide matcher was provided, reuse it; otherwise compile one.
         let matcher = match matcher {
-            Some(m) => m,
+            Some(m) => Arc::new(m.clone()),
             None => Arc::new(
                 RegexBuilder::new(&regex::escape(text))
                     .case_insensitive(true)

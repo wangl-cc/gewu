@@ -10,56 +10,20 @@ mod nested;
 mod scalar;
 pub(crate) mod text;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::{
     array::{Array, ArrayRef},
     datatypes::DataType,
     util::display::ArrayFormatter,
 };
-use regex::RegexBuilder;
 
+pub use crate::dataset::kind::ColumnCapabilities;
+pub(crate) use crate::dataset::kind::FilterEditorKind;
 use crate::{
     format, predicate::Predicate, selection::RowSelection, value_index::ValueIndex, Error, Filter,
     LogicalType, Result,
 };
-
-/// A Find query prepared once per captured session. The parsed literal matcher
-/// is shared by every column, so a page or highlight never recompiles it.
-pub(crate) struct SearchQuery {
-    text: String,
-    matcher: OnceLock<std::result::Result<Arc<regex::Regex>, String>>,
-}
-
-impl SearchQuery {
-    pub(crate) fn new(text: &str) -> Self {
-        Self {
-            text: text.to_owned(),
-            matcher: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn text(&self) -> &str {
-        &self.text
-    }
-
-    /// The case-insensitive literal matcher, compiled at most once.
-    pub(crate) fn matcher(&self) -> Result<Arc<regex::Regex>> {
-        let matcher = self.matcher.get_or_init(|| {
-            RegexBuilder::new(&regex::escape(&self.text))
-                .case_insensitive(true)
-                .build()
-                .map(Arc::new)
-                .map_err(|error| error.to_string())
-        });
-        match matcher {
-            Ok(matcher) => Ok(matcher.clone()),
-            Err(error) => Err(Error::InvalidArgument(format!(
-                "cannot prepare text search: {error}"
-            ))),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
@@ -70,31 +34,8 @@ pub struct ColumnInfo {
     pub nullable: bool,
 }
 
-/// Operations supported by a column's logical type. Value-list availability
-/// additionally depends on cardinality and is reported by `DistinctResult`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColumnCapabilities {
-    pub contains: bool,
-    pub range: bool,
-    pub equals: bool,
-    /// Histograms currently require a directly stored numeric array.
-    pub histogram: bool,
-    /// Direct numeric and temporal arrays support approximate plot coordinates.
-    pub scatter: bool,
-    /// Direct numeric values support positive-only logarithmic charts.
-    pub logarithmic: bool,
-}
-
 /// Maximum source cardinality offered as a checkbox list.
 pub(crate) const CHOICE_LIMIT: usize = 500;
-
-#[derive(Clone, Copy)]
-pub(crate) enum FilterEditorKind {
-    Range,
-    Choices,
-    Contains,
-    NullOnly,
-}
 
 #[derive(Clone, Copy)]
 pub(crate) struct Column<'a> {
@@ -110,18 +51,12 @@ impl<'a> Column<'a> {
         LogicalType::from_arrow(self.array.data_type())
     }
 
+    pub(crate) fn is_dictionary(self) -> bool {
+        matches!(self.array.data_type(), DataType::Dictionary(..))
+    }
+
     pub(crate) fn capabilities(self) -> ColumnCapabilities {
-        let logical = self.logical_type();
-        let is_dict = matches!(self.array.data_type(), DataType::Dictionary(..));
-        ColumnCapabilities {
-            contains: !logical.is_ordered() && logical != LogicalType::Boolean,
-            range: logical.is_ordered(),
-            histogram: logical.is_ordered() && !is_dict,
-            scatter: logical.is_ordered() && !is_dict,
-            logarithmic: logical.supports_logarithmic() && !is_dict,
-            equals: logical.is_ordered()
-                || matches!(logical, LogicalType::Boolean | LogicalType::Text),
-        }
+        self.logical_type().capabilities(self.is_dictionary())
     }
 
     pub(crate) fn logical_data_type(self) -> &'a DataType {
@@ -133,37 +68,30 @@ impl<'a> Column<'a> {
     }
 
     pub(crate) fn filter_editor(self, low_cardinality: bool) -> FilterEditorKind {
-        if low_cardinality {
-            FilterEditorKind::Choices
-        } else {
-            let cap = self.capabilities();
-            if cap.range {
-                FilterEditorKind::Range
-            } else if cap.contains {
-                FilterEditorKind::Contains
-            } else {
-                FilterEditorKind::NullOnly
-            }
-        }
+        self.logical_type()
+            .filter_editor(low_cardinality, self.is_dictionary())
     }
 
     pub(crate) fn formatter(self) -> Result<ArrayFormatter<'a>> {
         format::formatter(self.array.as_ref())
     }
 
-    pub(crate) fn prepare_search(self, query: &SearchQuery) -> Result<Option<Predicate<'a>>> {
-        if query.text().is_empty() {
+    /// Type-aware search for Find operations across all columns.
+    pub(crate) fn prepare_find(
+        self,
+        query: &str,
+        matcher: Option<&regex::Regex>,
+    ) -> Result<Option<Predicate<'a>>> {
+        if query.is_empty() {
             return Ok(None);
         }
-        if matches!(self.array.data_type(), DataType::Dictionary(..)) {
+        if self.is_dictionary() {
             return nested::dictionary_find(self.array, |values| {
-                Column::new(values).prepare_search(query)
+                Column::new(values).prepare_find(query, matcher)
             });
         }
         match self.logical_type() {
-            LogicalType::Text => {
-                text::contains(self.array, query.text(), false, Some(query.matcher()?)).map(Some)
-            }
+            LogicalType::Text => text::contains(self.array, query, false, matcher).map(Some),
             LogicalType::Integer { .. }
             | LogicalType::Float { .. }
             | LogicalType::Decimal { .. }
@@ -171,8 +99,8 @@ impl<'a> Column<'a> {
             | LogicalType::Date
             | LogicalType::Time
             | LogicalType::Timestamp { .. }
-            | LogicalType::Duration { .. } => scalar::search(self.array, query.text()),
-            LogicalType::List | LogicalType::Struct => nested::search(self.array, query),
+            | LogicalType::Duration { .. } => scalar::search(self.array, query),
+            LogicalType::List | LogicalType::Struct => nested::search(self.array, query, matcher),
             LogicalType::Binary | LogicalType::Interval | LogicalType::Other { .. } => Ok(None),
         }
     }
@@ -316,10 +244,7 @@ mod tests {
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
-        if let Some(test) = Column::new(array)
-            .prepare_search(&SearchQuery::new(query))
-            .unwrap()
-        {
+        if let Some(test) = Column::new(array).prepare_find(query, None).unwrap() {
             test.evaluate(range, &mut hits, &CancelToken::never())
                 .unwrap();
         }
@@ -559,7 +484,7 @@ mod tests {
         engine.cancel_pending();
         for array in arrays {
             let test = Column::new(&array)
-                .prepare_search(&SearchQuery::new("2"))
+                .prepare_find("2", None)
                 .unwrap()
                 .unwrap();
             assert!(matches!(

@@ -8,7 +8,7 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType},
 };
 
-use super::{Column, SearchQuery};
+use super::Column;
 use crate::{
     predicate::{Predicate, CHUNK},
     Result,
@@ -16,23 +16,24 @@ use crate::{
 
 pub(super) fn search<'a>(
     array: &'a ArrayRef,
-    query: &SearchQuery,
+    query: &str,
+    matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
     match array.data_type() {
-        DataType::Dictionary(..) => {
-            dictionary_find(array, |values| Column::new(values).prepare_search(query))
-        }
+        DataType::Dictionary(..) => dictionary_find(array, |values| {
+            Column::new(values).prepare_find(query, matcher)
+        }),
         DataType::List(_) => {
             let list = array.as_list::<i32>();
-            list_search(array, list.values(), list.value_offsets(), query)
+            list_search(array, list.values(), list.value_offsets(), query, matcher)
         }
         DataType::LargeList(_) => {
             let list = array.as_list::<i64>();
-            list_search(array, list.values(), list.value_offsets(), query)
+            list_search(array, list.values(), list.value_offsets(), query, matcher)
         }
         DataType::FixedSizeList(..) => {
             let list = array.as_fixed_size_list();
-            let Some(child) = Column::new(list.values()).prepare_search(query)? else {
+            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -42,7 +43,7 @@ pub(super) fn search<'a>(
         }
         DataType::ListView(_) => {
             let list = array.as_list_view::<i32>();
-            let Some(child) = Column::new(list.values()).prepare_search(query)? else {
+            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -52,7 +53,7 @@ pub(super) fn search<'a>(
         }
         DataType::LargeListView(_) => {
             let list = array.as_list_view::<i64>();
-            let Some(child) = Column::new(list.values()).prepare_search(query)? else {
+            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -65,7 +66,7 @@ pub(super) fn search<'a>(
                 .as_struct()
                 .columns()
                 .iter()
-                .map(|child| Column::new(child).prepare_search(query))
+                .map(|child| Column::new(child).prepare_find(query, matcher))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
@@ -176,9 +177,10 @@ fn list_search<'a, O: OffsetSizeTrait>(
     array: &'a ArrayRef,
     values: &'a ArrayRef,
     offsets: &'a [O],
-    query: &SearchQuery,
+    query: &str,
+    matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
-    let Some(child) = Column::new(values).prepare_search(query)? else {
+    let Some(child) = Column::new(values).prepare_find(query, matcher)? else {
         return Ok(None);
     };
     Ok(Some(elements(array, child, move |row| {

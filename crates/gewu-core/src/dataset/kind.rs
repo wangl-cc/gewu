@@ -39,6 +39,29 @@ pub enum LogicalType {
     Other { raw_name: String },
 }
 
+/// Operations supported by a column's logical type. Value-list availability
+/// additionally depends on cardinality and is reported by `DistinctResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnCapabilities {
+    pub contains: bool,
+    pub range: bool,
+    pub equals: bool,
+    /// Histograms currently require a directly stored numeric array.
+    pub histogram: bool,
+    /// Direct numeric and temporal arrays support approximate plot coordinates.
+    pub scatter: bool,
+    /// Direct numeric values support positive-only logarithmic charts.
+    pub logarithmic: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FilterEditorKind {
+    Range,
+    Choices,
+    Contains,
+    NullOnly,
+}
+
 impl LogicalType {
     /// From Arrow DataType conversion (masks storage differences while retaining logical
     /// parameters).
@@ -130,6 +153,50 @@ impl LogicalType {
             self,
             Self::Integer { .. } | Self::Float { .. } | Self::Decimal { .. }
         )
+    }
+
+    /// Whether this type supports substring or element contains search.
+    pub fn supports_contains(&self) -> bool {
+        !self.is_ordered() && *self != Self::Boolean
+    }
+
+    /// Whether this type supports ordered range filters.
+    pub fn supports_range(&self) -> bool {
+        self.is_ordered()
+    }
+
+    /// Whether this type supports equals or equals_any filters.
+    pub fn supports_equals(&self) -> bool {
+        self.is_ordered() || matches!(self, Self::Boolean | Self::Text)
+    }
+
+    /// Complete capabilities for this logical type given whether physical storage is a dictionary.
+    pub fn capabilities(&self, is_dictionary: bool) -> ColumnCapabilities {
+        ColumnCapabilities {
+            contains: self.supports_contains(),
+            range: self.supports_range(),
+            histogram: self.supports_range() && !is_dictionary,
+            scatter: self.supports_range() && !is_dictionary,
+            logarithmic: self.supports_logarithmic() && !is_dictionary,
+            equals: self.supports_equals(),
+        }
+    }
+
+    /// Preferred filter editor kind for this logical type.
+    pub(crate) fn filter_editor(
+        &self,
+        low_cardinality: bool,
+        _is_dictionary: bool,
+    ) -> FilterEditorKind {
+        if low_cardinality {
+            FilterEditorKind::Choices
+        } else if self.supports_range() {
+            FilterEditorKind::Range
+        } else if self.supports_contains() {
+            FilterEditorKind::Contains
+        } else {
+            FilterEditorKind::NullOnly
+        }
     }
 
     /// Normalized, concise display text for UI badges and type labels.
