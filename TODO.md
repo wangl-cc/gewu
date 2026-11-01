@@ -288,3 +288,17 @@
 
 - [ ] **T51 — 保持安装、签名与分发状态准确**【文档】
   - 如实说明当前发布产物、签名／公证状态及针对下载来源的隔离属性处理方法，路径不限定在 Applications。Developer ID、公证或 Homebrew 分发在实际具备后再写成已支持；验证现有下载与说明链接。
+
+### 2.5 重构收尾与开发者文档
+
+本节面向开发者的架构与契约文档，区别于 2.1–2.4 的产品说明；渐进重构收尾时再集中重写，并与最终命名一并定稿。
+
+- [ ] **T53 — 按最终命名重写 Core 与 FFI 文档**【文档、脆弱性】
+  - **依据**：重构期间文档未随代码同步。`crates/gewu-core/README.md` 仍有 8 处 `Document::` 接口名和 1 处“以 `Document` 别名保留”的说明（Rust 侧别名已删除），Code map 的 23 条路径引用中 21 条已指向不存在的路径（仅 `column/`、`file/` 仍存在）；`crates/gewu-uniffi/README.md` 只做了机械改名，尚未与最终契约核对。`docs/data-types.md`、`search-and-filter.md`、`file-formats.md` 描述的是重构未改变的行为，目前没有旧符号残留，不需要重写。
+  - **方向**：在命名冻结之后再动笔：Rust 侧确定使用 `Session` 且不复留 `Document` 别名，按 T54 处理 Swift／FFI 的 `GewuDocument` 过渡别名，并确认 `QuerySpec`、`Filter`、`Column` 的公开面及 `LogicalType::Dictionary`。Core README 按执行路径组织（打开 `Dataset` → 视图 `Session` 与版本发布 → `QuerySpec` 与谓词执行 → 行读取与导出 → `task/` 长任务及其取消），Code map 按新目录重画，`pub(crate)` 模块不作为公开契约描述；FFI README 的对象表、调用顺序和取消作用域与 Core 对齐；`docs/*.md` 只校订受影响的表述，不重写产品行为说明。同一次变更改正错误的别名说明，并把该文档重写作为重构收尾的完成条件。
+  - **验收**：markdownlint 通过；旧符号清单（`Document::`、`GewuDocument`、`ViewState`、`FilterEditorKind`、`is_dictionary`、`value_index` 及不存在的 `src/*.rs` 路径）grep 结果为零；README 中的相对链接和锚点可达；文档中的 API 名与模块路径和最终代码一一对应；交付说明中列出刻意未改动的用户文档及理由。
+
+- [ ] **T54 — 收敛 Swift 端 `GewuDocument` 过渡别名**【脆弱性】
+  - **依据**：Rust 侧已删除 `Document` 别名，App 中 `GewuDocument` 出现 24 次（含 `DocumentModel.swift` 中的 `typealias` 定义本身）、`GewuSession` 出现 11 次，同一类型存在两个名字；若不处理，T53 无法确定文档应使用哪个名字，后续 UI 改动也会继续分叉。
+  - **方向**：在 FFI 命名定案后统一为一个名字（优先 `GewuSession`），同步 `DocumentModel`、`WorkbookModel`、`FindModel`、`InspectorModel`、`Table/` 与 `Charts/` 等消费方及 `app/README.md` 的说明；如确有保留理由，写明原因与期限，不默认长期并存。只改 Swift 消费方，不手工编辑生成的绑定。
+  - **验收**：App 中同一类型只出现一个公开名字（或别名有明确记录的理由）；`xcodebuild` 构建与 `GewuTests` 通过，`swift-format` lint 通过；`app/README.md`、FFI README 与 Swift 代码的命名一致。
