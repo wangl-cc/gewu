@@ -38,9 +38,10 @@ pub struct Column {
 }
 
 impl Column {
-    pub fn new(name: impl Into<String>, array: ArrayRef, nullable: bool) -> Self {
+    pub fn new(name: impl Into<String>, array: ArrayRef) -> Self {
         let logical_type = LogicalType::from_arrow(array.data_type());
         let len = array.len();
+        let nullable = array.is_nullable();
         Self {
             name: name.into(),
             logical_type,
@@ -177,7 +178,7 @@ mod tests {
     };
 
     fn col(array: ArrayRef) -> Column {
-        Column::new("test", array, true)
+        Column::new("test", array)
     }
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {

@@ -54,7 +54,7 @@ impl Dataset {
         let columns = (0..batch.num_columns())
             .map(|i| {
                 let field = schema.field(i);
-                Column::new(field.name(), batch.column(i).clone(), field.is_nullable())
+                Column::new(field.name(), batch.column(i).clone())
             })
             .collect();
 

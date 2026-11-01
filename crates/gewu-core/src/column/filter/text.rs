@@ -221,7 +221,7 @@ mod tests {
         ]));
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(3), Some(0)]);
         let array: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
-        let column = Column::new("test", array.clone(), true);
+        let column = Column::new("test", array.clone());
         for exclude in [false, true] {
             let filter = Filter::TextValues {
                 values: vec![Some("a".into()), None, Some("a".into()), None],
