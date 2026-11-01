@@ -9,8 +9,7 @@ use arrow::{
 
 use super::Session;
 use crate::{
-    column::Column,
-    dataset::format,
+    column::format,
     engine::CancelToken,
     predicate::CHUNK,
     query::sort_rows,
@@ -55,11 +54,11 @@ impl Session {
 
         let arrays: Vec<&ArrayRef> = columns
             .iter()
-            .map(|&c| &self.dataset.columns[c as usize])
+            .map(|&c| &self.dataset.columns[c as usize].array)
             .collect();
-        let formatters = arrays
+        let formatters = columns
             .iter()
-            .map(|a| Column::new(a).formatter())
+            .map(|&c| self.dataset.columns[c as usize].formatter())
             .collect::<Result<Vec<_>>>()?;
 
         let mut cells = Vec::with_capacity(source_rows.len() * columns.len());
@@ -164,7 +163,7 @@ impl Session {
         let mut comparators = Vec::with_capacity(spec.sort.len());
         for key in &spec.sort {
             token.check()?;
-            let array = self.column(key.column)?;
+            let array = self.column_array(key.column)?;
             comparators.push(make_comparator(
                 array.as_ref(),
                 array.as_ref(),
@@ -177,7 +176,7 @@ impl Session {
         }
         let primitive = if spec.sort.len() == 1 {
             let key = &spec.sort[0];
-            let array = self.column(key.column)?;
+            let array = self.column_array(key.column)?;
             array
                 .data_type()
                 .is_primitive()

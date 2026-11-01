@@ -12,8 +12,9 @@ use arrow::{
 };
 
 use crate::{
-    column::histogram, format, scope::Selection, DistinctValue, Error, Histogram, LogicalType,
-    Result,
+    column::{format, stats},
+    scope::Selection,
+    DistinctValue, Error, Histogram, LogicalType, Result,
 };
 
 mod lengths;
@@ -34,7 +35,7 @@ pub struct ColumnSummary {
     /// Distinct non-null values.
     pub distinct_count: u64,
     /// Numbers, dates and times only (dates and times as their physical
-    /// value; see `Document::format_value`). These f64 results can approximate
+    /// value; see `Session::format_value`). These f64 results can approximate
     /// large integers and decimals; distinct counts use the native values.
     pub min: Option<f64>,
     pub max: Option<f64>,
@@ -262,7 +263,7 @@ impl ColumnAnalysis {
                 }
             }
             AnalysisSection::Distribution => AnalysisData::Distribution {
-                histogram: histogram::counts_scaled_with_context(
+                histogram: stats::counts_scaled_with_context(
                     &self.array,
                     &self.rows,
                     self.histogram_bins,

@@ -15,7 +15,7 @@ use super::scalar::{
     decimal::{Endpoint, Literal},
     float, integer, temporal,
 };
-use crate::{format, predicate::Predicate, Error, LogicalType, Result};
+use crate::{column::format, predicate::Predicate, Error, LogicalType, Result};
 
 /// A parsed endpoint for one column's logical type. Construct through [`Self::parse`]
 /// for text inputs or a native constructor for numerical controls. Bounds are

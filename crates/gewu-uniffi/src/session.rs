@@ -42,7 +42,7 @@ impl GewuSession {
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, GewuError> {
         Ok(Arc::new(Self {
-            inner: core::Document::open(path)?,
+            inner: core::Session::open(path)?,
         }))
     }
 
@@ -60,7 +60,7 @@ impl GewuSession {
             ..core::OpenOptions::default()
         };
         Ok(Arc::new(Self {
-            inner: core::Document::open_with_options(path, &options)?,
+            inner: core::Session::open_with_options(path, &options)?,
         }))
     }
 
@@ -75,7 +75,7 @@ impl GewuSession {
             ..core::OpenOptions::default()
         };
         Ok(Arc::new(Self {
-            inner: core::Document::open_with_options(path, &options)?,
+            inner: core::Session::open_with_options(path, &options)?,
         }))
     }
 

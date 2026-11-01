@@ -18,7 +18,9 @@ impl Session {
                 if !seen.insert(column) {
                     return Err(Error::InvalidArgument("duplicate find column".into()));
                 }
-                self.column(column).cloned().map(|array| (column, array))
+                self.column_array(column)
+                    .cloned()
+                    .map(|array| (column, array))
             })
             .collect::<Result<Vec<_>>>()?;
         Find::new(columns, view.rows.clone(), version, query.to_owned())

@@ -163,8 +163,8 @@ impl From<FileType> for core::FileType {
     }
 }
 
-impl From<&core::Document> for FileInfo {
-    fn from(document: &core::Document) -> Self {
+impl From<&core::Session> for FileInfo {
+    fn from(document: &core::Session) -> Self {
         let i = document.info();
         let mut info = FileInfo {
             path: i.path.clone(),

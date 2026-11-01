@@ -6,11 +6,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, QuerySpec};
+use gewu_core::{Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
-fn sample(tag: &str) -> (PathBuf, Document) {
+fn sample(tag: &str) -> (PathBuf, Session) {
     let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
     let labels: ArrayRef = Arc::new(StringArray::from(vec![
         Some("cat"),
@@ -39,7 +39,7 @@ fn sample(tag: &str) -> (PathBuf, Document) {
     write(tag, &batch)
 }
 
-fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Document) {
+fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Session) {
     let path = std::env::temp_dir().join(format!(
         "gewu-facets-{tag}-{}-{:?}.parquet",
         std::process::id(),
@@ -49,11 +49,11 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Document) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(batch).unwrap();
     w.close().unwrap();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     (path, doc)
 }
 
-fn labels_of(doc: &Document, column: u32, spec: Option<&QuerySpec>) -> Vec<(String, u64)> {
+fn labels_of(doc: &Session, column: u32, spec: Option<&QuerySpec>) -> Vec<(String, u64)> {
     doc.distinct_values(column, spec, 100)
         .unwrap()
         .values
@@ -64,7 +64,7 @@ fn labels_of(doc: &Document, column: u32, spec: Option<&QuerySpec>) -> Vec<(Stri
 
 /// label in {cat, dog}, price >= 2, and a search for "a" (names a only;
 /// labels cat; no prices or ids contain it as a value).
-fn busy_spec(doc: &Document) -> QuerySpec {
+fn busy_spec(doc: &Session) -> QuerySpec {
     let keys = doc
         .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
         .unwrap();

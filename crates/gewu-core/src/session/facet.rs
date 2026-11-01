@@ -2,29 +2,28 @@
 
 use super::Session;
 use crate::{
-    column::{histogram, Column, FilterEditorKind},
+    column::{index::count_values, stats, FilterEditorKind, LogicalType},
     predicate::Predicate,
     scope::RowScope,
-    value_index::count_values,
-    DistinctResult, Error, Filter, Histogram, LogicalType, QuerySpec, Result,
+    DistinctResult, Error, Filter, Histogram, QuerySpec, Result,
 };
 
 impl Session {
     /// Parse text once at the input boundary, retaining the column's full type.
     pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
-        crate::Bound::parse(Column::new(self.column(column)?).logical_data_type(), text)
+        self.column(column)?.parse_bound(text)
     }
 
     pub fn make_bound_i64(&self, column: u32, value: i64) -> Result<crate::Bound> {
-        crate::Bound::from_i64(Column::new(self.column(column)?).logical_data_type(), value)
+        self.column(column)?.make_bound_i64(value)
     }
 
     pub fn make_bound_u64(&self, column: u32, value: u64) -> Result<crate::Bound> {
-        crate::Bound::from_u64(Column::new(self.column(column)?).logical_data_type(), value)
+        self.column(column)?.make_bound_u64(value)
     }
 
     pub fn make_bound_f64(&self, column: u32, value: f64) -> Result<crate::Bound> {
-        crate::Bound::from_f64(Column::new(self.column(column)?).logical_data_type(), value)
+        self.column(column)?.make_bound_f64(value)
     }
 
     /// Decimal coefficient is transported as text to accommodate 256-bit values.
@@ -34,14 +33,7 @@ impl Session {
         coefficient: &str,
         scale: i8,
     ) -> Result<crate::Bound> {
-        let coefficient = coefficient
-            .parse::<arrow::datatypes::i256>()
-            .map_err(|_| Error::InvalidArgument("invalid decimal coefficient".into()))?;
-        crate::Bound::from_decimal(
-            Column::new(self.column(column)?).logical_data_type(),
-            coefficient,
-            scale,
-        )
+        self.column(column)?.make_bound_decimal(coefficient, scale)
     }
 
     /// Describe the filter editor using whole-column cardinality. Facet counts
@@ -74,17 +66,16 @@ impl Session {
             ));
         }
         use crate::{FilterEditor, FilterSpec};
-        let array = self.column(column)?;
-        let typed = Column::new(array);
-        if scale == crate::AxisScale::Log10 && !typed.capabilities().logarithmic {
+        let col = self.column(column)?;
+        if scale == crate::AxisScale::Log10 && !col.capabilities().logarithmic {
             return Err(Error::InvalidArgument(
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
         let editor_kind = self.dataset.filter_editor_kind(column)?;
-        if LogicalType::from_arrow(typed.logical_data_type()) == LogicalType::Text {
+        if *col.logical_type() == LogicalType::Text {
             return Ok(FilterSpec {
-                nullable: self.schema().field(column as usize).is_nullable(),
+                nullable: col.is_nullable(),
                 editor: FilterEditor::Text {
                     modes: vec![
                         crate::TextFilterMode::Choices,
@@ -108,15 +99,15 @@ impl Session {
             FilterEditorKind::Range => {
                 let rows = self.rows_in(RowScope::facet(spec, column))?;
                 FilterEditor::Range {
-                    logical_type: LogicalType::from_arrow(typed.logical_data_type()),
-                    distribution: histogram::build_scaled(array, &rows, bins, scale)?,
+                    logical_type: col.logical_type().clone(),
+                    distribution: stats::build_scaled(&col.array, &rows, bins, scale)?,
                 }
             }
             FilterEditorKind::Contains => FilterEditor::Contains,
             FilterEditorKind::NullOnly => FilterEditor::NullOnly,
         };
         Ok(FilterSpec {
-            nullable: self.schema().field(column as usize).is_nullable(),
+            nullable: col.is_nullable(),
             editor,
         })
     }
@@ -130,14 +121,14 @@ impl Session {
         column: u32,
         spec: Option<&QuerySpec>,
     ) -> Result<crate::TextChoices> {
-        let array = self.column(column)?;
-        if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
+        let col = self.column(column)?;
+        if *col.logical_type() != LogicalType::Text {
             return Err(Error::InvalidArgument(
                 "text choices require a string column".into(),
             ));
         }
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        crate::TextChoices::new(array.clone(), rows)
+        crate::TextChoices::new(col.array.clone(), rows)
     }
 
     /// Distinct values of a column with their counts, for the checkbox filter.
@@ -170,7 +161,8 @@ impl Session {
                 }
             }
             None => {
-                let counted = count_values(self.column(column)?, &rows, limit)?;
+                let col = self.column(column)?;
+                let counted = count_values(&col.array, &rows, limit)?;
                 DistinctResult {
                     total: counted.distinct,
                     truncated: counted.distinct > limit as u64,
@@ -185,9 +177,9 @@ impl Session {
     /// the range filter. With `spec`, counts only rows that pass the
     /// filters on *other* columns, like [`Self::distinct_values`].
     pub fn histogram(&self, column: u32, spec: Option<&QuerySpec>, bins: u32) -> Result<Histogram> {
-        let array = self.column(column)?;
+        let col = self.column(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        histogram::counts(array, &rows, bins)
+        stats::counts(&col.array, &rows, bins)
     }
 
     /// Distribution with exact inclusive bounds for each bin. Counts use the
@@ -200,9 +192,9 @@ impl Session {
         spec: Option<&QuerySpec>,
         bins: u32,
     ) -> Result<crate::RangeHistogram> {
-        let array = self.column(column)?;
+        let col = self.column(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        histogram::ranges(array, &rows, bins)
+        stats::ranges(&col.array, &rows, bins)
     }
 
     /// Validate and prepare an explicit filter without scanning data. Value-list
@@ -219,25 +211,24 @@ impl Session {
     }
 
     pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {
-        let column = Column::new(self.column(column_idx)?);
+        let col = self.column(column_idx)?;
         match filter {
             Filter::InValues { keys } => {
-                Ok(column.prepare_values(self.keyed_index(column_idx)?, keys))
+                Ok(col.prepare_values(self.keyed_index(column_idx)?, keys))
             }
             Filter::TextValues { values, exclude } => {
-                let array = self.column(column_idx)?;
-                if LogicalType::from_arrow(array.data_type()) != LogicalType::Text {
+                if *col.logical_type() != LogicalType::Text {
                     return Err(Error::InvalidArgument(format!(
                         "{} is not a string column",
-                        array.data_type()
+                        col.array.data_type()
                     )));
                 }
                 if let Some(index) = self.index(column_idx)? {
                     return Ok(index.prepare_text_predicate(values, *exclude));
                 }
-                column.prepare_filter(filter)
+                col.prepare_filter(filter)
             }
-            _ => column.prepare_filter(filter),
+            _ => col.prepare_filter(filter),
         }
     }
 }

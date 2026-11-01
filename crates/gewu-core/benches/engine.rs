@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{AnalysisSection, Document, Filter, QuerySpec, SortKey};
+use gewu_core::{AnalysisSection, Filter, QuerySpec, Session, SortKey};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -26,7 +26,7 @@ fn bench_file() -> PathBuf {
     path
 }
 
-fn col(doc: &Document, name: &str) -> u32 {
+fn col(doc: &Session, name: &str) -> u32 {
     doc.column_index(name)
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
@@ -35,12 +35,12 @@ fn open(c: &mut Criterion) {
     let path = bench_file();
     let mut g = c.benchmark_group("open");
     g.sample_size(10);
-    g.bench_function("parquet_2m", |b| b.iter(|| Document::open(&path).unwrap()));
+    g.bench_function("parquet_2m", |b| b.iter(|| Session::open(&path).unwrap()));
     g.finish();
 }
 
 fn apply_view(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let (price, score, rating, label, city) = (
         col(&doc, "price"),
         col(&doc, "score"),
@@ -158,7 +158,7 @@ fn apply_view(c: &mut Criterion) {
 }
 
 fn rows(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
     let mut g = c.benchmark_group("rows");
 
@@ -178,7 +178,7 @@ fn rows(c: &mut Criterion) {
 
 fn facets(c: &mut Criterion) {
     let path = bench_file();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     let (label, city, id, price) = (
         col(&doc, "label"),
         col(&doc, "city"),
@@ -204,7 +204,7 @@ fn facets(c: &mut Criterion) {
     ] {
         g.bench_function(format!("distinct_cold_{name}"), |b| {
             b.iter_batched(
-                || Document::open(&path).unwrap(),
+                || Session::open(&path).unwrap(),
                 |doc| doc.distinct_values(column, None, 10_000).unwrap(),
                 BatchSize::PerIteration,
             )
@@ -239,7 +239,7 @@ fn facets(c: &mut Criterion) {
     // (`column_stats` before it was merged into the summary).
     g.bench_function("stats_price_cold", |b| {
         b.iter_batched(
-            || Document::open(&path).unwrap(),
+            || Session::open(&path).unwrap(),
             |doc| doc.column_summary(price, 8).unwrap(),
             BatchSize::PerIteration,
         )
@@ -248,7 +248,7 @@ fn facets(c: &mut Criterion) {
 }
 
 fn inspector_values(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let mut group = c.benchmark_group("inspector_values");
     group.sample_size(10);
     for name in ["label", "id", "uuid"] {

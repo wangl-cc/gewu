@@ -8,7 +8,7 @@ use arrow::{
 };
 use regex::RegexBuilder;
 
-use crate::{format, predicate::Predicate, selection::RowSelection, Error, Result};
+use crate::{column::format, predicate::Predicate, selection::RowSelection, Error, Result};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.
@@ -221,12 +221,13 @@ mod tests {
         ]));
         let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(3), Some(0)]);
         let array: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
+        let column = Column::new("test", array.clone(), true);
         for exclude in [false, true] {
             let filter = Filter::TextValues {
                 values: vec![Some("a".into()), None, Some("a".into()), None],
                 exclude,
             };
-            let test = Column::new(&array).prepare_filter(&filter).unwrap();
+            let test = column.prepare_filter(&filter).unwrap();
             let mut actual = vec![false; array.len()];
             test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
                 .unwrap();

@@ -54,6 +54,16 @@ pub struct ColumnCapabilities {
     pub logarithmic: bool,
 }
 
+/// Metadata describing a single column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub logical_type: LogicalType,
+    pub display_type: String,
+    pub technical_type: String,
+    pub nullable: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum FilterEditorKind {
     Range,

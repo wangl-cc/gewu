@@ -7,17 +7,17 @@ use arrow::{
     datatypes::DataType,
 };
 use gewu_core::{
-    Bound, Document, Error, Filter, FilterEditor, LogicalType, QuerySpec, TextFilterMode,
+    Bound, Error, Filter, FilterEditor, LogicalType, QuerySpec, Session, TextFilterMode,
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> Document {
+fn document(columns: Vec<(&str, ArrayRef)>) -> Session {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Session::open(file.path()).unwrap()
 }
 
 #[test]

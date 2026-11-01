@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Filter, FilterEditor, QuerySpec};
+use gewu_core::{Filter, FilterEditor, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
-fn document() -> Document {
+fn document() -> Session {
     let score: ArrayRef = Arc::new(Float64Array::from(vec![
         None,
         Some(1.0),
@@ -40,10 +40,10 @@ fn document() -> Document {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Session::open(file.path()).unwrap()
 }
 
-fn range(doc: &Document, include_nulls: bool) -> Filter {
+fn range(doc: &Session, include_nulls: bool) -> Filter {
     Filter::Range {
         min: Some(doc.parse_bound(0, "1").unwrap()),
         max: Some(doc.parse_bound(0, "2").unwrap()),
@@ -59,7 +59,7 @@ fn contains(include_nulls: bool) -> Filter {
     }
 }
 
-fn rows(doc: &Document, spec: QuerySpec) -> Vec<u64> {
+fn rows(doc: &Session, spec: QuerySpec) -> Vec<u64> {
     let view = doc.apply_view(&spec).unwrap();
     doc.rows(view.version, 0, 20, &[0, 1]).unwrap().source_rows
 }

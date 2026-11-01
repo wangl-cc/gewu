@@ -5,13 +5,15 @@ use std::{path::Path, sync::Arc};
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use crate::{
-    dataset::Dataset, engine::ViewEngine, value_index::ValueIndex, ColumnCapabilities, FileInfo,
-    OpenOptions, Result,
+    column::{Column, ColumnCapabilities, ValueIndex},
+    dataset::Dataset,
+    engine::ViewEngine,
+    FileInfo, OpenOptions, Result,
 };
 
 mod analysis;
 mod export;
-mod filter;
+mod facet;
 mod find;
 mod query;
 
@@ -21,9 +23,6 @@ pub struct Session {
     dataset: Arc<Dataset>,
     views: ViewEngine,
 }
-
-/// Backward-compatible alias for [`Session`].
-pub type Document = Session;
 
 impl Session {
     /// Open a supported file using its format's default options.
@@ -86,7 +85,7 @@ impl Session {
         self.dataset.column_capabilities(column)
     }
 
-    // ---- internal helpers for document submodules ----
+    // ---- internal helpers for session submodules ----
 
     #[inline]
     pub fn n_rows(&self) -> usize {
@@ -94,8 +93,13 @@ impl Session {
     }
 
     #[inline]
-    pub(crate) fn column(&self, c: u32) -> Result<&ArrayRef> {
+    pub(crate) fn column(&self, c: u32) -> Result<&Column> {
         self.dataset.column(c)
+    }
+
+    #[inline]
+    pub(crate) fn column_array(&self, c: u32) -> Result<&ArrayRef> {
+        Ok(&self.dataset.column(c)?.array)
     }
 
     #[inline]

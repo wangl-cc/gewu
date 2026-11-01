@@ -8,12 +8,8 @@ pub(super) mod temporal;
 
 use arrow::array::{Array, ArrayRef, AsArray};
 
-use crate::{
-    column::bound::{prepare_range, Bound},
-    predicate::Predicate,
-    selection::RowSelection,
-    Error, LogicalType, Result,
-};
+use super::range::{prepare_range, Bound};
+use crate::{predicate::Predicate, selection::RowSelection, Error, LogicalType, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let text = text.trim();

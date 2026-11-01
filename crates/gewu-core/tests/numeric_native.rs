@@ -7,19 +7,19 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Document, Error, Filter, QuerySpec};
+use gewu_core::{Bound, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
-fn document(array: ArrayRef) -> Document {
+fn document(array: ArrayRef) -> Session {
     let file = tempfile::NamedTempFile::new().unwrap();
     let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Session::open(file.path()).unwrap()
 }
 
-fn check_range(doc: &Document, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
+fn check_range(doc: &Session, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
     let spec = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
         min,

@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, Document, Error, Filter, QuerySpec, SortKey, MAX_FIND_HIGHLIGHT_ROWS,
+    CellMatch, Error, Filter, QuerySpec, Session, SortKey, MAX_FIND_HIGHLIGHT_ROWS,
     MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Document) {
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(file.path()).unwrap();
+    let doc = Session::open(file.path()).unwrap();
     (file, doc)
 }
 

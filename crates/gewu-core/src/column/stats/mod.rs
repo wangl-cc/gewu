@@ -166,7 +166,9 @@ fn statistics<H: Output>(
     context: &AnalysisContext,
 ) -> Result<H> {
     context.check()?;
-    if !super::Column::new(array).capabilities().histogram {
+    let logical = crate::LogicalType::from_arrow(array.data_type());
+    let is_dict = matches!(array.data_type(), DataType::Dictionary(..));
+    if !logical.capabilities(is_dict).histogram {
         return Err(Error::InvalidArgument(format!(
             "{} does not support histograms",
             array.data_type()
@@ -630,8 +632,9 @@ mod tests {
         assert!(result.ranges.first().unwrap().min.is_none());
         assert!(result.ranges.last().unwrap().max.is_none());
         let mut selected = vec![0_u32; array.len()];
+        let column = Column::new("test", array.clone(), true);
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
-            let predicate = Column::new(&array)
+            let predicate = column
                 .prepare_filter(&Filter::Range {
                     include_nulls: false,
                     min: bounds.min.clone(),

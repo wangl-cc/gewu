@@ -22,7 +22,7 @@ pub enum Filter {
         include_nulls: bool,
     },
     /// Keep rows whose value is one of `keys` (keys come from
-    /// [`crate::Document::distinct_values`]). This is the Excel-style
+    /// [`crate::Session::distinct_values`]). This is the Excel-style
     /// checkbox filter.
     InValues { keys: Vec<u64> },
     /// Exact, case-sensitive string values without a distinct-value index.

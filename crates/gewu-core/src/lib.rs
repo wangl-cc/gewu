@@ -1,12 +1,11 @@
 //! Data engine for gewu, a read-only table viewer.
 //!
-//! The Mac app talks to a [`Document`] through UniFFI. A document owns the
-//! decoded data and a current view: the list of source rows to show, in
-//! display order. Sorting and filtering never move data; they only produce a
-//! new list of row numbers.
+//! The Mac app talks to a [`Session`] through UniFFI. A session manages active views,
+//! filters, and display order over an immutable in-memory [`Dataset`]. Sorting and
+//! filtering never move data; they only produce a new list of row numbers.
 
-mod column;
-mod dataset;
+pub mod column;
+pub mod dataset;
 mod error;
 mod file;
 mod filter;
@@ -16,12 +15,10 @@ pub mod task;
 
 pub use arrow::datatypes::TimeUnit;
 pub use column::{
-    bound::Bound,
-    histogram::{Histogram, RangeBounds, RangeHistogram},
-    ColumnCapabilities, ColumnInfo,
+    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, Histogram,
+    LogicalType, RangeBounds, RangeHistogram,
 };
-pub(crate) use dataset::{format, value_index};
-pub use dataset::{AxisScale, Dataset, DistinctResult, DistinctValue, LogicalType};
+pub use dataset::{AxisScale, Dataset};
 pub use error::{Error, Result};
 pub use file::{
     xlsx_sheet_names, ExportOptions, FileInfo, FileMetadata, FileType, OpenOptions,
@@ -30,7 +27,7 @@ pub use file::{
 pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
 pub(crate) use query::{engine, predicate, scope, selection};
 pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo};
-pub use session::{Document, Session};
+pub use session::Session;
 pub(crate) use task::analysis;
 pub use task::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,

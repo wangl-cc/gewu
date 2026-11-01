@@ -8,10 +8,8 @@ use arrow::{
 use super::Session;
 use crate::{
     analysis::numeric::Numeric,
-    column::histogram,
-    format,
+    column::{format, index::count_values, stats},
     scope::{for_rows, RowScope, Selection},
-    value_index::count_values,
     ColumnSummary, Histogram, Result,
 };
 
@@ -27,9 +25,12 @@ impl Session {
         limit: u32,
     ) -> Result<crate::ScatterAnalysis> {
         let x = x_column
-            .map(|column| self.column(column).map(|array| (column, array.clone())))
+            .map(|column| {
+                self.column_array(column)
+                    .map(|array| (column, array.clone()))
+            })
             .transpose()?;
-        let y = (y_column, self.column(y_column)?.clone());
+        let y = (y_column, self.column_array(y_column)?.clone());
         let view = self.views.snapshot(version)?;
         crate::ScatterAnalysis::new(x, y, view.rows.clone(), version, limit)
     }
@@ -37,16 +38,16 @@ impl Session {
     /// Distribution over the displayed rows, including this column's own
     /// filters and the text search. The axis still spans the source column.
     pub fn view_histogram(&self, version: u64, column: u32, bins: u32) -> Result<Histogram> {
-        let array = self.column(column)?;
+        let col = self.column(column)?;
         let view = self.views.snapshot(version)?;
         let rows = self.rows_in(RowScope::Rows(view.rows.clone()))?;
-        histogram::counts(array, &rows, bins)
+        stats::counts(&col.array, &rows, bins)
     }
 
     /// Available analysis sections, determined from type metadata without scanning rows.
     pub fn analysis_capabilities(&self, column: u32) -> Result<Vec<crate::AnalysisSection>> {
         Ok(crate::analysis::capabilities(
-            self.column(column)?.data_type(),
+            self.column(column)?.array.data_type(),
         ))
     }
 
@@ -58,15 +59,22 @@ impl Session {
         column: u32,
         section: crate::AnalysisSection,
     ) -> Result<crate::ColumnAnalysis> {
-        let array = self.column(column)?;
+        let col = self.column(column)?;
         let view = self.views.snapshot(version)?;
-        crate::ColumnAnalysis::new(array.clone(), view.rows.clone(), version, column, section)
+        crate::ColumnAnalysis::new(
+            col.array.clone(),
+            view.rows.clone(),
+            version,
+            column,
+            section,
+        )
     }
 
     /// Summary of one column over the current view's rows, with up to
     /// `top` most common values for non-numeric columns.
     pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary> {
-        let array = self.column(column)?;
+        let col = self.column(column)?;
+        let array = &col.array;
         let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()))?;
         let mut s = ColumnSummary {
             rows: rows.len() as u64,

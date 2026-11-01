@@ -15,7 +15,12 @@ use std::{
 use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
-use crate::{column::Column, engine::CancelToken, predicate::Predicate, Error, Result};
+use crate::{
+    column::{filter::prepare_find, LogicalType},
+    engine::CancelToken,
+    predicate::Predicate,
+    Error, Result,
+};
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;
@@ -126,7 +131,13 @@ impl Find {
         }
         let matcher = query.matcher()?;
         for (_, array) in &columns {
-            drop(Column::new(array).prepare_find(query.text(), Some(&matcher))?);
+            let logical_type = LogicalType::from_arrow(array.data_type());
+            drop(prepare_find(
+                array,
+                &logical_type,
+                query.text(),
+                Some(&matcher),
+            )?);
         }
         let (token, cancellation) = CancelToken::independent();
         Ok(Self {
@@ -319,7 +330,10 @@ impl Find {
         let matcher = self.query.matcher()?;
         self.columns
             .iter()
-            .map(|(_, array)| Column::new(array).prepare_find(self.query.text(), Some(&matcher)))
+            .map(|(_, array)| {
+                let logical_type = LogicalType::from_arrow(array.data_type());
+                prepare_find(array, &logical_type, self.query.text(), Some(&matcher))
+            })
             .collect()
     }
 

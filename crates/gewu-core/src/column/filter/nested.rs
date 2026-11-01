@@ -8,8 +8,9 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType},
 };
 
-use super::Column;
+use super::prepare_find;
 use crate::{
+    column::kind::LogicalType,
     predicate::{Predicate, CHUNK},
     Result,
 };
@@ -21,7 +22,8 @@ pub(super) fn search<'a>(
 ) -> Result<Option<Predicate<'a>>> {
     match array.data_type() {
         DataType::Dictionary(..) => dictionary_find(array, |values| {
-            Column::new(values).prepare_find(query, matcher)
+            let child_logical = LogicalType::from_arrow(values.data_type());
+            prepare_find(values, &child_logical, query, matcher)
         }),
         DataType::List(_) => {
             let list = array.as_list::<i32>();
@@ -33,7 +35,8 @@ pub(super) fn search<'a>(
         }
         DataType::FixedSizeList(..) => {
             let list = array.as_fixed_size_list();
-            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
+            let child_logical = LogicalType::from_arrow(list.values().data_type());
+            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -43,7 +46,8 @@ pub(super) fn search<'a>(
         }
         DataType::ListView(_) => {
             let list = array.as_list_view::<i32>();
-            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
+            let child_logical = LogicalType::from_arrow(list.values().data_type());
+            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -53,7 +57,8 @@ pub(super) fn search<'a>(
         }
         DataType::LargeListView(_) => {
             let list = array.as_list_view::<i64>();
-            let Some(child) = Column::new(list.values()).prepare_find(query, matcher)? else {
+            let child_logical = LogicalType::from_arrow(list.values().data_type());
+            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -66,7 +71,10 @@ pub(super) fn search<'a>(
                 .as_struct()
                 .columns()
                 .iter()
-                .map(|child| Column::new(child).prepare_find(query, matcher))
+                .map(|child| {
+                    let child_logical = LogicalType::from_arrow(child.data_type());
+                    prepare_find(child, &child_logical, query, matcher)
+                })
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
@@ -180,7 +188,8 @@ fn list_search<'a, O: OffsetSizeTrait>(
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
-    let Some(child) = Column::new(values).prepare_find(query, matcher)? else {
+    let child_logical = LogicalType::from_arrow(values.data_type());
+    let Some(child) = prepare_find(values, &child_logical, query, matcher)? else {
         return Ok(None);
     };
     Ok(Some(elements(array, child, move |row| {

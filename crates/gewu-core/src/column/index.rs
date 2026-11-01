@@ -24,9 +24,17 @@ use arrow::{
 };
 
 use crate::{
-    analysis::AnalysisContext, format, predicate::Predicate, scope::Selection,
+    analysis::AnalysisContext, column::format, predicate::Predicate, scope::Selection,
     selection::RowSelection, Result,
 };
+
+/// A column's value index, built on first use.
+#[derive(Clone)]
+pub(crate) enum Indexed {
+    Built(Arc<ValueIndex>),
+    /// More than [`INDEX_LIMIT`] distinct values: counted on demand instead.
+    TooMany,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {

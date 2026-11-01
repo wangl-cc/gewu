@@ -28,7 +28,7 @@ impl Session {
                 if !seen.insert(column) {
                     return Err(Error::InvalidArgument("duplicate export column".into()));
                 }
-                self.column(column).cloned()
+                self.column_array(column).cloned()
             })
             .collect::<Result<Vec<_>>>()?;
         let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
@@ -56,7 +56,7 @@ impl Session {
     pub fn nested_export_columns(&self, columns: &[u32]) -> Result<Vec<String>> {
         let mut nested = Vec::new();
         for &column in columns {
-            if self.column(column)?.data_type().is_nested() {
+            if self.column(column)?.array.data_type().is_nested() {
                 nested.push(self.dataset.schema.field(column as usize).name().clone());
             }
         }

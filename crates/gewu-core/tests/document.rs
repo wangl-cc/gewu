@@ -3,11 +3,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, QuerySpec, SortKey};
+use gewu_core::{Error, Filter, QuerySpec, Session, SortKey};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
-fn sample() -> (PathBuf, Document) {
+fn sample() -> (PathBuf, Session) {
     let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
     let labels: ArrayRef = Arc::new(StringArray::from(vec![
         Some("cat"),
@@ -43,11 +43,11 @@ fn sample() -> (PathBuf, Document) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     (path, doc)
 }
 
-fn names(doc: &Document) -> Vec<String> {
+fn names(doc: &Session) -> Vec<String> {
     let v = doc.current_view();
     let block = doc.rows(v.version, 0, 100, &[0]).unwrap();
     (0..block.n_rows)
@@ -252,7 +252,7 @@ fn histogram_counts() {
 }
 
 /// name | day (date32) | at (timestamp µs, UTC) | n (int64) | x (float64)
-fn temporal_sample() -> (PathBuf, Document) {
+fn temporal_sample() -> (PathBuf, Session) {
     use arrow::array::{Date32Array, TimestampMicrosecondArray};
     let names: ArrayRef = Arc::new(StringArray::from(vec!["Alpha", "beta", "Gamma", "delta"]));
     // 2024-01-01, 2024-01-02, null, 2024-03-15
@@ -292,11 +292,11 @@ fn temporal_sample() -> (PathBuf, Document) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     (path, doc)
 }
 
-fn find_names(doc: &Document, text: &str) -> Vec<String> {
+fn find_names(doc: &Session, text: &str) -> Vec<String> {
     let names = names(doc);
     let hits = doc
         .prepare_find(doc.current_view().version, text, &[0, 1, 2, 3, 4])

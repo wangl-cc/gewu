@@ -11,12 +11,12 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use gewu_core::{
-    Document, Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, SortKey,
+    Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, Session, SortKey,
 };
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
-fn sample() -> (TempDir, Document) {
+fn sample() -> (TempDir, Session) {
     let directory = tempfile::tempdir().unwrap();
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -54,17 +54,17 @@ fn sample() -> (TempDir, Document) {
         ArrowWriter::try_new(fs::File::create(&path).unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    (directory, Document::open(&path).unwrap())
+    (directory, Session::open(&path).unwrap())
 }
 
-fn document_from_batch(batch: &RecordBatch) -> (TempDir, Document) {
+fn document_from_batch(batch: &RecordBatch) -> (TempDir, Session) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested.parquet");
     let mut writer =
         ArrowWriter::try_new(fs::File::create(&path).unwrap(), batch.schema(), None).unwrap();
     writer.write(batch).unwrap();
     writer.close().unwrap();
-    (directory, Document::open(path).unwrap())
+    (directory, Session::open(path).unwrap())
 }
 
 fn nested_sample() -> RecordBatch {
@@ -157,7 +157,7 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     assert_eq!(result, batch);
 }
 
-fn filtered(doc: &Document) -> u64 {
+fn filtered(doc: &Session) -> u64 {
     doc.apply_view(
         &QuerySpec::single(0, Filter::Range {
             include_nulls: false,
@@ -276,7 +276,7 @@ fn parquet_export_honors_explicit_compression() {
             parquet_compression: ParquetCompression::Snappy,
         })
         .unwrap();
-    let reopened = Document::open(path).unwrap();
+    let reopened = Session::open(path).unwrap();
     let info = reopened.info();
     let gewu_core::FileMetadata::Parquet { compression, .. } = &info.metadata else {
         panic!("expected Parquet metadata");
@@ -379,7 +379,7 @@ fn formatting_failure_does_not_publish_a_partial_file() {
         ArrowWriter::try_new(fs::File::create(&source).unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(source).unwrap();
+    let doc = Session::open(source).unwrap();
     let destination = directory.path().join("result.csv");
     fs::write(&destination, "existing data").unwrap();
     let export = doc

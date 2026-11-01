@@ -1,13 +1,13 @@
 #![cfg(feature = "csv")]
 
-use gewu_core::{AnalysisData, AnalysisSection, Document, Error, Filter, QuerySpec};
+use gewu_core::{AnalysisData, AnalysisSection, Error, Filter, QuerySpec, Session};
 
 #[test]
 fn analysis_keeps_its_snapshot_and_cancels_independently_of_queries() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("analysis.csv");
     std::fs::write(&path, "number,text\n1,a\n2,b\n3,b\n").unwrap();
-    let doc = Document::open(path).unwrap();
+    let doc = Session::open(path).unwrap();
     let original = doc.current_view();
     let old = doc
         .prepare_analysis(original.version, 0, AnalysisSection::Statistics)

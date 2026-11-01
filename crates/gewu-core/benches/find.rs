@@ -11,16 +11,16 @@ use arrow::{
     datatypes::{DataType, Field, Int32Type},
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use gewu_core::{Document, Filter, QuerySpec, SortKey};
+use gewu_core::{Filter, QuerySpec, Session, SortKey};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Document) {
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let document = Document::open(file.path()).unwrap();
+    let document = Session::open(file.path()).unwrap();
     (file, document)
 }
 

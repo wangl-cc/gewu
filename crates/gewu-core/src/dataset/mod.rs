@@ -1,8 +1,8 @@
-//! Immutable tabular data, column schema and lazy per-column indexes.
+//! Immutable tabular data, column schema and dataset metadata.
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 use arrow::{
@@ -11,40 +11,24 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 
-pub(crate) mod format;
-pub(crate) mod kind;
 pub(crate) mod scale;
-pub(crate) mod value_index;
 
-pub use kind::LogicalType;
 pub use scale::AxisScale;
-pub use value_index::{DistinctResult, DistinctValue};
 
 use crate::{
-    column::{Column, FilterEditorKind, CHOICE_LIMIT},
-    file,
-    value_index::{ValueIndex, INDEX_LIMIT},
-    ColumnCapabilities, ColumnInfo, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
+    column::{format, index::ValueIndex, Column, ColumnCapabilities, FilterEditorKind},
+    file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
 };
-
-/// A column's value index, built on first use.
-pub(crate) enum Indexed {
-    Built(Arc<ValueIndex>),
-    /// More than [`INDEX_LIMIT`] distinct values: counted on demand instead.
-    TooMany,
-}
 
 /// An immutable tabular dataset loaded into memory.
 pub struct Dataset {
     pub(crate) source_path: PathBuf,
     pub(crate) schema: SchemaRef,
-    pub(crate) columns: Vec<ArrayRef>,
+    pub(crate) columns: Vec<Column>,
     pub(crate) n_rows: usize,
     pub(crate) file_size: u64,
     pub(crate) format: FileType,
     pub(crate) metadata: FileMetadata,
-    pub(crate) indexes: Vec<OnceLock<Indexed>>,
-    pub(crate) filter_editors: Vec<OnceLock<FilterEditorKind>>,
 }
 
 impl Dataset {
@@ -71,9 +55,12 @@ impl Dataset {
             )));
         }
 
-        let columns = batch.columns().to_vec();
-        let indexes = (0..columns.len()).map(|_| OnceLock::new()).collect();
-        let filter_editors = (0..columns.len()).map(|_| OnceLock::new()).collect();
+        let columns = (0..batch.num_columns())
+            .map(|i| {
+                let field = schema.field(i);
+                Column::new(field.name(), batch.column(i).clone(), field.is_nullable())
+            })
+            .collect();
 
         Ok(Self {
             source_path,
@@ -83,8 +70,6 @@ impl Dataset {
             file_size,
             format,
             metadata: loaded.metadata,
-            indexes,
-            filter_editors,
         })
     }
 
@@ -113,30 +98,18 @@ impl Dataset {
     }
 
     pub fn info(&self) -> FileInfo {
-        let columns = self
-            .schema
-            .fields()
-            .iter()
-            .map(|f| {
-                let logical_type = LogicalType::from_arrow(f.data_type());
-                ColumnInfo {
-                    name: f.name().clone(),
-                    display_type: logical_type.display_name(),
-                    technical_type: f.data_type().to_string(),
-                    logical_type,
-                    nullable: f.is_nullable(),
-                }
-            })
-            .collect();
-
         FileInfo {
             path: self.source_path.display().to_string(),
             row_count: self.n_rows as u64,
-            columns,
+            columns: self.columns.iter().map(Column::info).collect(),
             file_size: self.file_size,
             format: self.format,
             metadata: self.metadata.clone(),
         }
+    }
+
+    pub fn columns(&self) -> &[Column] {
+        &self.columns
     }
 
     /// Index of the column with this name.
@@ -148,18 +121,19 @@ impl Dataset {
             .map(|i| i as u32)
     }
 
-    pub fn column(&self, c: u32) -> Result<&ArrayRef> {
+    pub fn column(&self, c: u32) -> Result<&Column> {
         self.columns
             .get(c as usize)
             .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
     }
 
     pub fn column_capabilities(&self, column: u32) -> Result<ColumnCapabilities> {
-        Ok(Column::new(self.column(column)?).capabilities())
+        Ok(self.column(column)?.capabilities())
     }
 
     pub fn format_value(&self, column: u32, value: i64) -> Result<String> {
-        let data_type = self.column(column)?.data_type().clone();
+        let col = self.column(column)?;
+        let data_type = col.array.data_type().clone();
         let raw: ArrayRef = Arc::new(Int64Array::from(vec![value]));
         let typed = match data_type {
             DataType::Date32 | DataType::Time32(_) => {
@@ -173,53 +147,15 @@ impl Dataset {
 
     /// The column's value index, or `None` if it has too many values.
     pub(crate) fn index(&self, c: u32) -> Result<Option<Arc<ValueIndex>>> {
-        let array = self.column(c)?;
-        let cell = &self.indexes[c as usize];
-        let found = match cell.get() {
-            Some(found) => found,
-            None => {
-                let built = match ValueIndex::build(array, INDEX_LIMIT)? {
-                    Some(idx) => Indexed::Built(Arc::new(idx)),
-                    None => Indexed::TooMany,
-                };
-                cell.get_or_init(|| built)
-            }
-        };
-        Ok(match found {
-            Indexed::Built(idx) => Some(idx.clone()),
-            Indexed::TooMany => None,
-        })
+        self.column(c)?.index()
     }
 
     /// The column's value index, for filtering by key.
     pub(crate) fn keyed_index(&self, c: u32) -> Result<Arc<ValueIndex>> {
-        self.index(c)?.ok_or_else(|| {
-            Error::InvalidArgument(format!(
-                "column {} has more than {INDEX_LIMIT} distinct values; filter it with contains or a range",
-                self.schema.field(c as usize).name()
-            ))
-        })
+        self.column(c)?.keyed_index()
     }
 
     pub(crate) fn filter_editor_kind(&self, column: u32) -> Result<FilterEditorKind> {
-        let cell = &self.filter_editors[column as usize];
-        if let Some(kind) = cell.get() {
-            return Ok(*kind);
-        }
-        let array = self.column(column)?;
-        let typed = Column::new(array);
-        let supported = arrow::row::RowConverter::supports_fields(&[arrow::row::SortField::new(
-            array.data_type().clone(),
-        )]);
-        let low_cardinality = if !supported {
-            false
-        } else {
-            match self.indexes[column as usize].get() {
-                Some(Indexed::Built(index)) => index.len() <= CHOICE_LIMIT,
-                Some(Indexed::TooMany) => false,
-                None => crate::value_index::has_at_most(array, CHOICE_LIMIT)?,
-            }
-        };
-        Ok(*cell.get_or_init(|| typed.filter_editor(low_cardinality)))
+        self.column(column)?.filter_editor_kind()
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, QuerySpec};
+use gewu_core::{Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 #[test]
@@ -25,7 +25,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(file.path()).unwrap();
+    let doc = Session::open(file.path()).unwrap();
     let keys = doc.keys_for_labels(1, &[Some("2".into())]).unwrap();
     let spec = QuerySpec::default()
         .with_filter(1, Filter::InValues { keys })
@@ -83,7 +83,7 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
     assert_eq!(dataset.n_rows(), len as usize);
 
     // Create session from shared dataset
-    let doc = Document::from_dataset(dataset.clone());
+    let doc = Session::from_dataset(dataset.clone());
     assert_eq!(doc.n_rows(), len as usize);
 
     // Pass filters in reverse cost order: expensive text search first, cheap range second, null
