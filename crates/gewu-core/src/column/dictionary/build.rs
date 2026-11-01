@@ -3,7 +3,7 @@
 //! scan a normalized key, and text, binary and nested arrays use Arrow's row
 //! format.
 
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, UInt32Array},
@@ -12,126 +12,100 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use super::{
-    primitive::{build_float_primitive, build_ordered_primitive},
-    Dictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
-};
+use super::{Dictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE};
 
 impl Dictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
-    pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
-        macro_rules! ordered {
-            ($ty:ident) => {
-                build_ordered_primitive(array.as_primitive::<$ty>())
-            };
-        }
-        macro_rules! float {
-            ($ty:ident) => {
-                build_float_primitive(array.as_primitive::<$ty>())
-            };
+    pub(crate) fn from_array(array: &ArrayRef) -> Option<Self> {
+        macro_rules! from_canonical_array {
+            ($ty:ident) => {{
+                let array = array.as_primitive::<$ty>();
+                Self::from_canonical_array(array)
+            }};
         }
 
         use DataType::*;
         match array.data_type() {
-            Dictionary(..) => Self::build_native(array),
-            Boolean => build_boolean(array),
+            Dictionary(..) => Self::from_dict_array(array),
+            Boolean => {
+                let array = array.as_boolean();
+                Self::from_canonical_array(array)
+            }
             Null => Some(Self::all_null(array)),
-            Int8 => ordered!(Int8Type),
-            Int16 => ordered!(Int16Type),
-            Int32 => ordered!(Int32Type),
-            Int64 => ordered!(Int64Type),
-            UInt8 => ordered!(UInt8Type),
-            UInt16 => ordered!(UInt16Type),
-            UInt32 => ordered!(UInt32Type),
-            UInt64 => ordered!(UInt64Type),
-            Float16 => float!(Float16Type),
-            Float32 => float!(Float32Type),
-            Float64 => float!(Float64Type),
-            Date32 => ordered!(Date32Type),
-            Date64 => ordered!(Date64Type),
-            Time32(TimeUnit::Second) => ordered!(Time32SecondType),
-            Time32(TimeUnit::Millisecond) => ordered!(Time32MillisecondType),
-            Time64(TimeUnit::Microsecond) => ordered!(Time64MicrosecondType),
-            Time64(TimeUnit::Nanosecond) => ordered!(Time64NanosecondType),
-            Timestamp(TimeUnit::Second, _) => ordered!(TimestampSecondType),
-            Timestamp(TimeUnit::Millisecond, _) => ordered!(TimestampMillisecondType),
-            Timestamp(TimeUnit::Microsecond, _) => ordered!(TimestampMicrosecondType),
-            Timestamp(TimeUnit::Nanosecond, _) => ordered!(TimestampNanosecondType),
-            Duration(TimeUnit::Second) => ordered!(DurationSecondType),
-            Duration(TimeUnit::Millisecond) => ordered!(DurationMillisecondType),
-            Duration(TimeUnit::Microsecond) => ordered!(DurationMicrosecondType),
-            Duration(TimeUnit::Nanosecond) => ordered!(DurationNanosecondType),
-            Decimal32(..) => ordered!(Decimal32Type),
-            Decimal64(..) => ordered!(Decimal64Type),
-            Decimal128(..) => ordered!(Decimal128Type),
-            Decimal256(..) => ordered!(Decimal256Type),
-            _ => Self::build_row_format(array),
+            Int8 => from_canonical_array!(Int8Type),
+            Int16 => from_canonical_array!(Int16Type),
+            Int32 => from_canonical_array!(Int32Type),
+            Int64 => from_canonical_array!(Int64Type),
+            UInt8 => from_canonical_array!(UInt8Type),
+            UInt16 => from_canonical_array!(UInt16Type),
+            UInt32 => from_canonical_array!(UInt32Type),
+            UInt64 => from_canonical_array!(UInt64Type),
+            Float16 => from_canonical_array!(Float16Type),
+            Float32 => from_canonical_array!(Float32Type),
+            Float64 => from_canonical_array!(Float64Type),
+            Date32 => from_canonical_array!(Date32Type),
+            Date64 => from_canonical_array!(Date64Type),
+            Time32(TimeUnit::Second) => from_canonical_array!(Time32SecondType),
+            Time32(TimeUnit::Millisecond) => from_canonical_array!(Time32MillisecondType),
+            Time64(TimeUnit::Microsecond) => from_canonical_array!(Time64MicrosecondType),
+            Time64(TimeUnit::Nanosecond) => from_canonical_array!(Time64NanosecondType),
+            Timestamp(TimeUnit::Second, _) => from_canonical_array!(TimestampSecondType),
+            Timestamp(TimeUnit::Millisecond, _) => {
+                from_canonical_array!(TimestampMillisecondType)
+            }
+            Timestamp(TimeUnit::Microsecond, _) => {
+                from_canonical_array!(TimestampMicrosecondType)
+            }
+            Timestamp(TimeUnit::Nanosecond, _) => from_canonical_array!(TimestampNanosecondType),
+            Duration(TimeUnit::Second) => from_canonical_array!(DurationSecondType),
+            Duration(TimeUnit::Millisecond) => from_canonical_array!(DurationMillisecondType),
+            Duration(TimeUnit::Microsecond) => from_canonical_array!(DurationMicrosecondType),
+            Duration(TimeUnit::Nanosecond) => from_canonical_array!(DurationNanosecondType),
+            Decimal32(..) => from_canonical_array!(Decimal32Type),
+            Decimal64(..) => from_canonical_array!(Decimal64Type),
+            Decimal128(..) => from_canonical_array!(Decimal128Type),
+            Decimal256(..) => from_canonical_array!(Decimal256Type),
+            _ => Self::from_row_array(array),
         }
     }
 
-    /// Build a dictionary from an array by extracting a key for each non-null row.
-    pub(super) fn from_array_with_keys<K: Copy + Eq + Ord + Hash>(
-        array: &dyn Array,
-        key_at: impl Fn(usize) -> K,
-    ) -> Option<Self> {
+    /// Build a dictionary from a canonical primitive or boolean array in a single pass.
+    /// Values array is assembled directly from canonical native values without sorting or `take`.
+    pub(super) fn from_canonical_array<A>(array: &A) -> Option<Self>
+    where
+        A: super::primitive::CanonicalizeArray,
+    {
         let len = array.len();
-        let mut seen: HashMap<K, u8> = HashMap::new();
-        let mut key_of: Vec<K> = Vec::new();
-        let mut representative_row: Vec<usize> = Vec::new();
+        let nulls = array.nulls();
+        let mut seen: HashMap<A::Key, u8> = HashMap::new();
+        let mut native_of: Vec<A::Native> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(len);
         let mut has_null = false;
 
         for row in 0..len {
-            if array.is_null(row) {
+            if nulls.as_ref().is_some_and(|n| n.is_null(row)) {
                 has_null = true;
                 codes.push(NULL_CODE);
                 continue;
             }
-            let key = key_at(row);
+            let (key, native) = array.canonical_at(row);
             let code = match seen.get(&key) {
                 Some(&code) => code,
                 None => {
-                    if key_of.len() == MAX_DISTINCT_VALUES {
+                    if native_of.len() == MAX_DISTINCT_VALUES {
                         return None;
                     }
-                    let code = key_of.len() as u8;
+                    let code = native_of.len() as u8;
                     seen.insert(key, code);
-                    key_of.push(key);
-                    representative_row.push(row);
+                    native_of.push(native);
                     code
                 }
             };
             codes.push(code);
         }
 
-        let mut order: Vec<u8> = (0..key_of.len() as u8).collect();
-        order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(&key_of[b as usize]));
-        Self::finish(codes, &representative_row, &order, has_null, array)
-    }
-
-    /// Renumber temporary codes into value order and assemble the finished dictionary.
-    fn finish(
-        mut codes: Vec<u8>,
-        representative_row: &[usize],
-        order: &[u8],
-        has_null: bool,
-        array: &dyn Array,
-    ) -> Option<Self> {
-        let mut remap = [0u8; MAX_DISTINCT_VALUES];
-        for (new, &old) in order.iter().enumerate() {
-            remap[old as usize] = new as u8;
-        }
-        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
-            *code = remap[*code as usize];
-        }
-        let rows = UInt32Array::from(
-            order
-                .iter()
-                .map(|&old| representative_row[old as usize] as u32)
-                .collect::<Vec<_>>(),
-        );
-        let values = take(array, &rows, None).ok()?;
+        let values = array.build_array(native_of.into_iter());
         Some(Self {
             codes,
             values,
@@ -141,12 +115,9 @@ impl Dictionary {
 
     /// Row-format fallback for text, binary and nested arrays: discover
     /// distinct values by hashing rows, then write one `u8` code per row.
-    /// Row-format bytes give both equality and value order.
-    fn build_row_format(array: &ArrayRef) -> Option<Self> {
+    fn from_row_array(array: &ArrayRef) -> Option<Self> {
         let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
 
-        // Temporary codes in order of first appearance, and each value's representative
-        // source row. Row-format bytes sort like the values themselves.
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
         let mut representative_row: Vec<usize> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(array.len());
@@ -157,7 +128,7 @@ impl Dictionary {
                 .convert_columns(std::slice::from_ref(&array.slice(start, len)))
                 .ok()?;
             for (i, row) in rows.iter().enumerate() {
-                let source_row = start + i;
+                let source_row: usize = start + i;
                 if array.is_null(source_row) {
                     has_null = true;
                     codes.push(NULL_CODE);
@@ -180,21 +151,21 @@ impl Dictionary {
             }
         }
 
-        // Renumber codes into value order; null keeps its reserved code.
-        let mut key_of: Vec<&[u8]> = vec![&[]; representative_row.len()];
-        for (bytes, &code) in &seen {
-            key_of[code as usize] = bytes;
-        }
-        let mut order: Vec<u8> = (0..representative_row.len() as u8).collect();
-        order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(key_of[b as usize]));
-        Self::finish(codes, &representative_row, &order, has_null, array.as_ref())
+        let rows =
+            UInt32Array::from_iter_values(representative_row.into_iter().map(|row| row as u32));
+        let values = take(array.as_ref(), &rows, None).ok()?;
+        Some(Self {
+            codes,
+            values,
+            has_null,
+        })
     }
 
     /// Encode a native Dictionary. Arrow already encodes the values into
     /// `keys`/`values`, so no row hashing is needed: collect the referenced
-    /// dictionary values, reuse [`Self::build`] on that small array, then
+    /// dictionary values, reuse [`Self::from_array`] on that small array, then
     /// walk the keys once to write the shared per-row code array.
-    fn build_native(array: &ArrayRef) -> Option<Self> {
+    fn from_dict_array(array: &ArrayRef) -> Option<Self> {
         let dictionary = array.as_any_dictionary();
         let keys = dictionary.keys();
         let dictionary_values = dictionary.values().clone();
@@ -239,7 +210,7 @@ impl Dictionary {
             None,
         )
         .ok()?;
-        let encoded = Self::build(&referenced_values)?;
+        let encoded = Self::from_array(&referenced_values)?;
 
         let mut key_to_code = vec![NULL_CODE; dictionary_values.len()];
         for (entry, &slot) in entry_slot.iter().enumerate() {
@@ -275,12 +246,6 @@ impl Dictionary {
             has_null: !array.is_empty(),
         }
     }
-}
-
-/// Encode a boolean array. `false` sorts before `true`.
-fn build_boolean(array: &ArrayRef) -> Option<Dictionary> {
-    let source = array.as_boolean();
-    Dictionary::from_array_with_keys(source, |row| u8::from(source.value(row)))
 }
 
 /// Visit every key of a native Dictionary array; `None` for a null key.

@@ -154,10 +154,20 @@ where
             NULL_KEY
         } else {
             let value: f64 = array.value(row).into();
-            super::primitive::normalized_bits(value)
+            normalized_bits(value)
         };
         counts.entry(key).or_insert((0, row as u32)).0 += 1;
     }
     context.check()?;
     Ok(counts)
+}
+
+fn normalized_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0
+    } else if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
 }

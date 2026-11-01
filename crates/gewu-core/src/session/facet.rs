@@ -352,7 +352,10 @@ pub(crate) fn format_choices(
             count: null_count,
         });
     }
-    for (code, &count) in counts.iter().enumerate().take(values.len()) {
+    let sort_indices = arrow::compute::sort_to_indices(values, None, None)?;
+    for &code in sort_indices.values() {
+        let code = code as usize;
+        let count = counts[code];
         if include_zero || count > 0 {
             result.push(DistinctValue {
                 key: code as u64,

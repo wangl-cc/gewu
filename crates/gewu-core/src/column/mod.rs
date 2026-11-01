@@ -65,7 +65,7 @@ impl Column {
     /// cardinality (or whose type cannot be encoded) return `None`.
     pub(crate) fn dictionary(&self) -> Option<&Arc<Dictionary>> {
         self.dictionary
-            .get_or_init(|| Dictionary::build(&self.array).map(Arc::new))
+            .get_or_init(|| Dictionary::from_array(&self.array).map(Arc::new))
             .as_ref()
     }
 

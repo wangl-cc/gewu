@@ -1,19 +1,130 @@
-//! Native primitive encoders. A primitive whose native values are already
-//! exactly comparable and totally ordered uses its native value as the
-//! dictionary key; a floating-point array projects to a normalized total-order
-//! key so signed zeros and NaN payloads group the way value selection expects.
-
-use std::hash::Hash;
+use std::{hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{AsArray, PrimitiveArray},
-    datatypes::ArrowPrimitiveType,
+    array::{Array, ArrayRef, BooleanArray, PrimitiveArray},
+    datatypes::*,
 };
 
-use super::Dictionary;
+pub(super) trait Canonicalize: ArrowPrimitiveType {
+    type Key: Copy + Eq + Ord + Hash;
 
-/// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
-/// every NaN payload groups into one NaN.
+    fn canonical(native: Self::Native) -> (Self::Key, Self::Native);
+}
+
+macro_rules! impl_canonicalize {
+    ($($int_like:ident),*, $(,)?) => {
+        $(
+            impl Canonicalize for $int_like {
+                type Key = Self::Native;
+
+                #[inline]
+                fn canonical(value: Self::Native) -> (Self::Key, Self::Native) {
+                    (value, value)
+                }
+            }
+        )*
+    };
+    ($($float_like:ident => $int:ident => ($zero:expr, $nan:expr, $shift:literal)),*, $(,)?) => {
+        $(
+            impl Canonicalize for $float_like {
+                type Key = $int;
+
+                #[inline]
+                fn canonical(value: Self::Native) -> (Self::Key, Self::Native) {
+                    let (bits, canonical_native) = if value == $zero {
+                        (0, $zero)
+                    } else if value.is_nan() {
+                        ($nan.to_bits(), $nan)
+                    } else {
+                        (value.to_bits(), value)
+                    };
+                    let key = if bits & (1 << $shift) != 0 {
+                        !bits
+                    } else {
+                        bits | (1 << $shift)
+                    };
+                    (key, canonical_native)
+                }
+            }
+        )*
+    };
+}
+
+impl_canonicalize!(
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Date32Type,
+    Date64Type,
+    Time32SecondType,
+    Time32MillisecondType,
+    Time64MicrosecondType,
+    Time64NanosecondType,
+    TimestampSecondType,
+    TimestampMillisecondType,
+    TimestampMicrosecondType,
+    TimestampNanosecondType,
+    DurationSecondType,
+    DurationMillisecondType,
+    DurationMicrosecondType,
+    DurationNanosecondType,
+    Decimal32Type,
+    Decimal64Type,
+    Decimal128Type,
+    Decimal256Type,
+);
+
+impl_canonicalize!(
+    Float16Type => u16 => (half::f16::ZERO, half::f16::NAN, 15),
+    Float32Type => u32 => (0.0f32, f32::NAN, 31),
+    Float64Type => u64 => (0.0f64, f64::NAN, 63),
+);
+
+pub(super) trait CanonicalizeArray: Array {
+    type Key: Copy + Eq + Ord + Hash;
+    type Native: Copy;
+
+    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native);
+
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> ArrayRef;
+}
+
+impl<T: Canonicalize> CanonicalizeArray for PrimitiveArray<T> {
+    type Key = T::Key;
+    type Native = T::Native;
+
+    #[inline]
+    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native) {
+        T::canonical(self.value(index))
+    }
+
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> ArrayRef {
+        Arc::new(
+            PrimitiveArray::<T>::from_iter_values(sorted).with_data_type(self.data_type().clone()),
+        )
+    }
+}
+
+impl CanonicalizeArray for BooleanArray {
+    type Key = bool;
+    type Native = bool;
+
+    #[inline]
+    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native) {
+        let v = self.value(index);
+        (v, v)
+    }
+
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = bool>) -> ArrayRef {
+        Arc::new(BooleanArray::from(sorted.collect::<Vec<bool>>()))
+    }
+}
+
 pub(crate) fn normalized_bits(value: f64) -> u64 {
     if value == 0.0 {
         0
@@ -24,69 +135,18 @@ pub(crate) fn normalized_bits(value: f64) -> u64 {
     }
 }
 
-/// Order key of a normalized value. Unsigned comparison matches IEEE total
-/// order, with the shared zero between negatives and positives and NaN last.
-fn order_key(value: f64) -> u64 {
-    let bits = normalized_bits(value);
-    if bits & (1 << 63) != 0 {
-        !bits
-    } else {
-        bits | (1 << 63)
-    }
-}
-
-/// Encode an array whose native values are already the dictionary keys.
-pub(super) fn build_ordered_primitive<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-) -> Option<Dictionary>
-where
-    T::Native: Copy + Eq + Ord + Hash,
-{
-    Dictionary::from_array_with_keys(array, |row| array.value(row))
-}
-
-/// Encode a floating-point array. The key normalizes signed zeros and NaN
-/// payloads into one total order, and any zero in the distinct values array
-/// is normalized to `+0.0`.
-pub(super) fn build_float_primitive<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-) -> Option<Dictionary>
-where
-    T::Native: Into<f64> + std::ops::Neg<Output = T::Native>,
-{
-    let mut dict =
-        Dictionary::from_array_with_keys(array, |row| order_key(array.value(row).into()))?;
-    let values = dict.values.as_primitive::<T>();
-    if values
-        .iter()
-        .any(|v| v.is_some_and(|x| x.into() == 0.0 && x.into().is_sign_negative()))
-    {
-        let sanitized: PrimitiveArray<T> = arrow::compute::unary(values, |v| {
-            let f: f64 = v.into();
-            if f == 0.0 && f.is_sign_negative() {
-                -v
-            } else {
-                v
-            }
-        });
-        dict.values = std::sync::Arc::new(sanitized);
-    }
-    Some(dict)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn signed_zeros_group_together() {
-        assert_eq!(normalized_bits(0.0), normalized_bits(-0.0));
-        assert_eq!(order_key(0.0), order_key(-0.0));
-        assert_eq!(order_key(0.0), 1 << 63);
+    fn signed_zeros_canonicalize_to_positive_zero() {
+        assert_eq!(Float64Type::canonical(0.0), (1 << 63, 0.0));
+        assert_eq!(Float64Type::canonical(-0.0), (1 << 63, 0.0));
     }
 
     #[test]
-    fn nan_payloads_group_together() {
+    fn nan_payloads_canonicalize_to_standard_nan() {
         let payloads = [
             f64::NAN,
             f64::from_bits(f64::NAN.to_bits() | 1),
@@ -94,13 +154,14 @@ mod tests {
             f64::from_bits(0xfff8_0000_0000_0000),
         ];
         for value in payloads {
-            assert_eq!(normalized_bits(value), f64::NAN.to_bits());
-            assert_eq!(order_key(value), order_key(f64::NAN));
+            let (key, native) = Float64Type::canonical(value);
+            assert_eq!(key, f64::NAN.to_bits() | (1 << 63));
+            assert!(native.is_nan());
         }
     }
 
     #[test]
-    fn order_key_orders_like_the_values() {
+    fn float_keys_order_like_the_values() {
         let values = [
             f64::NEG_INFINITY,
             -1.0,
@@ -110,9 +171,11 @@ mod tests {
             f64::INFINITY,
             f64::NAN,
         ];
-        let keys: Vec<u64> = values.iter().copied().map(order_key).collect();
-        // Signed zeros share one option, so the sequence is non-decreasing
-        // rather than strictly increasing.
+        let keys: Vec<u64> = values
+            .iter()
+            .copied()
+            .map(|v| Float64Type::canonical(v).0)
+            .collect();
         assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "{keys:?}");
         assert_eq!(keys[2], keys[3]);
         assert!(keys[0] < keys[1] && keys[4] < keys[5] && keys[5] < keys[6]);
