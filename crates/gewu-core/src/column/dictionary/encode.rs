@@ -1,11 +1,12 @@
 //! Turning a physical Arrow array into the dictionary: native dictionaries reuse
-//! their keys and values, and plain arrays use native primitive scans or
-//! Arrow's row format.
+//! their keys and values, ordered primitives scan their native values, floats
+//! scan a normalized key, and text, binary and nested arrays use Arrow's row
+//! format.
 
 use std::collections::HashMap;
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray, UInt32Array},
+    array::{Array, ArrayRef, AsArray, UInt32Array},
     compute::take,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
@@ -20,38 +21,9 @@ use arrow::{
 };
 
 use super::{
-    primitive::{build_distinct, DictionaryKey},
+    primitive::{build_distinct, build_float_primitive, build_ordered_primitive},
     value_rows, ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
-
-/// An array kind that can enumerate its own values into a dictionary.
-pub(super) trait BuildDictionary {
-    fn build_dictionary(&self) -> Option<ValueDictionary>;
-}
-
-impl<T: DictionaryKey> BuildDictionary for PrimitiveArray<T> {
-    fn build_dictionary(&self) -> Option<ValueDictionary> {
-        build_distinct(
-            self.len(),
-            |row| self.is_null(row),
-            |row| T::key(self.value(row)),
-            |row| T::prefers_representative(self.value(row)),
-            self,
-        )
-    }
-}
-
-impl BuildDictionary for BooleanArray {
-    fn build_dictionary(&self) -> Option<ValueDictionary> {
-        build_distinct(
-            self.len(),
-            |row| self.is_null(row),
-            |row| u8::from(self.value(row)),
-            |_| false,
-            self,
-        )
-    }
-}
 
 impl ValueDictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
@@ -60,59 +32,61 @@ impl ValueDictionary {
         use DataType::*;
         match array.data_type() {
             Dictionary(..) => Self::build_native(array),
-            Boolean => array.as_boolean().build_dictionary(),
+            Boolean => build_boolean(array),
             Null => Some(ValueDictionary::all_null(array)),
-            Int8 => array.as_primitive::<Int8Type>().build_dictionary(),
-            Int16 => array.as_primitive::<Int16Type>().build_dictionary(),
-            Int32 => array.as_primitive::<Int32Type>().build_dictionary(),
-            Int64 => array.as_primitive::<Int64Type>().build_dictionary(),
-            UInt8 => array.as_primitive::<UInt8Type>().build_dictionary(),
-            UInt16 => array.as_primitive::<UInt16Type>().build_dictionary(),
-            UInt32 => array.as_primitive::<UInt32Type>().build_dictionary(),
-            UInt64 => array.as_primitive::<UInt64Type>().build_dictionary(),
-            Float16 => array.as_primitive::<Float16Type>().build_dictionary(),
-            Float32 => array.as_primitive::<Float32Type>().build_dictionary(),
-            Float64 => array.as_primitive::<Float64Type>().build_dictionary(),
-            Date32 => array.as_primitive::<Date32Type>().build_dictionary(),
-            Date64 => array.as_primitive::<Date64Type>().build_dictionary(),
-            Time32(TimeUnit::Second) => array.as_primitive::<Time32SecondType>().build_dictionary(),
-            Time32(TimeUnit::Millisecond) => array
-                .as_primitive::<Time32MillisecondType>()
-                .build_dictionary(),
-            Time64(TimeUnit::Microsecond) => array
-                .as_primitive::<Time64MicrosecondType>()
-                .build_dictionary(),
-            Time64(TimeUnit::Nanosecond) => array
-                .as_primitive::<Time64NanosecondType>()
-                .build_dictionary(),
-            Timestamp(TimeUnit::Second, _) => array
-                .as_primitive::<TimestampSecondType>()
-                .build_dictionary(),
-            Timestamp(TimeUnit::Millisecond, _) => array
-                .as_primitive::<TimestampMillisecondType>()
-                .build_dictionary(),
-            Timestamp(TimeUnit::Microsecond, _) => array
-                .as_primitive::<TimestampMicrosecondType>()
-                .build_dictionary(),
-            Timestamp(TimeUnit::Nanosecond, _) => array
-                .as_primitive::<TimestampNanosecondType>()
-                .build_dictionary(),
-            Duration(TimeUnit::Second) => array
-                .as_primitive::<DurationSecondType>()
-                .build_dictionary(),
-            Duration(TimeUnit::Millisecond) => array
-                .as_primitive::<DurationMillisecondType>()
-                .build_dictionary(),
-            Duration(TimeUnit::Microsecond) => array
-                .as_primitive::<DurationMicrosecondType>()
-                .build_dictionary(),
-            Duration(TimeUnit::Nanosecond) => array
-                .as_primitive::<DurationNanosecondType>()
-                .build_dictionary(),
-            Decimal32(..) => array.as_primitive::<Decimal32Type>().build_dictionary(),
-            Decimal64(..) => array.as_primitive::<Decimal64Type>().build_dictionary(),
-            Decimal128(..) => array.as_primitive::<Decimal128Type>().build_dictionary(),
-            Decimal256(..) => array.as_primitive::<Decimal256Type>().build_dictionary(),
+            Int8 => build_ordered_primitive(array.as_primitive::<Int8Type>()),
+            Int16 => build_ordered_primitive(array.as_primitive::<Int16Type>()),
+            Int32 => build_ordered_primitive(array.as_primitive::<Int32Type>()),
+            Int64 => build_ordered_primitive(array.as_primitive::<Int64Type>()),
+            UInt8 => build_ordered_primitive(array.as_primitive::<UInt8Type>()),
+            UInt16 => build_ordered_primitive(array.as_primitive::<UInt16Type>()),
+            UInt32 => build_ordered_primitive(array.as_primitive::<UInt32Type>()),
+            UInt64 => build_ordered_primitive(array.as_primitive::<UInt64Type>()),
+            Float16 => build_float_primitive(array.as_primitive::<Float16Type>()),
+            Float32 => build_float_primitive(array.as_primitive::<Float32Type>()),
+            Float64 => build_float_primitive(array.as_primitive::<Float64Type>()),
+            Date32 => build_ordered_primitive(array.as_primitive::<Date32Type>()),
+            Date64 => build_ordered_primitive(array.as_primitive::<Date64Type>()),
+            Time32(TimeUnit::Second) => {
+                build_ordered_primitive(array.as_primitive::<Time32SecondType>())
+            }
+            Time32(TimeUnit::Millisecond) => {
+                build_ordered_primitive(array.as_primitive::<Time32MillisecondType>())
+            }
+            Time64(TimeUnit::Microsecond) => {
+                build_ordered_primitive(array.as_primitive::<Time64MicrosecondType>())
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                build_ordered_primitive(array.as_primitive::<Time64NanosecondType>())
+            }
+            Timestamp(TimeUnit::Second, _) => {
+                build_ordered_primitive(array.as_primitive::<TimestampSecondType>())
+            }
+            Timestamp(TimeUnit::Millisecond, _) => {
+                build_ordered_primitive(array.as_primitive::<TimestampMillisecondType>())
+            }
+            Timestamp(TimeUnit::Microsecond, _) => {
+                build_ordered_primitive(array.as_primitive::<TimestampMicrosecondType>())
+            }
+            Timestamp(TimeUnit::Nanosecond, _) => {
+                build_ordered_primitive(array.as_primitive::<TimestampNanosecondType>())
+            }
+            Duration(TimeUnit::Second) => {
+                build_ordered_primitive(array.as_primitive::<DurationSecondType>())
+            }
+            Duration(TimeUnit::Millisecond) => {
+                build_ordered_primitive(array.as_primitive::<DurationMillisecondType>())
+            }
+            Duration(TimeUnit::Microsecond) => {
+                build_ordered_primitive(array.as_primitive::<DurationMicrosecondType>())
+            }
+            Duration(TimeUnit::Nanosecond) => {
+                build_ordered_primitive(array.as_primitive::<DurationNanosecondType>())
+            }
+            Decimal32(..) => build_ordered_primitive(array.as_primitive::<Decimal32Type>()),
+            Decimal64(..) => build_ordered_primitive(array.as_primitive::<Decimal64Type>()),
+            Decimal128(..) => build_ordered_primitive(array.as_primitive::<Decimal128Type>()),
+            Decimal256(..) => build_ordered_primitive(array.as_primitive::<Decimal256Type>()),
             _ => Self::build_row_format(array),
         }
     }
@@ -265,6 +239,18 @@ impl ValueDictionary {
             has_null: !array.is_empty(),
         }
     }
+}
+
+/// Encode a boolean array. `false` sorts before `true`.
+fn build_boolean(array: &ArrayRef) -> Option<ValueDictionary> {
+    let source = array.as_boolean();
+    build_distinct(
+        source.len(),
+        |row| source.is_null(row),
+        |row| u8::from(source.value(row)),
+        |_| false,
+        source,
+    )
 }
 
 /// Visit every key of a native Dictionary array; `None` for a null key.

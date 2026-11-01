@@ -1,82 +1,16 @@
-//! Native primitive encoders. Every Arrow primitive type names the key it
-//! produces in the dictionary, plus the floating-point value-identity rule those
-//! keys share.
+//! Native primitive encoders. A primitive whose native values are already
+//! exactly comparable and totally ordered uses its native value as the
+//! dictionary key; a floating-point array projects to a normalized total-order
+//! key so signed zeros and NaN payloads group the way value selection expects.
 
 use std::{collections::HashMap, hash::Hash};
 
 use arrow::{
-    array::Array,
-    datatypes::{
-        ArrowPrimitiveType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-        DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    },
+    array::{Array, PrimitiveArray},
+    datatypes::ArrowPrimitiveType,
 };
 
 use super::{value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
-
-/// How an Arrow primitive type's values become dictionary keys.
-///
-/// Contract: equal keys must mean "the same displayed value", and key order
-/// must equal value order, because codes are assigned in key order. Integers,
-/// temporal values and decimals use their native value as the key; floats use
-/// the normalized total-order key.
-pub(super) trait DictionaryKey: ArrowPrimitiveType {
-    type Key: Copy + Eq + Ord + Hash;
-
-    fn key(value: Self::Native) -> Self::Key;
-
-    /// Whether this value should replace the representative row recorded for
-    /// its key. Floats prefer positive zero so the option reads `0.0`.
-    fn prefers_representative(_: Self::Native) -> bool {
-        false
-    }
-}
-
-macro_rules! identity_keys {
-    ($($array:ty => $native:ty),* $(,)?) => {$(
-        impl DictionaryKey for $array {
-            type Key = $native;
-
-            fn key(value: $native) -> $native {
-                value
-            }
-        }
-    )*};
-}
-
-identity_keys!(
-    Int8Type => i8,
-    Int16Type => i16,
-    Int32Type => i32,
-    Int64Type => i64,
-    UInt8Type => u8,
-    UInt16Type => u16,
-    UInt32Type => u32,
-    UInt64Type => u64,
-    Date32Type => i32,
-    Date64Type => i64,
-    Time32SecondType => i32,
-    Time32MillisecondType => i32,
-    Time64MicrosecondType => i64,
-    Time64NanosecondType => i64,
-    TimestampSecondType => i64,
-    TimestampMillisecondType => i64,
-    TimestampMicrosecondType => i64,
-    TimestampNanosecondType => i64,
-    DurationSecondType => i64,
-    DurationMillisecondType => i64,
-    DurationMicrosecondType => i64,
-    DurationNanosecondType => i64,
-    Decimal32Type => i32,
-    Decimal64Type => i64,
-    Decimal128Type => i128,
-    Decimal256Type => arrow::datatypes::i256,
-);
 
 /// Canonical bits of a floating-point value: `-0.0` groups with `0.0`, and
 /// every NaN payload groups into one NaN.
@@ -101,40 +35,41 @@ fn order_key(value: f64) -> u64 {
     }
 }
 
-impl DictionaryKey for Float16Type {
-    type Key = u64;
-
-    fn key(value: Self::Native) -> u64 {
-        order_key(f64::from(value))
-    }
-
-    fn prefers_representative(value: Self::Native) -> bool {
-        f64::from(value) == 0.0 && value.is_sign_positive()
-    }
+/// Encode an array whose native values are already the dictionary keys.
+pub(super) fn build_ordered_primitive<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+) -> Option<ValueDictionary>
+where
+    T::Native: Copy + Eq + Ord + Hash,
+{
+    build_distinct(
+        array.len(),
+        |row| array.is_null(row),
+        |row| array.value(row),
+        |_| false,
+        array,
+    )
 }
 
-impl DictionaryKey for Float32Type {
-    type Key = u64;
-
-    fn key(value: Self::Native) -> u64 {
-        order_key(f64::from(value))
-    }
-
-    fn prefers_representative(value: Self::Native) -> bool {
-        f64::from(value) == 0.0 && value.is_sign_positive()
-    }
-}
-
-impl DictionaryKey for Float64Type {
-    type Key = u64;
-
-    fn key(value: Self::Native) -> u64 {
-        order_key(value)
-    }
-
-    fn prefers_representative(value: Self::Native) -> bool {
-        value == 0.0 && value.is_sign_positive()
-    }
+/// Encode a floating-point array. The key normalizes signed zeros and NaN
+/// payloads into one total order, and the zero group keeps positive zero as its
+/// representative so the option reads `0.0`.
+pub(super) fn build_float_primitive<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+) -> Option<ValueDictionary>
+where
+    T::Native: Into<f64>,
+{
+    build_distinct(
+        array.len(),
+        |row| array.is_null(row),
+        |row| order_key(array.value(row).into()),
+        |row| {
+            let value: f64 = array.value(row).into();
+            value == 0.0 && value.is_sign_positive()
+        },
+        array,
+    )
 }
 
 /// Shared dictionary algorithm: one native pass, one code per distinct key, then
