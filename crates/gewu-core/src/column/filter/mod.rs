@@ -13,10 +13,9 @@ pub use range::Bound;
 
 use crate::{
     column::kind::{ColumnCapabilities, LogicalType},
-    filter::Filter,
     predicate::Predicate,
     selection::RowSelection,
-    Error, Result,
+    Error, Filter, Result,
 };
 
 /// Type-aware search for Find operations across all columns.

@@ -8,26 +8,24 @@ pub mod column;
 pub mod dataset;
 mod error;
 mod file;
-mod filter;
 pub(crate) mod query;
 pub mod session;
 pub mod task;
 
 pub use arrow::datatypes::TimeUnit;
 pub use column::{
-    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, Histogram,
-    LogicalType, RangeBounds, RangeHistogram,
+    AxisScale, Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue,
+    Histogram, LogicalType, RangeBounds, RangeHistogram,
 };
-pub use dataset::{AxisScale, Dataset};
+pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
     xlsx_sheet_names, ExportOptions, FileInfo, FileMetadata, FileType, OpenOptions,
     ParquetCompression,
 };
-pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
 pub(crate) use query::{engine, predicate, scope, selection};
-pub use query::{QuerySpec, RowBlock, SortKey, ViewInfo};
-pub use session::Session;
+pub use query::{Filter, QuerySpec, RowBlock, SortKey, ViewInfo};
+pub use session::{FilterEditor, FilterSpec, Session, TextFilterMode};
 pub(crate) use task::analysis;
 pub use task::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,

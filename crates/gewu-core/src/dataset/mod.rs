@@ -11,10 +11,6 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
 };
 
-pub(crate) mod scale;
-
-pub use scale::AxisScale;
-
 use crate::{
     column::{format, index::ValueIndex, Column, ColumnCapabilities, FilterEditorKind},
     file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,

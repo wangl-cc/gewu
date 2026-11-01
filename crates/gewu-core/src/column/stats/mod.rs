@@ -8,9 +8,12 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, Result};
+use crate::{analysis::AnalysisContext, scope::Selection, Bound, Error, Result};
 
 mod logarithmic;
+mod scale;
+
+pub use scale::AxisScale;
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]

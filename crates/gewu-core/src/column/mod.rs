@@ -22,7 +22,7 @@ pub use index::{DistinctResult, DistinctValue};
 pub(crate) use index::{ValueIndex, INDEX_LIMIT};
 pub(crate) use kind::FilterEditorKind;
 pub use kind::{ColumnCapabilities, ColumnInfo, LogicalType};
-pub use stats::{Histogram, RangeBounds, RangeHistogram};
+pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 use crate::{predicate::Predicate, Filter, Result};
 

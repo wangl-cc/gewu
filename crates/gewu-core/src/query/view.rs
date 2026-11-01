@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::Filter;
+use super::filter::Filter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortKey {

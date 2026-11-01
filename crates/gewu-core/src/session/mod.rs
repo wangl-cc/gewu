@@ -17,6 +17,8 @@ mod facet;
 mod find;
 mod query;
 
+pub use facet::{FilterEditor, FilterSpec, TextFilterMode};
+
 /// An active viewing session over an immutable dataset.
 /// Holds a reference to the dataset and manages view versions, filters, and display order.
 pub struct Session {

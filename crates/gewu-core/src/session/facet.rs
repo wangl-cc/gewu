@@ -2,11 +2,50 @@
 
 use super::Session;
 use crate::{
-    column::{index::count_values, stats, FilterEditorKind, LogicalType},
+    column::{index::count_values, stats, DistinctValue, FilterEditorKind, LogicalType},
     predicate::Predicate,
     scope::RowScope,
-    DistinctResult, Error, Filter, Histogram, QuerySpec, Result,
+    DistinctResult, Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
 };
+
+/// The editor and data a frontend needs for one column's filter popover.
+/// The editor is chosen from the whole source column and stays stable as
+/// other filters change. Counts exclude this column's own filters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterSpec {
+    pub nullable: bool,
+    pub editor: FilterEditor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
+)]
+pub enum FilterEditor {
+    /// String filters always offer both modes. Source cardinality only selects
+    /// the initial recommendation; candidate pages are requested separately.
+    Text {
+        modes: Vec<TextFilterMode>,
+        recommended: TextFilterMode,
+    },
+    Range {
+        logical_type: LogicalType,
+        distribution: Option<RangeHistogram>,
+    },
+    /// All source values, including values with zero rows in the current facet.
+    Choices {
+        values: Vec<DistinctValue>,
+    },
+    Contains,
+    NullOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFilterMode {
+    Choices,
+    Contains,
+}
 
 impl Session {
     /// Parse text once at the input boundary, retaining the column's full type.
@@ -38,7 +77,7 @@ impl Session {
 
     /// Describe the filter editor using whole-column cardinality. Facet counts
     /// respect other columns' explicit filters without changing the editor.
-    pub fn filter_spec(&self, column: u32, spec: Option<&QuerySpec>) -> Result<crate::FilterSpec> {
+    pub fn filter_spec(&self, column: u32, spec: Option<&QuerySpec>) -> Result<FilterSpec> {
         self.filter_spec_with_bins(column, spec, 60)
     }
 
@@ -48,7 +87,7 @@ impl Session {
         column: u32,
         spec: Option<&QuerySpec>,
         bins: u32,
-    ) -> Result<crate::FilterSpec> {
+    ) -> Result<FilterSpec> {
         self.filter_spec_with_scale(column, spec, bins, crate::AxisScale::Linear)
     }
 
@@ -59,13 +98,12 @@ impl Session {
         spec: Option<&QuerySpec>,
         bins: u32,
         scale: crate::AxisScale,
-    ) -> Result<crate::FilterSpec> {
+    ) -> Result<FilterSpec> {
         if !(1..=60).contains(&bins) {
             return Err(Error::InvalidArgument(
                 "filter histogram bins must be between 1 and 60".into(),
             ));
         }
-        use crate::{FilterEditor, FilterSpec};
         let col = self.column(column)?;
         if scale == crate::AxisScale::Log10 && !col.capabilities().logarithmic {
             return Err(Error::InvalidArgument(

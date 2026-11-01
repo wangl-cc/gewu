@@ -1,7 +1,8 @@
-//! Explicit filter inputs and frontend editor descriptions.
+//! Declarative filter predicates and query planning costs.
 
-use crate::{DistinctValue, RangeHistogram};
+use crate::Bound;
 
+/// Declarative row-level filter predicate for a single column.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
     /// Equal to text parsed in this column's own type. Strings compare
@@ -16,8 +17,8 @@ pub enum Filter {
     /// Unlike search, the number of typed decimal places does not widen
     /// these bounds. Missing ends are open; invalid or reversed bounds error.
     Range {
-        min: Option<crate::Bound>,
-        max: Option<crate::Bound>,
+        min: Option<Bound>,
+        max: Option<Bound>,
         /// Also match nulls in this column, without bypassing other filters.
         include_nulls: bool,
     },
@@ -68,43 +69,4 @@ impl Filter {
             Filter::Contains { .. } => 5,
         }
     }
-}
-
-/// The editor and data a frontend needs for one column's filter.
-/// The editor is chosen from the whole source column and stays stable as
-/// other filters change. Counts exclude this column's own filters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FilterSpec {
-    pub nullable: bool,
-    pub editor: FilterEditor,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
-)]
-pub enum FilterEditor {
-    /// String filters always offer both modes. Source cardinality only selects
-    /// the initial recommendation; candidate pages are requested separately.
-    Text {
-        modes: Vec<TextFilterMode>,
-        recommended: TextFilterMode,
-    },
-    Range {
-        logical_type: crate::LogicalType,
-        distribution: Option<RangeHistogram>,
-    },
-    /// All source values, including values with zero rows in the current facet.
-    Choices {
-        values: Vec<DistinctValue>,
-    },
-    Contains,
-    NullOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextFilterMode {
-    Choices,
-    Contains,
 }
