@@ -1,5 +1,6 @@
-//! Native primitive encoders. One `PrimitiveKey` key function per physical
-//! type, plus the floating-point value-identity rule those keys share.
+//! Native primitive encoders. Every Arrow primitive type names the key it
+//! produces in the codebook, plus the floating-point value-identity rule those
+//! keys share.
 
 use std::{collections::HashMap, hash::Hash};
 
@@ -18,11 +19,13 @@ use arrow::{
 
 use super::{value_rows, ValueDictionary, MAX_DISTINCT_VALUES, NULL_CODE};
 
-/// How a primitive value becomes a codebook key.
+/// How an Arrow primitive type's values become codebook keys.
 ///
 /// Contract: equal keys must mean "the same displayed value", and key order
-/// must equal value order, because codes are assigned in key order.
-pub(super) trait PrimitiveKey: ArrowPrimitiveType {
+/// must equal value order, because codes are assigned in key order. Integers,
+/// temporal values and decimals use their native value as the key; floats use
+/// the normalized total-order key.
+pub(super) trait DictionaryKey: ArrowPrimitiveType {
     type Key: Copy + Eq + Ord + Hash;
 
     fn key(value: Self::Native) -> Self::Key;
@@ -36,7 +39,7 @@ pub(super) trait PrimitiveKey: ArrowPrimitiveType {
 
 macro_rules! identity_keys {
     ($($array:ty => $native:ty),* $(,)?) => {$(
-        impl PrimitiveKey for $array {
+        impl DictionaryKey for $array {
             type Key = $native;
 
             fn key(value: $native) -> $native {
@@ -98,7 +101,7 @@ fn order_key(value: f64) -> u64 {
     }
 }
 
-impl PrimitiveKey for Float16Type {
+impl DictionaryKey for Float16Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
@@ -110,7 +113,7 @@ impl PrimitiveKey for Float16Type {
     }
 }
 
-impl PrimitiveKey for Float32Type {
+impl DictionaryKey for Float32Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {
@@ -122,7 +125,7 @@ impl PrimitiveKey for Float32Type {
     }
 }
 
-impl PrimitiveKey for Float64Type {
+impl DictionaryKey for Float64Type {
     type Key = u64;
 
     fn key(value: Self::Native) -> u64 {

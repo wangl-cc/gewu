@@ -20,7 +20,7 @@ use arrow::{
 };
 
 use super::{
-    primitive::{build_distinct, PrimitiveKey},
+    primitive::{build_distinct, DictionaryKey},
     value_rows, ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
 
@@ -29,7 +29,7 @@ pub(super) trait BuildDictionary {
     fn build_dictionary(&self) -> Option<ValueDictionary>;
 }
 
-impl<T: PrimitiveKey> BuildDictionary for PrimitiveArray<T> {
+impl<T: DictionaryKey> BuildDictionary for PrimitiveArray<T> {
     fn build_dictionary(&self) -> Option<ValueDictionary> {
         build_distinct(
             self.len(),
