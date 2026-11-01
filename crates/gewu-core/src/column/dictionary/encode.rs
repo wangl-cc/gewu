@@ -3,90 +3,69 @@
 //! scan a normalized key, and text, binary and nested arrays use Arrow's row
 //! format.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, UInt32Array},
     compute::take,
-    datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-        DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    },
+    datatypes::*,
     row::{RowConverter, SortField},
 };
 
 use super::{
-    primitive::{build_distinct, build_float_primitive, build_ordered_primitive},
-    value_rows, ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
+    primitive::{build_float_primitive, build_ordered_primitive},
+    ValueDictionary, CHUNK, MAX_DISTINCT_VALUES, NULL_CODE,
 };
 
 impl ValueDictionary {
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
     pub(crate) fn build(array: &ArrayRef) -> Option<Self> {
+        macro_rules! ordered {
+            ($ty:ident) => {
+                build_ordered_primitive(array.as_primitive::<$ty>())
+            };
+        }
+        macro_rules! float {
+            ($ty:ident) => {
+                build_float_primitive(array.as_primitive::<$ty>())
+            };
+        }
+
         use DataType::*;
         match array.data_type() {
             Dictionary(..) => Self::build_native(array),
             Boolean => build_boolean(array),
             Null => Some(ValueDictionary::all_null(array)),
-            Int8 => build_ordered_primitive(array.as_primitive::<Int8Type>()),
-            Int16 => build_ordered_primitive(array.as_primitive::<Int16Type>()),
-            Int32 => build_ordered_primitive(array.as_primitive::<Int32Type>()),
-            Int64 => build_ordered_primitive(array.as_primitive::<Int64Type>()),
-            UInt8 => build_ordered_primitive(array.as_primitive::<UInt8Type>()),
-            UInt16 => build_ordered_primitive(array.as_primitive::<UInt16Type>()),
-            UInt32 => build_ordered_primitive(array.as_primitive::<UInt32Type>()),
-            UInt64 => build_ordered_primitive(array.as_primitive::<UInt64Type>()),
-            Float16 => build_float_primitive(array.as_primitive::<Float16Type>()),
-            Float32 => build_float_primitive(array.as_primitive::<Float32Type>()),
-            Float64 => build_float_primitive(array.as_primitive::<Float64Type>()),
-            Date32 => build_ordered_primitive(array.as_primitive::<Date32Type>()),
-            Date64 => build_ordered_primitive(array.as_primitive::<Date64Type>()),
-            Time32(TimeUnit::Second) => {
-                build_ordered_primitive(array.as_primitive::<Time32SecondType>())
-            }
-            Time32(TimeUnit::Millisecond) => {
-                build_ordered_primitive(array.as_primitive::<Time32MillisecondType>())
-            }
-            Time64(TimeUnit::Microsecond) => {
-                build_ordered_primitive(array.as_primitive::<Time64MicrosecondType>())
-            }
-            Time64(TimeUnit::Nanosecond) => {
-                build_ordered_primitive(array.as_primitive::<Time64NanosecondType>())
-            }
-            Timestamp(TimeUnit::Second, _) => {
-                build_ordered_primitive(array.as_primitive::<TimestampSecondType>())
-            }
-            Timestamp(TimeUnit::Millisecond, _) => {
-                build_ordered_primitive(array.as_primitive::<TimestampMillisecondType>())
-            }
-            Timestamp(TimeUnit::Microsecond, _) => {
-                build_ordered_primitive(array.as_primitive::<TimestampMicrosecondType>())
-            }
-            Timestamp(TimeUnit::Nanosecond, _) => {
-                build_ordered_primitive(array.as_primitive::<TimestampNanosecondType>())
-            }
-            Duration(TimeUnit::Second) => {
-                build_ordered_primitive(array.as_primitive::<DurationSecondType>())
-            }
-            Duration(TimeUnit::Millisecond) => {
-                build_ordered_primitive(array.as_primitive::<DurationMillisecondType>())
-            }
-            Duration(TimeUnit::Microsecond) => {
-                build_ordered_primitive(array.as_primitive::<DurationMicrosecondType>())
-            }
-            Duration(TimeUnit::Nanosecond) => {
-                build_ordered_primitive(array.as_primitive::<DurationNanosecondType>())
-            }
-            Decimal32(..) => build_ordered_primitive(array.as_primitive::<Decimal32Type>()),
-            Decimal64(..) => build_ordered_primitive(array.as_primitive::<Decimal64Type>()),
-            Decimal128(..) => build_ordered_primitive(array.as_primitive::<Decimal128Type>()),
-            Decimal256(..) => build_ordered_primitive(array.as_primitive::<Decimal256Type>()),
+            Int8 => ordered!(Int8Type),
+            Int16 => ordered!(Int16Type),
+            Int32 => ordered!(Int32Type),
+            Int64 => ordered!(Int64Type),
+            UInt8 => ordered!(UInt8Type),
+            UInt16 => ordered!(UInt16Type),
+            UInt32 => ordered!(UInt32Type),
+            UInt64 => ordered!(UInt64Type),
+            Float16 => float!(Float16Type),
+            Float32 => float!(Float32Type),
+            Float64 => float!(Float64Type),
+            Date32 => ordered!(Date32Type),
+            Date64 => ordered!(Date64Type),
+            Time32(TimeUnit::Second) => ordered!(Time32SecondType),
+            Time32(TimeUnit::Millisecond) => ordered!(Time32MillisecondType),
+            Time64(TimeUnit::Microsecond) => ordered!(Time64MicrosecondType),
+            Time64(TimeUnit::Nanosecond) => ordered!(Time64NanosecondType),
+            Timestamp(TimeUnit::Second, _) => ordered!(TimestampSecondType),
+            Timestamp(TimeUnit::Millisecond, _) => ordered!(TimestampMillisecondType),
+            Timestamp(TimeUnit::Microsecond, _) => ordered!(TimestampMicrosecondType),
+            Timestamp(TimeUnit::Nanosecond, _) => ordered!(TimestampNanosecondType),
+            Duration(TimeUnit::Second) => ordered!(DurationSecondType),
+            Duration(TimeUnit::Millisecond) => ordered!(DurationMillisecondType),
+            Duration(TimeUnit::Microsecond) => ordered!(DurationMicrosecondType),
+            Duration(TimeUnit::Nanosecond) => ordered!(DurationNanosecondType),
+            Decimal32(..) => ordered!(Decimal32Type),
+            Decimal64(..) => ordered!(Decimal64Type),
+            Decimal128(..) => ordered!(Decimal128Type),
+            Decimal256(..) => ordered!(Decimal256Type),
             _ => Self::build_row_format(array),
         }
     }
@@ -97,10 +76,10 @@ impl ValueDictionary {
     fn build_row_format(array: &ArrayRef) -> Option<Self> {
         let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
 
-        // Temporary codes in order of first appearance, and each value's first
+        // Temporary codes in order of first appearance, and each value's representative
         // source row. Row-format bytes sort like the values themselves.
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
-        let mut first_row: Vec<usize> = Vec::new();
+        let mut representative_row: Vec<usize> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(array.len());
         let mut has_null = false;
         for start in (0..array.len()).step_by(CHUNK) {
@@ -119,12 +98,12 @@ impl ValueDictionary {
                 let code = match seen.get(bytes) {
                     Some(&code) => code,
                     None => {
-                        if first_row.len() == MAX_DISTINCT_VALUES {
+                        if representative_row.len() == MAX_DISTINCT_VALUES {
                             return None;
                         }
-                        let code = first_row.len() as u8;
+                        let code = representative_row.len() as u8;
                         seen.insert(bytes.into(), code);
-                        first_row.push(source_row);
+                        representative_row.push(source_row);
                         code
                     }
                 };
@@ -133,25 +112,13 @@ impl ValueDictionary {
         }
 
         // Renumber codes into value order; null keeps its reserved code.
-        let mut key_of: Vec<&[u8]> = vec![&[]; first_row.len()];
+        let mut key_of: Vec<&[u8]> = vec![&[]; representative_row.len()];
         for (bytes, &code) in &seen {
             key_of[code as usize] = bytes;
         }
-        let mut order: Vec<u8> = (0..first_row.len() as u8).collect();
+        let mut order: Vec<u8> = (0..representative_row.len() as u8).collect();
         order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(key_of[b as usize]));
-        let mut remap = [0u8; MAX_DISTINCT_VALUES];
-        for (new, &old) in order.iter().enumerate() {
-            remap[old as usize] = new as u8;
-        }
-        for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
-            *code = remap[*code as usize];
-        }
-
-        Some(Self {
-            codes,
-            values: value_rows(array.as_ref(), &first_row, &order)?,
-            has_null,
-        })
+        finish_dictionary(codes, &representative_row, &order, has_null, array.as_ref())
     }
 
     /// Encode a native Dictionary. Arrow already encodes the values into
@@ -279,4 +246,82 @@ fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Shared dictionary algorithm: one native pass, one code per distinct key, then
+/// codes renumbered into key order.
+pub(super) fn build_distinct<K: Copy + Eq + Ord + Hash>(
+    len: usize,
+    is_null: impl Fn(usize) -> bool,
+    key_at: impl Fn(usize) -> K,
+    prefer_at: impl Fn(usize) -> bool,
+    array: &dyn Array,
+) -> Option<ValueDictionary> {
+    let mut seen: HashMap<K, u8> = HashMap::new();
+    let mut key_of: Vec<K> = Vec::new();
+    let mut representative_row: Vec<usize> = Vec::new();
+    let mut codes: Vec<u8> = Vec::with_capacity(len);
+    let mut has_null = false;
+    for row in 0..len {
+        if is_null(row) {
+            has_null = true;
+            codes.push(NULL_CODE);
+            continue;
+        }
+        let key = key_at(row);
+        let code = match seen.get(&key) {
+            Some(&code) => code,
+            None => {
+                if key_of.len() == MAX_DISTINCT_VALUES {
+                    return None;
+                }
+                let code = key_of.len() as u8;
+                seen.insert(key, code);
+                key_of.push(key);
+                representative_row.push(row);
+                code
+            }
+        };
+        if prefer_at(row) {
+            representative_row[code as usize] = row;
+        }
+        codes.push(code);
+    }
+    let mut order: Vec<u8> = (0..key_of.len() as u8).collect();
+    order.sort_unstable_by(|&a, &b| key_of[a as usize].cmp(&key_of[b as usize]));
+    finish_dictionary(codes, &representative_row, &order, has_null, array)
+}
+
+/// Renumber codes into value order and assemble the dictionary.
+fn finish_dictionary(
+    mut codes: Vec<u8>,
+    representative_row: &[usize],
+    order: &[u8],
+    has_null: bool,
+    array: &dyn Array,
+) -> Option<ValueDictionary> {
+    let mut remap = [0u8; MAX_DISTINCT_VALUES];
+    for (new, &old) in order.iter().enumerate() {
+        remap[old as usize] = new as u8;
+    }
+    for code in codes.iter_mut().filter(|code| **code != NULL_CODE) {
+        *code = remap[*code as usize];
+    }
+    Some(ValueDictionary {
+        codes,
+        values: value_rows(array, representative_row, order)?,
+        has_null,
+    })
+}
+
+/// Build the dictionary's `values` array in code order from each value's
+/// representative row.
+fn value_rows(array: &dyn Array, representative_row: &[usize], order: &[u8]) -> Option<ArrayRef> {
+    let rows = UInt32Array::from(
+        order
+            .iter()
+            .map(|&old| representative_row[old as usize] as u32)
+            .collect::<Vec<_>>(),
+    );
+    take(array, &rows, None).ok()
 }

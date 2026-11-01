@@ -16,10 +16,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use arrow::{
-    array::{Array, ArrayRef, UInt32Array},
-    compute::take,
-};
+use arrow::array::{Array, ArrayRef};
 use streaming::{count_values, ValueCounts};
 
 use crate::{
@@ -222,22 +219,6 @@ impl ValueDictionary {
         }
         Ok(self.predicate_from_allowed(allowed))
     }
-}
-
-/// Build the dictionary's `values` array in code order from each value's
-/// representative row.
-pub(super) fn value_rows(
-    array: &dyn Array,
-    representative_row: &[usize],
-    order: &[u8],
-) -> Option<ArrayRef> {
-    let rows = UInt32Array::from(
-        order
-            .iter()
-            .map(|&old| representative_row[old as usize] as u32)
-            .collect::<Vec<_>>(),
-    );
-    take(array, &rows, None).ok()
 }
 
 /// Distinct values with counts over `rows`: the dictionary when the column has
