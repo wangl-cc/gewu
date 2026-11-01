@@ -20,7 +20,7 @@ Float16, Float32 and Float64 Find uses the precision of the input:
 | `3` | `[2.5, 3.5)` |
 | `1e3` | `[500, 1500)` |
 
-The lower edge is included and the upper edge is excluded. Matching also includes the exact parsed target, so a precision interval that collapses at the column's floating-point resolution still finds that value. Find accepts `nan` and `inf`.
+The lower edge is included and the upper edge is excluded. Matching also includes the exact parsed target, so a precision interval that collapses at the column's floating-point resolution still finds that value. Find accepts `nan` and `inf`. Value selection groups `-0.0` with `0.0` and every NaN payload into one NaN option, so a column never shows duplicate zero or NaN choices.
 
 Explicit equality parses to the native floating-point type, including Float32 rounding for a Float32 column. Explicit range filters use inclusive endpoints and do not widen with input precision. NaN is distinct from null; histograms count it separately. Linear histograms include infinities in the outer bins; logarithmic histograms exclude them and report their count.
 
@@ -54,9 +54,9 @@ Find and equality accept `true` or `false`, ignoring ASCII case. They compare th
 
 ## Nested and other values
 
-Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a supported nested or fallback type instead searches its displayed text, so it can differ from recursive typed Find.
+Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a nested type instead searches its displayed text, so it can differ from recursive typed Find.
 
-Binary columns are excluded from Find. Other fallback types use a substring of their displayed value. Available filter operations depend on the logical type; a displayed string does not imply every filter operation is supported.
+Binary columns are excluded from Find, and map columns are not searched. Available filter operations depend on the logical type and its encoding: a dictionary-encoded column is discrete, so it offers value choices instead of range filters, and a displayed string does not imply every filter operation is supported. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
 
 ## Nulls
 

@@ -6,7 +6,6 @@
 //! preparation, capability metadata and visible row blocks are UI-thread APIs.
 
 mod analysis;
-mod document;
 mod error;
 mod export;
 mod file;
@@ -14,6 +13,7 @@ mod filter;
 mod find;
 mod scale;
 mod scatter;
+mod session;
 mod text_choices;
 mod view;
 
@@ -21,7 +21,6 @@ pub use analysis::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
     DistinctValue, Histogram, LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
 };
-pub use document::GewuDocument;
 pub use error::GewuError;
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
 pub use file::{
@@ -34,7 +33,8 @@ pub use filter::{
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindOperation, FindSession};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
+pub use session::GewuSession;
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use view::{RowBlock, SortKey, ViewInfo, ViewState};
+pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo};
 
 uniffi::setup_scaffolding!();

@@ -1,6 +1,6 @@
 use std::fs;
 
-use gewu_core::{Document, Error, FileType, OpenOptions};
+use gewu_core::{Error, FileType, OpenOptions, Session};
 
 #[test]
 fn feature_availability_matches_open_errors() {
@@ -15,7 +15,7 @@ fn feature_availability_matches_open_errors() {
         if !enabled {
             let path = directory.path().join(format!("disabled.{extension}"));
             fs::write(&path, []).unwrap();
-            assert!(matches!(Document::open(&path), Err(Error::Unsupported(_))));
+            assert!(matches!(Session::open(&path), Err(Error::Unsupported(_))));
             if format == FileType::Xlsx {
                 assert!(matches!(
                     gewu_core::xlsx_sheet_names(&path),
@@ -23,7 +23,7 @@ fn feature_availability_matches_open_errors() {
                 ));
             }
             assert!(matches!(
-                Document::open_with_options(&path, &OpenOptions {
+                Session::open_with_options(&path, &OpenOptions {
                     format: Some(format),
                     ..Default::default()
                 }),
@@ -34,7 +34,7 @@ fn feature_availability_matches_open_errors() {
 }
 
 #[cfg(any(feature = "csv", feature = "xlsx"))]
-fn assert_disabled_exports(doc: &Document) {
+fn assert_disabled_exports(doc: &Session) {
     for format in [
         FileType::Parquet,
         FileType::Csv,
@@ -53,7 +53,7 @@ fn assert_disabled_exports(doc: &Document) {
 #[cfg(feature = "csv")]
 mod delimited {
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
 
     use super::*;
 
@@ -63,7 +63,7 @@ mod delimited {
         for (extension, delimiter) in [("CSV", ','), ("tsv", '\t')] {
             let path = directory.path().join(format!("source.{extension}"));
             fs::write(&path, format!("PAR1_id{delimiter}label\n1{delimiter}ok\n")).unwrap();
-            let doc = Document::open(path).unwrap();
+            let doc = Session::open(path).unwrap();
             assert_eq!(doc.info().row_count, 1);
             assert_eq!(doc.column_index("PAR1_id"), Some(0));
         }
@@ -74,7 +74,7 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed.csv");
         fs::write(&path, "id,ordinary\n9007199254740993,42\n1.5,2.5\n").unwrap();
-        let doc = Document::open(path).unwrap();
+        let doc = Session::open(path).unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.schema().field(1).data_type(), &DataType::Float64);
         assert_eq!(doc.rows(0, 0, 2, &[0]).unwrap().cells, [
@@ -92,7 +92,7 @@ mod delimited {
             let path = directory.path().join(format!("source.{extension}"));
             let text = format!("7{delimiter}true{delimiter}1.25{delimiter}\"雪{delimiter}\"\"quoted\"\"\nline\"\n8{delimiter}false{delimiter}{delimiter}plain\n");
             fs::write(&path, text).unwrap();
-            let doc = Document::open_with_options(&path, &OpenOptions {
+            let doc = Session::open_with_options(&path, &OpenOptions {
                 has_header: false,
                 ..Default::default()
             })
@@ -128,7 +128,7 @@ mod delimited {
         }
         contents.push_str("late text\n");
         fs::write(&path, contents).unwrap();
-        let doc = Document::open(path).unwrap();
+        let doc = Session::open(path).unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.info().row_count, 70_001);
         let rows = doc
@@ -143,17 +143,17 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("table.custom");
         fs::write(&path, "id\tlabel\n1\t雪\n").unwrap();
-        assert!(matches!(Document::open(&path), Err(Error::Unsupported(_))));
+        assert!(matches!(Session::open(&path), Err(Error::Unsupported(_))));
         let options = OpenOptions {
             format: Some(FileType::Tsv),
             ..Default::default()
         };
-        let doc = Document::open_with_options(&path, &options).unwrap();
+        let doc = Session::open_with_options(&path, &options).unwrap();
         assert_eq!(doc.info().format, FileType::Tsv);
         assert_eq!(doc.column_index("label"), Some(1));
         assert_eq!(doc.info().row_count, 1);
         assert!(matches!(
-            Document::open_with_options(&path, &OpenOptions {
+            Session::open_with_options(&path, &OpenOptions {
                 sheet: Some("Sheet1".into()),
                 ..options.clone()
             }),
@@ -161,7 +161,7 @@ mod delimited {
         ));
         for contents in ["a\tb\n1\t2\t3\n", "a\tb\n1\n"] {
             fs::write(&path, contents).unwrap();
-            assert!(Document::open_with_options(&path, &options).is_err());
+            assert!(Session::open_with_options(&path, &options).is_err());
         }
     }
 
@@ -170,20 +170,19 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.csv");
         fs::write(&source, "id,label,enabled\n3,\"雪,\"\"quoted\"\"\nline\",true\n1,omit,false\n2,\"tab\tcell\",false\n").unwrap();
-        let doc = Document::open(source).unwrap();
+        let doc = Session::open(source).unwrap();
         let version = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::Range {
+            .apply_view(
+                &QuerySpec::single(0, Filter::Range {
                     include_nulls: false,
-                    column: 0,
                     min: Some(doc.parse_bound(0, "2").unwrap()),
                     max: None,
-                }],
-                sort: vec![SortKey {
+                })
+                .with_sort(vec![SortKey {
                     column: 0,
                     descending: true,
-                }],
-            })
+                }]),
+            )
             .unwrap()
             .version;
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
@@ -191,7 +190,7 @@ mod delimited {
             let export = doc.prepare_export(version, &[1, 0], format).unwrap();
             export.write(&path).unwrap();
             assert_eq!(export.progress().rows_written, 2);
-            let reloaded = Document::open(path).unwrap();
+            let reloaded = Session::open(path).unwrap();
             assert_eq!(reloaded.info().row_count, 2);
             assert_eq!(reloaded.schema().field(0).name(), "label");
             assert_eq!(reloaded.schema().field(1).name(), "id");
@@ -204,13 +203,9 @@ mod delimited {
             );
         }
         let empty = doc
-            .apply_view(&ViewState {
-                filters: vec![gewu_core::Filter::Equals {
-                    column: 1,
-                    value: "absent-value".into(),
-                }],
-                ..Default::default()
-            })
+            .apply_view(&QuerySpec::single(1, Filter::Equals {
+                value: "absent-value".into(),
+            }))
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
@@ -218,7 +213,7 @@ mod delimited {
                 .unwrap()
                 .write(&path)
                 .unwrap();
-            let reloaded = Document::open(path).unwrap();
+            let reloaded = Session::open(path).unwrap();
             assert_eq!(reloaded.info().row_count, 0);
             assert_eq!(reloaded.schema().field(0).name(), "label");
             assert_eq!(reloaded.schema().field(1).name(), "id");
@@ -231,7 +226,7 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, SortKey, ViewState};
+    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
@@ -247,7 +242,7 @@ mod xlsx {
         sheet.write_number_with_format(1, 0, 0.5, &format).unwrap();
         sheet.write_number_with_format(2, 0, 1.0, &format).unwrap();
         workbook.save(&path).unwrap();
-        let doc = Document::open(path).unwrap();
+        let doc = Session::open(path).unwrap();
         assert_eq!(
             doc.schema().field(0).data_type(),
             &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
@@ -284,7 +279,7 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("source.xlsx");
         workbook(&path);
-        let doc = Document::open(&path).unwrap();
+        let doc = Session::open(&path).unwrap();
         assert_eq!(doc.info().format, FileType::Xlsx);
         assert_eq!(doc.info().row_count, 2);
         assert_eq!(doc.info().metadata, FileMetadata::Xlsx {
@@ -305,7 +300,7 @@ mod xlsx {
             has_header: false,
             ..Default::default()
         };
-        let raw = Document::open_with_options(&path, &options).unwrap();
+        let raw = Session::open_with_options(&path, &options).unwrap();
         assert_eq!(raw.info().row_count, 2);
         assert_eq!(raw.schema().field(0).name(), "column_1");
         assert_eq!(
@@ -318,7 +313,7 @@ mod xlsx {
             sheet: "Raw".into(),
             sheets: vec!["数据".into(), "Raw".into()]
         });
-        let header = Document::open_with_options(&path, &OpenOptions {
+        let header = Session::open_with_options(&path, &OpenOptions {
             has_header: true,
             ..options
         })
@@ -326,7 +321,7 @@ mod xlsx {
         assert_eq!(header.info().row_count, 1);
         assert_eq!(header.schema().field(0).name(), "10");
         assert!(matches!(
-            Document::open_with_options(path, &OpenOptions {
+            Session::open_with_options(path, &OpenOptions {
                 sheet: Some("missing".into()),
                 ..Default::default()
             }),
@@ -339,9 +334,9 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.xlsx");
         workbook(&source);
-        let doc = Document::open(source).unwrap();
+        let doc = Session::open(source).unwrap();
         let version = doc
-            .apply_view(&ViewState {
+            .apply_view(&QuerySpec {
                 sort: vec![SortKey {
                     column: 0,
                     descending: false,
@@ -355,7 +350,7 @@ mod xlsx {
             .unwrap()
             .write(&destination)
             .unwrap();
-        let reloaded = Document::open(&destination).unwrap();
+        let reloaded = Session::open(&destination).unwrap();
         assert_eq!(
             reloaded
                 .rows(reloaded.current_view().version, 0, 2, &[0, 1])
@@ -364,19 +359,15 @@ mod xlsx {
             doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .apply_view(&ViewState {
-                filters: vec![gewu_core::Filter::Equals {
-                    column: 1,
-                    value: "absent-value".into(),
-                }],
-                ..Default::default()
-            })
+            .apply_view(&QuerySpec::single(1, Filter::Equals {
+                value: "absent-value".into(),
+            }))
             .unwrap();
         doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
-        let reloaded = Document::open(destination).unwrap();
+        let reloaded = Session::open(destination).unwrap();
         assert_eq!(reloaded.info().row_count, 0);
         assert_eq!(reloaded.schema().field(0).name(), "label");
         assert_eq!(reloaded.schema().field(1).name(), "enabled");
@@ -387,7 +378,7 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.xlsx");
         workbook(&source);
-        let doc = Document::open(source).unwrap();
+        let doc = Session::open(source).unwrap();
         let destination = directory.path().join("existing.xlsx");
         fs::write(&destination, "keep me").unwrap();
         let export = doc

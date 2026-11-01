@@ -6,7 +6,7 @@ Explicit column filters narrow the displayed rows. Toolbar Find is separate: it 
 
 Find searches all columns in the current filtered row set, including columns outside the rendered viewport. Matches follow display row and column order; Next and Previous wrap, and navigation reveals the row and column. Highlight storage is limited to visible blocks, but navigation pages continue through the complete view without a hit-count ceiling. Find does not report an exact total unless one is computed separately.
 
-Changing Find does not alter `ViewState`, row contents, export contents or inspector statistics. Sorting, filtering, changing the query or closing the document invalidates the captured Find session.
+Changing Find does not alter `QuerySpec`, row contents, export contents or inspector statistics. Sorting, filtering, changing the query or closing the document invalidates the captured Find session.
 
 ## Combining filter conditions
 
@@ -30,11 +30,13 @@ For example, a price range and a city selection require both conditions to match
 
 Parsing, precision, case sensitivity and nested-value behavior are defined once in [data types](data-types.md). In particular, the period or precision expansion used by Find does not apply to explicit range filters.
 
+Key-based value selection (`InValues`) is available for columns with at most 255 non-null distinct values. Larger text columns keep exact text selection (`TextValues`), and other large columns use range or text matching instead.
+
 ## Editor selection
 
-Text columns offer both value selection and text matching. Up to 500 distinct source values, including null, recommends value selection initially; otherwise text matching is recommended. Users can switch modes regardless of this threshold.
+Text columns offer both value selection and text matching. Up to 255 non-null distinct source values (plus null) recommends value selection initially; otherwise text matching is recommended. Users can switch modes regardless of this threshold.
 
-Other columns with up to 500 distinct values use a value list. Higher-cardinality ordered columns use a range editor. Remaining columns use text matching where supported, or null-only filtering. The recommendation comes from the source column and stays stable as filters change.
+Other columns with up to 255 non-null distinct values use a value list. Higher-cardinality ordered columns use a range editor. Remaining columns use text matching where supported, or null-only filtering. The recommendation comes from the source column and stays stable as filters change.
 
 ## Candidate values and counts
 

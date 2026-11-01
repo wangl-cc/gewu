@@ -169,7 +169,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.textSize = textSize
             header.filtered = model.appliedFilterColumns.contains(UInt32(i))
-            let sort = model.appliedState.sort.first { $0.column == UInt32(i) }
+            let sort = model.appliedSpec.sort.first { $0.column == UInt32(i) }
             header.sorted = sort != nil
             header.sortAscending = !(sort?.descending ?? false)
         }
@@ -510,7 +510,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let column = UInt32(col)
         let content = ColumnFilterView(
             doc: model.doc, column: column, info: model.info.columns[col],
-            state: model.state, current: model.columnFilters[column] ?? []
+            querySpec: model.spec, current: model.columnFilters[column] ?? []
         ) { [weak self] filters in
             self?.closePopover()
             self?.model.setFilters(filters, column: column)

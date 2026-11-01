@@ -10,7 +10,7 @@ final class TextChoicesModel: ObservableObject {
     private let session = TextChoiceSession()
 
     func load(
-        document: GewuDocument, column: UInt32, state: ViewState,
+        document: GewuDocument, column: UInt32, querySpec: QuerySpec,
         query: String, after: TextChoiceCursor?
     ) async {
         guard !Task.isCancelled else { return }
@@ -22,7 +22,7 @@ final class TextChoicesModel: ObservableObject {
         do {
             try await Task.sleep(for: .milliseconds(200))
             let result = try await session.page(
-                document: document, column: column, state: state,
+                document: document, column: column, querySpec: querySpec,
                 query: query, after: after, ticket: ticket)
             guard !Task.isCancelled, session.isCurrent(ticket) else { return }
             page = result
@@ -78,14 +78,14 @@ private final class TextChoiceSession: @unchecked Sendable {
         job?.cancel()
     }
 
-    private func prepared(document: GewuDocument, column: UInt32, state: ViewState) throws -> TextChoices {
+    private func prepared(document: GewuDocument, column: UInt32, querySpec: QuerySpec) throws -> TextChoices {
         lock.lock()
         let existing = job
         lock.unlock()
         if let existing { return existing }
         // Preparation computes the facet and currently has no cancellation handle.
         // If closed meanwhile, cancel the returned job before starting any page.
-        let prepared = try document.prepareTextChoices(column: column, state: state)
+        let prepared = try document.prepareTextChoices(column: column, spec: querySpec)
         lock.lock()
         let closed = closed
         if !closed {
@@ -108,14 +108,14 @@ private final class TextChoiceSession: @unchecked Sendable {
     }
 
     func page(
-        document: GewuDocument, column: UInt32, state: ViewState,
+        document: GewuDocument, column: UInt32, querySpec: QuerySpec,
         query: String, after: TextChoiceCursor?, ticket: UInt64
     ) async throws -> TextChoicePage {
         try await withCheckedThrowingContinuation { continuation in
             worker.async {
                 do {
                     guard self.isCurrent(ticket) else { throw CancellationError() }
-                    let job = try self.prepared(document: document, column: column, state: state)
+                    let job = try self.prepared(document: document, column: column, querySpec: querySpec)
                     let generation = try self.pageGeneration(for: ticket)
                     let page = try job.pageForGeneration(
                         query: query, after: after, limit: 100,

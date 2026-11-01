@@ -4,7 +4,7 @@ struct ColumnFilterView: View {
     let doc: GewuDocument
     let column: UInt32
     let info: ColumnInfo
-    let state: ViewState
+    let querySpec: QuerySpec
     let current: [Filter]
     let onApply: ([Filter]) -> Void
 
@@ -44,7 +44,7 @@ struct ColumnFilterView: View {
         switch spec.editor {
         case .text(let modes, let recommended):
             TextFilterView(
-                document: doc, column: column, nullable: spec.nullable, state: state,
+                document: doc, column: column, nullable: spec.nullable, querySpec: querySpec,
                 modes: modes, recommended: recommended, current: current, onApply: onApply)
         case .range(_, let distribution):
             RangeFilterView(
@@ -68,9 +68,9 @@ struct ColumnFilterView: View {
         do {
             let doc = doc
             let column = column
-            let state = state
+            let querySpec = querySpec
             let spec = try await Task.detached {
-                try doc.filterSpecWithBins(column: column, state: state, bins: bins, scale: scale)
+                try doc.filterSpecWithBins(column: column, spec: querySpec, bins: bins, scale: scale)
             }
             .value
             guard !Task.isCancelled else { return }

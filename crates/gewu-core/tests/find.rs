@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, Document, Error, Filter, SortKey, ViewState, MAX_FIND_HIGHLIGHT_ROWS,
+    CellMatch, Error, Filter, QuerySpec, Session, SortKey, MAX_FIND_HIGHLIGHT_ROWS,
     MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Document) {
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(file.path()).unwrap();
+    let doc = Session::open(file.path()).unwrap();
     (file, doc)
 }
 
@@ -83,16 +83,15 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
-        .apply_view(&ViewState {
-            sort: vec![SortKey {
+        .apply_view(
+            &QuerySpec::single(2, Filter::Equals {
+                value: "true".into(),
+            })
+            .with_sort(vec![SortKey {
                 column: 0,
                 descending: true,
-            }],
-            filters: vec![Filter::Equals {
-                column: 2,
-                value: "true".into(),
-            }],
-        })
+            }]),
+        )
         .unwrap();
     let find = doc.prepare_find(view.version, "12", &[0, 1]).unwrap();
     assert_eq!(find.next(None, 10).unwrap(), vec![
@@ -119,7 +118,7 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     ]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert_eq!(find.highlight(0, 3).unwrap().matched, highlight.matched);
 }
 

@@ -8,8 +8,8 @@ enum NullMode: Int {
         self = .include
         for filter in filters {
             switch filter {
-            case .isNull(_, let negate): self = negate ? .exclude : .only
-            case .range(_, _, _, let includeNulls), .contains(_, _, _, let includeNulls):
+            case .isNull(let negate): self = negate ? .exclude : .only
+            case .range(_, _, let includeNulls), .contains(_, _, let includeNulls):
                 // An explicit null-only condition takes precedence if filters are combined.
                 if self != .only { self = includeNulls ? .include : .exclude }
             default: break
@@ -17,11 +17,11 @@ enum NullMode: Int {
         }
     }
 
-    func filter(column: UInt32) -> Filter? {
+    var filter: Filter? {
         switch self {
         case .include: nil
-        case .exclude: .isNull(column: column, negate: true)
-        case .only: .isNull(column: column, negate: false)
+        case .exclude: .isNull(negate: true)
+        case .only: .isNull(negate: false)
         }
     }
 }
@@ -36,7 +36,7 @@ struct NullFilterView: View {
         HStack {
             NullModePicker(selection: $nullMode)
             Spacer()
-            Button("Apply") { onApply(nullMode.filter(column: column).map { [$0] } ?? []) }
+            Button("Apply") { onApply(nullMode.filter.map { [$0] } ?? []) }
                 .keyboardShortcut(.defaultAction)
         }
         .onAppear { nullMode = NullMode(current) }

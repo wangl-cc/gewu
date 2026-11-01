@@ -118,7 +118,7 @@ struct RangeFilterView: View {
     private func restore() {
         reset()
         nullMode = NullMode(current)
-        for case .range(_, let min, let max, _) in current {
+        for case .range(let min, let max, _) in current {
             lowerBound = min
             upperBound = max
         }
@@ -239,7 +239,7 @@ struct RangeFilterView: View {
     }
 
     private func apply() {
-        if nullMode == .only, let filter = nullMode.filter(column: column) {
+        if nullMode == .only, let filter = nullMode.filter {
             onApply([filter])
             return
         }
@@ -247,12 +247,12 @@ struct RangeFilterView: View {
             let min = lowerEdited ? try parse(minimum) : lowerBound
             let max = upperEdited ? try parse(maximum) : upperBound
             if min == nil && max == nil {
-                onApply(nullMode.filter(column: column).map { [$0] } ?? [])
+                onApply(nullMode.filter.map { [$0] } ?? [])
             } else {
                 let filter = Filter.range(
-                    column: column, min: min, max: max,
+                    min: min, max: max,
                     includeNulls: nullMode == .include)
-                try doc.validateFilter(filter: filter)
+                try doc.validateFilter(column: column, filter: filter)
                 onApply([filter])
             }
         } catch {

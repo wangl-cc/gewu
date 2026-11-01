@@ -11,16 +11,16 @@ use arrow::{
     datatypes::{DataType, Field, Int32Type},
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use gewu_core::{Document, Filter, SortKey, ViewState};
+use gewu_core::{Filter, QuerySpec, Session, SortKey};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Document) {
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let document = Document::open(file.path()).unwrap();
+    let document = Session::open(file.path()).unwrap();
     (file, document)
 }
 
@@ -91,13 +91,9 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Equals {
-                column: 1,
-                value: "true".into(),
-            }],
-            ..Default::default()
-        })
+        .apply_view(&QuerySpec::single(1, Filter::Equals {
+            value: "true".into(),
+        }))
         .unwrap();
     assert_eq!(filtered.row_count, 20_000);
     let dictionary_find = dictionary_doc
@@ -132,7 +128,7 @@ fn find_scans(c: &mut Criterion) {
     }));
     let (_wide_file, wide_doc) = document(columns);
     let sorted = wide_doc
-        .apply_view(&ViewState {
+        .apply_view(&QuerySpec {
             sort: vec![SortKey {
                 column: 0,
                 descending: true,

@@ -1,5 +1,5 @@
 //! File adapters translate external formats to and from Arrow data.
-//! Document owns decoded data; Export owns snapshots and destination commits.
+//! Dataset owns decoded data; Export owns snapshots and destination commits.
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 use std::sync::atomic::Ordering;
@@ -171,7 +171,7 @@ pub(crate) struct LoadedFile {
 /// cells in an individual sheet do not prevent listing the others. Workbook
 /// metadata, styles and shared strings are still read; this is blocking I/O.
 /// Returns an empty list when the workbook has no worksheets. The path must
-/// identify an XLSX file under the same detection rules as [`crate::Document::open`].
+/// identify an XLSX file under the same detection rules as [`crate::Session::open`].
 pub fn xlsx_sheet_names(path: impl AsRef<Path>) -> Result<Vec<String>> {
     FileType::Xlsx.require_enabled()?;
     let path = path.as_ref();

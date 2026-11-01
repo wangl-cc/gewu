@@ -8,12 +8,10 @@ use arrow::{
 
 use crate::Result;
 
-pub(crate) fn options() -> FormatOptions<'static> {
-    FormatOptions::default().with_display_error(true)
-}
+const FORMAT_OPTIONS: FormatOptions<'static> = FormatOptions::new().with_display_error(true);
 
 pub(crate) fn formatter(array: &dyn Array) -> Result<ArrayFormatter<'_>> {
-    Ok(ArrayFormatter::try_new(array, &options())?)
+    Ok(ArrayFormatter::try_new(array, &FORMAT_OPTIONS)?)
 }
 
 /// Format one cell, `None` for null.

@@ -9,37 +9,30 @@ use crate::{DistinctValue, Histogram, LogicalType};
 #[derive(uniffi::Enum)]
 pub enum Filter {
     TextValues {
-        column: u32,
         values: Vec<Option<String>>,
         exclude: bool,
     },
     InValues {
-        column: u32,
         keys: Vec<u64>,
     },
     IsNull {
-        column: u32,
         negate: bool,
     },
     Contains {
-        column: u32,
         text: String,
         case_sensitive: bool,
         include_nulls: bool,
     },
     /// Exact typed equality; parsing is owned by the column's type.
     Equals {
-        column: u32,
         value: String,
     },
     /// Any exact typed equality, without a distinct-value index.
     EqualsAny {
-        column: u32,
         values: Vec<String>,
     },
     /// Inclusive typed bounds. A missing endpoint is open.
     Range {
-        column: u32,
         min: Option<Arc<Bound>>,
         max: Option<Arc<Bound>>,
         include_nulls: bool,
@@ -169,37 +162,25 @@ impl From<core::FilterSpec> for FilterSpec {
 impl From<Filter> for core::Filter {
     fn from(filter: Filter) -> Self {
         match filter {
-            Filter::TextValues {
-                column,
-                values,
-                exclude,
-            } => Self::TextValues {
-                column,
-                values,
-                exclude,
-            },
-            Filter::InValues { column, keys } => Self::InValues { column, keys },
-            Filter::IsNull { column, negate } => Self::IsNull { column, negate },
+            Filter::TextValues { values, exclude } => Self::TextValues { values, exclude },
+            Filter::InValues { keys } => Self::InValues { keys },
+            Filter::IsNull { negate } => Self::IsNull { negate },
             Filter::Contains {
-                column,
                 text,
                 case_sensitive,
                 include_nulls,
             } => Self::Contains {
-                column,
                 text,
                 case_sensitive,
                 include_nulls,
             },
-            Filter::Equals { column, value } => Self::Equals { column, value },
-            Filter::EqualsAny { column, values } => Self::EqualsAny { column, values },
+            Filter::Equals { value } => Self::Equals { value },
+            Filter::EqualsAny { values } => Self::EqualsAny { values },
             Filter::Range {
-                column,
                 min,
                 max,
                 include_nulls,
             } => Self::Range {
-                column,
                 min: min.map(|bound| bound.inner.clone()),
                 max: max.map(|bound| bound.inner.clone()),
                 include_nulls,

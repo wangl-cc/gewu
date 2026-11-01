@@ -28,12 +28,12 @@ struct ContainsEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Contains…", text: $draft.text).textFieldStyle(.roundedBorder)
-                .onSubmit { onApply(draft.filters(column: column)) }
+                .onSubmit { onApply(draft.filters()) }
             Toggle("Match Case", isOn: $draft.caseSensitive).toggleStyle(.checkbox)
             HStack {
                 if nullable { NullModePicker(selection: $draft.nullMode) }
                 Spacer()
-                Button("Apply") { onApply(draft.filters(column: column)) }
+                Button("Apply") { onApply(draft.filters()) }
                     .keyboardShortcut(.defaultAction)
             }
         }

@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{AnalysisSection, Document, Filter, SortKey, ViewState};
+use gewu_core::{AnalysisSection, Filter, QuerySpec, Session, SortKey};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -26,7 +26,7 @@ fn bench_file() -> PathBuf {
     path
 }
 
-fn col(doc: &Document, name: &str) -> u32 {
+fn col(doc: &Session, name: &str) -> u32 {
     doc.column_index(name)
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
@@ -35,12 +35,12 @@ fn open(c: &mut Criterion) {
     let path = bench_file();
     let mut g = c.benchmark_group("open");
     g.sample_size(10);
-    g.bench_function("parquet_2m", |b| b.iter(|| Document::open(&path).unwrap()));
+    g.bench_function("parquet_2m", |b| b.iter(|| Session::open(&path).unwrap()));
     g.finish();
 }
 
 fn apply_view(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let (price, score, rating, label, city) = (
         col(&doc, "price"),
         col(&doc, "score"),
@@ -52,71 +52,59 @@ fn apply_view(c: &mut Criterion) {
     // Build the label index once, so InValues measures filtering only.
     let cat = doc.keys_for_labels(label, &[Some("cat".into())]).unwrap();
 
-    let cases: Vec<(&str, ViewState)> = vec![
-        ("no_filter", ViewState::default()),
-        ("range_1", ViewState {
-            filters: vec![Filter::Range {
+    let cases: Vec<(&str, QuerySpec)> = vec![
+        ("no_filter", QuerySpec::default()),
+        (
+            "range_1",
+            QuerySpec::default().with_filter(price, Filter::Range {
                 include_nulls: false,
-                column: price,
                 min: Some(doc.make_bound_i64(price, 100).unwrap()),
                 max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-            }],
-            ..Default::default()
-        }),
-        ("range_3", ViewState {
-            filters: vec![
-                Filter::Range {
+            }),
+        ),
+        (
+            "range_3",
+            QuerySpec::default()
+                .with_filter(price, Filter::Range {
                     include_nulls: false,
-                    column: price,
                     min: Some(doc.make_bound_i64(price, 100).unwrap()),
                     max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-                },
-                Filter::Range {
+                })
+                .with_filter(score, Filter::Range {
                     include_nulls: false,
-                    column: score,
                     min: Some(doc.make_bound_i64(score, 80).unwrap()),
                     max: Some(doc.make_bound_i64(score, 120).unwrap()),
-                },
-                Filter::Range {
+                })
+                .with_filter(rating, Filter::Range {
                     include_nulls: false,
-                    column: rating,
                     min: Some(doc.make_bound_i64(rating, 20).unwrap()),
                     max: Some(doc.make_bound_i64(rating, 40).unwrap()),
-                },
-            ],
-            ..Default::default()
-        }),
-        ("in_values_label", ViewState {
-            filters: vec![Filter::InValues {
-                column: label,
-                keys: cat,
-            }],
-            ..Default::default()
-        }),
-        ("contains_city", ViewState {
-            filters: vec![Filter::Contains {
+                }),
+        ),
+        (
+            "in_values_label",
+            QuerySpec::default().with_filter(label, Filter::InValues { keys: cat }),
+        ),
+        (
+            "contains_city",
+            QuerySpec::default().with_filter(city, Filter::Contains {
                 include_nulls: false,
-                column: city,
                 text: "city-12".into(),
                 case_sensitive: false,
-            }],
-            ..Default::default()
-        }),
-        ("is_null_label", ViewState {
-            filters: vec![Filter::IsNull {
-                column: label,
-                negate: false,
-            }],
-            ..Default::default()
-        }),
-        ("sort_price", ViewState {
+            }),
+        ),
+        (
+            "is_null_label",
+            QuerySpec::default().with_filter(label, Filter::IsNull { negate: false }),
+        ),
+        ("sort_price", QuerySpec {
             sort: vec![SortKey {
                 column: price,
                 descending: true,
             }],
             ..Default::default()
         }),
-        ("sort_city_price", ViewState {
+        ("sort_city_price", QuerySpec {
             sort: vec![
                 SortKey {
                     column: city,
@@ -129,52 +117,52 @@ fn apply_view(c: &mut Criterion) {
             ],
             ..Default::default()
         }),
-        ("range_decimal", ViewState {
-            filters: vec![Filter::Range {
+        (
+            "range_decimal",
+            QuerySpec::default().with_filter(amount, Filter::Range {
                 include_nulls: false,
-                column: amount,
                 min: Some(doc.make_bound_i64(amount, 50).unwrap()),
                 max: Some(doc.make_bound_i64(amount, 500).unwrap()),
-            }],
-            ..Default::default()
-        }),
-        ("sort_uuid", ViewState {
+            }),
+        ),
+        ("sort_uuid", QuerySpec {
             sort: vec![SortKey {
                 column: uuid,
                 descending: false,
             }],
             ..Default::default()
         }),
-        ("range_then_sort", ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: price,
-                min: Some(doc.make_bound_i64(price, 100).unwrap()),
-                max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-            }],
-            sort: vec![SortKey {
-                column: score,
-                descending: false,
-            }],
-        }),
+        (
+            "range_then_sort",
+            QuerySpec::default()
+                .with_filter(price, Filter::Range {
+                    include_nulls: false,
+                    min: Some(doc.make_bound_i64(price, 100).unwrap()),
+                    max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                })
+                .with_sort(vec![SortKey {
+                    column: score,
+                    descending: false,
+                }]),
+        ),
     ];
 
     let mut g = c.benchmark_group("apply_view");
     g.sample_size(20).measurement_time(Duration::from_secs(5));
-    for (name, state) in &cases {
+    for (name, spec) in &cases {
         g.bench_function(*name, |b| {
-            b.iter(|| doc.apply_view(black_box(state)).unwrap())
+            b.iter(|| doc.apply_view(black_box(spec)).unwrap())
         });
     }
     g.finish();
 }
 
 fn rows(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
     let mut g = c.benchmark_group("rows");
 
-    let plain = doc.apply_view(&ViewState::default()).unwrap();
+    let plain = doc.apply_view(&QuerySpec::default()).unwrap();
     g.bench_function("block_256_all_columns", |b| {
         b.iter(|| doc.rows(plain.version, 1_000_000, 256, &columns).unwrap())
     });
@@ -190,22 +178,18 @@ fn rows(c: &mut Criterion) {
 
 fn facets(c: &mut Criterion) {
     let path = bench_file();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     let (label, city, id, price) = (
         col(&doc, "label"),
         col(&doc, "city"),
         col(&doc, "id"),
         col(&doc, "price"),
     );
-    let other_filter = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: price,
-            min: Some(doc.make_bound_i64(price, 100).unwrap()),
-            max: Some(doc.make_bound_i64(price, 5000).unwrap()),
-        }],
-        ..Default::default()
-    };
+    let other_filter = QuerySpec::single(price, Filter::Range {
+        include_nulls: false,
+        min: Some(doc.make_bound_i64(price, 100).unwrap()),
+        max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+    });
 
     let mut g = c.benchmark_group("facets");
     g.sample_size(10).measurement_time(Duration::from_secs(8));
@@ -220,7 +204,7 @@ fn facets(c: &mut Criterion) {
     ] {
         g.bench_function(format!("distinct_cold_{name}"), |b| {
             b.iter_batched(
-                || Document::open(&path).unwrap(),
+                || Session::open(&path).unwrap(),
                 |doc| doc.distinct_values(column, None, 10_000).unwrap(),
                 BatchSize::PerIteration,
             )
@@ -238,18 +222,12 @@ fn facets(c: &mut Criterion) {
     g.bench_function("histogram_price", |b| {
         b.iter(|| doc.histogram(price, None, 60).unwrap())
     });
-    let label_filter = ViewState {
-        filters: vec![Filter::IsNull {
-            column: label,
-            negate: true,
-        }],
-        ..Default::default()
-    };
+    let label_filter = QuerySpec::single(label, Filter::IsNull { negate: true });
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| doc.histogram(price, Some(&label_filter), 60).unwrap())
     });
 
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     g.bench_function("summary_price", |b| {
         b.iter(|| doc.column_summary(price, 8).unwrap())
     });
@@ -261,7 +239,7 @@ fn facets(c: &mut Criterion) {
     // (`column_stats` before it was merged into the summary).
     g.bench_function("stats_price_cold", |b| {
         b.iter_batched(
-            || Document::open(&path).unwrap(),
+            || Session::open(&path).unwrap(),
             |doc| doc.column_summary(price, 8).unwrap(),
             BatchSize::PerIteration,
         )
@@ -270,7 +248,7 @@ fn facets(c: &mut Criterion) {
 }
 
 fn inspector_values(c: &mut Criterion) {
-    let doc = Document::open(bench_file()).unwrap();
+    let doc = Session::open(bench_file()).unwrap();
     let mut group = c.benchmark_group("inspector_values");
     group.sample_size(10);
     for name in ["label", "id", "uuid"] {

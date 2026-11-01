@@ -10,7 +10,7 @@ use arrow::{
     compute::cast,
     datatypes::{DataType, TimeUnit},
 };
-use gewu_core::Document;
+use gewu_core::Session;
 use parquet::arrow::ArrowWriter;
 
 /// Find each query and check matching source/display rows in the initial view.
@@ -20,7 +20,7 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(file.path()).unwrap();
+    let doc = Session::open(file.path()).unwrap();
 
     for (query, expected) in queries {
         let find = doc.prepare_find(0, query, &[0]).unwrap();

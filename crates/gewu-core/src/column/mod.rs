@@ -1,135 +1,116 @@
-//! A borrowed column interprets user input using its complete Arrow type.
+//! First-class persistent Column model and column-level operations.
 //!
-//! Logical semantics live here; Arrow arrays retain physical storage. Preparing
-//! a predicate never scans the column. Execution and cancellation live outside
-//! the type parsers; value indexes remain owned by the document.
+//! Type semantics live in [`crate::types`]; this module owns the column's data,
+//! its lazy distinct-value dictionary, and the per-column kernels:
+//! - [`dictionary`]: distinct-value dictionary and streaming counts
+//! - [`filter`]: Single-column filter and Find predicate compilation
+//! - [`stats`]: Histograms and distributions
 
-pub(crate) mod bound;
-pub(crate) mod histogram;
-mod nested;
-mod scalar;
-pub(crate) mod text;
+pub mod dictionary;
+pub mod filter;
+pub mod stats;
 
 use std::sync::{Arc, OnceLock};
 
-use arrow::{
-    array::{Array, ArrayRef},
-    datatypes::DataType,
-    util::display::ArrayFormatter,
-};
-use regex::RegexBuilder;
+use arrow::{array::ArrayRef, datatypes::DataType};
+pub(crate) use dictionary::{Dictionary, MAX_DISTINCT_VALUES};
+pub use filter::range::Bound;
+pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
-use crate::{
-    format, predicate::Predicate, value_index::ValueIndex, Error, Filter, LogicalType, Result,
-};
+pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
+use crate::{predicate::Predicate, types::Type, Filter, Result};
 
-/// A Find query prepared once per captured session. The parsed literal matcher
-/// is shared by every column, so a page or highlight never recompiles it.
-pub(crate) struct SearchQuery {
-    text: String,
-    matcher: OnceLock<std::result::Result<Arc<regex::Regex>, String>>,
-}
-
-impl SearchQuery {
-    pub(crate) fn new(text: &str) -> Self {
-        Self {
-            text: text.to_owned(),
-            matcher: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn text(&self) -> &str {
-        &self.text
-    }
-
-    /// The case-insensitive literal matcher, compiled at most once.
-    pub(crate) fn matcher(&self) -> Result<Arc<regex::Regex>> {
-        let matcher = self.matcher.get_or_init(|| {
-            RegexBuilder::new(&regex::escape(&self.text))
-                .case_insensitive(true)
-                .build()
-                .map(Arc::new)
-                .map_err(|error| error.to_string())
-        });
-        match matcher {
-            Ok(matcher) => Ok(matcher.clone()),
-            Err(error) => Err(Error::InvalidArgument(format!(
-                "cannot prepare text search: {error}"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnInfo {
+/// An immutable, first-class column owned by a [`crate::Dataset`].
+pub struct Column {
     pub name: String,
     pub logical_type: LogicalType,
-    pub display_type: String,
-    pub technical_type: String,
     pub nullable: bool,
+    pub len: usize,
+    pub array: ArrayRef,
+    /// The four-dimension type model. Every capability and policy question
+    /// derives from it.
+    ty: Type,
+    /// Lazy compact encoding of the column's distinct values. `None` is
+    /// cached when the type cannot be encoded or has too many values.
+    dictionary: OnceLock<Option<Arc<Dictionary>>>,
 }
 
-/// Operations supported by a column's logical type. Value-list availability
-/// additionally depends on cardinality and is reported by `DistinctResult`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColumnCapabilities {
-    pub contains: bool,
-    pub range: bool,
-    pub equals: bool,
-    /// Histograms currently require a directly stored numeric array.
-    pub histogram: bool,
-    /// Direct numeric and temporal arrays support approximate plot coordinates.
-    pub scatter: bool,
-    /// Direct numeric values support positive-only logarithmic charts.
-    pub logarithmic: bool,
-}
-
-/// Maximum source cardinality offered as a checkbox list.
-pub(crate) const CHOICE_LIMIT: usize = 500;
-
-#[derive(Clone, Copy)]
-pub(crate) enum FilterEditorKind {
-    Range,
-    Choices,
-    Contains,
-    NullOnly,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Column<'a> {
-    array: &'a ArrayRef,
-}
-
-impl<'a> Column<'a> {
-    pub(crate) fn new(array: &'a ArrayRef) -> Self {
-        Self { array }
+impl Column {
+    /// Build a column. Fails for Arrow types without Gewu semantics rather
+    /// than exposing a column no operation can describe.
+    pub fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
+        let name = name.into();
+        let Some(ty) = Type::from_arrow(array.data_type()) else {
+            return Err(crate::Error::Unsupported(format!(
+                "column {name:?} has unsupported type {}",
+                array.data_type()
+            )));
+        };
+        let logical_type = ty.logical();
+        let len = array.len();
+        let nullable = array.is_nullable();
+        Ok(Self {
+            name,
+            logical_type,
+            nullable,
+            len,
+            array,
+            ty,
+            dictionary: OnceLock::new(),
+        })
     }
 
-    pub(crate) fn capabilities(self) -> ColumnCapabilities {
-        fn of(data_type: &DataType) -> ColumnCapabilities {
-            if let DataType::Dictionary(_, values) = data_type {
-                return ColumnCapabilities {
-                    histogram: false,
-                    scatter: false,
-                    logarithmic: false,
-                    ..of(values)
-                };
-            }
-            let logical_type = LogicalType::from_arrow(data_type);
-            ColumnCapabilities {
-                contains: !logical_type.is_ordered() && logical_type != LogicalType::Boolean,
-                range: logical_type.is_ordered(),
-                histogram: logical_type.is_ordered(),
-                scatter: logical_type.is_ordered(),
-                logarithmic: logical_type.supports_logarithmic(),
-                equals: logical_type.is_ordered()
-                    || matches!(logical_type, LogicalType::Boolean | LogicalType::Text),
-            }
-        }
-        of(self.array.data_type())
+    /// The column's compact distinct-value encoding, built once and shared by
+    /// every session over the same dataset. Columns that are too high
+    /// cardinality (or whose type cannot be encoded) return `None`.
+    pub(crate) fn dictionary(&self) -> Option<&Arc<Dictionary>> {
+        self.dictionary
+            .get_or_init(|| Dictionary::build(&self.array).map(Arc::new))
+            .as_ref()
     }
 
-    pub(crate) fn logical_data_type(self) -> &'a DataType {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[inline]
+    pub fn array(&self) -> ArrayRef {
+        self.array.clone()
+    }
+
+    #[inline]
+    pub fn logical_type(&self) -> &LogicalType {
+        &self.logical_type
+    }
+
+    #[inline]
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
+
+    /// The column's four-dimension type model.
+    #[inline]
+    pub(crate) fn ty(&self) -> &Type {
+        &self.ty
+    }
+
+    #[inline]
+    pub fn capabilities(&self) -> ColumnCapabilities {
+        self.ty.capabilities()
+    }
+
+    pub fn logical_data_type(&self) -> &DataType {
         let mut data_type = self.array.data_type();
         while let DataType::Dictionary(_, values) = data_type {
             data_type = values;
@@ -137,147 +118,51 @@ impl<'a> Column<'a> {
         data_type
     }
 
-    pub(crate) fn filter_editor(self, low_cardinality: bool) -> FilterEditorKind {
-        if low_cardinality {
-            FilterEditorKind::Choices
-        } else if self.capabilities().range {
-            FilterEditorKind::Range
-        } else if self.capabilities().contains {
-            FilterEditorKind::Contains
-        } else {
-            FilterEditorKind::NullOnly
+    pub fn info(&self) -> ColumnInfo {
+        ColumnInfo {
+            name: self.name.clone(),
+            display_type: self.logical_type.display_name(),
+            technical_type: self.array.data_type().to_string(),
+            logical_type: self.logical_type.clone(),
+            encoding: self.ty.encoding(),
+            nullable: self.nullable,
         }
     }
 
-    pub(crate) fn formatter(self) -> Result<ArrayFormatter<'a>> {
-        format::formatter(self.array.as_ref())
+    #[cfg(test)]
+    pub(crate) fn prepare_find<'a>(
+        &'a self,
+        query: &str,
+        matcher: Option<&regex::Regex>,
+    ) -> Result<Option<Predicate<'a>>> {
+        filter::prepare_find(&self.array, &self.ty, query, matcher)
     }
 
-    pub(crate) fn prepare_search(self, query: &SearchQuery) -> Result<Option<Predicate<'a>>> {
-        if query.text().is_empty() {
-            return Ok(None);
-        }
-        match self.array.data_type() {
-            DataType::Dictionary(..)
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(..)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::Struct(_) => nested::search(self.array, query),
-            DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_) => Ok(None),
-            data_type
-                if LogicalType::from_arrow(data_type).is_ordered()
-                    || *data_type == DataType::Boolean =>
-            {
-                scalar::search(self.array, query.text())
-            }
-            _ => text::contains(self.array, query, false).map(Some),
-        }
+    pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
+        filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter)
     }
 
-    /// Type-dependent filters. InValues is prepared separately once the
-    /// document has obtained its lazy value index.
-    pub(crate) fn prepare_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
-        let predicate = self.prepare_value_filter(filter)?;
-        let include_nulls = matches!(
-            filter,
-            Filter::Range {
-                include_nulls: true,
-                ..
-            } | Filter::Contains {
-                include_nulls: true,
-                ..
-            }
-        );
-        let array = self.array;
-        if !include_nulls || array.null_count() == 0 {
-            return Ok(predicate);
-        }
-        Ok(match predicate {
-            Predicate::Rows(test) => {
-                Predicate::rows(Box::new(move |row| array.is_null(row) || test(row)))
-            }
-            predicate => Predicate::batch(Box::new(move |rows, hits, cancel| {
-                predicate.evaluate_selected(rows.clone(), hits, cancel)?;
-                for (index, row) in rows.iter().enumerate() {
-                    hits[index] |= array.is_null(row);
-                }
-                Ok(())
-            })),
-        })
+    pub fn parse_bound(&self, text: &str) -> Result<Bound> {
+        Bound::parse(self.logical_data_type(), text)
     }
 
-    fn prepare_value_filter(self, filter: &Filter) -> Result<Predicate<'a>> {
-        if let Filter::TextValues {
-            values, exclude, ..
-        } = filter
-        {
-            return text::selected_values(self.array, values, *exclude);
-        }
-        if let Filter::IsNull { negate, .. } = filter {
-            let negate = *negate;
-            let array = self.array;
-            return Ok(Predicate::rows(Box::new(move |row| {
-                array.is_null(row) != negate
-            })));
-        }
-        if matches!(self.array.data_type(), DataType::Dictionary(..)) {
-            return nested::dictionary(self.array, |values| {
-                Column::new(values).prepare_filter(filter).map(Some)
-            })?
-            .ok_or_else(|| {
-                Error::InvalidArgument("filter cannot be applied to dictionary values".into())
-            });
-        }
-        let capabilities = self.capabilities();
-        match filter {
-            Filter::Contains {
-                text: value,
-                case_sensitive,
-                ..
-            } if capabilities.contains => {
-                text::contains(self.array, &SearchQuery::new(value), *case_sensitive)
-            }
-            Filter::Range { min, max, .. } if capabilities.range => {
-                bound::prepare_range(self.array, min.as_ref(), max.as_ref())
-            }
-            Filter::Equals { value, .. } if capabilities.equals => self.prepare_equals(value),
-            Filter::EqualsAny { values, .. } if capabilities.equals => {
-                let predicates = values
-                    .iter()
-                    .map(|value| self.prepare_equals(value))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(Predicate::any_of(predicates))
-            }
-            _ => Err(Error::InvalidArgument(format!(
-                "filter is not supported for {}",
-                self.array.data_type()
-            ))),
-        }
+    pub fn make_bound_i64(&self, value: i64) -> Result<Bound> {
+        Bound::from_i64(self.logical_data_type(), value)
     }
 
-    fn prepare_equals(self, value: &str) -> Result<Predicate<'a>> {
-        if LogicalType::from_arrow(self.array.data_type()) == LogicalType::Text {
-            Ok(text::equals(self.array, value))
-        } else {
-            scalar::equals(self.array, value)
-        }
+    pub fn make_bound_u64(&self, value: u64) -> Result<Bound> {
+        Bound::from_u64(self.logical_data_type(), value)
     }
 
-    pub(crate) fn prepare_values(self, index: Arc<ValueIndex>, keys: &[u64]) -> Predicate<'a> {
-        let mut allowed = vec![false; index.len()];
-        for &key in keys {
-            if let Ok(key) = usize::try_from(key) {
-                if let Some(slot) = allowed.get_mut(key) {
-                    *slot = true;
-                }
-            }
-        }
-        Predicate::rows(Box::new(move |row| allowed[index.codes[row] as usize]))
+    pub fn make_bound_f64(&self, value: f64) -> Result<Bound> {
+        Bound::from_f64(self.logical_data_type(), value)
+    }
+
+    pub fn make_bound_decimal(&self, coefficient: &str, scale: i8) -> Result<Bound> {
+        let coeff = coefficient
+            .parse::<arrow::datatypes::i256>()
+            .map_err(|_| crate::Error::InvalidArgument("invalid decimal coefficient".into()))?;
+        Bound::from_decimal(self.logical_data_type(), coeff, scale)
     }
 }
 
@@ -296,14 +181,16 @@ mod tests {
     use crate::{
         engine::{CancelToken, ViewEngine},
         predicate::CHUNK,
+        Error,
     };
+
+    fn col(array: ArrayRef) -> Column {
+        Column::new("test", array).unwrap()
+    }
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
-        if let Some(test) = Column::new(array)
-            .prepare_search(&SearchQuery::new(query))
-            .unwrap()
-        {
+        if let Some(test) = col(array.clone()).prepare_find(query, None).unwrap() {
             test.evaluate(range, &mut hits, &CancelToken::never())
                 .unwrap();
         }
@@ -313,12 +200,9 @@ mod tests {
     #[test]
     fn typed_membership_validates_every_input_and_empty_lists_match_nothing() {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
-        let column = Column::new(&array);
+        let column = col(array);
         let test = column
-            .prepare_filter(&Filter::EqualsAny {
-                column: 0,
-                values: Vec::new(),
-            })
+            .prepare_filter(&Filter::EqualsAny { values: Vec::new() })
             .unwrap();
         let mut hits = [true; 3];
         test.evaluate(0..3, &mut hits, &CancelToken::never())
@@ -326,7 +210,6 @@ mod tests {
         assert_eq!(hits, [false; 3]);
         assert!(matches!(
             column.prepare_filter(&Filter::EqualsAny {
-                column: 0,
                 values: vec!["1".into(), "invalid".into()],
             }),
             Err(Error::InvalidArgument(_))
@@ -339,9 +222,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let test = Column::new(&array)
+        let column = col(array);
+        let test = column
             .prepare_filter(&Filter::EqualsAny {
-                column: 0,
                 values: vec!["01".into(), "2".into()],
             })
             .unwrap();
@@ -360,9 +243,9 @@ mod tests {
             Some("a%_\\Z trailing"),
         ]));
         assert_eq!(matches(&array, "%_\\z", 1..4), [true, false, true]);
-        let test = Column::new(&array)
+        let column = col(array);
+        let test = column
             .prepare_filter(&Filter::Equals {
-                column: 0,
                 value: "A%_\\z".into(),
             })
             .unwrap();
@@ -396,10 +279,10 @@ mod tests {
                 true, false, true, false,
             ]),
         ] {
+            let column = col(array.clone());
             for (include_nulls, expected) in [(false, excluded), (true, included)] {
-                let test = Column::new(&array)
+                let test = column
                     .prepare_filter(&Filter::Contains {
-                        column: 0,
                         text: text.into(),
                         case_sensitive: true,
                         include_nulls,
@@ -420,10 +303,10 @@ mod tests {
             None,
             Some(vec![]),
         ]));
-        let test = Column::new(&array)
+        let column = col(array);
+        let test = column
             .prepare_filter(&Filter::Contains {
                 include_nulls: false,
-                column: 0,
                 text: String::new(),
                 case_sensitive: false,
             })
@@ -492,11 +375,9 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(matches(&array, "2", 1..4), [true, false, true]);
-        let test = Column::new(&array)
-            .prepare_filter(&Filter::Equals {
-                column: 0,
-                value: "2".into(),
-            })
+        let column = col(array);
+        let test = column
+            .prepare_filter(&Filter::Equals { value: "2".into() })
             .unwrap();
         let mut first = [false; 2];
         let mut second = [false; 2];
@@ -523,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_range_support_does_not_claim_histogram_support() {
+    fn dictionary_capabilities_are_discrete() {
         let array: ArrayRef = Arc::new(
             DictionaryArray::<Int8Type>::try_new(
                 Int8Array::from(vec![0]),
@@ -531,9 +412,9 @@ mod tests {
             )
             .unwrap(),
         );
-        assert_eq!(Column::new(&array).capabilities(), ColumnCapabilities {
+        assert_eq!(col(array).capabilities(), ColumnCapabilities {
             contains: false,
-            range: true,
+            range: false,
             equals: true,
             histogram: false,
             scatter: false,
@@ -553,14 +434,44 @@ mod tests {
         let token = engine.begin();
         engine.cancel_pending();
         for array in arrays {
-            let test = Column::new(&array)
-                .prepare_search(&SearchQuery::new("2"))
-                .unwrap()
-                .unwrap();
+            let column = col(array);
+            let test = column.prepare_find("2", None).unwrap().unwrap();
             assert!(matches!(
                 test.evaluate(0..1, &mut [false], &token),
                 Err(Error::Cancelled)
             ));
         }
+    }
+
+    #[test]
+    fn dictionary_is_built_once_and_cached() {
+        let column = col(Arc::new(StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+        ])));
+        let first = column.dictionary().cloned().expect("dictionary");
+        let second = column.dictionary().cloned().expect("dictionary");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let high_cardinality: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1000));
+        assert!(col(high_cardinality).dictionary().is_none());
+    }
+
+    #[test]
+    fn column_len_and_empty() {
+        let empty_col = col(Arc::new(Int32Array::from(Vec::<i32>::new())));
+        assert_eq!(empty_col.len(), 0);
+        assert!(empty_col.is_empty());
+
+        let array: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("apple"),
+            Some("banana"),
+            Some("apple"),
+            None,
+        ]));
+        let column = col(array);
+        assert_eq!(column.len(), 4);
+        assert!(!column.is_empty());
     }
 }

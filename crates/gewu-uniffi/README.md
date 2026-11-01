@@ -8,7 +8,7 @@ This document describes the calling contract. See [data types](../../docs/data-t
 
 | Object | Responsibility and lifetime |
 | --- | --- |
-| `GewuDocument` | Owns an open Core document and its current view. Opening decodes the file into memory. |
+| `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
 | `Bound` | Immutable, exact typed range endpoint. Obtained from a document's parsing or native constructors, or from filter histogram bins. |
 | `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
@@ -23,9 +23,9 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 ## Open, query and read rows
 
-1. Call `GewuDocument::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuDocument::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
+1. Call `GewuSession::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuSession::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
 2. Read `info()` for schema and file metadata, and `current_view()` for the initial `ViewInfo`.
-3. Construct a `ViewState` containing sort keys and explicit column filters. Run `apply_view(state)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
+3. Construct a `QuerySpec` containing sort keys and explicit column filters. Run `apply_view(spec)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
 4. Pass that view's `version` to `rows(version, start, count, columns)`. Column indexes refer to the source schema, even when the UI reorders columns; the returned cells follow the requested column order.
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.
@@ -42,7 +42,7 @@ Generated Swift entry points are:
 
 ```swift
 let names = try xlsxSheetNames(path: path)
-let document = try GewuDocument.openSheet(path: path, sheet: name)
+let session = try GewuSession.openSheet(path: path, sheet: name)
 ```
 
 The name is matched exactly, without trimming or case folding. Missing names produce `InvalidArgument`. Opening uses the first occupied row as headers, including when that leaves an empty table. Each call rereads the file and creates an independent document with an unfiltered initial view; listing does not retain a workbook snapshot. If the file changes between calls, opening uses its new contents and may reject a previously listed name. `document.info().sheet` and `.sheets` describe the workbook at open time.
@@ -67,12 +67,12 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 | `info`, `current_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
 | `parse_bound`, `make_bound_*`, `Bound` methods, `format_value` | Scalar operations. |
-| `validate_filter` | Scalar preparation for most filters; `InValues` may build a lazy index, so allow background execution. |
+| `validate_filter` | Scalar preparation for most filters; `InValues` may build the column's compact encoding, so allow background execution. |
 | Cancellation methods and export `progress` | Control calls that can be made while background work runs. |
 
 Cancellation has independent scopes:
 
-- A new `apply_view` supersedes older view work when it enters Core. `GewuDocument::cancel_pending()` invalidates pending work; a concurrent request past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible. It does not cancel file opening, analysis or export.
+- A new `apply_view` supersedes older view work when it enters Core. `GewuSession::cancel_pending()` invalidates pending work; a concurrent request past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible. It does not cancel file opening, analysis or export.
 - `ColumnAnalysis::cancel()` cancels only that analysis job. Cancellation is terminal for the handle; prepare a new job to run it again after cancellation.
 - `ScatterAnalysis::cancel()` similarly cancels only its scatter scan, not table queries or other analysis jobs.
 - `FindOperation::cancel()` interrupts one Find scan at predicate and batch checkpoints without closing its session. `FindSession::cancel()` permanently closes only that captured Find.
@@ -84,7 +84,7 @@ For detached analysis work, connect a Swift task cancellation handler to the Rus
 
 ## Filters and exact bounds
 
-Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
+`ColumnInfo.logical_type` is value semantics only; `ColumnInfo.encoding` is `Direct` or `Dictionary`, and dictionary columns are discrete (choices rather than ordered filters or charts). Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
 
 | `FilterEditor` | UI contract |
 | --- | --- |
@@ -98,13 +98,15 @@ Core chooses the editor using type capabilities and cardinality. Do not infer it
 
 String choices use `prepare_text_choices(column, state)` followed by `TextChoices::page(query, after, limit)`, both off the UI thread. Reuse the captured session across searches and pages. Pages use an exclusive value cursor, retain bounded candidate storage, and include zero-count source values. Preparation is not cancellable. For a new search, call `invalidate_pages()` when accepting the request, then pass the returned generation to `page_for_generation`; this interrupts obsolete scans while retaining the facet. Queued requests must not advance generations themselves. `cancel()` permanently closes the session independently of table queries. Debounce requests, serialize scans, and reject obsolete results before publishing them.
 
-`Filter::EqualsAny` accepts multiple text inputs interpreted using the column's typed equality rules without building a value index.
+`Filter::EqualsAny` accepts multiple text inputs interpreted using the column's typed equality rules without building the column's value encoding.
 
-Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the value-index limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
+Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the 255-value encoding limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
 
 For text endpoints, call `parse_bound(column, text)`. Native controls can call `make_bound_int`, `make_bound_uint`, `make_bound_float` or `make_bound_decimal`; decimal coefficients cross the boundary as integer strings with an explicit scale. These constructors validate against the column's logical type.
 
 Preserve `Bound` objects when submitting `Filter::Range`. Its endpoints are inclusive, and `None` means an open end. `display()` supplies text, `same_value()` compares exact typed values, and `axis_value()` is only an approximate plotting coordinate. Never rebuild a filter from histogram coordinates or a rounded floating-point value. Use the supplied histogram bin bounds directly.
+
+`Filter::InValues` takes the keys reported for a column's distinct values. Non-null values use stable small codes; null uses the reserved key `255`. A column with more than 255 non-null distinct values has no keys, so its value selection fails with `InvalidArgument`; use `TextValues`, `Range` or `Contains` instead.
 
 `Range` and `Contains` can include nulls through `include_nulls`; `IsNull` handles null-only filtering. `validate_filter` checks a candidate without applying a view. Invalid filter inputs become `InvalidArgument`. Find instead skips columns whose types cannot interpret its query, according to the [type-specific semantics](../../docs/data-types.md).
 

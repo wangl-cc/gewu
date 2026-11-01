@@ -31,9 +31,11 @@ impl From<core::TimeUnit> for TimeUnit {
     }
 }
 
-/// A logical data type with semantic parameters; mirrors `gewu_core::LogicalType`.
+/// A column's value semantics with its parameters; mirrors `gewu_core::LogicalType`.
+/// Storage encoding is reported separately by [`ColumnEncoding`].
 #[derive(uniffi::Enum, Clone, PartialEq, Eq)]
 pub enum LogicalType {
+    Null,
     Text,
     Integer {
         bits: u8,
@@ -60,14 +62,31 @@ pub enum LogicalType {
     Binary,
     List,
     Struct,
-    Other {
-        raw_name: String,
-    },
+    Map,
+}
+
+/// How Arrow stores a column's values; mirrors `gewu_core::Encoding`.
+/// Dictionary-encoded columns are discrete: they offer value choices rather
+/// than ordered filters or charts.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnEncoding {
+    Direct,
+    Dictionary,
+}
+
+impl From<core::Encoding> for ColumnEncoding {
+    fn from(encoding: core::Encoding) -> Self {
+        match encoding {
+            core::Encoding::Direct => Self::Direct,
+            core::Encoding::Dictionary => Self::Dictionary,
+        }
+    }
 }
 
 impl From<core::LogicalType> for LogicalType {
     fn from(t: core::LogicalType) -> Self {
         match t {
+            core::LogicalType::Null => Self::Null,
             core::LogicalType::Text => Self::Text,
             core::LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
             core::LogicalType::Float { bits } => Self::Float { bits },
@@ -84,7 +103,7 @@ impl From<core::LogicalType> for LogicalType {
             core::LogicalType::Binary => Self::Binary,
             core::LogicalType::List => Self::List,
             core::LogicalType::Struct => Self::Struct,
-            core::LogicalType::Other { raw_name } => Self::Other { raw_name },
+            core::LogicalType::Map => Self::Map,
         }
     }
 }
@@ -116,6 +135,7 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
 pub struct ColumnInfo {
     pub name: String,
     pub logical_type: LogicalType,
+    pub encoding: ColumnEncoding,
     pub display_type: String,
     pub technical_type: String,
     pub capabilities: ColumnCapabilities,
@@ -163,8 +183,8 @@ impl From<FileType> for core::FileType {
     }
 }
 
-impl From<&core::Document> for FileInfo {
-    fn from(document: &core::Document) -> Self {
+impl From<&core::Session> for FileInfo {
+    fn from(document: &core::Session) -> Self {
         let i = document.info();
         let mut info = FileInfo {
             path: i.path.clone(),
@@ -180,6 +200,7 @@ impl From<&core::Document> for FileInfo {
                     ColumnInfo {
                         name: c.name.clone(),
                         logical_type: c.logical_type.clone().into(),
+                        encoding: c.encoding.into(),
                         display_type: c.display_type.clone(),
                         technical_type: c.technical_type.clone(),
                         capabilities: capabilities.into(),

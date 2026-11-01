@@ -1,5 +1,7 @@
 //! Query state and visible row blocks.
 
+use std::collections::HashMap;
+
 use gewu_core as core;
 
 use crate::Filter;
@@ -11,9 +13,9 @@ pub struct SortKey {
 }
 
 #[derive(uniffi::Record)]
-pub struct ViewState {
+pub struct QuerySpec {
     pub sort: Vec<SortKey>,
-    pub filters: Vec<Filter>,
+    pub filters: HashMap<u32, Vec<Filter>>,
 }
 
 #[derive(uniffi::Record)]
@@ -33,9 +35,9 @@ pub struct RowBlock {
     pub source_rows: Vec<u64>,
 }
 
-impl From<ViewState> for core::ViewState {
-    fn from(s: ViewState) -> Self {
-        core::ViewState {
+impl From<QuerySpec> for core::QuerySpec {
+    fn from(s: QuerySpec) -> Self {
+        core::QuerySpec {
             sort: s
                 .sort
                 .into_iter()
@@ -44,7 +46,11 @@ impl From<ViewState> for core::ViewState {
                     descending: k.descending,
                 })
                 .collect(),
-            filters: s.filters.into_iter().map(Into::into).collect(),
+            filters: s
+                .filters
+                .into_iter()
+                .map(|(col, filters)| (col, filters.into_iter().map(Into::into).collect()))
+                .collect(),
         }
     }
 }

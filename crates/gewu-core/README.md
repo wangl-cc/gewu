@@ -6,26 +6,27 @@ Behavior references: [data types](../../docs/data-types.md), [Find and filtering
 
 For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
-## Document and views
+## Session, dataset and views
 
-`Document` is the public entry point. It retains immutable Arrow columns and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
+`Session` (also aliased as `Document` for backward compatibility) is the public viewing session entry point. It pairs an immutable `Dataset` with an interactive `ViewEngine` and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
 
-- `Document::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
-- `Document::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
-- `Document::apply_view` evaluates a `ViewState` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
-- `Document::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
-- `Document::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
-- `Document::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
+- `Session::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
+- `Session::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
+- `Session::from_dataset` creates a fresh viewing session sharing an existing loaded dataset.
+- `Session::apply_view` evaluates a `QuerySpec` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
+- `Session::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
+- `Session::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
+- `Session::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
 
-The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Value indexes are lazy. Explicit-filter dictionary predicates cache matches once per dictionary value; Find instead evaluates only keys referenced by its selected rows.
+The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Each column lazily builds one compact distinct-value encoding (`u8` codes, null reserved for code 255), shared by every session over the dataset; native dictionary columns reuse Arrow's encoded values instead of re-detecting them, and high-cardinality columns are left unencoded and use streaming counts. Explicit-filter code predicates match through that encoding; Find instead evaluates only keys referenced by its selected rows.
 
 ## Query preparation and execution
 
-`ViewState` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
+`QuerySpec` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
 `Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
 
-`Document::column_capabilities` reports supported operations. `Document::validate_filter` validates and prepares a filter without applying a view. Preparation parses scalar inputs and binds borrowed arrays; value-list filters may build a lazy index. String matching prepares one reusable Unicode matcher per query, without recompiling it for every batch.
+`Document::column_capabilities` reports supported operations. `Document::validate_filter` validates and prepares a filter without applying a view. Preparation parses scalar inputs and binds borrowed arrays; value-list filters may build the column's compact encoding. String matching prepares one reusable Unicode matcher per query, without recompiling it for every batch.
 
 Prepared predicates evaluate in bounded batches with cancellation checks. Native row predicates can skip rows already rejected by another filter. Sorting compares source row IDs in bounded runs and merges, with cancellation checkpoints between units of work. Sort-key columns are not widened or copied in full. Nulls remain last in both directions; equal keys retain source-row order. Comparator preparation and individual value comparisons are not interruptible, so checkpoints do not imply a fixed wall-clock deadline. `ViewEngine` publishes the completed view at its final cancellation check.
 
@@ -39,7 +40,7 @@ Scans prepare typed predicates once per call against the original arrays and pro
 
 `Document::filter_spec` returns the editor contract and facet data. Core owns the recommendation; frontends should use it rather than duplicate the [selection rules](../../docs/search-and-filter.md#editor-selection).
 
-The editor recommendation is cached. A bounded cardinality probe avoids building full row-code indexes solely to classify high-cardinality columns. Non-text choice keys remain stable for the document's lifetime, and values with zero matching rows remain available.
+The editor recommendation follows the source column's compact encoding; encoding stops at the first value beyond the limit, so a high-cardinality column is classified without building row codes. Non-text choice keys remain stable for the dataset's lifetime, and values with zero matching rows remain available.
 
 For string choices, `prepare_text_choices(column, state)` captures a facet snapshot; run preparation off the UI thread. Its `page(query, after, limit)` returns up to 200 values in UTF-8 lexical order, with null first, plus an exclusive cursor for the next page. Candidate search is a Unicode case-insensitive literal substring; selection uses exact, case-sensitive string identities. Each page scans the source but retains only a bounded page of candidates, including values with zero facet counts. No complete distinct index is built. `invalidate_pages()` cancels obsolete page scans without discarding the facet and returns a generation for `page_for_generation(query, after, limit, generation)`. Capture it when accepting a new request; a queued stale request must never advance it. `cancel()` independently and permanently closes the session; preparation itself has no cancellation handle.
 
@@ -92,6 +93,14 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 `FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
 
+## Type model
+
+[types/](src/types) is the single place that answers what a column type supports. A type has four orthogonal dimensions: `Shape` (null, scalar, list, struct, map), `Scalar` (text, boolean, number, temporal, interval or binary, with its bit width, precision and scale, time unit and time zone), `Encoding` (direct or dictionary) and the parameter-free `Domain` that policy code matches on. `Type::from_arrow` builds the model and returns `None` for Arrow types without Gewu semantics; opening a document rejects such columns instead of degrading silently. `LogicalType` is derived from the model as the stable value projection used by the FFI, `ColumnInfo` and the app, while `ColumnInfo::encoding` separately reports direct or dictionary storage — a dictionary of text is still text.
+
+Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units and Find strategy. `column/filter`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
+
+[column/dictionary/](src/column/dictionary) owns the compact distinct-value dictionary: native dictionaries reuse their keys and values, primitive arrays scan their native values directly, floats scan a normalized key, and only text, binary and nested arrays use Arrow's row format. Its consumers call `counts`, `keys_for_labels`, `prepare_predicate` or the `counted` facade for streaming fallback; they never see codes or encoding strategy. Shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN) lives in [dictionary/primitive.rs](src/column/dictionary/primitive.rs): it is the dictionary's definition of value identity, and the values analysis imports it so both group floats the same way.
+
 ## Code map
 
 | Path | Responsibility |
@@ -105,12 +114,13 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 | [view.rs](src/view.rs) | Query state, sort keys and formatted row blocks. |
 | [filter.rs](src/filter.rs) | Explicit filter inputs and filter-editor contracts. |
 | [engine.rs](src/engine.rs) | View snapshots, versions, cancellation and publication. |
-| [column/](src/column) | Per-type capabilities, formatting and search/filter preparation; scalar, text and nested behavior. |
+| [types/](src/types) | Four-dimension column type model and the capability, analysis and Find derivations. |
+| [column/](src/column) | Per-type formatting, predicate preparation, distinct-value encoding and histograms. |
 | [column/bound.rs](src/column/bound.rs) | Exact typed endpoints and range preparation. |
 | [column/histogram.rs](src/column/histogram.rs) | Native bin membership, counts and exact filter bounds. |
 | [predicate.rs](src/predicate.rs) | Prepared predicates, batch evaluation and intersection. |
 | [scope.rs](src/scope.rs) | Source, current-view and facet row selections. |
-| [value_index.rs](src/value_index.rs) | Stable value keys and distinct-value indexing. |
+| [column/dictionary/](src/column/dictionary) | Distinct-value dictionary, stable keys, streaming counts, native primitive encoders and float value identity. |
 | [analysis.rs](src/analysis.rs) and [analysis/](src/analysis) | Independent analysis jobs, result types, length analysis and shared native numeric statistics. |
 | [scatter.rs](src/scatter.rs) | Bounded, deterministic scatter sampling with independent cancellation. |
 | [text_choices.rs](src/text_choices.rs) | Bounded string candidate sessions, page results and cursors. |

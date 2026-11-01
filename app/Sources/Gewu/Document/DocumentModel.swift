@@ -2,6 +2,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+public typealias GewuDocument = GewuSession
+
 enum InspectorPage: String, CaseIterable {
     case column = "Column Overview"
     case chart = "Chart"
@@ -12,12 +14,12 @@ enum InspectorPage: String, CaseIterable {
 @MainActor
 final class DocumentModel: ObservableObject {
     let url: URL
-    let doc: GewuDocument
+    let doc: GewuSession
     let info: FileInfo
     let kinds: [ColumnKind]
     let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedState = ViewState(sort: [], filters: [])
+    @Published private(set) var appliedSpec = QuerySpec(sort: [], filters: [:])
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -46,7 +48,7 @@ final class DocumentModel: ObservableObject {
     // Serial execution keeps Rust's request order consistent with UI order.
     private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
-    init(url: URL, document: GewuDocument) {
+    init(url: URL, document: GewuSession) {
         self.url = url
         doc = document
         let metadata = document.info()
@@ -67,10 +69,10 @@ final class DocumentModel: ObservableObject {
         export.choose(document: doc, view: current, columns: table.displayedColumns, source: url, window: window)
     }
 
-    var state: ViewState {
-        ViewState(
+    var spec: QuerySpec {
+        QuerySpec(
             sort: sort,
-            filters: columnFilters.sorted { $0.key < $1.key }.flatMap(\.value))
+            filters: columnFilters)
     }
 
     var subtitle: String {
@@ -118,7 +120,7 @@ final class DocumentModel: ObservableObject {
         request &+= 1
         let mine = request
         gate.set(mine)
-        let state = state
+        let spec = spec
         let filterColumns = Set(columnFilters.keys)
         let worker = worker
         let gate = gate
@@ -133,7 +135,7 @@ final class DocumentModel: ObservableObject {
                             continuation.resume(throwing: CancellationError())
                             return
                         }
-                        do { continuation.resume(returning: try doc.applyView(state: state)) } catch {
+                        do { continuation.resume(returning: try doc.applyView(spec: spec)) } catch {
                             continuation.resume(throwing: error)
                         }
                     }
@@ -141,7 +143,7 @@ final class DocumentModel: ObservableObject {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.copying.cancel()
                 self.appliedFilterColumns = filterColumns
-                self.appliedState = state
+                self.appliedSpec = spec
                 self.current = view
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil

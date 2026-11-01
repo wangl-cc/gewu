@@ -7,17 +7,17 @@ use arrow::{
     datatypes::DataType,
 };
 use gewu_core::{
-    Bound, Document, Error, Filter, FilterEditor, LogicalType, TextFilterMode, ViewState,
+    Bound, Error, Filter, FilterEditor, LogicalType, QuerySpec, Session, TextFilterMode,
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> Document {
+fn document(columns: Vec<(&str, ArrayRef)>) -> Session {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Session::open(file.path()).unwrap()
 }
 
 #[test]
@@ -59,16 +59,12 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
             recommended: TextFilterMode::Contains
         }
     );
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 1,
-            min: None,
-            max: Some(doc.make_bound_i64(1, 0).unwrap()),
-        }],
-        ..Default::default()
-    };
-    let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&state)).unwrap().editor else {
+    let spec = QuerySpec::single(1, Filter::Range {
+        include_nulls: false,
+        min: None,
+        max: Some(doc.make_bound_i64(1, 0).unwrap()),
+    });
+    let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&spec)).unwrap().editor else {
         panic!("stable choices")
     };
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
@@ -79,19 +75,15 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
         original.iter().map(|v| v.key).collect::<Vec<_>>()
     );
     assert_eq!(
-        doc.filter_spec(2, Some(&state)).unwrap().editor,
+        doc.filter_spec(2, Some(&spec)).unwrap().editor,
         FilterEditor::Text {
             modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
             recommended: TextFilterMode::Contains
         }
     );
-    let chosen = ViewState {
-        filters: vec![Filter::InValues {
-            column: 0,
-            keys: vec![values[1].key],
-        }],
-        ..Default::default()
-    };
+    let chosen = QuerySpec::single(0, Filter::InValues {
+        keys: vec![values[1].key],
+    });
     assert_eq!(doc.apply_view(&chosen).unwrap().row_count, 200);
     let FilterEditor::Choices { values: own_facet } =
         doc.filter_spec(0, Some(&chosen)).unwrap().editor
@@ -122,15 +114,11 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
     let bin = distribution.ranges.len() / 2;
     let bounds = &distribution.ranges[bin];
     let view = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 0,
-                min: bounds.min.clone(),
-                max: bounds.max.clone(),
-            }],
-            ..Default::default()
-        })
+        .apply_view(&QuerySpec::single(0, Filter::Range {
+            include_nulls: false,
+            min: bounds.min.clone(),
+            max: bounds.max.clone(),
+        }))
         .unwrap();
     assert_eq!(view.row_count, distribution.histogram.counts[bin]);
     let rows = doc.rows(view.version, 0, 600, &[0]).unwrap();
@@ -159,23 +147,55 @@ fn typed_bounds_reject_mismatched_columns_without_replacing_view() {
     let before = doc.current_view();
     let wrong = Bound::from_i64(&DataType::Int64, 2).unwrap();
     assert!(matches!(
-        doc.apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 0,
-                min: Some(wrong),
-                max: None
-            }],
-            ..Default::default()
-        }),
+        doc.apply_view(&QuerySpec::single(0, Filter::Range {
+            include_nulls: false,
+            min: Some(wrong),
+            max: None,
+        },)),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(doc.current_view(), before);
 }
 
 #[test]
+fn float_choices_group_signed_zero_and_nan_payloads() {
+    use arrow::array::Float64Array;
+
+    let score = Float64Array::from(vec![
+        Some(-0.0),
+        Some(0.0),
+        Some(f64::NAN),
+        Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+        Some(1.0),
+        None,
+    ]);
+    let doc = document(vec![("score", Arc::new(score))]);
+    let FilterEditor::Choices { values } = doc.filter_spec(0, None).unwrap().editor else {
+        panic!("small float column should offer choices")
+    };
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| (value.label.as_deref(), value.count))
+            .collect::<Vec<_>>(),
+        [
+            (None, 1),
+            (Some("0.0"), 2),
+            (Some("1.0"), 1),
+            (Some("NaN"), 2)
+        ]
+    );
+
+    let keys = doc.keys_for_labels(0, &[Some("NaN".into())]).unwrap();
+    let view = doc
+        .apply_view(&QuerySpec::single(0, Filter::InValues { keys }))
+        .unwrap();
+    assert_eq!(view.row_count, 2);
+}
+
+#[test]
 fn choice_limit_counts_null_and_empty_columns_remain_valid() {
-    for (count, choices) in [(499, true), (500, false)] {
+    for (count, choices) in [(255, true), (256, false)] {
         let array = Int32Array::from_iter((0..count).map(Some).chain([None]));
         let doc = document(vec![("value", Arc::new(array))]);
         let spec = doc.filter_spec(0, None).unwrap();
@@ -213,20 +233,16 @@ fn high_cardinality_text_choices_do_not_require_a_value_index() {
         )),
     )]);
     let choices = doc
-        .prepare_text_choices(0, Some(&ViewState::default()))
+        .prepare_text_choices(0, Some(&QuerySpec::default()))
         .unwrap();
     let page = choices.page("value-100000", None, 100).unwrap();
     assert_eq!(page.values.len(), 1);
     assert_eq!(page.values[0].count, 1);
     let view = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::TextValues {
-                column: 0,
-                values: vec![page.values[0].value.clone()],
-                exclude: false,
-            }],
-            ..Default::default()
-        })
+        .apply_view(&QuerySpec::single(0, Filter::TextValues {
+            values: vec![page.values[0].value.clone()],
+            exclude: false,
+        }))
         .unwrap();
     assert_eq!(doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows, [
         100_000
@@ -248,22 +264,14 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
         ),
         ("group", Arc::new(Int32Array::from(vec![1, 1, 1, 1, 2]))),
     ]);
-    let state = ViewState {
-        filters: vec![
-            Filter::TextValues {
-                column: 0,
-                values: vec![Some("Cat".into())],
-                exclude: false,
-            },
-            Filter::Equals {
-                column: 1,
-                value: "1".into(),
-            },
-        ],
-        ..Default::default()
-    };
-    let choices = doc.prepare_text_choices(0, Some(&state)).unwrap();
-    doc.apply_view(&ViewState::default()).unwrap();
+    let spec = QuerySpec::default()
+        .with_filter(0, Filter::TextValues {
+            values: vec![Some("Cat".into())],
+            exclude: false,
+        })
+        .with_filter(1, Filter::Equals { value: "1".into() });
+    let choices = doc.prepare_text_choices(0, Some(&spec)).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert_eq!(
         choices
             .page("", None, 10)
@@ -281,14 +289,10 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
         (vec![], true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::TextValues {
-                    column: 0,
-                    values,
-                    exclude,
-                }],
-                ..Default::default()
-            })
+            .apply_view(&QuerySpec::single(0, Filter::TextValues {
+                values,
+                exclude,
+            }))
             .unwrap();
         assert_eq!(
             doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows,
@@ -311,8 +315,7 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
         Err(Error::InvalidArgument(_))
     ));
     assert!(matches!(
-        doc.validate_filter(&Filter::TextValues {
-            column: 1,
+        doc.validate_filter(1, &Filter::TextValues {
             values: vec![],
             exclude: false
         }),

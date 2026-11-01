@@ -3,11 +3,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Document, Error, Filter, SortKey, ViewState};
+use gewu_core::{Error, Filter, QuerySpec, Session, SortKey};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
-fn sample() -> (PathBuf, Document) {
+fn sample() -> (PathBuf, Session) {
     let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
     let labels: ArrayRef = Arc::new(StringArray::from(vec![
         Some("cat"),
@@ -43,11 +43,11 @@ fn sample() -> (PathBuf, Document) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     (path, doc)
 }
 
-fn names(doc: &Document) -> Vec<String> {
+fn names(doc: &Session) -> Vec<String> {
     let v = doc.current_view();
     let block = doc.rows(v.version, 0, 100, &[0]).unwrap();
     (0..block.n_rows)
@@ -70,24 +70,24 @@ fn opens_file() {
 #[test]
 fn sorts_with_nulls_last() {
     let (path, doc) = sample();
-    let state = ViewState {
+    let spec = QuerySpec {
         sort: vec![SortKey {
             column: 2,
             descending: false,
         }],
         ..Default::default()
     };
-    doc.apply_view(&state).unwrap();
+    doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
-    let state = ViewState {
+    let spec = QuerySpec {
         sort: vec![SortKey {
             column: 2,
             descending: true,
         }],
         ..Default::default()
     };
-    doc.apply_view(&state).unwrap();
+    doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
     std::fs::remove_file(path).ok();
 }
@@ -108,22 +108,19 @@ fn checkbox_filter_and_distinct() {
     let keys = doc
         .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
         .unwrap();
-    let state = ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }],
-        sort: vec![SortKey {
-            column: 3,
-            descending: true,
-        }],
-    };
-    let v = doc.apply_view(&state).unwrap();
+    let spec = QuerySpec::single(1, Filter::InValues { keys }).with_sort(vec![SortKey {
+        column: 3,
+        descending: true,
+    }]);
+    let v = doc.apply_view(&spec).unwrap();
     assert_eq!(v.row_count, 4);
     assert_eq!(names(&doc), ["f", "d", "b", "a"]);
 
     // Distinct values of another column respect this filter.
-    let prices = doc.distinct_values(2, Some(&state), 100).unwrap();
+    let prices = doc.distinct_values(2, Some(&spec), 100).unwrap();
     assert_eq!(prices.total, 4);
     // ...but the filtered column itself still lists every value (like Excel).
-    let labels = doc.distinct_values(1, Some(&state), 100).unwrap();
+    let labels = doc.distinct_values(1, Some(&spec), 100).unwrap();
     assert_eq!(labels.total, 4);
     std::fs::remove_file(path).ok();
 }
@@ -131,36 +128,22 @@ fn checkbox_filter_and_distinct() {
 #[test]
 fn null_contains_and_typed_equality() {
     let (path, doc) = sample();
-    let state = ViewState {
-        filters: vec![Filter::IsNull {
-            column: 2,
-            negate: false,
-        }],
-        ..Default::default()
-    };
-    doc.apply_view(&state).unwrap();
+    let spec = QuerySpec::single(2, Filter::IsNull { negate: false });
+    doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["d"]);
 
-    let state = ViewState {
-        filters: vec![Filter::Contains {
-            include_nulls: false,
-            column: 1,
-            text: "D".into(),
-            case_sensitive: false,
-        }],
-        ..Default::default()
-    };
-    doc.apply_view(&state).unwrap();
+    let spec = QuerySpec::single(1, Filter::Contains {
+        include_nulls: false,
+        text: "D".into(),
+        case_sensitive: false,
+    });
+    doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
-    let state = ViewState {
-        filters: vec![Filter::Equals {
-            column: 2,
-            value: "2.25".into(),
-        }],
-        ..Default::default()
-    };
-    doc.apply_view(&state).unwrap();
+    let spec = QuerySpec::single(2, Filter::Equals {
+        value: "2.25".into(),
+    });
+    doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["e"]);
     std::fs::remove_file(path).ok();
 }
@@ -169,7 +152,7 @@ fn null_contains_and_typed_equality() {
 fn stale_version_is_rejected() {
     let (path, doc) = sample();
     let old = doc.current_view().version;
-    doc.apply_view(&ViewState::default()).unwrap();
+    doc.apply_view(&QuerySpec::default()).unwrap();
     assert!(matches!(
         doc.rows(old, 0, 10, &[0]),
         Err(Error::StaleVersion { .. })
@@ -201,15 +184,11 @@ fn range_filter_on_floats_skips_nulls() {
     ] {
         let min = min.map(|text| doc.parse_bound(2, text).unwrap());
         let max = max.map(|text| doc.parse_bound(2, text).unwrap());
-        doc.apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 2,
-                min,
-                max,
-            }],
-            ..Default::default()
-        })
+        doc.apply_view(&QuerySpec::single(2, Filter::Range {
+            include_nulls: false,
+            min,
+            max,
+        }))
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -227,15 +206,11 @@ fn range_filter_on_integers() {
     ] {
         let min = min.map(|text| doc.parse_bound(3, text).unwrap());
         let max = max.map(|text| doc.parse_bound(3, text).unwrap());
-        doc.apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 3,
-                min,
-                max,
-            }],
-            ..Default::default()
-        })
+        doc.apply_view(&QuerySpec::single(3, Filter::Range {
+            include_nulls: false,
+            min,
+            max,
+        }))
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -277,7 +252,7 @@ fn histogram_counts() {
 }
 
 /// name | day (date32) | at (timestamp µs, UTC) | n (int64) | x (float64)
-fn temporal_sample() -> (PathBuf, Document) {
+fn temporal_sample() -> (PathBuf, Session) {
     use arrow::array::{Date32Array, TimestampMicrosecondArray};
     let names: ArrayRef = Arc::new(StringArray::from(vec!["Alpha", "beta", "Gamma", "delta"]));
     // 2024-01-01, 2024-01-02, null, 2024-03-15
@@ -317,11 +292,11 @@ fn temporal_sample() -> (PathBuf, Document) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = Document::open(&path).unwrap();
+    let doc = Session::open(&path).unwrap();
     (path, doc)
 }
 
-fn find_names(doc: &Document, text: &str) -> Vec<String> {
+fn find_names(doc: &Session, text: &str) -> Vec<String> {
     let names = names(doc);
     let hits = doc
         .prepare_find(doc.current_view().version, text, &[0, 1, 2, 3, 4])
@@ -398,15 +373,11 @@ fn contains_filter_is_for_text_only() {
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::Contains {
-                    include_nulls: false,
-                    column,
-                    text: "1700".into(),
-                    case_sensitive: false,
-                }],
-                ..Default::default()
-            })
+            .apply_view(&QuerySpec::single(column, Filter::Contains {
+                include_nulls: false,
+                text: "1700".into(),
+                case_sensitive: false,
+            }))
             .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
     }
@@ -435,29 +406,21 @@ fn dates_format_parse_and_filter() {
 
     // Range on dates: nulls excluded, bounds inclusive.
     let min = doc.parse_bound(1, "2024-01-02").unwrap();
-    doc.apply_view(&ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 1,
-            min: Some(min),
-            max: None,
-        }],
-        ..Default::default()
-    })
+    doc.apply_view(&QuerySpec::single(1, Filter::Range {
+        include_nulls: false,
+        min: Some(min),
+        max: None,
+    }))
     .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
     let max = doc.parse_bound(2, "2024-01-01T10:00:00Z").unwrap();
-    doc.apply_view(&ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 2,
-            min: None,
-            max: Some(max),
-        }],
-        ..Default::default()
-    })
+    doc.apply_view(&QuerySpec::single(2, Filter::Range {
+        include_nulls: false,
+        min: None,
+        max: Some(max),
+    }))
     .unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
@@ -510,11 +473,8 @@ fn column_summary_follows_the_view() {
 
     // With a filter, only the view's rows count.
     let keys = doc.keys_for_labels(1, &[Some("dog".into())]).unwrap();
-    doc.apply_view(&ViewState {
-        filters: vec![Filter::InValues { column: 1, keys }],
-        ..Default::default()
-    })
-    .unwrap();
+    doc.apply_view(&QuerySpec::single(1, Filter::InValues { keys }))
+        .unwrap();
     let s = doc.column_summary(2, 5).unwrap();
     assert_eq!((s.rows, s.min, s.max), (2, Some(1.0), Some(7.0)));
     std::fs::remove_file(path).ok();

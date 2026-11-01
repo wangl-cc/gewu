@@ -23,15 +23,15 @@ final class WorkbookModel: ObservableObject {
     private var listedSheets = false
     private var attemptedSheet: WorksheetName?
     private let sheetNames: @Sendable (String) throws -> [String]
-    private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDocument
+    private let openDocument: @Sendable (String, String?, Bool) throws -> GewuSession
     private let didOpen: @MainActor (URL) -> Void
 
     init(
         url: URL,
         hasHeader: Bool = true,
         sheetNames: @escaping @Sendable (String) throws -> [String] = { try xlsxSheetNames(path: $0) },
-        openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDocument = { path, sheet, header in
-            try GewuDocument.openWithOptions(path: path, sheet: sheet, hasHeader: header)
+        openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuSession = { path, sheet, header in
+            try GewuSession.openWithOptions(path: path, sheet: sheet, hasHeader: header)
         },
         didOpen: @escaping @MainActor (URL) -> Void = { FileCoordinator.shared.recordRecent($0) }
     ) {
@@ -150,5 +150,5 @@ final class WorkbookModel: ObservableObject {
 private struct WorkbookRead: Sendable {
     let sheets: [WorksheetName]?
     let sheet: WorksheetName?
-    let document: Result<GewuDocument, Error>
+    let document: Result<GewuSession, Error>
 }
