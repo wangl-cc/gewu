@@ -6,7 +6,10 @@ use arrow::array::Array;
 
 use super::Session;
 use crate::{
-    column::{dictionary::NULL_CODE, stats},
+    column::{
+        dictionary::{Tally, NULL_CODE},
+        stats,
+    },
     format,
     predicate::Predicate,
     scope::RowScope,
@@ -161,12 +164,12 @@ impl Session {
         }
         let editor = if let Some(dictionary) = &dictionary {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
-            let counts = dictionary.tally(&rows);
+            let tally = dictionary.tally(&rows);
             FilterEditor::Choices {
                 values: format_choices(
                     dictionary.values().as_ref(),
                     dictionary.has_null(),
-                    &counts,
+                    &tally,
                     true,
                 )?,
             }
@@ -229,11 +232,11 @@ impl Session {
         let limit = limit as usize;
         match dictionary {
             Some(dictionary) => {
-                let counts = dictionary.tally(&rows);
+                let tally = dictionary.tally(&rows);
                 let choices = format_choices(
                     dictionary.values().as_ref(),
                     dictionary.has_null(),
-                    &counts,
+                    &tally,
                     false,
                 )?;
                 let total = choices.len() as u64;
@@ -338,12 +341,12 @@ impl Session {
 pub(crate) fn format_choices(
     values: &dyn Array,
     has_null: bool,
-    counts: &[u64; 256],
+    tally: &Tally,
     include_zero: bool,
 ) -> Result<Vec<DistinctValue>> {
     let formatter = format::formatter(values)?;
     let mut result = Vec::with_capacity(values.len() + 1);
-    let null_count = counts[NULL_CODE as usize];
+    let null_count = tally.null_count;
     if has_null && (include_zero || null_count > 0) {
         result.push(DistinctValue {
             key: u64::from(NULL_CODE),
@@ -354,7 +357,7 @@ pub(crate) fn format_choices(
     let sort_indices = arrow::compute::sort_to_indices(values, None, None)?;
     for &code in sort_indices.values() {
         let code = code as usize;
-        let count = counts[code];
+        let count = tally.counts[code];
         if include_zero || count > 0 {
             result.push(DistinctValue {
                 key: code as u64,

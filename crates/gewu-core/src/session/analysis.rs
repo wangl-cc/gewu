@@ -107,11 +107,11 @@ impl Session {
         };
         let dictionary = self.dictionary(column)?;
         if let Some(dictionary) = dictionary {
-            let counts = dictionary.tally(&rows);
+            let tally = dictionary.tally(&rows);
             let mut choices = format_choices(
                 dictionary.values().as_ref(),
                 dictionary.has_null(),
-                &counts,
+                &tally,
                 false,
             )?;
             s.distinct_count = choices.len() as u64;

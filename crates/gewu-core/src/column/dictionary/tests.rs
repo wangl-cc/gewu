@@ -17,20 +17,25 @@ impl Dictionary {
     fn counts(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
         format_choices(
             self.values.as_ref(),
-            self.has_null,
+            self.has_null(),
             &self.tally(rows),
             false,
         )
     }
 
     fn counts_all(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
-        format_choices(self.values.as_ref(), self.has_null, &self.tally(rows), true)
+        format_choices(
+            self.values.as_ref(),
+            self.has_null(),
+            &self.tally(rows),
+            true,
+        )
     }
 
     fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
         let target: std::collections::HashSet<&Option<String>> = labels.iter().collect();
         let mut keys = Vec::new();
-        if self.has_null && labels.iter().any(Option::is_none) {
+        if self.has_null() && labels.iter().any(Option::is_none) {
             keys.push(u64::from(NULL_CODE));
         }
         let formatter = format::formatter(self.values.as_ref())?;

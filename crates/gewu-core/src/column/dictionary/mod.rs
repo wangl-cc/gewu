@@ -46,13 +46,25 @@ pub(crate) const NULL_CODE: u8 = 255;
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
 
+/// Occurrences of distinct values over a selection of rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tally {
+    /// Sized exactly to match `Dictionary.values.len()`, with `counts[i]` being the frequency of
+    /// `values[i]`.
+    pub counts: Vec<u64>,
+    /// Occurrences of null rows.
+    pub null_count: u64,
+}
+
 pub(crate) struct Dictionary {
     /// Code of each source row; [`NULL_CODE`] for null.
     codes: Vec<u8>,
     /// Non-null values in code order.
     values: ArrayRef,
-    /// Whether the source column contains at least one null.
-    has_null: bool,
+    /// Precomputed full-table counts, matching `values.len()`.
+    all_counts: Vec<u64>,
+    /// Precomputed full-table null row count.
+    all_null_count: u64,
 }
 
 impl Dictionary {
@@ -122,11 +134,11 @@ impl Dictionary {
         let mut seen: HashMap<A::Key, u8> = HashMap::new();
         let mut native_of: Vec<A::Native> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(len);
-        let mut has_null = false;
+        let mut buf = [0u64; 256];
 
         for row in 0..len {
             if nulls.as_ref().is_some_and(|n| n.is_null(row)) {
-                has_null = true;
+                buf[NULL_CODE as usize] += 1;
                 codes.push(NULL_CODE);
                 continue;
             }
@@ -143,14 +155,18 @@ impl Dictionary {
                     code
                 }
             };
+            buf[code as usize] += 1;
             codes.push(code);
         }
 
         let values = array.build_array(native_of.into_iter());
+        let all_counts = buf[..values.len()].to_vec();
+        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
             values,
-            has_null,
+            all_counts,
+            all_null_count,
         })
     }
 
@@ -162,7 +178,7 @@ impl Dictionary {
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
         let mut representative_row: Vec<usize> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(array.len());
-        let mut has_null = false;
+        let mut buf = [0u64; 256];
         for start in (0..array.len()).step_by(CHUNK) {
             let len = CHUNK.min(array.len() - start);
             let rows = converter
@@ -171,7 +187,7 @@ impl Dictionary {
             for (i, row) in rows.iter().enumerate() {
                 let source_row: usize = start + i;
                 if array.is_null(source_row) {
-                    has_null = true;
+                    buf[NULL_CODE as usize] += 1;
                     codes.push(NULL_CODE);
                     continue;
                 }
@@ -188,6 +204,7 @@ impl Dictionary {
                         code
                     }
                 };
+                buf[code as usize] += 1;
                 codes.push(code);
             }
         }
@@ -195,10 +212,13 @@ impl Dictionary {
         let rows =
             UInt32Array::from_iter_values(representative_row.into_iter().map(|row| row as u32));
         let values = take(array.as_ref(), &rows, None).ok()?;
+        let all_counts = buf[..values.len()].to_vec();
+        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
             values,
-            has_null,
+            all_counts,
+            all_null_count,
         })
     }
 
@@ -218,19 +238,16 @@ impl Dictionary {
         // Which dictionary entries are referenced, and are there logical nulls
         // (a null key, or a key pointing at a null value)?
         let value_nulls = dictionary_values.logical_nulls();
-        let mut has_null = false;
         let mut referenced: Vec<u32> = Vec::new();
         let mut entry_slot = vec![u32::MAX; dictionary_values.len()];
         if !scan_keys(keys, |key| {
             let Some(entry) = key else {
-                has_null = true;
                 return;
             };
             if value_nulls
                 .as_ref()
                 .is_some_and(|nulls| nulls.is_null(entry))
             {
-                has_null = true;
                 return;
             }
             let Some(slot) = entry_slot.get_mut(entry) else {
@@ -260,21 +277,27 @@ impl Dictionary {
             }
         }
 
-        // One key walk writes the shared per-row code array.
+        // One key walk writes the shared per-row code array and tallies full-table counts.
         let mut codes = Vec::with_capacity(array.len());
+        let mut buf = [0u64; 256];
         if !scan_keys(keys, |key| {
-            codes.push(match key {
+            let code = match key {
                 None => NULL_CODE,
                 Some(entry) => key_to_code.get(entry).copied().unwrap_or(NULL_CODE),
-            });
+            };
+            buf[code as usize] += 1;
+            codes.push(code);
         }) {
             return None;
         }
 
+        let all_counts = buf[..encoded.values.len()].to_vec();
+        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
             values: encoded.values,
-            has_null,
+            all_counts,
+            all_null_count,
         })
     }
 
@@ -284,7 +307,8 @@ impl Dictionary {
         Self {
             codes: vec![NULL_CODE; array.len()],
             values: array.slice(0, 0),
-            has_null: !array.is_empty(),
+            all_counts: Vec::new(),
+            all_null_count: array.len() as u64,
         }
     }
 }
@@ -297,7 +321,7 @@ impl Dictionary {
 
     #[inline]
     pub(crate) fn has_null(&self) -> bool {
-        self.has_null
+        self.all_null_count > 0
     }
 
     #[inline]
@@ -315,21 +339,30 @@ impl Dictionary {
         self.codes[row]
     }
 
-    /// Tally occurrences of each code over `rows`.
-    /// `counts[0..self.values.len()]` correspond to non-null values, and
-    /// `counts[NULL_CODE as usize]` is the count of null rows.
-    pub(crate) fn tally(&self, rows: &Selection) -> [u64; 256] {
-        let mut counts = [0u64; 256];
+    /// Tally occurrences of each distinct value over `rows`.
+    /// Returns `Tally` containing counts strictly matching `values.len()` in length,
+    /// and the count of null rows.
+    pub(crate) fn tally(&self, rows: &Selection) -> Tally {
         match rows {
-            Selection::All(_) => self
-                .codes
-                .iter()
-                .for_each(|&code| counts[code as usize] += 1),
-            Selection::Rows(rows) => rows
-                .iter()
-                .for_each(|&row| counts[self.codes[row as usize] as usize] += 1),
+            Selection::All(_) => Tally {
+                counts: self.all_counts.clone(),
+                null_count: self.all_null_count,
+            },
+            Selection::Rows(rows) => {
+                let mut buf = [0u64; 256];
+                for &row in rows.iter() {
+                    buf[self.codes[row as usize] as usize] += 1;
+                }
+                Tally {
+                    counts: buf[..self.values.len()].to_vec(),
+                    null_count: if self.all_null_count > 0 {
+                        buf[NULL_CODE as usize]
+                    } else {
+                        0
+                    },
+                }
+            }
         }
-        counts
     }
 
     fn fill_matches(
