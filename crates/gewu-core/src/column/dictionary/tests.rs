@@ -11,13 +11,62 @@ use arrow::{
 };
 
 use super::{streaming::count_values, *};
-use crate::{column::format, engine::CancelToken, scope::Selection};
+use crate::{
+    engine::CancelToken, format, predicate::Predicate, scope::Selection,
+    session::facet::format_choices, DistinctValue, Result,
+};
 
 fn labels(dictionary: &ValueDictionary) -> Vec<Option<String>> {
     let formatter = format::formatter(dictionary.values.as_ref()).unwrap();
     (0..dictionary.values.len())
         .map(|code| format::cell(dictionary.values.as_ref(), &formatter, code))
         .collect()
+}
+
+impl ValueDictionary {
+    fn counts(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
+        format_choices(
+            self.values.as_ref(),
+            self.has_null,
+            &self.tally(rows),
+            false,
+        )
+    }
+
+    fn counts_all(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
+        format_choices(self.values.as_ref(), self.has_null, &self.tally(rows), true)
+    }
+
+    fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
+        let target: std::collections::HashSet<&Option<String>> = labels.iter().collect();
+        let mut keys = Vec::new();
+        if self.has_null && labels.iter().any(Option::is_none) {
+            keys.push(u64::from(NULL_CODE));
+        }
+        let formatter = format::formatter(self.values.as_ref())?;
+        for code in 0..self.values.len() {
+            let label = format::cell(self.values.as_ref(), &formatter, code);
+            if target.contains(&label) {
+                keys.push(code as u64);
+            }
+        }
+        Ok(keys)
+    }
+
+    fn prepare_text_predicate(
+        self: &Arc<Self>,
+        values: &[Option<String>],
+        exclude: bool,
+    ) -> Result<Predicate<'static>> {
+        let keys = self.keys_for_labels(values)?;
+        let mut allowed = [exclude; 256];
+        for key in keys {
+            if let Some(slot) = allowed.get_mut(key as usize) {
+                *slot = !exclude;
+            }
+        }
+        Ok(self.predicate_from_allowed(allowed))
+    }
 }
 
 #[test]

@@ -16,7 +16,7 @@ use super::scalar::{
     float, integer, temporal,
 };
 use crate::{
-    column::format,
+    format,
     predicate::Predicate,
     types::{direct_domain, Domain},
     Error, Result,

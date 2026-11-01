@@ -8,8 +8,10 @@ use arrow::{
 use super::Session;
 use crate::{
     analysis::numeric::Numeric,
-    column::{dictionary::counted, format, stats},
+    column::stats,
+    format,
     scope::{for_rows, RowScope, Selection},
+    session::facet::format_choices,
     ColumnSummary, Histogram, Result,
 };
 
@@ -104,27 +106,41 @@ impl Session {
             Selection::Rows(_) => rows.iter().filter(|&r| array.is_null(r)).count() as u64,
         };
         let dictionary = self.dictionary(column)?;
-        // One spare in case null is among the most common.
-        let counted = counted(dictionary.as_ref(), array, &rows, top + 1)?;
-        s.distinct_count = counted.distinct;
-        let mut values = counted.top;
-        if dictionary.is_some() {
-            // Value order: the first and last non-null are the extremes.
-            let mut present = values.iter().filter_map(|v| v.label.as_ref());
+        if let Some(dictionary) = dictionary {
+            let counts = dictionary.tally(&rows);
+            let mut choices = format_choices(
+                dictionary.values().as_ref(),
+                dictionary.has_null(),
+                &counts,
+                false,
+            )?;
+            s.distinct_count = choices.len() as u64;
+            let mut present = choices.iter().filter_map(|v| v.label.as_ref());
             s.min_label = present.clone().next().cloned();
             s.max_label = present.next_back().cloned();
+            if s.null_count > 0 {
+                s.distinct_count -= 1;
+            }
+            choices.retain(|v| v.label.is_some());
+            choices.sort_by_key(|v| std::cmp::Reverse(v.count));
+            choices.truncate(top);
+            s.top_values = choices;
         } else {
+            // One spare in case null is among the most common.
+            let counted =
+                crate::column::dictionary::streaming::count_values(array, &rows, top + 1)?;
+            s.distinct_count = counted.distinct;
             let (lo, hi) = extremes(array, &rows)?;
             (s.min_label, s.max_label) = (label(lo), label(hi));
+            if s.null_count > 0 {
+                s.distinct_count -= 1;
+            }
+            let mut values = counted.top;
+            values.retain(|v| v.label.is_some());
+            values.sort_by_key(|v| std::cmp::Reverse(v.count));
+            values.truncate(top);
+            s.top_values = values;
         }
-        if s.null_count > 0 {
-            s.distinct_count -= 1;
-        }
-        values.retain(|v| v.label.is_some());
-        // Stable: ties stay in value order.
-        values.sort_by_key(|v| std::cmp::Reverse(v.count));
-        values.truncate(top);
-        s.top_values = values;
         Ok(s)
     }
 }

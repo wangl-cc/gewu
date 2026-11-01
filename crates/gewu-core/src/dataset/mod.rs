@@ -12,8 +12,8 @@ use arrow::{
 };
 
 use crate::{
-    column::{format, Column, ColumnCapabilities},
-    file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
+    column::{Column, ColumnCapabilities},
+    file, format, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
 };
 
 /// An immutable tabular dataset loaded into memory.

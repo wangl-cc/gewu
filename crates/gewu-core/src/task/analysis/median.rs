@@ -13,7 +13,7 @@ use arrow::{
 };
 
 use super::{numeric::Numeric, AnalysisContext};
-use crate::{column::format, scope::Selection, Error, Result};
+use crate::{format, scope::Selection, Error, Result};
 
 pub(super) fn label(
     array: &ArrayRef,

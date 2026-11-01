@@ -1,13 +1,41 @@
 //! Filter inputs, editor data and facet queries.
 
+use std::collections::HashSet;
+
+use arrow::array::Array;
+
 use super::Session;
 use crate::{
-    column::{dictionary::counted, stats, DistinctValue},
+    column::{dictionary::NULL_CODE, stats},
+    format,
     predicate::Predicate,
     scope::RowScope,
     types::{Domain, LogicalType},
-    DistinctResult, Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
+    Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctValue {
+    /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
+    /// Codes `0..=254` name non-null values and `255` names null.
+    pub key: u64,
+    /// Displayed text; `None` is the null value.
+    pub label: Option<String>,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctResult {
+    /// Sorted by value, nulls first.
+    pub values: Vec<DistinctValue>,
+    /// Number of distinct values before `limit` was applied.
+    pub total: u64,
+    pub truncated: bool,
+    /// Whether the keys name values for [`crate::Filter::InValues`]. False for
+    /// columns with too many distinct values to encode; `values` then holds
+    /// the most common ones.
+    pub keyed: bool,
+}
 
 /// The editor and data a frontend needs for one column's filter popover.
 /// The editor is chosen from the whole source column and stays stable as
@@ -133,8 +161,14 @@ impl Session {
         }
         let editor = if let Some(dictionary) = &dictionary {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
+            let counts = dictionary.tally(&rows);
             FilterEditor::Choices {
-                values: dictionary.counts_all(&rows)?,
+                values: format_choices(
+                    dictionary.values().as_ref(),
+                    dictionary.has_null(),
+                    &counts,
+                    true,
+                )?,
             }
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
@@ -193,13 +227,34 @@ impl Session {
         let dictionary = self.dictionary(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
         let limit = limit as usize;
-        let counted = counted(dictionary.as_ref(), &col.array, &rows, limit)?;
-        Ok(DistinctResult {
-            total: counted.distinct,
-            truncated: counted.distinct > limit as u64,
-            values: counted.top.into_iter().take(limit).collect(),
-            keyed: dictionary.is_some(),
-        })
+        match dictionary {
+            Some(dictionary) => {
+                let counts = dictionary.tally(&rows);
+                let choices = format_choices(
+                    dictionary.values().as_ref(),
+                    dictionary.has_null(),
+                    &counts,
+                    false,
+                )?;
+                let total = choices.len() as u64;
+                Ok(DistinctResult {
+                    total,
+                    truncated: total > limit as u64,
+                    values: choices.into_iter().take(limit).collect(),
+                    keyed: true,
+                })
+            }
+            None => {
+                let counted =
+                    crate::column::dictionary::streaming::count_values(&col.array, &rows, limit)?;
+                Ok(DistinctResult {
+                    total: counted.distinct,
+                    truncated: counted.distinct > limit as u64,
+                    values: counted.top.into_iter().take(limit).collect(),
+                    keyed: false,
+                })
+            }
+        }
     }
 
     /// Distribution of a numeric, date or time column in `bins` bins, for
@@ -235,7 +290,20 @@ impl Session {
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used when filtering by displayed value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        self.keyed_dictionary(column)?.keys_for_labels(labels)
+        let dictionary = self.keyed_dictionary(column)?;
+        let target: HashSet<&Option<String>> = labels.iter().collect();
+        let mut keys = Vec::new();
+        if dictionary.has_null() && labels.iter().any(Option::is_none) {
+            keys.push(u64::from(NULL_CODE));
+        }
+        let formatter = format::formatter(dictionary.values().as_ref())?;
+        for code in 0..dictionary.len() {
+            let label = format::cell(dictionary.values().as_ref(), &formatter, code);
+            if target.contains(&label) {
+                keys.push(code as u64);
+            }
+        }
+        Ok(keys)
     }
 
     pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {
@@ -252,11 +320,46 @@ impl Session {
                     )));
                 }
                 if let Some(dictionary) = self.dictionary(column_idx)? {
-                    return dictionary.prepare_text_predicate(values, *exclude);
+                    let keys = self.keys_for_labels(column_idx, values)?;
+                    let mut allowed = [*exclude; 256];
+                    for key in keys {
+                        if let Some(slot) = allowed.get_mut(key as usize) {
+                            *slot = !exclude;
+                        }
+                    }
+                    return Ok(dictionary.predicate_from_allowed(allowed));
                 }
                 col.prepare_filter(filter)
             }
             _ => col.prepare_filter(filter),
         }
     }
+}
+
+pub(crate) fn format_choices(
+    values: &dyn Array,
+    has_null: bool,
+    counts: &[u64; 256],
+    include_zero: bool,
+) -> Result<Vec<DistinctValue>> {
+    let formatter = format::formatter(values)?;
+    let mut result = Vec::with_capacity(values.len() + 1);
+    let null_count = counts[NULL_CODE as usize];
+    if has_null && (include_zero || null_count > 0) {
+        result.push(DistinctValue {
+            key: u64::from(NULL_CODE),
+            label: None,
+            count: null_count,
+        });
+    }
+    for (code, &count) in counts.iter().enumerate().take(values.len()) {
+        if include_zero || count > 0 {
+            result.push(DistinctValue {
+                key: code as u64,
+                label: format::cell(values, &formatter, code),
+                count,
+            });
+        }
+    }
+    Ok(result)
 }

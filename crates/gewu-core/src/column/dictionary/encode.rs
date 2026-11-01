@@ -36,7 +36,7 @@ impl ValueDictionary {
         match array.data_type() {
             Dictionary(..) => Self::build_native(array),
             Boolean => build_boolean(array),
-            Null => Some(ValueDictionary::all_null(array)),
+            Null => Some(Self::all_null(array)),
             Int8 => ordered!(Int8Type),
             Int16 => ordered!(Int16Type),
             Int32 => ordered!(Int32Type),

@@ -11,13 +11,11 @@
 
 pub mod dictionary;
 pub mod filter;
-pub mod format;
 pub mod stats;
 
 use std::sync::{Arc, OnceLock};
 
-use arrow::{array::ArrayRef, datatypes::DataType, util::display::ArrayFormatter};
-pub use dictionary::{DistinctResult, DistinctValue};
+use arrow::{array::ArrayRef, datatypes::DataType};
 pub(crate) use dictionary::{ValueDictionary, MAX_DISTINCT_VALUES};
 pub use filter::range::Bound;
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
@@ -132,15 +130,6 @@ impl Column {
             encoding: self.ty.encoding(),
             nullable: self.nullable,
         }
-    }
-
-    pub fn formatter(&self) -> Result<ArrayFormatter<'_>> {
-        format::formatter(self.array.as_ref())
-    }
-
-    pub fn format_cell(&self, row: usize) -> Result<String> {
-        let formatter = self.formatter()?;
-        Ok(formatter.value(row).to_string())
     }
 
     #[cfg(test)]

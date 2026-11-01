@@ -9,8 +9,8 @@ use arrow::{
 
 use super::Session;
 use crate::{
-    column::format,
     engine::CancelToken,
+    format,
     predicate::CHUNK,
     query::sort_rows,
     scope::{RowScope, Selection},
@@ -58,7 +58,7 @@ impl Session {
             .collect();
         let formatters = columns
             .iter()
-            .map(|&c| self.dataset.columns[c as usize].formatter())
+            .map(|&c| format::formatter(self.dataset.columns[c as usize].array.as_ref()))
             .collect::<Result<Vec<_>>>()?;
 
         let mut cells = Vec::with_capacity(source_rows.len() * columns.len());

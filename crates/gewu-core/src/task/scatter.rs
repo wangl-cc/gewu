@@ -8,8 +8,7 @@ use arrow::array::ArrayRef;
 
 use crate::{
     analysis::{numeric::Numeric, AnalysisContext},
-    column::format,
-    AxisScale, Error, Result,
+    format, AxisScale, Error, Result,
 };
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;

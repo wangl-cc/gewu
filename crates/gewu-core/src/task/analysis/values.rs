@@ -15,7 +15,7 @@ use arrow::{
 };
 
 use super::{AnalysisContext, ValueSummary};
-use crate::{column::format, scope::Selection, DistinctValue, Error, Result};
+use crate::{format, scope::Selection, DistinctValue, Error, Result};
 
 const DISTINCT_CAPACITY: usize = 4096;
 const CANDIDATE_CAPACITY: usize = 256;

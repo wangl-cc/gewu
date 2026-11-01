@@ -12,10 +12,8 @@ use arrow::{
 };
 
 use crate::{
-    column::{format, stats},
-    scope::Selection,
-    types::Type,
-    DistinctValue, Error, Histogram, LogicalType, Result,
+    column::stats, format, scope::Selection, types::Type, DistinctValue, Error, Histogram,
+    LogicalType, Result,
 };
 
 mod lengths;

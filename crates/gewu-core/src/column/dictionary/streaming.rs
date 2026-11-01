@@ -17,8 +17,8 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use super::{DistinctValue, CHUNK};
-use crate::{analysis::AnalysisContext, column::format, scope::Selection, Result};
+use super::CHUNK;
+use crate::{analysis::AnalysisContext, format, scope::Selection, DistinctValue, Result};
 
 /// Distinct values counted once, without keeping an index.
 pub(crate) struct ValueCounts {

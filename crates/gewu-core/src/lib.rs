@@ -8,6 +8,7 @@ pub mod column;
 pub mod dataset;
 mod error;
 mod file;
+pub(crate) mod format;
 pub(crate) mod query;
 pub mod session;
 pub mod task;
@@ -15,8 +16,8 @@ pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
 pub use column::{
-    AxisScale, Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue,
-    Histogram, LogicalType, RangeBounds, RangeHistogram,
+    AxisScale, Bound, Column, ColumnCapabilities, ColumnInfo, Histogram, LogicalType, RangeBounds,
+    RangeHistogram,
 };
 pub use dataset::Dataset;
 pub use error::{Error, Result};
@@ -26,7 +27,9 @@ pub use file::{
 };
 pub(crate) use query::{engine, predicate, scope, selection};
 pub use query::{Filter, QuerySpec, RowBlock, SortKey, ViewInfo};
-pub use session::{FilterEditor, FilterSpec, Session, TextFilterMode};
+pub use session::{
+    DistinctResult, DistinctValue, FilterEditor, FilterSpec, Session, TextFilterMode,
+};
 pub(crate) use task::analysis;
 pub use task::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,
