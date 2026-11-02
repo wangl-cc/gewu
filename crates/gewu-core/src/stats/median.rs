@@ -12,19 +12,18 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{numeric::Numeric, AnalysisContext};
-use crate::{format, scope::Selection, Error, Result};
+use super::{numeric::Numeric, AnalysisContext, ArrayView};
+use crate::{format, Error, Result};
 
-pub(super) fn label(
-    array: &ArrayRef,
-    rows: &Selection,
+pub(crate) fn label(
+    view: ArrayView<'_>,
     context: &AnalysisContext,
 ) -> Result<Option<String>> {
-    let value = Numeric::new(array)
+    let value = Numeric::new(view.array)
         .expect("validated numeric statistics")
         .accessor();
-    let mut ids = Vec::with_capacity(rows.len());
-    for (i, row) in rows.iter().enumerate() {
+    let mut ids = Vec::with_capacity(view.len());
+    for (i, row) in view.rows.iter().enumerate() {
         context.check_at(i)?;
         if value(row).is_some_and(|v| !v.is_nan()) {
             ids.push(row as u32);
@@ -33,14 +32,14 @@ pub(super) fn label(
     if ids.is_empty() {
         return Ok(None);
     }
-    let compare = make_comparator(array.as_ref(), array.as_ref(), SortOptions::default())?;
+    let compare = make_comparator(view.array.as_ref(), view.array.as_ref(), SortOptions::default())?;
     let middle = ids.len() / 2;
     select(&mut ids, middle, &compare, &mut || context.check())?;
     let high = ids[middle] as usize;
     if ids.len() % 2 == 1 {
         return Ok(format::cell(
-            array.as_ref(),
-            &format::formatter(array.as_ref())?,
+            view.array.as_ref(),
+            &format::formatter(view.array.as_ref())?,
             high,
         ));
     }
@@ -51,7 +50,7 @@ pub(super) fn label(
             low = row as usize;
         }
     }
-    midpoint(array, low, high)
+    midpoint(view.array, low, high)
 }
 
 // Median-of-three fast path, with a linear-work budget before switching to
@@ -289,9 +288,9 @@ mod tests {
     use super::*;
 
     fn median(array: ArrayRef) -> Option<String> {
+        let all = crate::scope::Selection::All(array.len());
         label(
-            &array,
-            &Selection::All(array.len()),
+            ArrayView::new(&array, &all),
             &AnalysisContext::default(),
         )
         .unwrap()
@@ -436,10 +435,10 @@ mod tests {
             ));
         }
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
+        let rows = crate::scope::Selection::Rows(Arc::new(vec![3, 1]));
         assert_eq!(
             label(
-                &array,
-                &Selection::Rows(Arc::new(vec![3, 1])),
+                ArrayView::new(&array, &rows),
                 &AnalysisContext::default()
             )
             .unwrap()
@@ -448,8 +447,9 @@ mod tests {
         );
         let context = AnalysisContext::default();
         context.cancel();
+        let all = crate::scope::Selection::All(4);
         assert!(matches!(
-            label(&array, &Selection::All(4), &context),
+            label(ArrayView::new(&array, &all), &context),
             Err(Error::Cancelled)
         ));
     }

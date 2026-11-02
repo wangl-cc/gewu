@@ -7,8 +7,8 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use super::{Histogram, Output, RangeBounds};
-use crate::{analysis::AnalysisContext, scope::Selection, AxisScale, Bound, Error, Result};
+use super::{AnalysisContext, Histogram, Output, RangeBounds};
+use crate::{scope::Selection, AxisScale, Bound, Error, Result};
 
 pub(super) fn build<H: Output>(
     array: &ArrayRef,

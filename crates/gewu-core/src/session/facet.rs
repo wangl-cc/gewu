@@ -2,9 +2,9 @@
 
 use super::Session;
 use crate::{
-    column::stats,
     predicate::Predicate,
     scope::RowScope,
+    stats,
     types::{Domain, LogicalType},
     Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
 };
@@ -160,7 +160,11 @@ impl Session {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
             FilterEditor::Range {
                 logical_type: col.logical_type().clone(),
-                distribution: stats::build_scaled(&col.array, &rows, bins, scale)?,
+                distribution: stats::build_scaled(
+                    stats::ArrayView::new(&col.array, &rows),
+                    bins,
+                    scale,
+                )?,
             }
         } else if col.capabilities().contains {
             FilterEditor::Contains
@@ -220,7 +224,7 @@ impl Session {
     pub fn histogram(&self, column: u32, spec: Option<&QuerySpec>, bins: u32) -> Result<Histogram> {
         let col = self.column(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        stats::counts(&col.array, &rows, bins)
+        stats::counts(stats::ArrayView::new(&col.array, &rows), bins)
     }
 
     /// Distribution with exact inclusive bounds for each bin. Counts use the
@@ -235,7 +239,7 @@ impl Session {
     ) -> Result<crate::RangeHistogram> {
         let col = self.column(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        stats::ranges(&col.array, &rows, bins)
+        stats::ranges(stats::ArrayView::new(&col.array, &rows), bins)
     }
 
     /// Validate and prepare an explicit filter without scanning data. Value-list

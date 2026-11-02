@@ -37,6 +37,7 @@ impl<'a> RowScope<'a> {
 }
 
 /// The rows a [`RowScope`] resolved to.
+#[derive(Debug)]
 pub(crate) enum Selection {
     All(usize),
     Rows(Arc<Vec<u32>>),

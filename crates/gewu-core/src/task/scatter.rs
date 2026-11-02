@@ -7,8 +7,9 @@ use std::{collections::BinaryHeap, sync::Arc};
 use arrow::array::ArrayRef;
 
 use crate::{
-    analysis::{numeric::Numeric, AnalysisContext},
-    format, AxisScale, Error, Result,
+    format,
+    stats::{numeric::Numeric, AnalysisContext},
+    AxisScale, Error, Result,
 };
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;

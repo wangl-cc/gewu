@@ -8,12 +8,272 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{analysis::AnalysisContext, scope::Selection, Bound, Error, Result};
+use crate::{scope::Selection, Bound, Error, Result};
 
+pub mod analysis;
+mod context;
+mod extremes;
+mod lengths;
 mod logarithmic;
+mod median;
+pub(crate) mod numeric;
 mod scale;
+pub(crate) mod streaming;
+mod values;
 
+pub use analysis::{
+    capabilities, AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis,
+};
+pub use extremes::extremes;
 pub use scale::AxisScale;
+pub use crate::types::LengthUnit;
+
+pub(crate) use context::AnalysisContext;
+
+pub fn median_label(view: ArrayView<'_>) -> Result<Option<String>> {
+    view.median_label(&AnalysisContext::default())
+}
+
+/// Facts about one column over the rows of the current view (so explicit
+/// filters apply), for aggregate reporting.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColumnSummary {
+    /// Rows in the current view.
+    pub rows: u64,
+    pub null_count: u64,
+    pub nan_count: u64,
+    /// Distinct non-null values.
+    pub distinct_count: u64,
+    /// Numbers, dates and times only (dates and times as their physical
+    /// value; see `Session::format_value`). These f64 results can approximate
+    /// large integers and decimals; distinct counts use the native values.
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    /// Smallest and largest non-null values of any comparable column, as
+    /// the table displays them.
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    /// Other columns: the most common values, most common first.
+    pub top_values: Vec<crate::DistinctValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NumericStatistics {
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
+    /// Exact native median text. Nulls and NaNs are excluded. Opposite infinities
+    /// as the two central values have no median. Even temporal medians retain
+    /// fractional native units rather than rounding back to the column's unit.
+    pub median_label: Option<String>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    pub nan_count: u64,
+    pub infinite_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValueSummary {
+    /// Non-null distinct values, estimated with a fixed-capacity sketch.
+    pub distinct_count: u64,
+    /// Applies to distinct cardinality and candidate selection. Counts recount
+    /// candidates over all rows; 64-bit hash collisions may merge values.
+    pub estimated: bool,
+    pub values: Vec<crate::DistinctValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LengthSummary {
+    pub unit: crate::types::LengthUnit,
+    pub empty_count: u64,
+    pub min: Option<u64>,
+    pub max: Option<u64>,
+    pub mean: Option<f64>,
+    pub histogram: Histogram,
+}
+
+/// A borrowed view of an Arrow array over a row selection.
+#[derive(Debug, Clone, Copy)]
+pub struct ArrayView<'a> {
+    pub array: &'a ArrayRef,
+    pub(crate) rows: &'a Selection,
+}
+
+impl<'a> ArrayView<'a> {
+    #[inline]
+    pub(crate) fn new(array: &'a ArrayRef, rows: &'a Selection) -> Self {
+        Self { array, rows }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.rows.len() == 0
+    }
+
+    #[inline]
+    pub fn data_type(&self) -> &DataType {
+        self.array.data_type()
+    }
+
+    #[inline]
+    pub fn is_null(&self, row: usize) -> bool {
+        self.array.is_null(row)
+    }
+
+    #[inline]
+    pub fn is_valid(&self, row: usize) -> bool {
+        self.array.is_valid(row)
+    }
+
+    #[inline]
+    pub fn null_count(&self) -> u64 {
+        match self.rows {
+            Selection::All(_) => self.array.null_count() as u64,
+            Selection::Rows(_) => {
+                self.rows.iter().filter(|&r| self.array.is_null(r)).count() as u64
+            }
+        }
+    }
+
+    /// Extrema row indices for comparable types: (min_row, max_row).
+    #[inline]
+    pub fn extremes(&self) -> Result<(Option<usize>, Option<usize>)> {
+        extremes::extremes(*self)
+    }
+
+    /// Formatted median label.
+    #[inline]
+    pub(crate) fn median_label(&self, context: &AnalysisContext) -> Result<Option<String>> {
+        median::label(*self, context)
+    }
+
+    /// Numeric statistics (min, max, mean, std dev, median, etc.).
+    #[inline]
+    pub(crate) fn numeric_statistics(&self, context: &AnalysisContext) -> Result<NumericStatistics> {
+        numeric::analyze(*self, context)
+    }
+
+    /// Histogram distribution with the given bins and scale.
+    #[inline]
+    pub(crate) fn histogram(
+        &self,
+        bins: u32,
+        scale: AxisScale,
+        context: &AnalysisContext,
+    ) -> Result<Histogram> {
+        counts_scaled_with_context(*self, bins, scale, context)
+    }
+
+    /// Range-bounded histogram distribution.
+    #[inline]
+    pub fn range_histogram(
+        &self,
+        bins: u32,
+        scale: AxisScale,
+    ) -> Result<Option<RangeHistogram>> {
+        build_scaled(*self, bins, scale)
+    }
+
+    /// Text or binary length statistics.
+    #[inline]
+    pub(crate) fn length_summary(&self, bins: u32, context: &AnalysisContext) -> Result<LengthSummary> {
+        lengths::analyze(*self, bins, context)
+    }
+
+    /// Distinct value frequency summary via sketch.
+    #[inline]
+    pub(crate) fn value_summary(&self, context: &AnalysisContext) -> Result<ValueSummary> {
+        values::analyze(*self, context)
+    }
+
+    /// Exact distinct count and top values streaming scan.
+    #[inline]
+    pub(crate) fn count_values(&self, keep: usize) -> Result<streaming::ValueCounts> {
+        streaming::count_values(*self, keep)
+    }
+
+    /// Comprehensive column summary for display.
+    #[inline]
+    pub fn summary(
+        &self,
+        choices: Option<Vec<crate::DistinctValue>>,
+        top: usize,
+    ) -> Result<ColumnSummary> {
+        summary(*self, choices, top)
+    }
+}
+
+/// Summary of one column over the view's rows, with up to `top` most common values
+/// for non-numeric columns.
+pub fn summary(
+    view: ArrayView<'_>,
+    choices: Option<Vec<crate::DistinctValue>>,
+    top: usize,
+) -> Result<ColumnSummary> {
+    let mut s = ColumnSummary {
+        rows: view.len() as u64,
+        null_count: 0,
+        nan_count: 0,
+        distinct_count: 0,
+        min: None,
+        max: None,
+        min_label: None,
+        max_label: None,
+        mean: None,
+        std_dev: None,
+        top_values: Vec::new(),
+    };
+    let array = view.array;
+    let rows = view.rows;
+    let f = crate::format::formatter(array.as_ref())?;
+    let label = |row: Option<usize>| row.and_then(|r| crate::format::cell(array.as_ref(), &f, r));
+
+    if let Some(numeric) = numeric::Numeric::new(array) {
+        let context = AnalysisContext::default();
+        let details =
+            crate::scope::for_rows!(rows, |it| numeric.summarize(it, &mut s, true, &context))?;
+        (s.min_label, s.max_label) = (label(details.min_row), label(details.max_row));
+        return Ok(s);
+    }
+
+    s.null_count = view.null_count();
+    if let Some(mut choices) = choices {
+        s.distinct_count = choices.len() as u64;
+        let mut present = choices.iter().filter_map(|v| v.label.as_ref());
+        s.min_label = present.clone().next().cloned();
+        s.max_label = present.next_back().cloned();
+        if s.null_count > 0 {
+            s.distinct_count -= 1;
+        }
+        choices.retain(|v| v.label.is_some());
+        choices.sort_by_key(|v| std::cmp::Reverse(v.count));
+        choices.truncate(top);
+        s.top_values = choices;
+    } else {
+        // One spare in case null is among the most common.
+        let counted = streaming::count_values(view, top + 1)?;
+        s.distinct_count = counted.distinct;
+        let (lo, hi) = extremes::extremes(view)?;
+        (s.min_label, s.max_label) = (label(lo), label(hi));
+        if s.null_count > 0 {
+            s.distinct_count -= 1;
+        }
+        let mut values = counted.top;
+        values.retain(|v| v.label.is_some());
+        values.sort_by_key(|v| std::cmp::Reverse(v.count));
+        values.truncate(top);
+        s.top_values = values;
+    }
+    Ok(s)
+}
+
+
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,17 +374,21 @@ pub(crate) fn build(
     )
 }
 
-pub(crate) fn build_scaled(
-    array: &ArrayRef,
-    rows: &Selection,
+pub fn build_scaled(
+    view: ArrayView<'_>,
     bins: u32,
     scale: AxisScale,
 ) -> Result<Option<RangeHistogram>> {
     match scale {
-        AxisScale::Linear => build(array, rows, bins),
+        AxisScale::Linear => build(view.array, view.rows, bins),
         AxisScale::Log10 => {
-            logarithmic::build(array, rows, bins.min(MAX_BINS), &AnalysisContext::default())
-                .map(Some)
+            logarithmic::build(
+                view.array,
+                view.rows,
+                bins.min(MAX_BINS),
+                &AnalysisContext::default(),
+            )
+            .map(Some)
         }
     }
 }
@@ -132,34 +396,32 @@ pub(crate) fn build_scaled(
 /// Statistics use the requested bin count and the caller's row scope, while
 /// sharing exact cuts with filter charts. Empty/all-NaN columns have no axis;
 /// an infinity-only column has no finite domain and is an explicit error.
-pub(crate) fn counts(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<Histogram> {
-    counts_with_context(array, rows, bins, &AnalysisContext::default())
+pub fn counts(view: ArrayView<'_>, bins: u32) -> Result<Histogram> {
+    counts_with_context(view, bins, &AnalysisContext::default())
 }
 
 pub(crate) fn counts_with_context(
-    array: &ArrayRef,
-    rows: &Selection,
+    view: ArrayView<'_>,
     bins: u32,
     context: &AnalysisContext,
 ) -> Result<Histogram> {
-    statistics(array, rows, bins, context)
+    statistics(view.array, view.rows, bins, context)
 }
 
 pub(crate) fn counts_scaled_with_context(
-    array: &ArrayRef,
-    rows: &Selection,
+    view: ArrayView<'_>,
     bins: u32,
     scale: AxisScale,
     context: &AnalysisContext,
 ) -> Result<Histogram> {
     match scale {
-        AxisScale::Linear => counts_with_context(array, rows, bins, context),
-        AxisScale::Log10 => logarithmic::build(array, rows, bins, context),
+        AxisScale::Linear => counts_with_context(view, bins, context),
+        AxisScale::Log10 => logarithmic::build(view.array, view.rows, bins, context),
     }
 }
 
-pub(crate) fn ranges(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<RangeHistogram> {
-    statistics(array, rows, bins, &AnalysisContext::default())
+pub fn ranges(view: ArrayView<'_>, bins: u32) -> Result<RangeHistogram> {
+    statistics(view.array, view.rows, bins, &AnalysisContext::default())
 }
 
 fn statistics<H: Output>(
@@ -600,6 +862,24 @@ mod tests {
     };
 
     use super::*;
+
+    fn counts(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<Histogram> {
+        super::counts(ArrayView::new(array, rows), bins)
+    }
+
+    fn counts_with_context(
+        array: &ArrayRef,
+        rows: &Selection,
+        bins: u32,
+        context: &AnalysisContext,
+    ) -> Result<Histogram> {
+        super::counts_with_context(ArrayView::new(array, rows), bins, context)
+    }
+
+    fn ranges(array: &ArrayRef, rows: &Selection, bins: u32) -> Result<RangeHistogram> {
+        super::ranges(ArrayView::new(array, rows), bins)
+    }
+
     use crate::{column::Column, engine::CancelToken, Filter};
 
     #[test]

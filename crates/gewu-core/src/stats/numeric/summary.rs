@@ -8,7 +8,7 @@ use arrow::{
 };
 
 use super::{IntegerColumn, RealColumn, RealType};
-use crate::{analysis::AnalysisContext, ColumnSummary, Result};
+use crate::{stats::AnalysisContext, stats::ColumnSummary, Result};
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where

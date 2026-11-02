@@ -1,90 +1,19 @@
 //! On-demand column analysis over an immutable view snapshot. Jobs own their
 //! cancellation state; cancelling an inspector never cancels a table query.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use arrow::{
     array::{Array, ArrayRef},
     datatypes::DataType,
 };
 
-use crate::{
-    column::stats, format, scope::Selection, types::Type, DistinctValue, Error, Histogram,
-    LogicalType, Result,
+use super::{
+    AnalysisContext, ArrayView, Histogram, LengthSummary, NumericStatistics, ValueSummary,
 };
-
-mod lengths;
-mod median;
-pub(crate) mod numeric;
-pub(crate) mod streaming;
-mod values;
-
-use numeric::Numeric;
-pub(crate) use streaming::count_values;
-
-/// Facts about one column over the rows of the current view (so explicit
-/// filters apply), for aggregate reporting.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ColumnSummary {
-    /// Rows in the current view.
-    pub rows: u64,
-    pub null_count: u64,
-    pub nan_count: u64,
-    /// Distinct non-null values.
-    pub distinct_count: u64,
-    /// Numbers, dates and times only (dates and times as their physical
-    /// value; see `Session::format_value`). These f64 results can approximate
-    /// large integers and decimals; distinct counts use the native values.
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    /// Smallest and largest non-null values of any comparable column, as
-    /// the table displays them.
-    pub min_label: Option<String>,
-    pub max_label: Option<String>,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    /// Other columns: the most common values, most common first.
-    pub top_values: Vec<DistinctValue>,
-}
+use crate::{scope::Selection, types::Type, Error, LogicalType, Result};
 
 pub use crate::types::{AnalysisSection, LengthUnit};
-
-#[derive(Debug, Clone)]
-pub struct NumericStatistics {
-    pub min_label: Option<String>,
-    pub max_label: Option<String>,
-    /// Exact native median text. Nulls and NaNs are excluded. Opposite infinities
-    /// as the two central values have no median. Even temporal medians retain
-    /// fractional native units rather than rounding back to the column's unit.
-    pub median_label: Option<String>,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    pub nan_count: u64,
-    pub infinite_count: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ValueSummary {
-    /// Non-null distinct values, estimated with a fixed-capacity sketch.
-    pub distinct_count: u64,
-    /// Applies to distinct cardinality and candidate selection. Counts recount
-    /// candidates over all rows; 64-bit hash collisions may merge values.
-    pub estimated: bool,
-    pub values: Vec<DistinctValue>,
-}
-
-#[derive(Debug, Clone)]
-pub struct LengthSummary {
-    pub unit: LengthUnit,
-    pub empty_count: u64,
-    pub min: Option<u64>,
-    pub max: Option<u64>,
-    pub mean: Option<f64>,
-    pub histogram: Histogram,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisField {
@@ -112,31 +41,7 @@ pub struct AnalysisResult {
     pub data: AnalysisData,
 }
 
-#[derive(Default)]
-pub(crate) struct AnalysisContext {
-    cancelled: AtomicBool,
-}
 
-impl AnalysisContext {
-    pub(crate) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn check(&self) -> Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-
-    pub(crate) fn check_at(&self, index: usize) -> Result<()> {
-        if index.is_multiple_of(4096) {
-            self.check()?;
-        }
-        Ok(())
-    }
-}
 
 /// A read-only job for exactly one section. Array buffers and source row IDs
 /// are shared, not copied. Results keep the captured version even if the table
@@ -217,56 +122,27 @@ impl ColumnAnalysis {
     /// Cancellation is terminal for this job and checked throughout scans.
     pub fn run(&self) -> Result<AnalysisResult> {
         self.context.check()?;
+        let view = ArrayView::new(&self.array, &self.rows);
         let data = match self.section {
             AnalysisSection::Overview => AnalysisData::Overview {
-                rows: self.rows.len() as u64,
+                rows: view.len() as u64,
                 null_count: self.null_count()?,
             },
-            AnalysisSection::Statistics => {
-                let mut summary = ColumnSummary {
-                    rows: self.rows.len() as u64,
-                    ..Default::default()
-                };
-                let details = Numeric::new(&self.array)
-                    .expect("validated statistics capability")
-                    .summarize(self.rows.iter(), &mut summary, false, &self.context)?;
-                let formatter = format::formatter(self.array.as_ref())?;
-                let label = |row: Option<usize>| {
-                    row.and_then(|row| format::cell(self.array.as_ref(), &formatter, row))
-                };
-                AnalysisData::Statistics {
-                    statistics: NumericStatistics {
-                        min_label: label(details.min_row),
-                        max_label: label(details.max_row),
-                        median_label: median::label(&self.array, &self.rows, &self.context)?,
-                        mean: summary.mean.filter(|v| v.is_finite()),
-                        std_dev: summary
-                            .std_dev
-                            .filter(|v| v.is_finite() && details.infinite_count == 0),
-                        nan_count: summary.nan_count,
-                        infinite_count: details.infinite_count,
-                    },
-                }
-            }
+            AnalysisSection::Statistics => AnalysisData::Statistics {
+                statistics: view.numeric_statistics(&self.context)?,
+            },
             AnalysisSection::Distribution => AnalysisData::Distribution {
-                histogram: stats::counts_scaled_with_context(
-                    &self.array,
-                    &self.rows,
+                histogram: view.histogram(
                     self.histogram_bins,
                     self.histogram_scale,
                     &self.context,
                 )?,
             },
             AnalysisSection::Values => AnalysisData::Values {
-                summary: values::analyze(&self.array, &self.rows, &self.context)?,
+                summary: view.value_summary(&self.context)?,
             },
             AnalysisSection::Lengths => AnalysisData::Lengths {
-                summary: lengths::analyze(
-                    &self.array,
-                    &self.rows,
-                    self.histogram_bins,
-                    &self.context,
-                )?,
+                summary: view.length_summary(self.histogram_bins, &self.context)?,
             },
             AnalysisSection::Structure => AnalysisData::Structure {
                 fields: structure(self.array.data_type())?,
@@ -297,7 +173,7 @@ impl ColumnAnalysis {
 }
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
-pub(crate) fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
+pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
     Type::from_arrow(data_type).map_or_else(
         || vec![AnalysisSection::Overview],
         |ty| ty.analysis_sections(),

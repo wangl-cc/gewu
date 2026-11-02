@@ -1,24 +1,25 @@
 //! Length statistics scan native values twice and retain only the histogram.
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray},
+    array::{Array, AsArray},
     datatypes::DataType,
 };
 
-use super::{AnalysisContext, LengthSummary, LengthUnit};
-use crate::{scope::Selection, Error, Histogram, Result};
+use super::{AnalysisContext, ArrayView, LengthSummary};
+use crate::{scope::Selection, types::LengthUnit, Error, Histogram, Result};
 
 pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
     crate::types::Type::from_arrow(data_type).and_then(|ty| ty.length_unit())
 }
 
-pub(super) fn analyze(
-    array: &ArrayRef,
-    rows: &Selection,
+pub(crate) fn analyze(
+    view: ArrayView<'_>,
     bins: u32,
     context: &AnalysisContext,
 ) -> Result<LengthSummary> {
     context.check()?;
+    let array = view.array;
+    let rows = view.rows;
     let unit = unit(array.data_type()).ok_or_else(|| {
         Error::InvalidArgument(format!("{} has no length analysis", array.data_type()))
     })?;
@@ -157,7 +158,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{ListArray, StringArray},
+        array::{ArrayRef, ListArray, StringArray},
         datatypes::Int32Type,
     };
 
@@ -172,7 +173,8 @@ mod tests {
             None,
         ]));
         let context = AnalysisContext::default();
-        let result = analyze(&array, &Selection::All(4), 40, &context).unwrap();
+        let all = crate::scope::Selection::All(4);
+        let result = analyze(ArrayView::new(&array, &all), 40, &context).unwrap();
         assert_eq!(result.unit, LengthUnit::Characters);
         assert_eq!(
             (result.min, result.max, result.empty_count),
@@ -182,9 +184,9 @@ mod tests {
         assert_eq!(result.histogram.counts, [1, 0, 2]);
         assert_eq!(result.histogram.null_count, 1);
         for rows in [vec![], vec![3]] {
+            let sel = crate::scope::Selection::Rows(Arc::new(rows.clone()));
             let result = analyze(
-                &array,
-                &Selection::Rows(Arc::new(rows.clone())),
+                ArrayView::new(&array, &sel),
                 40,
                 &context,
             )
@@ -193,7 +195,8 @@ mod tests {
             assert!(result.histogram.counts.is_empty());
             assert_eq!(result.histogram.null_count, rows.len() as u64);
         }
-        let result = analyze(&array, &Selection::Rows(Arc::new(vec![2])), 40, &context).unwrap();
+        let sel2 = crate::scope::Selection::Rows(Arc::new(vec![2]));
+        let result = analyze(ArrayView::new(&array, &sel2), 40, &context).unwrap();
         assert_eq!(result.histogram.counts, [1]);
         assert_eq!(
             (result.histogram.lo, result.histogram.hi),
@@ -211,9 +214,9 @@ mod tests {
             Some(vec![Some(5)]),
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
+        let sel = crate::scope::Selection::Rows(Arc::new(vec![0, 1, 2]));
         let result = analyze(
-            &array,
-            &Selection::Rows(Arc::new(vec![0, 1, 2])),
+            ArrayView::new(&array, &sel),
             40,
             &AnalysisContext::default(),
         )

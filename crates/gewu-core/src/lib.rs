@@ -11,14 +11,12 @@ mod file;
 pub(crate) mod format;
 pub(crate) mod query;
 pub mod session;
+pub mod stats;
 pub mod task;
 pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
-pub use column::{
-    AxisScale, Bound, Column, ColumnCapabilities, ColumnInfo, Histogram, LogicalType, RangeBounds,
-    RangeHistogram,
-};
+pub use column::{Bound, Column, ColumnCapabilities, ColumnInfo, LogicalType};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
@@ -30,12 +28,14 @@ pub use query::{Filter, QuerySpec, RowBlock, SortKey, ViewInfo};
 pub use session::{
     DistinctResult, DistinctValue, FilterEditor, FilterSpec, Session, TextFilterMode,
 };
-pub(crate) use task::analysis;
+pub use stats::{
+    ArrayView, AxisScale, ColumnSummary, Histogram, LengthSummary, NumericStatistics, RangeBounds,
+    RangeHistogram, ValueSummary,
+};
 pub use task::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,
-    ColumnSummary, Export, ExportProgress, Find, FindHighlight, FindOperation, LengthSummary,
-    LengthUnit, NumericStatistics, ScatterAnalysis, ScatterPoint, ScatterResult, TextChoice,
-    TextChoiceCursor, TextChoicePage, TextChoices, ValueSummary, MAX_FIND_HIGHLIGHT_ROWS,
-    MAX_FIND_PAGE_SIZE, MAX_SCATTER_POINTS,
+    Export, ExportProgress, Find, FindHighlight, FindOperation, LengthUnit, ScatterAnalysis,
+    ScatterPoint, ScatterResult, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices,
+    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE, MAX_SCATTER_POINTS,
 };
 pub use types::{Encoding, Type};

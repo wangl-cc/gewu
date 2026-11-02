@@ -9,13 +9,13 @@ use std::{
 use arrow::{
     array::{
         downcast_dictionary_array, downcast_integer_array, downcast_temporal_array, Array,
-        ArrayRef, AsArray, PrimitiveArray,
+        AsArray, PrimitiveArray,
     },
     datatypes::*,
 };
 
-use super::{AnalysisContext, ValueSummary};
-use crate::{format, scope::Selection, DistinctValue, Error, Result};
+use super::{AnalysisContext, ArrayView, ValueSummary};
+use crate::{format, DistinctValue, Error, Result};
 
 const DISTINCT_CAPACITY: usize = 4096;
 const CANDIDATE_CAPACITY: usize = 256;
@@ -177,22 +177,21 @@ impl Sketch {
     }
 }
 
-pub(super) fn analyze(
-    array: &ArrayRef,
-    rows: &Selection,
+pub(crate) fn analyze(
+    view: ArrayView<'_>,
     context: &AnalysisContext,
 ) -> Result<ValueSummary> {
     context.check()?;
-    let value = hasher(array.as_ref())?;
+    let value = hasher(view.array.as_ref())?;
     let mut sketch = Sketch::default();
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in view.rows.iter().enumerate() {
         context.check_at(index)?;
         if let Some(key) = value(row) {
             sketch.add(key, row);
         }
     }
     let mut counts = sketch.nominees();
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in view.rows.iter().enumerate() {
         context.check_at(index)?;
         if let Some(count) = value(row).and_then(|key| counts.get_mut(&key)) {
             count.0 += 1;
@@ -201,7 +200,7 @@ pub(super) fn analyze(
     let mut top: Vec<_> = counts.into_values().collect();
     top.sort_unstable_by_key(|&(count, row)| (std::cmp::Reverse(count), row));
     top.truncate(OUTPUT_LIMIT);
-    let formatter = format::formatter(array.as_ref())?;
+    let formatter = format::formatter(view.array.as_ref())?;
     let values = top
         .into_iter()
         .enumerate()
@@ -223,7 +222,9 @@ pub(super) fn analyze(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{DictionaryArray, Float64Array, Int32Array, Int64Array, StringArray};
+    use arrow::array::{
+        ArrayRef, DictionaryArray, Float64Array, Int32Array, Int64Array, StringArray,
+    };
 
     use super::*;
 
@@ -244,9 +245,9 @@ mod tests {
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(
             (0..50_000).map(|_| 0).chain(1..100_001),
         ));
+        let sel = crate::scope::Selection::All(array.len());
         let summary = analyze(
-            &array,
-            &Selection::All(array.len()),
+            ArrayView::new(&array, &sel),
             &AnalysisContext::default(),
         )
         .unwrap();
@@ -262,9 +263,9 @@ mod tests {
         assert_eq!(unique.distinct(), DISTINCT_CAPACITY as u64);
         // Complete MG eviction cycles still have representative fallback values.
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
+        let sel = crate::scope::Selection::All(array.len());
         let summary = analyze(
-            &array,
-            &Selection::All(array.len()),
+            ArrayView::new(&array, &sel),
             &AnalysisContext::default(),
         )
         .unwrap();
@@ -281,7 +282,8 @@ mod tests {
             Some(f64::from_bits(0x7ff8000000000001)),
             None,
         ]));
-        let summary = analyze(&array, &Selection::All(5), &AnalysisContext::default()).unwrap();
+        let all5 = crate::scope::Selection::All(5);
+        let summary = analyze(ArrayView::new(&array, &all5), &AnalysisContext::default()).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert!(summary.values.iter().all(|value| value.count == 2));
         let dictionary: ArrayRef = Arc::new(
@@ -296,9 +298,9 @@ mod tests {
             )
             .unwrap(),
         );
+        let sel_dict = crate::scope::Selection::Rows(Arc::new(vec![4, 2, 0, 1, 3]));
         let summary = analyze(
-            &dictionary,
-            &Selection::Rows(Arc::new(vec![4, 2, 0, 1, 3])),
+            ArrayView::new(&dictionary, &sel_dict),
             &AnalysisContext::default(),
         )
         .unwrap();
@@ -309,8 +311,9 @@ mod tests {
         );
         let context = AnalysisContext::default();
         context.cancel();
+        let all_dict = crate::scope::Selection::All(5);
         assert!(matches!(
-            analyze(&dictionary, &Selection::All(5), &context),
+            analyze(ArrayView::new(&dictionary, &all_dict), &context),
             Err(Error::Cancelled)
         ));
     }

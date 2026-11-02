@@ -479,7 +479,7 @@ mod tests {
             let model = Type::from_arrow(&data_type);
             assert_eq!(
                 model.as_ref().is_some_and(Type::is_ordered),
-                crate::analysis::numeric::Numeric::new(&array).is_some(),
+                crate::stats::numeric::Numeric::new(&array).is_some(),
                 "{data_type}"
             );
         }

@@ -1,12 +1,11 @@
 //! Background and asynchronous computational tasks over tabular snapshots.
 
-pub mod analysis;
 pub mod export;
 pub mod find;
 pub mod scatter;
 pub mod text_choices;
 
-pub use analysis::{
+pub use crate::stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
     LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
 };

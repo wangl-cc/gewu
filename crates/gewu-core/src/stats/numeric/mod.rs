@@ -11,7 +11,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{analysis::AnalysisContext, types::Type, ColumnSummary, Result};
+use crate::{stats::AnalysisContext, stats::ColumnSummary, types::Type, Result};
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -81,6 +81,31 @@ impl<'a> Numeric<'a> {
     pub(crate) fn accessor(self) -> Box<dyn Fn(usize) -> Option<f64> + 'a> {
         dispatch!(self.0, accessor())
     }
+}
+
+pub(crate) fn analyze(
+    view: super::ArrayView<'_>,
+    context: &AnalysisContext,
+) -> Result<super::NumericStatistics> {
+    let mut summary = ColumnSummary::default();
+    let details = Numeric::new(view.array)
+        .expect("validated statistics capability")
+        .summarize(view.rows.iter(), &mut summary, false, context)?;
+    let formatter = crate::format::formatter(view.array.as_ref())?;
+    let label = |row: Option<usize>| {
+        row.and_then(|row| crate::format::cell(view.array.as_ref(), &formatter, row))
+    };
+    Ok(super::NumericStatistics {
+        min_label: label(details.min_row),
+        max_label: label(details.max_row),
+        median_label: super::median::label(view, context)?,
+        mean: summary.mean.filter(|v| v.is_finite()),
+        std_dev: summary
+            .std_dev
+            .filter(|v| v.is_finite() && details.infinite_count == 0),
+        nan_count: summary.nan_count,
+        infinite_count: details.infinite_count,
+    })
 }
 
 struct IntegerColumn<'a, T: ArrowPrimitiveType>(&'a PrimitiveArray<T>);

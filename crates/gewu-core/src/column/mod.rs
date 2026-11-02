@@ -4,18 +4,15 @@
 //! its lazy distinct-value dictionary, and the per-column kernels:
 //! - [`dictionary`]: compact distinct-value dictionary encoding
 //! - [`filter`]: Single-column filter and Find predicate compilation
-//! - [`stats`]: Histograms and distributions
 
 pub mod dictionary;
 pub mod filter;
-pub mod stats;
 
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 pub(crate) use dictionary::Dictionary;
 pub use filter::range::Bound;
-pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
 use crate::{
@@ -165,7 +162,8 @@ impl Column {
                 keyed: true,
             })
         } else {
-            let counted = crate::analysis::count_values(&self.array, rows, limit)?;
+            let counted =
+                crate::stats::ArrayView::new(&self.array, rows).count_values(limit)?;
             Ok(DistinctResult {
                 total: counted.distinct,
                 truncated: counted.distinct > limit as u64,
