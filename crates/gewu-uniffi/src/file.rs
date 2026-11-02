@@ -11,59 +11,6 @@ pub fn xlsx_sheet_names(path: String) -> Result<Vec<String>, crate::GewuError> {
     Ok(core::xlsx_sheet_names(path)?)
 }
 
-/// Time unit for timestamps and durations; mirrors `arrow::datatypes::TimeUnit`.
-#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
-pub enum TimeUnit {
-    Second,
-    Millisecond,
-    Microsecond,
-    Nanosecond,
-}
-
-impl From<core::TimeUnit> for TimeUnit {
-    fn from(u: core::TimeUnit) -> Self {
-        match u {
-            core::TimeUnit::Second => Self::Second,
-            core::TimeUnit::Millisecond => Self::Millisecond,
-            core::TimeUnit::Microsecond => Self::Microsecond,
-            core::TimeUnit::Nanosecond => Self::Nanosecond,
-        }
-    }
-}
-
-/// Type details retained by the filter and nested-analysis interfaces.
-#[derive(uniffi::Enum, Clone, PartialEq, Eq)]
-pub enum LogicalType {
-    Null,
-    Text,
-    Integer {
-        bits: u8,
-        signed: bool,
-    },
-    Float {
-        bits: u8,
-    },
-    Decimal {
-        precision: u8,
-        scale: i8,
-    },
-    Boolean,
-    Date,
-    Time,
-    Timestamp {
-        unit: TimeUnit,
-        timezone: Option<String>,
-    },
-    Duration {
-        unit: TimeUnit,
-    },
-    Interval,
-    Binary,
-    List,
-    Struct,
-    Map,
-}
-
 /// Coarse value semantics for cell presentation. Use capabilities for operations.
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum ValueCategory {
@@ -78,31 +25,6 @@ impl From<core::ValueCategory> for ValueCategory {
             core::ValueCategory::Number => Self::Number,
             core::ValueCategory::Temporal => Self::Temporal,
             core::ValueCategory::Text => Self::Text,
-        }
-    }
-}
-
-impl From<core::LogicalType> for LogicalType {
-    fn from(t: core::LogicalType) -> Self {
-        match t {
-            core::LogicalType::Null => Self::Null,
-            core::LogicalType::Text => Self::Text,
-            core::LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
-            core::LogicalType::Float { bits } => Self::Float { bits },
-            core::LogicalType::Decimal { precision, scale } => Self::Decimal { precision, scale },
-            core::LogicalType::Boolean => Self::Boolean,
-            core::LogicalType::Date => Self::Date,
-            core::LogicalType::Time => Self::Time,
-            core::LogicalType::Timestamp { unit, timezone } => Self::Timestamp {
-                unit: unit.into(),
-                timezone,
-            },
-            core::LogicalType::Duration { unit } => Self::Duration { unit: unit.into() },
-            core::LogicalType::Interval => Self::Interval,
-            core::LogicalType::Binary => Self::Binary,
-            core::LogicalType::List => Self::List,
-            core::LogicalType::Struct => Self::Struct,
-            core::LogicalType::Map => Self::Map,
         }
     }
 }

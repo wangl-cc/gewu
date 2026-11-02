@@ -95,7 +95,7 @@ For string paging, call `prepare_text_choices(column, spec)` and `TextChoices::p
 
 The app holds a query draft and an applied snapshot. Find and default export use the applied snapshot's column order. Hiding removes a column's sort/filter; showing it adds a fresh empty configuration. Sorting priority is independent of display position. See [Find and filtering](../../docs/search-and-filter.md) for UI interactions and empty-selection semantics.
 
-Scatter results carry axis kinds independently of column presentation. The filter protocol no longer exports `LogicalType` or scalar object handles; nested analysis metadata still uses `LogicalType`.
+Scatter results carry axis kinds independently of column presentation. Nested analysis fields carry their name, display type, technical Arrow type and nullability, projected directly from Arrow. Neither interface exports an intermediate logical-type enum.
 
 ## On-demand analysis
 

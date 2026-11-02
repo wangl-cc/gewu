@@ -14,7 +14,6 @@ pub mod session;
 pub mod stats;
 pub mod types;
 
-pub use arrow::datatypes::TimeUnit;
 pub use column::{
     Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, ValueCategory,
 };
@@ -38,4 +37,4 @@ pub use stats::{
     RangeBounds, RangeHistogram, ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult,
     ValueSummary, MAX_SCATTER_POINTS,
 };
-pub use types::{Encoding, LogicalType};
+pub use types::Encoding;

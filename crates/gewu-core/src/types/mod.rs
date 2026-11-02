@@ -3,10 +3,7 @@
 //! Arrow's [`DataType`] is the source of truth. This module describes values
 //! and storage; each operation owns its support rules and native dispatch.
 
-mod logical;
-
 use arrow::datatypes::DataType;
-pub use logical::LogicalType;
 
 /// How Arrow stores a type. Dictionary encoding is lossless and does not
 /// change the value domain.

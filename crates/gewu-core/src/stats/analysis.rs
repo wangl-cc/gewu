@@ -12,7 +12,7 @@ pub use super::LengthUnit;
 use super::{
     AnalysisContext, ArrayView, Histogram, LengthSummary, NumericStatistics, ValueSummary,
 };
-use crate::{scope::Selection, Error, LogicalType, Result};
+use crate::{column::display_type, scope::Selection, types, Error, Result};
 
 /// A section of the column inspector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,7 +28,6 @@ pub enum AnalysisSection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisField {
     pub name: String,
-    pub logical_type: LogicalType,
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
@@ -217,13 +216,15 @@ pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
 
 fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
     let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
-        let logical = LogicalType::from_arrow(data_type)
-            .ok_or_else(|| Error::Unsupported(format!("unsupported nested type {data_type}")))?;
+        if !types::is_describable(data_type) {
+            return Err(Error::Unsupported(format!(
+                "unsupported nested type {data_type}"
+            )));
+        }
         Ok(AnalysisField {
             name: name.to_owned(),
-            display_type: logical.display_name(),
+            display_type: display_type(data_type),
             technical_type: data_type.to_string(),
-            logical_type: logical,
             nullable,
         })
     };
@@ -381,6 +382,38 @@ mod tests {
     }
 
     #[test]
+    fn nested_field_labels_preserve_parameters_and_dictionary_storage_details() {
+        use arrow::datatypes::TimeUnit;
+
+        let types = [
+            (DataType::Decimal256(50, 12), "decimal(50,12)"),
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("Europe/London".into())),
+                "timestamp(Europe/London)",
+            ),
+            (
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::UInt64)),
+                "uint64",
+            ),
+        ];
+        for (data_type, label) in types {
+            let array = new_null_array(
+                &DataType::Struct(vec![Field::new("child", data_type.clone(), false)].into()),
+                0,
+            );
+            let AnalysisData::Structure { fields } = run(&array, AnalysisSection::Structure) else {
+                panic!("structure")
+            };
+            assert_eq!(fields, vec![AnalysisField {
+                name: "child".into(),
+                display_type: label.into(),
+                technical_type: data_type.to_string(),
+                nullable: false,
+            }]);
+        }
+    }
+
+    #[test]
     fn structural_sections_use_type_metadata_and_never_offer_scalar_statistics() {
         let field = Arc::new(Field::new("child", DataType::Int32, true));
         for data_type in [
@@ -405,10 +438,6 @@ mod tests {
                 ("child", "int32", true)
             );
             assert_eq!(fields[0].technical_type, "Int32");
-            assert_eq!(fields[0].logical_type, LogicalType::Integer {
-                bits: 32,
-                signed: true
-            });
         }
     }
 }

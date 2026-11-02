@@ -52,7 +52,7 @@ impl ColumnInfo {
     }
 }
 
-fn display_type(data_type: &DataType) -> String {
+pub(crate) fn display_type(data_type: &DataType) -> String {
     use DataType::*;
     match value_type(data_type) {
         Null => "null".into(),

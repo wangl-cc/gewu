@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 use arrow::{array::ArrayRef, datatypes::DataType};
 pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
+pub(crate) use metadata::display_type;
 pub use metadata::{ColumnInfo, ValueCategory};
 
 use crate::{predicate::Predicate, scope::Selection, types, Filter, Result};
