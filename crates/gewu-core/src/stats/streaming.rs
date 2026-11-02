@@ -18,7 +18,7 @@ use arrow::{
 };
 
 use super::{AnalysisContext, ArrayView};
-use crate::{format, scope::Selection, DistinctValue, Result};
+use crate::{column::DistinctValue, format, scope::Selection, Result};
 
 const CHUNK: usize = 64 * 1024;
 

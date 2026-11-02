@@ -16,9 +16,33 @@ pub use filter::range::Bound;
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
 use crate::{
-    predicate::Predicate, scope::Selection, types::Type, DistinctResult, DistinctValue, Error,
-    Filter, Result,
+    predicate::Predicate, scope::Selection, types::Type, Error, Filter, Result,
 };
+
+/// A single distinct value in a column or summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctValue {
+    /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
+    /// Codes `0..=254` name non-null values and `255` names null.
+    pub key: u64,
+    /// Displayed text; `None` is the null value.
+    pub label: Option<String>,
+    pub count: u64,
+}
+
+/// Distinct values of a column, with total count and truncation state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctResult {
+    /// Sorted by value, nulls first.
+    pub values: Vec<DistinctValue>,
+    /// Number of distinct values before `limit` was applied.
+    pub total: u64,
+    pub truncated: bool,
+    /// Whether the keys name values for [`crate::Filter::InValues`]. False for
+    /// columns with too many distinct values to encode; `values` then holds
+    /// the most common ones.
+    pub keyed: bool,
+}
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {

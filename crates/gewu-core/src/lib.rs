@@ -15,7 +15,9 @@ pub mod stats;
 pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
-pub use column::{Bound, Column, ColumnCapabilities, ColumnInfo, LogicalType};
+pub use column::{
+    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, LogicalType,
+};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
@@ -28,8 +30,8 @@ pub use query::{
     MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use session::{
-    DistinctResult, DistinctValue, FilterEditor, FilterSpec, Session, TextChoice,
-    TextChoiceCursor, TextChoicePage, TextChoices, TextFilterMode,
+    FilterEditor, FilterSpec, Session, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices,
+    TextFilterMode,
 };
 pub use stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,

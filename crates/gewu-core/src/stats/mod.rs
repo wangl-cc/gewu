@@ -8,7 +8,7 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{scope::Selection, Bound, Error, Result};
+use crate::{column::DistinctValue, scope::Selection, Bound, Error, Result};
 
 pub mod analysis;
 mod context;
@@ -58,7 +58,7 @@ pub struct ColumnSummary {
     pub mean: Option<f64>,
     pub std_dev: Option<f64>,
     /// Other columns: the most common values, most common first.
-    pub top_values: Vec<crate::DistinctValue>,
+    pub top_values: Vec<DistinctValue>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +82,7 @@ pub struct ValueSummary {
     /// Applies to distinct cardinality and candidate selection. Counts recount
     /// candidates over all rows; 64-bit hash collisions may merge values.
     pub estimated: bool,
-    pub values: Vec<crate::DistinctValue>,
+    pub values: Vec<DistinctValue>,
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +204,7 @@ impl<'a> ArrayView<'a> {
     #[inline]
     pub fn summary(
         &self,
-        choices: Option<Vec<crate::DistinctValue>>,
+        choices: Option<Vec<DistinctValue>>,
         top: usize,
     ) -> Result<ColumnSummary> {
         summary(*self, choices, top)
@@ -215,7 +215,7 @@ impl<'a> ArrayView<'a> {
 /// for non-numeric columns.
 pub fn summary(
     view: ArrayView<'_>,
-    choices: Option<Vec<crate::DistinctValue>>,
+    choices: Option<Vec<DistinctValue>>,
     top: usize,
 ) -> Result<ColumnSummary> {
     let mut s = ColumnSummary {

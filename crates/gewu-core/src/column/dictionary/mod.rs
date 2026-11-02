@@ -29,6 +29,8 @@ use arrow::{
     datatypes::*,
     row::{RowConverter, SortField},
 };
+
+use super::DistinctValue;
 use rapidhash::RapidHashMap;
 
 use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
@@ -419,11 +421,11 @@ impl Dictionary {
         &self,
         rows: &Selection,
         include_zero: bool,
-    ) -> Vec<crate::DistinctValue> {
+    ) -> Vec<DistinctValue> {
         let mut result = Vec::with_capacity(self.labels.len() + 1);
         let tally = self.tally(rows);
         if self.has_null() && (include_zero || tally.null_count > 0) {
-            result.push(crate::DistinctValue {
+            result.push(DistinctValue {
                 key: Self::NULL_KEY,
                 label: None,
                 count: tally.null_count,
@@ -432,7 +434,7 @@ impl Dictionary {
         for (code, label) in self.labels.iter().enumerate() {
             let count = tally.counts[code];
             if include_zero || count > 0 {
-                result.push(crate::DistinctValue {
+                result.push(DistinctValue {
                     key: code as u64,
                     label: Some(label.clone()),
                     count,
