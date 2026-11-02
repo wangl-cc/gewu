@@ -25,14 +25,14 @@ pub use error::GewuError;
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
 pub use file::{
     xlsx_sheet_names, ColumnCapabilities, ColumnInfo, FileInfo, FileType, KeyValue, LogicalType,
-    TimeUnit,
+    TimeUnit, ValueCategory,
 };
 pub use filter::{
     Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,
 };
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindOperation, FindSession};
 pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
+pub use scatter::{ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult};
 pub use session::GewuSession;
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo};

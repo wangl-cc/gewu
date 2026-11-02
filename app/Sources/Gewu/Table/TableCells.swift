@@ -1,17 +1,7 @@
 import AppKit
 
-/// How a column's values are displayed, from the kind the core reports.
-enum ColumnKind {
-    case number, temporal, text
-
-    init(_ type: LogicalType) {
-        switch type {
-        case .integer, .float, .decimal: self = .number
-        case .date, .time, .timestamp, .duration, .interval: self = .temporal
-        default: self = .text
-        }
-    }
-
+/// The app chooses styling from the coarse value category reported by Core.
+extension ValueCategory {
     var alignment: NSTextAlignment { self == .text ? .left : .right }
 }
 
@@ -28,7 +18,7 @@ struct CellFonts {
         null = NSFont(descriptor: text.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? text
     }
 
-    func font(for kind: ColumnKind) -> NSFont { kind == .text ? text : digits }
+    func font(for kind: ValueCategory) -> NSFont { kind == .text ? text : digits }
 }
 
 private func funnel(filled: Bool, color: NSColor) -> NSImage? {

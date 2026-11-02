@@ -31,8 +31,7 @@ impl From<core::TimeUnit> for TimeUnit {
     }
 }
 
-/// A column's value semantics with its parameters; mirrors `gewu_core::LogicalType`.
-/// Storage encoding is reported separately by [`ColumnEncoding`].
+/// Type details retained by the filter and nested-analysis interfaces.
 #[derive(uniffi::Enum, Clone, PartialEq, Eq)]
 pub enum LogicalType {
     Null,
@@ -65,20 +64,20 @@ pub enum LogicalType {
     Map,
 }
 
-/// How Arrow stores a column's values; mirrors `gewu_core::Encoding`.
-/// Dictionary-encoded columns are discrete: they offer value choices rather
-/// than ordered filters or charts.
+/// Coarse value semantics for cell presentation. Use capabilities for operations.
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
-pub enum ColumnEncoding {
-    Direct,
-    Dictionary,
+pub enum ValueCategory {
+    Number,
+    Temporal,
+    Text,
 }
 
-impl From<core::Encoding> for ColumnEncoding {
-    fn from(encoding: core::Encoding) -> Self {
-        match encoding {
-            core::Encoding::Direct => Self::Direct,
-            core::Encoding::Dictionary => Self::Dictionary,
+impl From<core::ValueCategory> for ValueCategory {
+    fn from(category: core::ValueCategory) -> Self {
+        match category {
+            core::ValueCategory::Number => Self::Number,
+            core::ValueCategory::Temporal => Self::Temporal,
+            core::ValueCategory::Text => Self::Text,
         }
     }
 }
@@ -134,8 +133,7 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
 #[derive(uniffi::Record)]
 pub struct ColumnInfo {
     pub name: String,
-    pub logical_type: LogicalType,
-    pub encoding: ColumnEncoding,
+    pub value_category: ValueCategory,
     pub display_type: String,
     pub technical_type: String,
     pub capabilities: ColumnCapabilities,
@@ -199,8 +197,7 @@ impl From<&core::Session> for FileInfo {
                         .expect("column came from this document's schema");
                     ColumnInfo {
                         name: c.name.clone(),
-                        logical_type: c.logical_type.clone().into(),
-                        encoding: c.encoding.into(),
+                        value_category: c.value_category.into(),
                         display_type: c.display_type.clone(),
                         technical_type: c.technical_type.clone(),
                         capabilities: capabilities.into(),

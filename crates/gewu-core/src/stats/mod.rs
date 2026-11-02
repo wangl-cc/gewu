@@ -30,7 +30,9 @@ pub use extremes::extremes;
 pub use lengths::LengthUnit;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
+pub use scatter::{
+    ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS,
+};
 
 pub fn median_label(view: ArrayView<'_>) -> Result<Option<String>> {
     view.median_label(&AnalysisContext::default())

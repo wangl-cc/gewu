@@ -16,7 +16,7 @@ pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
 pub use column::{
-    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, LogicalType,
+    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, ValueCategory,
 };
 pub use dataset::Dataset;
 pub use error::{Error, Result};
@@ -36,7 +36,7 @@ pub use session::{
 pub use stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,
     ColumnAnalysis, ColumnSummary, Histogram, LengthSummary, LengthUnit, NumericStatistics,
-    RangeBounds, RangeHistogram, ScatterAnalysis, ScatterPoint, ScatterResult, ValueSummary,
-    MAX_SCATTER_POINTS,
+    RangeBounds, RangeHistogram, ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult,
+    ValueSummary, MAX_SCATTER_POINTS,
 };
-pub use types::Encoding;
+pub use types::{Encoding, LogicalType};

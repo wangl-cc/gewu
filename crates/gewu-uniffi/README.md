@@ -84,7 +84,9 @@ For detached analysis work, connect a Swift task cancellation handler to the Rus
 
 ## Filters and exact bounds
 
-`ColumnInfo.logical_type` is value semantics only; `ColumnInfo.encoding` is `Direct` or `Dictionary`, and dictionary columns are discrete (choices rather than ordered filters or charts). Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
+`ColumnInfo.value_category` supplies the coarse cell category (`Number`, `Temporal`, or `Text`); the app chooses alignment and fonts. `display_type` is the human-readable type label and `technical_type` is the underlying Arrow description. Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render, rather than inferring support from the category or parsing the labels. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
+
+Scatter results carry `x_axis_kind` and `y_axis_kind` (`Number`, `Date`, or `DateTime`), so chart presentation does not depend on column type metadata. Coordinates retain source units and exact labels retain their existing format. The filter and nested-analysis interfaces still expose `LogicalType`; column metadata no longer does.
 
 | `FilterEditor` | UI contract |
 | --- | --- |

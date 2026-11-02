@@ -16,6 +16,25 @@ pub(crate) fn supports(data_type: &DataType) -> bool {
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;
 
+/// Interpretation of scatter labels for axis presentation. Numeric coordinates
+/// retain their existing source units; date labels carry the calendar values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScatterAxisKind {
+    Number,
+    Date,
+    DateTime,
+}
+
+impl ScatterAxisKind {
+    fn from_arrow(data_type: &DataType) -> Self {
+        match data_type {
+            DataType::Date32 | DataType::Date64 => Self::Date,
+            DataType::Timestamp(..) => Self::DateTime,
+            _ => Self::Number,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScatterPoint {
     pub source_row: u64,
@@ -32,6 +51,8 @@ pub struct ScatterResult {
     /// None means the zero-based source row index, not display position.
     pub x_column: Option<u32>,
     pub y_column: u32,
+    pub x_axis_kind: ScatterAxisKind,
+    pub y_axis_kind: ScatterAxisKind,
     pub total_rows: u64,
     /// Rows with finite, non-null values in both requested axis domains.
     pub eligible_rows: u64,
@@ -174,6 +195,13 @@ impl ScatterAnalysis {
             version: self.version,
             x_column: self.x.as_ref().map(|(column, _)| *column),
             y_column: self.y.0,
+            x_axis_kind: self
+                .x
+                .as_ref()
+                .map_or(ScatterAxisKind::Number, |(_, array)| {
+                    ScatterAxisKind::from_arrow(array.data_type())
+                }),
+            y_axis_kind: ScatterAxisKind::from_arrow(self.y.1.data_type()),
             total_rows: self.rows.len() as u64,
             eligible_rows,
             non_positive_rows,
@@ -194,9 +222,38 @@ fn priority(row: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Date32Array, Float64Array, Int64Array, StringArray};
+    use arrow::array::{
+        Date32Array, Float64Array, Int64Array, StringArray, TimestampNanosecondArray,
+    };
 
     use super::*;
+
+    #[test]
+    fn axis_kinds_describe_the_snapshot_even_without_points() {
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![1]));
+        let timestamps: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![0]));
+        let result = ScatterAnalysis::new(
+            Some((0, dates.clone())),
+            (1, timestamps),
+            Arc::new(vec![]),
+            7,
+            8,
+        )
+        .unwrap()
+        .run()
+        .unwrap();
+        assert!(result.points.is_empty());
+        assert_eq!(result.x_axis_kind, ScatterAxisKind::Date);
+        assert_eq!(result.y_axis_kind, ScatterAxisKind::DateTime);
+        let result = ScatterAnalysis::new(None, (0, dates), Arc::new(vec![0]), 7, 8)
+            .unwrap()
+            .run()
+            .unwrap();
+        assert_eq!(result.x_axis_kind, ScatterAxisKind::Number);
+        assert_eq!(result.y_axis_kind, ScatterAxisKind::Date);
+        assert_eq!(result.points[0].x, 0.0);
+        assert_eq!(result.points[0].y, 1.0);
+    }
 
     #[test]
     fn log_axes_classify_pairs_independently_and_keep_original_values() {

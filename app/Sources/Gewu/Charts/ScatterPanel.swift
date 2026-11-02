@@ -134,8 +134,6 @@ struct ScatterPanel: View {
             guard let y = model.chartY else { return }
             await chart.load(
                 document: model.doc, version: model.current.version, x: model.chartX, y: y,
-                xKind: model.chartX.map { model.info.columns[$0].logicalType },
-                yKind: model.info.columns[y].logicalType,
                 limit: pointLimit, rowNumberBase: rowNumberBase,
                 xScale: request.xScale, yScale: request.yScale)
         }
@@ -175,7 +173,7 @@ final class ScatterModel: ObservableObject {
     }
 
     func load(
-        document: GewuDocument, version: UInt64, x: Int?, y: Int, xKind: LogicalType?, yKind: LogicalType?,
+        document: GewuDocument, version: UInt64, x: Int?, y: Int,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,
@@ -205,8 +203,8 @@ final class ScatterModel: ObservableObject {
                     }
                     return (
                         result,
-                        ScatterDates.make(points: result.points, x: true, kind: xKind),
-                        ScatterDates.make(points: result.points, x: false, kind: yKind)
+                        ScatterDates.make(points: result.points, x: true, kind: result.xAxisKind),
+                        ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
                     )
                 }.value
             } onCancel: {

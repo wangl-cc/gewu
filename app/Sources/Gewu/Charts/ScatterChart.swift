@@ -171,15 +171,14 @@ enum ScatterDates {
         return (start == end ? "\(start)" : "\(start)–\(end)") + " · UTC"
     }
 
-    static func make(points: [ScatterPoint], x: Bool, kind: LogicalType?) -> [Date]? {
-        guard let kind else { return nil }
+    static func make(points: [ScatterPoint], x: Bool, kind: ScatterAxisKind) -> [Date]? {
         let isDate: Bool
         switch kind {
         case .date:
             isDate = true
-        case .timestamp:
+        case .dateTime:
             isDate = false
-        default:
+        case .number:
             return nil
         }
         let fractional = ISO8601DateFormatter()

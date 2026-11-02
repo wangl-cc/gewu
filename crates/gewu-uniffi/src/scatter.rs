@@ -4,6 +4,24 @@ use gewu_core as core;
 
 use crate::GewuError;
 
+/// Axis presentation semantics supplied with the scatter snapshot.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum ScatterAxisKind {
+    Number,
+    Date,
+    DateTime,
+}
+
+impl From<core::ScatterAxisKind> for ScatterAxisKind {
+    fn from(kind: core::ScatterAxisKind) -> Self {
+        match kind {
+            core::ScatterAxisKind::Number => Self::Number,
+            core::ScatterAxisKind::Date => Self::Date,
+            core::ScatterAxisKind::DateTime => Self::DateTime,
+        }
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct ScatterPoint {
     pub source_row: u64,
@@ -18,6 +36,8 @@ pub struct ScatterResult {
     pub version: u64,
     pub x_column: Option<u32>,
     pub y_column: u32,
+    pub x_axis_kind: ScatterAxisKind,
+    pub y_axis_kind: ScatterAxisKind,
     pub total_rows: u64,
     pub eligible_rows: u64,
     pub non_positive_rows: u64,
@@ -41,6 +61,8 @@ impl ScatterAnalysis {
             version: result.version,
             x_column: result.x_column,
             y_column: result.y_column,
+            x_axis_kind: result.x_axis_kind.into(),
+            y_axis_kind: result.y_axis_kind.into(),
             total_rows: result.total_rows,
             eligible_rows: result.eligible_rows,
             non_positive_rows: result.non_positive_rows,

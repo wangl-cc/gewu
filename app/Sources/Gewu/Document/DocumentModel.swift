@@ -16,7 +16,7 @@ final class DocumentModel: ObservableObject {
     let url: URL
     let doc: GewuSession
     let info: FileInfo
-    let kinds: [ColumnKind]
+    let kinds: [ValueCategory]
     let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
     @Published private(set) var appliedSpec = QuerySpec(sort: [], filters: [:])
@@ -53,7 +53,7 @@ final class DocumentModel: ObservableObject {
         doc = document
         let metadata = document.info()
         info = metadata
-        kinds = metadata.columns.map { ColumnKind($0.logicalType) }
+        kinds = metadata.columns.map(\.valueCategory)
         find = FindModel()
         current = document.currentView()
         selectedColumn = metadata.columns.isEmpty ? nil : 0

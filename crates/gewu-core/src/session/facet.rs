@@ -115,7 +115,8 @@ impl Session {
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
             FilterEditor::Range {
-                logical_type: col.logical_type().clone(),
+                logical_type: LogicalType::from_arrow(col.array.data_type())
+                    .expect("column type was validated at loading"),
                 distribution: stats::build_scaled(
                     stats::ArrayView::new(&col.array, &rows),
                     bins,

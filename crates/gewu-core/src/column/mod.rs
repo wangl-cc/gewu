@@ -8,20 +8,16 @@
 pub mod bound;
 pub mod dictionary;
 pub mod filter;
+mod metadata;
 
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
+pub use metadata::{ColumnInfo, ValueCategory};
 
-pub use crate::types::LogicalType;
-use crate::{
-    predicate::Predicate,
-    scope::Selection,
-    types::{self, Encoding},
-    Error, Filter, Result,
-};
+use crate::{predicate::Predicate, scope::Selection, types, Error, Filter, Result};
 
 /// Operations supported by a column's type. Value-list availability
 /// additionally depends on cardinality and is reported by `DistinctResult`.
@@ -36,19 +32,6 @@ pub struct ColumnCapabilities {
     pub scatter: bool,
     /// Direct numeric values support positive-only logarithmic charts.
     pub logarithmic: bool,
-}
-
-/// Metadata describing a single column.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnInfo {
-    pub name: String,
-    pub logical_type: LogicalType,
-    /// How Arrow stores the values. A dictionary column is discrete: it offers
-    /// value choices rather than ordered filters or charts.
-    pub encoding: Encoding,
-    pub display_type: String,
-    pub technical_type: String,
-    pub nullable: bool,
 }
 
 /// A single distinct value in a column or summary.
@@ -79,7 +62,6 @@ pub struct DistinctResult {
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {
     pub name: String,
-    pub logical_type: LogicalType,
     pub nullable: bool,
     pub len: usize,
     pub array: ArrayRef,
@@ -93,17 +75,16 @@ impl Column {
     /// than exposing a column no operation can describe.
     pub fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
         let name = name.into();
-        let Some(logical_type) = LogicalType::from_arrow(array.data_type()) else {
+        if !types::is_describable(array.data_type()) {
             return Err(crate::Error::Unsupported(format!(
                 "column {name:?} has unsupported type {}",
                 array.data_type()
             )));
-        };
+        }
         let len = array.len();
         let nullable = array.is_nullable();
         Ok(Self {
             name,
-            logical_type,
             nullable,
             len,
             array,
@@ -141,11 +122,6 @@ impl Column {
     }
 
     #[inline]
-    pub fn logical_type(&self) -> &LogicalType {
-        &self.logical_type
-    }
-
-    #[inline]
     pub fn is_nullable(&self) -> bool {
         self.nullable
     }
@@ -168,14 +144,7 @@ impl Column {
     }
 
     pub fn info(&self) -> ColumnInfo {
-        ColumnInfo {
-            name: self.name.clone(),
-            display_type: self.logical_type.display_name(),
-            technical_type: self.array.data_type().to_string(),
-            logical_type: self.logical_type.clone(),
-            encoding: types::encoding(self.array.data_type()),
-            nullable: self.nullable,
-        }
+        ColumnInfo::from_column(self)
     }
 
     #[cfg(test)]

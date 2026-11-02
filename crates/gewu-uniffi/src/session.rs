@@ -347,6 +347,17 @@ mod tests {
         ));
         std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
         let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
+        let info = doc.info();
+        assert!(matches!(
+            info.columns[0].value_category,
+            crate::ValueCategory::Text
+        ));
+        assert!(matches!(
+            info.columns[1].value_category,
+            crate::ValueCategory::Number
+        ));
+        assert_eq!(info.columns[0].display_type, "string");
+        assert_eq!(info.columns[1].display_type, "int64");
         let FilterEditor::Text { modes, recommended } = doc.filter_spec(0, None).unwrap().editor
         else {
             panic!("strings should offer both filter modes");
