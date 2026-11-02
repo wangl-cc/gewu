@@ -8,11 +8,22 @@ use arrow::{
     datatypes::DataType,
 };
 
+pub use super::LengthUnit;
 use super::{
     AnalysisContext, ArrayView, Histogram, LengthSummary, NumericStatistics, ValueSummary,
 };
-pub use crate::types::{AnalysisSection, LengthUnit};
-use crate::{scope::Selection, types, Error, LogicalType, Result};
+use crate::{scope::Selection, Error, LogicalType, Result};
+
+/// A section of the column inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnalysisSection {
+    Overview,
+    Statistics,
+    Distribution,
+    Values,
+    Lengths,
+    Structure,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisField {
@@ -105,7 +116,7 @@ impl ColumnAnalysis {
     pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
         if scale == crate::AxisScale::Log10
             && (self.section != AnalysisSection::Distribution
-                || !types::capabilities(self.array.data_type()).logarithmic)
+                || !super::supports_logarithmic(self.array.data_type()))
         {
             return Err(Error::InvalidArgument(
                 "logarithmic binning requires a numeric distribution".into(),
@@ -171,7 +182,37 @@ impl ColumnAnalysis {
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
 pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
-    types::analysis_sections(data_type)
+    use AnalysisSection::*;
+    let mut sections = vec![Overview];
+    if !crate::types::is_describable(data_type) {
+        return sections;
+    }
+    if super::numeric::supports(data_type) {
+        sections.push(Statistics);
+    }
+    if super::supports_histogram(data_type) {
+        sections.push(Distribution);
+    }
+    if super::values::supports(data_type) {
+        sections.push(Values);
+    }
+    if super::lengths::unit(data_type).is_some() {
+        sections.push(Lengths);
+    }
+    if matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+            | DataType::Dictionary(..)
+    ) {
+        sections.push(Structure);
+    }
+    sections
 }
 
 fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
@@ -226,6 +267,37 @@ mod tests {
         .run()
         .unwrap()
         .data
+    }
+
+    #[test]
+    fn analysis_sections_preserve_presentation_order() {
+        use arrow::datatypes::Fields;
+        use AnalysisSection::*;
+        let item = |data_type| Arc::new(Field::new("item", data_type, true));
+        let dictionary = |value| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value));
+        for (data_type, expected) in [
+            (DataType::Int32, vec![
+                Overview,
+                Statistics,
+                Distribution,
+                Values,
+            ]),
+            (DataType::Utf8, vec![Overview, Values, Lengths]),
+            (DataType::Binary, vec![Overview, Lengths]),
+            (DataType::List(item(DataType::Int32)), vec![
+                Overview, Lengths, Structure,
+            ]),
+            (
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                vec![Overview, Structure],
+            ),
+            (dictionary(DataType::Int64), vec![
+                Overview, Values, Structure,
+            ]),
+            (DataType::Null, vec![Overview]),
+        ] {
+            assert_eq!(capabilities(&data_type), expected, "{data_type}");
+        }
     }
 
     #[test]

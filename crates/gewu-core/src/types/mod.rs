@@ -1,19 +1,12 @@
-//! Purpose-specific projections of Arrow types.
+//! Shared Arrow type descriptions and scalar classifications.
 //!
-//! Arrow's [`DataType`] is the source of truth. Display metadata, operation
-//! capabilities and search strategies borrow it directly; kernels use the
-//! original type to select native arrays. No parallel type tree is stored.
+//! Arrow's [`DataType`] is the source of truth. This module describes values
+//! and storage; each operation owns its support rules and native dispatch.
 
-mod derive;
 mod logical;
 
 use arrow::datatypes::DataType;
-pub(crate) use derive::supports_ordered;
-pub use derive::{
-    analysis_sections, capabilities, find_strategy, length_unit, AnalysisSection, FindStrategy,
-    LengthUnit,
-};
-pub use logical::{ColumnCapabilities, ColumnInfo, LogicalType};
+pub use logical::LogicalType;
 
 /// How Arrow stores a type. Dictionary encoding is lossless and does not
 /// change the value domain.
@@ -79,22 +72,22 @@ pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
     })
 }
 
-/// Whether Gewu can describe the entire type, including nested children.
-/// Document loading rejects unsupported types rather than hiding their fields.
-pub(crate) fn is_supported(data_type: &DataType) -> bool {
+/// Whether the entire schema has a display description, including children.
+/// This is not a claim that any particular operation supports the type.
+pub(crate) fn is_describable(data_type: &DataType) -> bool {
     use DataType::*;
     match data_type {
         Null => true,
-        Dictionary(_, values) => is_supported(values),
+        Dictionary(_, values) => is_describable(values),
         List(field)
         | LargeList(field)
         | ListView(field)
         | LargeListView(field)
-        | FixedSizeList(field, _) => is_supported(field.data_type()),
-        Struct(fields) => fields.iter().all(|field| is_supported(field.data_type())),
+        | FixedSizeList(field, _) => is_describable(field.data_type()),
+        Struct(fields) => fields.iter().all(|field| is_describable(field.data_type())),
         Map(field, _) => match field.data_type() {
             Struct(fields) if fields.len() == 2 => {
-                fields.iter().all(|field| is_supported(field.data_type()))
+                fields.iter().all(|field| is_describable(field.data_type()))
             }
             _ => false,
         },
@@ -104,33 +97,7 @@ pub(crate) fn is_supported(data_type: &DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use arrow::datatypes::{Field, Fields, UnionFields, UnionMode};
-
     use super::*;
-
-    #[test]
-    fn unsupported_children_are_rejected_at_loading() {
-        let unsupported = DataType::Union(UnionFields::empty(), UnionMode::Sparse);
-        let child = Arc::new(Field::new("child", unsupported.clone(), true));
-        for data_type in [
-            unsupported.clone(),
-            DataType::List(child.clone()),
-            DataType::Struct(Fields::from(vec![child.clone()])),
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(unsupported)),
-            DataType::RunEndEncoded(Arc::new(Field::new("runs", DataType::Int32, false)), child),
-        ] {
-            let array = arrow::array::new_empty_array(&data_type);
-            assert!(
-                matches!(
-                    crate::Column::new("unsupported", array),
-                    Err(crate::Error::Unsupported(_))
-                ),
-                "{data_type}"
-            );
-        }
-    }
 
     #[test]
     fn dictionary_preserves_domain_but_not_native_dispatch() {

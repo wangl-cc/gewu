@@ -1,17 +1,29 @@
 //! Range predicate compilation over Arrow arrays.
 
-use arrow::array::ArrayRef;
+use arrow::{array::ArrayRef, datatypes::DataType};
 
-use super::scalar::{
-    decimal::Endpoint,
-    float, integer, temporal,
-};
+use super::scalar::{decimal::Endpoint, float, integer, temporal};
 use crate::{
     column::{bound::invalid_type, Bound},
     predicate::Predicate,
     types::{direct_domain, Domain},
     Error, Result,
 };
+
+pub(crate) fn supports(data_type: &DataType) -> bool {
+    matches!(
+        direct_domain(data_type),
+        Some(
+            Domain::Integer
+                | Domain::Float
+                | Domain::Decimal
+                | Domain::Date
+                | Domain::Time
+                | Domain::Timestamp
+                | Domain::Duration
+        )
+    )
+}
 
 pub(crate) fn prepare_range<'a>(
     array: &'a ArrayRef,
@@ -27,10 +39,7 @@ pub(crate) fn prepare_range<'a>(
             )));
         }
     }
-    if min
-        .zip(max)
-        .is_some_and(|(lo, hi)| lo.compare(hi).is_gt())
-    {
+    if min.zip(max).is_some_and(|(lo, hi)| lo.compare(hi).is_gt()) {
         return Err(Error::InvalidArgument(
             "minimum must not exceed maximum".into(),
         ));

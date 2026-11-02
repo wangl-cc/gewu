@@ -1,15 +1,15 @@
 //! The stable, display-oriented projection of Arrow [`DataType`].
 //!
 //! [`LogicalType`] is the value semantics of a column: what the FFI, the app
-//! and [`ColumnInfo`] show. Storage encoding is deliberately not part of it —
-//! a dictionary of text is text with [`Encoding::Dictionary`] — so type badges
+//! and [`crate::ColumnInfo`] show. Storage encoding is deliberately not part of it —
+//! a dictionary of text is text with [`super::Encoding::Dictionary`] — so type badges
 //! and value editors do not need to recurse through storage wrappers.
 //!
-//! Operation policies project directly from Arrow in [`super::derive`].
+//! Operations define their own support and execution rules.
 
 use arrow::datatypes::{DataType, TimeUnit};
 
-use super::{is_supported, Encoding};
+use super::is_describable;
 
 /// A column's value semantics with the parameters that make it display exact.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -47,34 +47,6 @@ pub enum LogicalType {
     Struct,
     /// Key/value entries.
     Map,
-}
-
-/// Operations supported by a column's type. Value-list availability
-/// additionally depends on cardinality and is reported by `DistinctResult`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColumnCapabilities {
-    pub contains: bool,
-    pub range: bool,
-    pub equals: bool,
-    /// Histograms currently require a directly stored numeric array.
-    pub histogram: bool,
-    /// Direct numeric and temporal arrays support approximate plot coordinates.
-    pub scatter: bool,
-    /// Direct numeric values support positive-only logarithmic charts.
-    pub logarithmic: bool,
-}
-
-/// Metadata describing a single column.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnInfo {
-    pub name: String,
-    pub logical_type: LogicalType,
-    /// How Arrow stores the values. A dictionary column is discrete: it offers
-    /// value choices rather than ordered filters or charts.
-    pub encoding: Encoding,
-    pub display_type: String,
-    pub technical_type: String,
-    pub nullable: bool,
 }
 
 impl LogicalType {
@@ -140,12 +112,12 @@ impl LogicalType {
             Utf8 | LargeUtf8 | Utf8View => Self::Text,
             Dictionary(_, values) => return Self::from_arrow(values),
             List(_) | LargeList(_) | ListView(_) | LargeListView(_) | FixedSizeList(..)
-                if is_supported(data_type) =>
+                if is_describable(data_type) =>
             {
                 Self::List
             }
-            Struct(_) if is_supported(data_type) => Self::Struct,
-            Map(..) if is_supported(data_type) => Self::Map,
+            Struct(_) if is_describable(data_type) => Self::Struct,
+            Map(..) if is_describable(data_type) => Self::Map,
             _ => return None,
         })
     }
@@ -184,6 +156,7 @@ mod tests {
     use arrow::datatypes::{Field, Fields, IntervalUnit};
 
     use super::*;
+    use crate::types::Encoding;
 
     fn field(name: &str, data_type: DataType) -> Arc<Field> {
         Arc::new(Field::new(name, data_type, true))

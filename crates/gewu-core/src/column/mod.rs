@@ -15,8 +15,41 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
 
-pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
-use crate::{predicate::Predicate, scope::Selection, types, Error, Filter, Result};
+pub use crate::types::LogicalType;
+use crate::{
+    predicate::Predicate,
+    scope::Selection,
+    types::{self, Encoding},
+    Error, Filter, Result,
+};
+
+/// Operations supported by a column's type. Value-list availability
+/// additionally depends on cardinality and is reported by `DistinctResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnCapabilities {
+    pub contains: bool,
+    pub range: bool,
+    pub equals: bool,
+    /// Histograms currently require a directly stored numeric array.
+    pub histogram: bool,
+    /// Direct numeric and temporal arrays support approximate plot coordinates.
+    pub scatter: bool,
+    /// Direct numeric values support positive-only logarithmic charts.
+    pub logarithmic: bool,
+}
+
+/// Metadata describing a single column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub logical_type: LogicalType,
+    /// How Arrow stores the values. A dictionary column is discrete: it offers
+    /// value choices rather than ordered filters or charts.
+    pub encoding: Encoding,
+    pub display_type: String,
+    pub technical_type: String,
+    pub nullable: bool,
+}
 
 /// A single distinct value in a column or summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,7 +152,15 @@ impl Column {
 
     #[inline]
     pub fn capabilities(&self) -> ColumnCapabilities {
-        types::capabilities(self.array.data_type())
+        let data_type = self.array.data_type();
+        ColumnCapabilities {
+            contains: filter::supports_contains(data_type),
+            range: filter::range::supports(data_type),
+            equals: filter::supports_equals(data_type),
+            histogram: crate::stats::supports_histogram(data_type),
+            scatter: crate::stats::scatter::supports(data_type),
+            logarithmic: crate::stats::supports_logarithmic(data_type),
+        }
     }
 
     pub fn logical_data_type(&self) -> &DataType {
@@ -262,6 +303,56 @@ mod tests {
                 .unwrap();
         }
         hits
+    }
+
+    #[test]
+    fn capabilities_distinguish_value_semantics_from_storage_support() {
+        let dictionary = |value| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value));
+        for (data_type, contains, equals, ordered, logarithmic) in [
+            (DataType::Int32, false, true, true, true),
+            (DataType::Date32, false, true, true, false),
+            (DataType::Utf8, true, true, false, false),
+            (DataType::Boolean, false, true, false, false),
+            (DataType::Binary, true, false, false, false),
+            (dictionary(DataType::Int64), false, true, false, false),
+            (dictionary(DataType::Utf8), true, true, false, false),
+        ] {
+            assert_eq!(
+                col(arrow::array::new_null_array(&data_type, 1)).capabilities(),
+                ColumnCapabilities {
+                    contains,
+                    range: ordered,
+                    equals,
+                    histogram: ordered,
+                    scatter: ordered,
+                    logarithmic,
+                },
+                "{data_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_children_are_rejected_at_loading() {
+        use arrow::datatypes::{Fields, UnionFields, UnionMode};
+        let unsupported = DataType::Union(UnionFields::empty(), UnionMode::Sparse);
+        let child = Arc::new(Field::new("child", unsupported.clone(), true));
+        for data_type in [
+            unsupported.clone(),
+            DataType::List(child.clone()),
+            DataType::Struct(Fields::from(vec![child.clone()])),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(unsupported)),
+            DataType::RunEndEncoded(Arc::new(Field::new("runs", DataType::Int32, false)), child),
+        ] {
+            let array = arrow::array::new_empty_array(&data_type);
+            assert!(
+                matches!(
+                    crate::Column::new("unsupported", array),
+                    Err(crate::Error::Unsupported(_))
+                ),
+                "{data_type}"
+            );
+        }
     }
 
     #[test]

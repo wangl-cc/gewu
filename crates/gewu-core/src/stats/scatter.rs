@@ -4,10 +4,15 @@
 
 use std::{collections::BinaryHeap, sync::Arc};
 
-use arrow::array::ArrayRef;
+use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{numeric::Numeric, AnalysisContext, AxisScale};
 use crate::{format, Error, Result};
+
+/// Scatter uses the native numeric accessor for approximate coordinates.
+pub(crate) fn supports(data_type: &DataType) -> bool {
+    super::numeric::supports(data_type)
+}
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;
 
@@ -93,8 +98,7 @@ impl ScatterAnalysis {
             (y_scale, Some(&self.y.1)),
         ] {
             if scale == AxisScale::Log10
-                && !array
-                    .is_some_and(|array| crate::types::capabilities(array.data_type()).logarithmic)
+                && !array.is_some_and(|array| super::supports_logarithmic(array.data_type()))
             {
                 return Err(Error::InvalidArgument(
                     "logarithmic scatter axes require a numeric column".into(),

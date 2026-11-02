@@ -1,41 +1,56 @@
 //! Column-level predicate compilation for explicit filters and Find queries.
 //!
-//! Type policies project directly from Arrow through [`crate::types`].
-//! The modules below own the native kernels.
+//! This module owns filter support rules and native predicate preparation.
+//! Find compiles its own text queries in the private `find` module.
+
+mod find;
+pub(crate) use find::prepare as prepare_find;
 
 pub mod nested;
 pub mod range;
 pub mod scalar;
 pub mod text;
 
-use arrow::array::{Array, ArrayRef};
+use arrow::{
+    array::{Array, ArrayRef},
+    datatypes::DataType,
+};
 
 pub use super::bound::Bound;
 use crate::{
     predicate::Predicate,
     selection::RowSelection,
-    types::{self, Domain, Encoding, FindStrategy},
+    types::{self, Domain, Encoding},
     Error, Filter, Result,
 };
 
-/// Type-aware search for Find operations across all columns.
-pub(crate) fn prepare_find<'a>(
-    array: &'a ArrayRef,
-    query: &str,
-    matcher: Option<&regex::Regex>,
-) -> Result<Option<Predicate<'a>>> {
-    if query.is_empty() {
-        return Ok(None);
-    }
-    match types::find_strategy(array.data_type()) {
-        FindStrategy::Unsupported => Ok(None),
-        FindStrategy::Text => text::contains(array, query, false, matcher).map(Some),
-        FindStrategy::Scalar => scalar::search(array, query),
-        FindStrategy::List | FindStrategy::Struct => nested::search(array, query, matcher),
-        FindStrategy::Dictionary => {
-            nested::dictionary_find(array, |values| prepare_find(values, query, matcher))
-        }
-    }
+/// Types with a useful displayed-text or element-containment filter.
+pub(crate) fn supports_contains(data_type: &DataType) -> bool {
+    let data_type = types::value_type(data_type);
+    matches!(
+        types::direct_domain(data_type),
+        Some(Domain::Text | Domain::Binary | Domain::Interval)
+    ) || matches!(
+        data_type,
+        DataType::Null
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+    )
+}
+
+/// Equality parses scalar values or compares text; dictionaries follow values.
+pub(crate) fn supports_equals(data_type: &DataType) -> bool {
+    let data_type = types::value_type(data_type);
+    range::supports(data_type)
+        || matches!(
+            types::direct_domain(data_type),
+            Some(Domain::Text | Domain::Boolean)
+        )
 }
 
 /// Type-dependent filters. InValues is prepared separately once the
@@ -88,24 +103,25 @@ fn prepare_value_filter<'a>(array: &'a ArrayRef, filter: &Filter) -> Result<Pred
                 Error::InvalidArgument("filter cannot be applied to dictionary values".into())
             });
     }
-    let capabilities = types::capabilities(array.data_type());
     match filter {
         Filter::Contains {
             text: value,
             case_sensitive,
             ..
-        } if capabilities.contains => text::contains(array, value, *case_sensitive, None),
-        Filter::Range { min, max, .. } if capabilities.range => {
+        } if supports_contains(array.data_type()) => {
+            text::contains(array, value, *case_sensitive, None)
+        }
+        Filter::Range { min, max, .. } if range::supports(array.data_type()) => {
             range::prepare_range(array, min.as_ref(), max.as_ref())
         }
-        Filter::Equals { value } if capabilities.equals => {
+        Filter::Equals { value } if supports_equals(array.data_type()) => {
             if types::domain(array.data_type()) == Some(Domain::Text) {
                 Ok(text::equals(array, value))
             } else {
                 scalar::equals(array, value)
             }
         }
-        Filter::EqualsAny { values } if capabilities.equals => {
+        Filter::EqualsAny { values } if supports_equals(array.data_type()) => {
             let predicates = values
                 .iter()
                 .map(|value| {

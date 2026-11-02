@@ -1,4 +1,4 @@
-//! Nested Find projects strategies from child Arrow types using
+//! Nested Find prepares child predicates using
 //! borrowed parent and child selections, without decoding Arrow value payload.
 
 use std::{ops::Range, sync::OnceLock};

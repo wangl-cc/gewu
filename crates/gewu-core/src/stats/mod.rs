@@ -27,10 +27,10 @@ pub use analysis::{
 };
 pub(crate) use context::AnalysisContext;
 pub use extremes::extremes;
+pub use lengths::LengthUnit;
+pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
-
-pub use crate::types::LengthUnit;
 
 pub fn median_label(view: ArrayView<'_>) -> Result<Option<String>> {
     view.median_label(&AnalysisContext::default())
@@ -87,7 +87,7 @@ pub struct ValueSummary {
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
-    pub unit: crate::types::LengthUnit,
+    pub unit: LengthUnit,
     pub empty_count: u64,
     pub min: Option<u64>,
     pub max: Option<u64>,
@@ -425,6 +425,23 @@ pub fn ranges(view: ArrayView<'_>, bins: u32) -> Result<RangeHistogram> {
     statistics(view.array, view.rows, bins, &AnalysisContext::default())
 }
 
+/// Storage types handled by native histogram binning.
+pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
+    use crate::types::{direct_domain, Domain};
+    matches!(
+        direct_domain(data_type),
+        Some(
+            Domain::Integer
+                | Domain::Float
+                | Domain::Decimal
+                | Domain::Date
+                | Domain::Time
+                | Domain::Timestamp
+                | Domain::Duration
+        )
+    )
+}
+
 fn statistics<H: Output>(
     array: &ArrayRef,
     rows: &Selection,
@@ -432,7 +449,7 @@ fn statistics<H: Output>(
     context: &AnalysisContext,
 ) -> Result<H> {
     context.check()?;
-    let histogram = crate::types::capabilities(array.data_type()).histogram;
+    let histogram = supports_histogram(array.data_type());
     if !histogram {
         return Err(Error::InvalidArgument(format!(
             "{} does not support histograms",

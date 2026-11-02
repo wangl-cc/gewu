@@ -13,9 +13,24 @@ use num_traits::ToPrimitive;
 
 use crate::{
     stats::{AnalysisContext, ColumnSummary},
-    types::supports_ordered,
+    types::{direct_domain, Domain},
     Result,
 };
+
+pub(crate) fn supports(data_type: &DataType) -> bool {
+    matches!(
+        direct_domain(data_type),
+        Some(
+            Domain::Integer
+                | Domain::Float
+                | Domain::Decimal
+                | Domain::Date
+                | Domain::Time
+                | Domain::Timestamp
+                | Domain::Duration
+        )
+    )
+}
 
 /// A validated, borrowed numeric column.
 #[derive(Clone, Copy)]
@@ -62,9 +77,7 @@ mod summary;
 
 impl<'a> Numeric<'a> {
     pub(crate) fn new(array: &'a ArrayRef) -> Option<Self> {
-        // The storage projection decides; the dispatch table above covers every
-        // ordered kind (checked by a test in `types/derive.rs`).
-        supports_ordered(array.data_type()).then_some(Self(array))
+        supports(array.data_type()).then_some(Self(array))
     }
 
     /// Fill in the numeric parts of `summary`; returns the rows holding
@@ -193,6 +206,7 @@ mod tests {
     use arrow::{
         array::{Decimal128Array, Decimal256Array},
         compute::cast,
+        datatypes::{Field, Fields},
     };
 
     use super::*;
@@ -256,6 +270,73 @@ mod tests {
                 "{:?} row {row}",
                 array.data_type()
             );
+        }
+    }
+
+    fn every_type() -> Vec<DataType> {
+        use DataType::*;
+        let item = Arc::new(Field::new("item", Int32, true));
+        let mut types = vec![
+            Null,
+            Boolean,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            Float16,
+            Float32,
+            Float64,
+            Date32,
+            Date64,
+            Interval(arrow::datatypes::IntervalUnit::YearMonth),
+            Interval(arrow::datatypes::IntervalUnit::DayTime),
+            Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            Binary,
+            LargeBinary,
+            BinaryView,
+            FixedSizeBinary(4),
+            Utf8,
+            LargeUtf8,
+            Utf8View,
+            List(item.clone()),
+            LargeList(item.clone()),
+            FixedSizeList(item, 2),
+            Decimal32(9, 2),
+            Decimal64(18, 2),
+            Decimal128(38, 2),
+            Decimal256(76, 2),
+            Dictionary(Box::new(Int32), Box::new(Utf8)),
+            Dictionary(Box::new(Int32), Box::new(Int64)),
+            Struct(Fields::from(vec![Field::new("f", Int32, true)])),
+        ];
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            types.push(Timestamp(unit, None));
+            types.push(Timestamp(unit, Some("UTC".into())));
+            types.push(Duration(unit));
+        }
+        types.push(Time32(TimeUnit::Second));
+        types.push(Time32(TimeUnit::Millisecond));
+        types.push(Time64(TimeUnit::Microsecond));
+        types.push(Time64(TimeUnit::Nanosecond));
+        types
+    }
+
+    #[test]
+    fn supported_types_have_native_dispatch() {
+        for data_type in every_type() {
+            let array = arrow::array::new_null_array(&data_type, 1);
+            if let Some(numeric) = Numeric::new(&array) {
+                assert_eq!(numeric.accessor()(0), None, "{data_type}");
+            }
         }
     }
 }

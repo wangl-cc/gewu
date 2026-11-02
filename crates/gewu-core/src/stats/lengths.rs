@@ -6,10 +6,26 @@ use arrow::{
 };
 
 use super::{AnalysisContext, ArrayView, LengthSummary};
-use crate::{scope::Selection, types::LengthUnit, Error, Histogram, Result};
+use crate::{scope::Selection, Error, Histogram, Result};
+
+/// What a length measurement counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LengthUnit {
+    Characters,
+    Bytes,
+    Elements,
+}
 
 pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
-    crate::types::length_unit(data_type)
+    use DataType::*;
+    match data_type {
+        Utf8 | LargeUtf8 | Utf8View => Some(LengthUnit::Characters),
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => Some(LengthUnit::Bytes),
+        List(_) | LargeList(_) | ListView(_) | LargeListView(_) | FixedSizeList(..) | Map(..) => {
+            Some(LengthUnit::Elements)
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn analyze(
@@ -163,6 +179,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn lengths_measure_native_values() {
+        let item =
+            |data_type| std::sync::Arc::new(arrow::datatypes::Field::new("item", data_type, true));
+        let dictionary = |value| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value));
+        assert_eq!(unit(&DataType::Utf8View), Some(LengthUnit::Characters));
+        assert_eq!(unit(&DataType::Binary), Some(LengthUnit::Bytes));
+        assert_eq!(
+            unit(&DataType::List(item(DataType::Int32))),
+            Some(LengthUnit::Elements)
+        );
+        assert_eq!(unit(&DataType::Int32), None);
+        assert_eq!(unit(&dictionary(DataType::Utf8)), None);
+    }
 
     #[test]
     fn unicode_lengths_distinguish_empty_and_null() {

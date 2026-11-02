@@ -8,14 +8,33 @@ use std::{
 
 use arrow::{
     array::{
-        downcast_dictionary_array, downcast_integer_array, downcast_temporal_array, Array,
-        AsArray, PrimitiveArray,
+        downcast_dictionary_array, downcast_integer_array, downcast_temporal_array, Array, AsArray,
+        PrimitiveArray,
     },
     datatypes::*,
 };
 
 use super::{AnalysisContext, ArrayView, ValueSummary};
 use crate::{column::DistinctValue, format, Error, Result};
+
+/// Scalar values with comparable labels and bounded distinct estimates.
+pub(super) fn supports(data_type: &DataType) -> bool {
+    use crate::types::{domain, Domain};
+    matches!(
+        domain(data_type),
+        Some(
+            Domain::Text
+                | Domain::Boolean
+                | Domain::Integer
+                | Domain::Float
+                | Domain::Decimal
+                | Domain::Date
+                | Domain::Time
+                | Domain::Timestamp
+                | Domain::Duration
+        )
+    )
+}
 
 const DISTINCT_CAPACITY: usize = 4096;
 const CANDIDATE_CAPACITY: usize = 256;
@@ -177,10 +196,7 @@ impl Sketch {
     }
 }
 
-pub(crate) fn analyze(
-    view: ArrayView<'_>,
-    context: &AnalysisContext,
-) -> Result<ValueSummary> {
+pub(crate) fn analyze(view: ArrayView<'_>, context: &AnalysisContext) -> Result<ValueSummary> {
     context.check()?;
     let value = hasher(view.array.as_ref())?;
     let mut sketch = Sketch::default();
@@ -246,11 +262,7 @@ mod tests {
             (0..50_000).map(|_| 0).chain(1..100_001),
         ));
         let sel = crate::scope::Selection::All(array.len());
-        let summary = analyze(
-            ArrayView::new(&array, &sel),
-            &AnalysisContext::default(),
-        )
-        .unwrap();
+        let summary = analyze(ArrayView::new(&array, &sel), &AnalysisContext::default()).unwrap();
         assert_eq!(
             (summary.values[0].label.as_deref(), summary.values[0].count),
             (Some("0"), 50_000)
@@ -264,11 +276,7 @@ mod tests {
         // Complete MG eviction cycles still have representative fallback values.
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
         let sel = crate::scope::Selection::All(array.len());
-        let summary = analyze(
-            ArrayView::new(&array, &sel),
-            &AnalysisContext::default(),
-        )
-        .unwrap();
+        let summary = analyze(ArrayView::new(&array, &sel), &AnalysisContext::default()).unwrap();
         assert_eq!(summary.values.len(), OUTPUT_LIMIT);
         assert!(summary.values.iter().all(|value| value.count == 1));
     }
