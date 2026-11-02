@@ -14,7 +14,7 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{AnalysisContext, ArrayView, ValueSummary};
+use super::{ArrayView, Cancellation, ValueSummary};
 use crate::{column::DistinctValue, format, Error, Result};
 
 /// Scalar values with comparable labels and bounded distinct estimates.
@@ -196,7 +196,7 @@ impl Sketch {
     }
 }
 
-pub(crate) fn analyze(view: ArrayView<'_>, context: &AnalysisContext) -> Result<ValueSummary> {
+pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<ValueSummary> {
     context.check()?;
     let value = hasher(view.array.as_ref())?;
     let mut sketch = Sketch::default();
@@ -262,7 +262,7 @@ mod tests {
             (0..50_000).map(|_| 0).chain(1..100_001),
         ));
         let sel = crate::scope::Selection::All(array.len());
-        let summary = analyze(ArrayView::new(&array, &sel), &AnalysisContext::default()).unwrap();
+        let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
         assert_eq!(
             (summary.values[0].label.as_deref(), summary.values[0].count),
             (Some("0"), 50_000)
@@ -276,7 +276,7 @@ mod tests {
         // Complete MG eviction cycles still have representative fallback values.
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
         let sel = crate::scope::Selection::All(array.len());
-        let summary = analyze(ArrayView::new(&array, &sel), &AnalysisContext::default()).unwrap();
+        let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
         assert_eq!(summary.values.len(), OUTPUT_LIMIT);
         assert!(summary.values.iter().all(|value| value.count == 1));
     }
@@ -291,7 +291,7 @@ mod tests {
             None,
         ]));
         let all5 = crate::scope::Selection::All(5);
-        let summary = analyze(ArrayView::new(&array, &all5), &AnalysisContext::default()).unwrap();
+        let summary = analyze(ArrayView::new(&array, &all5), &Cancellation::default()).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert!(summary.values.iter().all(|value| value.count == 2));
         let dictionary: ArrayRef = Arc::new(
@@ -309,7 +309,7 @@ mod tests {
         let sel_dict = crate::scope::Selection::Rows(Arc::new(vec![4, 2, 0, 1, 3]));
         let summary = analyze(
             ArrayView::new(&dictionary, &sel_dict),
-            &AnalysisContext::default(),
+            &Cancellation::default(),
         )
         .unwrap();
         assert_eq!(summary.distinct_count, 2);
@@ -317,7 +317,7 @@ mod tests {
             (summary.values[0].label.as_deref(), summary.values[0].count),
             (Some("same"), 2)
         );
-        let context = AnalysisContext::default();
+        let context = Cancellation::default();
         context.cancel();
         let all_dict = crate::scope::Selection::All(5);
         assert!(matches!(

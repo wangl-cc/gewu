@@ -74,13 +74,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::engine::CancelToken;
+    use crate::Cancellation;
 
     fn matches(array: &ArrayRef, min: Option<&Bound>, max: Option<&Bound>) -> Vec<bool> {
         let mut out = vec![false; array.len()];
         prepare_range(array, min, max)
             .unwrap()
-            .evaluate(0..array.len(), &mut out, &CancelToken::never())
+            .evaluate(0..array.len(), &mut out, &Cancellation::default())
             .unwrap();
         out
     }

@@ -7,7 +7,7 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Error, Filter, QuerySpec, Session};
+use gewu_core::{Bound, Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 fn document(array: ArrayRef) -> Session {
@@ -28,7 +28,10 @@ fn check_range(doc: &Session, min: Option<Bound>, max: Option<Bound>, expected: 
             false,
         ),
     );
-    let view = doc.apply_view(&spec).unwrap();
+    let view = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(
         doc.rows(view.version, 0, 100, &[0]).unwrap().source_rows,
         expected,
@@ -188,10 +191,28 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
         &[0, 1, 2, 3],
     );
 
-    signed.apply_view(&QuerySpec::default()).unwrap();
-    unsigned.apply_view(&QuerySpec::default()).unwrap();
-    assert_eq!(signed.column_summary(0, 0).unwrap().distinct_count, 4);
-    assert_eq!(unsigned.column_summary(0, 0).unwrap().distinct_count, 4);
+    signed
+        .prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
+    unsigned
+        .prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
+    assert_eq!(
+        signed
+            .column_summary(0, 0, &Cancellation::default())
+            .unwrap()
+            .distinct_count,
+        4
+    );
+    assert_eq!(
+        unsigned
+            .column_summary(0, 0, &Cancellation::default())
+            .unwrap()
+            .distinct_count,
+        4
+    );
 }
 
 #[test]
@@ -331,7 +352,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         Some(f32::NAN),
         None,
     ])));
-    let summary = doc.column_summary(0, 0).unwrap();
+    let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
     assert_eq!(
         (
             summary.rows,
@@ -345,7 +366,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         (summary.min, summary.max, summary.mean, summary.std_dev),
         (Some(1.0), Some(3.0), Some(2.0), Some(1.0))
     );
-    let histogram = doc.histogram(0, None, 2).unwrap();
+    let histogram = doc.histogram(0, None, 2, &Cancellation::default()).unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
         (histogram.null_count, histogram.nan_count, histogram.total),
@@ -353,13 +374,13 @@ fn float32_summary_and_histogram_follow_selected_rows() {
     );
 
     check_range(&doc, Some(doc.parse_bound(0, "2").unwrap()), None, &[1, 2]);
-    let summary = doc.column_summary(0, 0).unwrap();
+    let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
     assert_eq!(
         (summary.rows, summary.distinct_count, summary.mean),
         (2, 2, Some(2.5))
     );
     let histogram = doc
-        .view_histogram(doc.current_view().version, 0, 2)
+        .view_histogram(doc.current_view().version, 0, 2, &Cancellation::default())
         .unwrap();
     assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
     assert_eq!(histogram.counts, [0, 2]);
@@ -382,12 +403,14 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
     ];
     for array in arrays {
         let doc = document(array);
-        let summary = doc.column_summary(0, 0).unwrap();
+        let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
         assert_eq!(
             (summary.null_count, summary.distinct_count, summary.mean),
             (1, 3, Some(1.0))
         );
-        let histogram = doc.histogram(0, None, 10).unwrap();
+        let histogram = doc
+            .histogram(0, None, 10, &Cancellation::default())
+            .unwrap();
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
@@ -423,7 +446,12 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
     ];
     for array in arrays {
         let doc = document(array);
-        assert_eq!(doc.column_summary(0, 0).unwrap().distinct_count, 2);
+        assert_eq!(
+            doc.column_summary(0, 0, &Cancellation::default())
+                .unwrap()
+                .distinct_count,
+            2
+        );
         // Chart coordinates may round, but filter endpoints remain exact.
         assert_eq!(
             doc.parse_bound(0, &base.to_string()).unwrap().axis_value(),

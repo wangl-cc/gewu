@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
-use gewu_core::{Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 fn document() -> Session {
@@ -52,7 +52,10 @@ fn contains(include_nulls: bool) -> Filter {
 }
 
 fn rows(doc: &Session, spec: QuerySpec) -> Vec<u64> {
-    let view = doc.apply_view(&spec).unwrap();
+    let view = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     doc.rows(view.version, 0, 20, &[0, 1]).unwrap().source_rows
 }
 
@@ -128,9 +131,9 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
         .with_filter(2, Filter::exact(vec!["A".into()], false, false))
         .with_filter(3, Filter::contains("needle".into(), false, false));
     let values = doc
-        .prepare_text_choices(2, Some(&spec))
+        .prepare_text_choices(2, Some(&spec), &Cancellation::default())
         .unwrap()
-        .page("", None, 100)
+        .page("", None, 100, &Cancellation::default())
         .unwrap()
         .values;
     assert_eq!(
@@ -143,7 +146,9 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
 
     // Removing only score's own filter leaves source rows 0, 1 and 5: null,
     // one finite value, and NaN. The UI must not conflate those last two classes.
-    let choices = doc.filter_choices(0, Some(&spec)).unwrap();
+    let choices = doc
+        .filter_choices(0, Some(&spec), &Cancellation::default())
+        .unwrap();
     let values = choices.values.unwrap();
     assert_eq!(
         values.iter().map(|value| value.count).sum::<u64>() + choices.null_count,

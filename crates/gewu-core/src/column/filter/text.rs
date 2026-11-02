@@ -42,9 +42,17 @@ where
 }
 
 /// Non-null membership. The column compiler owns exclusion and null policy.
-pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
+pub(super) fn selected_values<'a>(
+    array: &'a ArrayRef,
+    values: &[String],
+    cancel: &crate::Cancellation,
+) -> Result<Predicate<'a>> {
     let read = accessor(array)?;
-    let selected: HashSet<String> = values.iter().cloned().collect();
+    let mut selected = HashSet::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        cancel.check_at(index)?;
+        selected.insert(value.clone());
+    }
     Ok(Predicate::new(Box::new(
         move |rows, incoming, output, _cancel| {
             match (rows, incoming) {
@@ -195,7 +203,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, engine::CancelToken, Filter};
+    use crate::{column::Column, Cancellation, Filter};
 
     #[test]
     fn dictionary_membership_combines_nulls_and_duplicate_values() {
@@ -210,9 +218,11 @@ mod tests {
         let column = Column::new("test", array.clone()).unwrap();
         for exclude in [false, true] {
             let filter = Filter::exact(vec!["a".into(), "a".into()], exclude, !exclude);
-            let test = column.prepare_filter(&filter).unwrap();
+            let test = column
+                .prepare_filter(&filter, &Cancellation::default())
+                .unwrap();
             let mut actual = vec![false; array.len()];
-            test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
+            test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
                 .unwrap();
             assert_eq!(
                 actual,
@@ -235,9 +245,11 @@ mod tests {
             for exclude in [false, true] {
                 let column = Column::new("value", array.clone()).unwrap();
                 let filter = Filter::exact(vec!["a".into()], exclude, !exclude);
-                let test = column.prepare_filter(&filter).unwrap();
+                let test = column
+                    .prepare_filter(&filter, &Cancellation::default())
+                    .unwrap();
                 let mut actual = vec![false; array.len()];
-                test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
+                test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
                     .unwrap();
                 let expected = [true, false, true, false, false].map(|value| value != exclude);
                 assert_eq!(actual, expected, "{data_type}: exclude={exclude}");
@@ -270,7 +282,7 @@ mod tests {
                 let expected = ilike(&array, &Scalar::new(pattern)).unwrap();
                 let test = contains(&array, query, false, None).unwrap();
                 let mut actual = vec![false; array.len()];
-                test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
+                test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
                     .unwrap();
                 assert_eq!(
                     actual,

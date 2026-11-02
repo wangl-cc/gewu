@@ -25,6 +25,30 @@ pub struct ViewInfo {
     pub row_count: u64,
 }
 
+/// The committed specification and row version captured together.
+#[derive(uniffi::Record)]
+pub struct QueryState {
+    pub view: ViewInfo,
+    pub spec: QuerySpec,
+}
+
+/// A view request registered before background execution.
+#[derive(uniffi::Object)]
+pub struct ViewOperation {
+    pub(crate) inner: core::ViewOperation,
+}
+
+#[uniffi::export]
+impl ViewOperation {
+    pub fn run(&self) -> Result<ViewInfo, crate::GewuError> {
+        Ok(self.inner.run()?.into())
+    }
+
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct RowBlock {
     pub version: u64,
@@ -60,6 +84,25 @@ impl From<core::ViewInfo> for ViewInfo {
         ViewInfo {
             version: v.version,
             row_count: v.row_count,
+        }
+    }
+}
+
+impl From<core::QuerySpec> for QuerySpec {
+    fn from(spec: core::QuerySpec) -> Self {
+        Self {
+            columns: spec
+                .columns
+                .into_iter()
+                .map(|c| ColSpec {
+                    column: c.column,
+                    filter: c.filter.map(Into::into),
+                    sort: c.sort.map(|s| ColSort {
+                        priority: s.priority,
+                        descending: s.descending,
+                    }),
+                })
+                .collect(),
         }
     }
 }

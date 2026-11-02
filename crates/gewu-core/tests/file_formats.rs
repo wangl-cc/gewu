@@ -1,6 +1,6 @@
 use std::fs;
 
-use gewu_core::{Error, FileType, OpenOptions, Session};
+use gewu_core::{Cancellation, Error, FileType, OpenOptions, Session};
 
 #[test]
 fn feature_availability_matches_open_errors() {
@@ -172,10 +172,11 @@ mod delimited {
         fs::write(&source, "id,label,enabled\n3,\"雪,\"\"quoted\"\"\nline\",true\n1,omit,false\n2,\"tab\tcell\",false\n").unwrap();
         let doc = Session::open(source).unwrap();
         let version = doc
-            .apply_view(
+            .prepare_view(
                 &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
                     .with_sort(0, true, 0),
             )
+            .and_then(|operation| operation.run())
             .unwrap()
             .version;
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
@@ -196,10 +197,11 @@ mod delimited {
             );
         }
         let empty = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 1,
                 Filter::exact(vec!["absent-value".into()], false, false),
             ))
+            .and_then(|operation| operation.run())
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
@@ -241,10 +243,10 @@ mod xlsx {
             doc.schema().field(0).data_type(),
             &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
         );
-        let h = doc.histogram(0, None, 3).unwrap();
+        let h = doc.histogram(0, None, 3, &Cancellation::default()).unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
         assert_eq!(
-            doc.view_histogram(doc.current_view().version, 0, 3)
+            doc.view_histogram(doc.current_view().version, 0, 3, &Cancellation::default())
                 .unwrap(),
             h
         );
@@ -330,7 +332,8 @@ mod xlsx {
         workbook(&source);
         let doc = Session::open(source).unwrap();
         let version = doc
-            .apply_view(&QuerySpec::new().with_sort(0, false, 0))
+            .prepare_view(&QuerySpec::new().with_sort(0, false, 0))
+            .and_then(|operation| operation.run())
             .unwrap()
             .version;
         let destination = directory.path().join("export.xlsx");
@@ -347,10 +350,11 @@ mod xlsx {
             doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 1,
                 Filter::exact(vec!["absent-value".into()], false, false),
             ))
+            .and_then(|operation| operation.run())
             .unwrap();
         doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
             .unwrap()

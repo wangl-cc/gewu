@@ -34,7 +34,7 @@ struct ChartPresentationTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
         try "x,y\n-1,10\n1,0\n10,100\n100,1000\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuDocument.open(path: url.path) }.value
+        let document = try await Task.detached { try GewuSession.open(path: url.path) }.value
         let model = ScatterModel()
         await model.load(
             document: document, version: 0, x: 0, y: 1,

@@ -82,7 +82,7 @@ struct TableExecutionTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let csv = "value,label\n" + (0..<130).map { "\($0),row\($0)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
-        let doc = try GewuDocument.open(path: path.path)
+        let doc = try GewuSession.open(path: path.path)
         let version = doc.currentView().version
         let reader = TableRowReader()
         let source = try await reader.read(doc, version: version, start: 2, count: 4, columns: [])
@@ -93,10 +93,11 @@ struct TableExecutionTests {
                 start, count, columns in
                 calls += 1
                 if calls == 2 {
-                    _ = try doc.applyView(
+                    _ = try doc.prepareView(
                         spec: QuerySpec(columns: [
                             ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)
-                        ]))
+                        ])
+                    ).run()
                 }
                 return try doc.rows(version: version, start: UInt64(start), count: UInt32(count), columns: columns)
             }

@@ -31,7 +31,7 @@ struct ExactFilterDraft {
 }
 
 struct TextFilterView: View {
-    let document: GewuDocument
+    let document: GewuSession
     let column: UInt32
     let querySpec: QuerySpec
     @Binding var draft: ExactFilterDraft

@@ -318,7 +318,7 @@ mod tests {
                 || {
                     checks += 1;
                     if checks == cancel_at {
-                        engine.cancel_pending();
+                        token.cancel();
                     }
                     token.check()
                 },
@@ -359,7 +359,7 @@ mod tests {
             }
             if checkpoints == first_merge_check + 1 {
                 assert!(comparisons.load(AtomicOrdering::Relaxed) > before_merge);
-                engine.cancel_pending();
+                token.cancel();
             }
             token.check()
         });

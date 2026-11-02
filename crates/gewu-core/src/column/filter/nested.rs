@@ -265,7 +265,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::engine::CancelToken;
+    use crate::Cancellation;
 
     fn dictionary(keys: Int32Array) -> ArrayRef {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
@@ -296,7 +296,7 @@ mod tests {
         let rows = [3, 1, 2];
         let mut hits = [false; 3];
         predicate
-            .evaluate(&rows[..], &mut hits, &CancelToken::never())
+            .evaluate(&rows[..], &mut hits, &Cancellation::default())
             .unwrap();
         assert_eq!(*selected.lock().unwrap(), [9_999, 2]);
         assert_eq!(hits, [false, true, false]);
@@ -329,7 +329,7 @@ mod tests {
         let predicate = elements(&list, child, |_| 0..2);
         let mut hits = [false];
         predicate
-            .evaluate(0..1, &mut hits, &CancelToken::never())
+            .evaluate(0..1, &mut hits, &Cancellation::default())
             .unwrap();
         assert_eq!(*selected.lock().unwrap(), [9_999, 2]);
         assert_eq!(hits, [true]);
@@ -354,7 +354,7 @@ mod tests {
         }));
         let predicate = elements(&list, child, move |_| 0..len);
         predicate
-            .evaluate(0..1, &mut [false], &CancelToken::never())
+            .evaluate(0..1, &mut [false], &Cancellation::default())
             .unwrap();
         assert_eq!(*calls.lock().unwrap(), [
             (0, CHUNK),

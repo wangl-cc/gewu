@@ -33,7 +33,10 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
             Filter::range(Some("65530.5".into()), Some("131080".into()), false),
         )
         .with_filter(2, Filter::contains("keep".into(), false, false));
-    let view = doc.apply_view(&spec).unwrap();
+    let view = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     let rows = doc.rows(view.version, 0, len as u32, &[0, 1, 2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
@@ -46,7 +49,8 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         Filter::range(Some("20".into()), Some("10".into()), false),
     );
     assert!(matches!(
-        doc.apply_view(&invalid),
+        doc.prepare_view(&invalid)
+            .and_then(|operation| operation.run()),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(
@@ -88,7 +92,10 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
             Filter::range(Some("100".into()), Some("200".into()), false),
         );
 
-    let view = doc.apply_view(&expensive_first).unwrap();
+    let view = doc
+        .prepare_view(&expensive_first)
+        .and_then(|operation| operation.run())
+        .unwrap();
     let expected: Vec<u64> = (100..=200)
         .filter(|i| i % 5 == 0)
         .map(|i| i as u64)

@@ -21,7 +21,7 @@ final class InspectorModel: ObservableObject {
     private var histogramBins: UInt32 = 40
     private var histogramScale: AxisScale = .linear
 
-    func matches(document: GewuDocument, version: UInt64, column: UInt32) -> Bool {
+    func matches(document: GewuSession, version: UInt64, column: UInt32) -> Bool {
         context == Context(document: ObjectIdentifier(document), version: version, column: column)
     }
 
@@ -33,7 +33,7 @@ final class InspectorModel: ObservableObject {
     }
 
     func load(
-        document: GewuDocument, version: UInt64, column: UInt32, expanded: Int, bins: UInt32 = 40,
+        document: GewuSession, version: UInt64, column: UInt32, expanded: Int, bins: UInt32 = 40,
         scale: AxisScale = .linear
     ) async {
         guard !Task.isCancelled else { return }

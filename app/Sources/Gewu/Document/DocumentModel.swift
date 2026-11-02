@@ -2,8 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-public typealias GewuDocument = GewuSession
-
 enum InspectorPage: String, CaseIterable {
     case column = "Column Overview"
     case chart = "Chart"
@@ -44,9 +42,9 @@ final class DocumentModel: ObservableObject {
 
     weak var table: DataTableController?
     private var viewTask: Task<Void, Never>?
+    private var viewOperation: ViewOperation?
     private var request: UInt64 = 0
-    private let gate = RequestGate()
-    // Serial execution keeps Rust's request order consistent with UI order.
+    // Bound concurrent work; Rust registers request order before queueing.
     private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
     init(url: URL, document: GewuSession) {
@@ -56,8 +54,9 @@ final class DocumentModel: ObservableObject {
         info = metadata
         kinds = metadata.columns.map(\.valueCategory)
         find = FindModel()
-        current = document.currentView()
-        spec = QuerySpec(columns: metadata.columns.indices.map { ColSpec(column: UInt32($0), sort: nil, filter: nil) })
+        let committed = document.currentQuery()
+        current = committed.view
+        spec = committed.spec
         appliedSpec = spec
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn
@@ -204,28 +203,38 @@ final class DocumentModel: ObservableObject {
         let doc = doc
         find.invalidate()
         viewTask?.cancel()
-        doc.cancelPending()
+        viewOperation?.cancel()
         request &+= 1
         let mine = request
-        gate.set(mine)
         let spec = spec
         let worker = worker
-        let gate = gate
+        let operation: ViewOperation
+        do {
+            operation = try doc.prepareView(spec: spec)
+        } catch {
+            isBusy = false
+            viewOperation = nil
+            restoreCommittedQuery()
+            reportError(error)
+            updateFind()
+            return
+        }
+        viewOperation = operation
         isBusy = true
         viewTask = Task { [weak self] in
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(150)) }
                 try Task.checkCancellation()
-                let view: ViewInfo = try await withCheckedThrowingContinuation { continuation in
-                    worker.async {
-                        guard gate.isCurrent(mine) else {
-                            continuation.resume(throwing: CancellationError())
-                            return
-                        }
-                        do { continuation.resume(returning: try doc.applyView(spec: spec)) } catch {
-                            continuation.resume(throwing: error)
+                let view: ViewInfo = try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { continuation in
+                        worker.async {
+                            do { continuation.resume(returning: try operation.run()) } catch {
+                                continuation.resume(throwing: error)
+                            }
                         }
                     }
+                } onCancel: {
+                    operation.cancel()
                 }
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.copying.cancel()
@@ -234,11 +243,13 @@ final class DocumentModel: ObservableObject {
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil
                 self.isBusy = false
+                self.viewOperation = nil
                 self.updateFind()
             } catch {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.isBusy = false
-                self.spec = self.appliedSpec
+                self.viewOperation = nil
+                self.restoreCommittedQuery()
                 if case GewuError.Cancelled = error {
                     self.updateFind()
                     return
@@ -260,6 +271,18 @@ final class DocumentModel: ObservableObject {
             cursor: preservingMatch ? find.currentMatch : nil, debounce: debounce)
     }
 
+    private func restoreCommittedQuery() {
+        let committed = doc.currentQuery()
+        if current.version != committed.view.version {
+            copying.cancel()
+            selectedDisplayRow = nil
+            selectedSourceRow = nil
+        }
+        current = committed.view
+        appliedSpec = committed.spec
+        spec = committed.spec
+    }
+
     /// Reordering columns keeps the current match instead of jumping to the first one.
     func findColumnsChanged() {
         guard find.activeQuery != nil else { return }
@@ -268,9 +291,9 @@ final class DocumentModel: ObservableObject {
 
     func stop() {
         request &+= 1
-        gate.set(request)
         viewTask?.cancel()
-        doc.cancelPending()
+        viewOperation?.cancel()
+        viewOperation = nil
         find.stop()
         export.stop()
         copying.cancel()

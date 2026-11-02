@@ -73,7 +73,7 @@ final class RowCache {
 /// Serializes table reads off the main actor, including width sampling and match
 /// navigation. Cancelled requests stop before entering the synchronous FFI call.
 actor TableRowReader {
-    func read(_ document: GewuDocument, version: UInt64, start: UInt64, count: UInt32, columns: [UInt32]) throws
+    func read(_ document: GewuSession, version: UInt64, start: UInt64, count: UInt32, columns: [UInt32]) throws
         -> RowBlock
     {
         try Task.checkCancellation()

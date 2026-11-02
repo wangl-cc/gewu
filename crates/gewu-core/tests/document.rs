@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
@@ -71,11 +71,15 @@ fn opens_file() {
 fn sorts_with_nulls_last() {
     let (path, doc) = sample();
     let spec = QuerySpec::new().with_sort(2, false, 0);
-    doc.apply_view(&spec).unwrap();
+    doc.prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
     let spec = QuerySpec::new().with_sort(2, true, 0);
-    doc.apply_view(&spec).unwrap();
+    doc.prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
     std::fs::remove_file(path).ok();
 }
@@ -83,7 +87,9 @@ fn sorts_with_nulls_last() {
 #[test]
 fn checkbox_filter_and_distinct() {
     let (path, doc) = sample();
-    let all = doc.distinct_values(1, None, 100).unwrap();
+    let all = doc
+        .distinct_values(1, None, 100, &Cancellation::default())
+        .unwrap();
     let labels: Vec<_> = all.values.iter().map(|v| v.label.clone()).collect();
     assert_eq!(labels, [
         None,
@@ -98,15 +104,22 @@ fn checkbox_filter_and_distinct() {
         Filter::exact(vec!["cat".into(), "dog".into()], false, false),
     )
     .with_sort(3, true, 0);
-    let v = doc.apply_view(&spec).unwrap();
+    let v = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(v.row_count, 4);
     assert_eq!(names(&doc), ["f", "d", "b", "a"]);
 
     // Distinct values of another column respect this filter.
-    let prices = doc.distinct_values(2, Some(&spec), 100).unwrap();
+    let prices = doc
+        .distinct_values(2, Some(&spec), 100, &Cancellation::default())
+        .unwrap();
     assert_eq!(prices.total, 4);
     // ...but the filtered column itself still lists every value (like Excel).
-    let labels = doc.distinct_values(1, Some(&spec), 100).unwrap();
+    let labels = doc
+        .distinct_values(1, Some(&spec), 100, &Cancellation::default())
+        .unwrap();
     assert_eq!(labels.total, 4);
     std::fs::remove_file(path).ok();
 }
@@ -115,15 +128,21 @@ fn checkbox_filter_and_distinct() {
 fn null_contains_and_typed_equality() {
     let (path, doc) = sample();
     let spec = QuerySpec::single(2, Filter::exact(vec![], false, true));
-    doc.apply_view(&spec).unwrap();
+    doc.prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(names(&doc), ["d"]);
 
     let spec = QuerySpec::single(1, Filter::contains("D".into(), false, false));
-    doc.apply_view(&spec).unwrap();
+    doc.prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
     let spec = QuerySpec::single(2, Filter::exact(vec!["2.25".into()], false, false));
-    doc.apply_view(&spec).unwrap();
+    doc.prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(names(&doc), ["e"]);
     std::fs::remove_file(path).ok();
 }
@@ -132,7 +151,9 @@ fn null_contains_and_typed_equality() {
 fn stale_version_is_rejected() {
     let (path, doc) = sample();
     let old = doc.current_view().version;
-    doc.apply_view(&QuerySpec::default()).unwrap();
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert!(matches!(
         doc.rows(old, 0, 10, &[0]),
         Err(Error::StaleVersion { .. })
@@ -143,7 +164,7 @@ fn stale_version_is_rejected() {
 #[test]
 fn stats() {
     let (path, doc) = sample();
-    let s = doc.column_summary(2, 5).unwrap();
+    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
     assert_eq!(s.null_count, 1);
     assert_eq!(s.distinct_count, 5);
     assert_eq!(s.min_label.as_deref(), Some("1.0"));
@@ -164,7 +185,7 @@ fn range_filter_on_floats_skips_nulls() {
     ] {
         let min = min.map(|text| doc.parse_bound(2, text).unwrap());
         let max = max.map(|text| doc.parse_bound(2, text).unwrap());
-        doc.apply_view(&QuerySpec::single(
+        doc.prepare_view(&QuerySpec::single(
             2,
             Filter::range(
                 min.map(|b: gewu_core::Bound| b.filter_text()),
@@ -172,6 +193,7 @@ fn range_filter_on_floats_skips_nulls() {
                 false,
             ),
         ))
+        .and_then(|operation| operation.run())
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -189,7 +211,7 @@ fn range_filter_on_integers() {
     ] {
         let min = min.map(|text| doc.parse_bound(3, text).unwrap());
         let max = max.map(|text| doc.parse_bound(3, text).unwrap());
-        doc.apply_view(&QuerySpec::single(
+        doc.prepare_view(&QuerySpec::single(
             3,
             Filter::range(
                 min.map(|b: gewu_core::Bound| b.filter_text()),
@@ -197,6 +219,7 @@ fn range_filter_on_integers() {
                 false,
             ),
         ))
+        .and_then(|operation| operation.run())
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -217,7 +240,7 @@ fn range_filter_rejects_text_columns() {
 fn histogram_counts() {
     let (path, doc) = sample();
     // price spans 1.0..=9.0 in 4 bins of width 2: [1,3) [3,5) [5,7) [7,9].
-    let h = doc.histogram(2, None, 4).unwrap();
+    let h = doc.histogram(2, None, 4, &Cancellation::default()).unwrap();
     assert_eq!((h.lo, h.hi), (Some(1.0), Some(9.0)));
     assert!(!h.integer);
     assert_eq!(h.counts, [2, 1, 0, 2]);
@@ -225,7 +248,9 @@ fn histogram_counts() {
 
     // Small integer span: one bin per integer would need 51 bins, so with
     // 100 bins each integer 10..=60 gets its own.
-    let h = doc.histogram(3, None, 100).unwrap();
+    let h = doc
+        .histogram(3, None, 100, &Cancellation::default())
+        .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(10.0), Some(61.0)));
     assert_eq!(h.counts.len(), 51);
@@ -233,7 +258,9 @@ fn histogram_counts() {
     assert_eq!(h.counts[0], 1);
     assert_eq!(h.counts[50], 1);
 
-    assert!(doc.histogram(1, None, 10).is_err());
+    assert!(doc
+        .histogram(1, None, 10, &Cancellation::default())
+        .is_err());
     std::fs::remove_file(path).ok();
 }
 
@@ -287,7 +314,7 @@ fn find_names(doc: &Session, text: &str) -> Vec<String> {
     let hits = doc
         .prepare_find(doc.current_view().version, text, &[0, 1, 2, 3, 4])
         .unwrap()
-        .next(None, 256)
+        .next(None, 256, &Cancellation::default())
         .unwrap();
     let mut rows: Vec<usize> = hits.iter().map(|hit| hit.display_row as usize).collect();
     rows.dedup();
@@ -359,10 +386,11 @@ fn contains_filter_is_for_text_only() {
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 column,
                 Filter::contains("1700".into(), false, false),
             ))
+            .and_then(|operation| operation.run())
             .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
     }
@@ -391,7 +419,7 @@ fn dates_format_parse_and_filter() {
 
     // Range on dates: nulls excluded, bounds inclusive.
     let min = doc.parse_bound(1, "2024-01-02").unwrap();
-    doc.apply_view(&QuerySpec::single(
+    doc.prepare_view(&QuerySpec::single(
         1,
         Filter::range(
             (Some(min)).map(|b: gewu_core::Bound| b.filter_text()),
@@ -399,12 +427,13 @@ fn dates_format_parse_and_filter() {
             false,
         ),
     ))
+    .and_then(|operation| operation.run())
     .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
     let max = doc.parse_bound(2, "2024-01-01T10:00:00Z").unwrap();
-    doc.apply_view(&QuerySpec::single(
+    doc.prepare_view(&QuerySpec::single(
         2,
         Filter::range(
             None,
@@ -412,11 +441,14 @@ fn dates_format_parse_and_filter() {
             false,
         ),
     ))
+    .and_then(|operation| operation.run())
     .unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
     // Dates are integers: the histogram ends one day past the last date.
-    let h = doc.histogram(1, None, 100).unwrap();
+    let h = doc
+        .histogram(1, None, 100, &Cancellation::default())
+        .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_798.0)));
     assert_eq!(h.null_count, 1);
@@ -430,7 +462,7 @@ fn find_marks_matching_cells() {
     for (query, expected) in [("170", vec![(1, 3)]), ("2024-01-02", vec![(1, 1)])] {
         let find = doc.prepare_find(0, query, &[0, 1, 2, 3, 4]).unwrap();
         let hits: Vec<(u64, u32)> = find
-            .next(None, 10)
+            .next(None, 10, &Cancellation::default())
             .unwrap()
             .into_iter()
             .map(|hit| (hit.display_row, hit.column))
@@ -444,7 +476,7 @@ fn find_marks_matching_cells() {
 fn column_summary_follows_the_view() {
     let (path, doc) = sample();
     // price: 3.5, 1.0, 9.0, null, 2.25, 7.0
-    let s = doc.column_summary(2, 5).unwrap();
+    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
     assert_eq!((s.rows, s.null_count, s.distinct_count), (6, 1, 5));
     assert_eq!((s.min, s.max), (Some(1.0), Some(9.0)));
     assert!((s.mean.unwrap() - 4.55).abs() < 1e-9);
@@ -453,7 +485,7 @@ fn column_summary_follows_the_view() {
     assert!(s.top_values.is_empty());
 
     // label: cat, dog, null, cat, bird, dog
-    let s = doc.column_summary(1, 2).unwrap();
+    let s = doc.column_summary(1, 2, &Cancellation::default()).unwrap();
     assert_eq!((s.null_count, s.distinct_count), (1, 3));
     let top: Vec<_> = s
         .top_values
@@ -463,12 +495,13 @@ fn column_summary_follows_the_view() {
     assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
 
     // With a filter, only the view's rows count.
-    doc.apply_view(&QuerySpec::single(
+    doc.prepare_view(&QuerySpec::single(
         1,
         Filter::exact(vec!["dog".into()], false, false),
     ))
+    .and_then(|operation| operation.run())
     .unwrap();
-    let s = doc.column_summary(2, 5).unwrap();
+    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
     assert_eq!((s.rows, s.min, s.max), (2, Some(1.0), Some(7.0)));
     std::fs::remove_file(path).ok();
 }

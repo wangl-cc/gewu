@@ -43,7 +43,7 @@ extension String {
 }
 
 struct RangeFilterView: View {
-    let doc: GewuDocument
+    let doc: GewuSession
     let column: UInt32
     let distribution: RangeHistogram?
     @Binding var bins: UInt32

@@ -206,7 +206,7 @@ mod tests {
     use arrow::array::{ArrayRef, Float64Array};
 
     use super::{equals, search};
-    use crate::engine::CancelToken;
+    use crate::Cancellation;
 
     #[test]
     fn equality_parses_float32_without_double_rounding() {
@@ -221,7 +221,7 @@ mod tests {
         let mut matched = [false; 2];
         equals(&array, text)
             .unwrap()
-            .evaluate(0..2, &mut matched, &CancelToken::never())
+            .evaluate(0..2, &mut matched, &Cancellation::default())
             .unwrap();
         assert_eq!(matched, [false, true]);
     }
@@ -231,7 +231,7 @@ mod tests {
         let mut matched = [false];
         search(&array, query)
             .unwrap()
-            .evaluate(0..1, &mut matched, &CancelToken::never())
+            .evaluate(0..1, &mut matched, &Cancellation::default())
             .unwrap();
         matched[0]
     }

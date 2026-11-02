@@ -11,7 +11,7 @@ use arrow::{
     datatypes::{DataType, Field, Int32Type},
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use gewu_core::{Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Filter, QuerySpec, Session};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
@@ -38,11 +38,11 @@ fn find_scans(c: &mut Criterion) {
     let (_text_file, text_doc) = document(vec![("value", text)]);
     let no_hit = text_doc.prepare_find(0, "absent", &[0]).unwrap();
     group.bench_function("text_no_hit_1m", |b| {
-        b.iter(|| black_box(no_hit.next(None, 1).unwrap()))
+        b.iter(|| black_box(no_hit.next(None, 1, &Cancellation::default()).unwrap()))
     });
     let sparse = text_doc.prepare_find(0, "needle", &[0]).unwrap();
     group.bench_function("text_last_hit_1m", |b| {
-        b.iter(|| black_box(sparse.next(None, 1).unwrap()))
+        b.iter(|| black_box(sparse.next(None, 1, &Cancellation::default()).unwrap()))
     });
 
     let lists: ArrayRef = Arc::new(ListArray::from_iter_primitive::<
@@ -53,14 +53,14 @@ fn find_scans(c: &mut Criterion) {
     let (_list_file, list_doc) = document(vec![("value", lists)]);
     let nested = list_doc.prepare_find(0, "2", &[0]).unwrap();
     group.bench_function("nested_no_hit_100k", |b| {
-        b.iter(|| black_box(nested.next(None, 1).unwrap()))
+        b.iter(|| black_box(nested.next(None, 1, &Cancellation::default()).unwrap()))
     });
 
     let intervals: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![1; 200_000]));
     let (_interval_file, interval_doc) = document(vec![("value", intervals)]);
     let formatted = interval_doc.prepare_find(0, "absent", &[0]).unwrap();
     group.bench_function("formatted_no_hit_200k", |b| {
-        b.iter(|| black_box(formatted.next(None, 1).unwrap()))
+        b.iter(|| black_box(formatted.next(None, 1, &Cancellation::default()).unwrap()))
     });
 
     let dictionary: ArrayRef = Arc::new(
@@ -91,17 +91,24 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
-        .apply_view(&QuerySpec::single(
+        .prepare_view(&QuerySpec::single(
             1,
             Filter::exact(vec!["true".into()], false, false),
         ))
+        .and_then(|operation| operation.run())
         .unwrap();
     assert_eq!(filtered.row_count, 20_000);
     let dictionary_find = dictionary_doc
         .prepare_find(filtered.version, "absent", &[0])
         .unwrap();
     group.bench_function("dictionary_filtered_20k_of_120k_values_100k", |b| {
-        b.iter(|| black_box(dictionary_find.next(None, 1).unwrap()))
+        b.iter(|| {
+            black_box(
+                dictionary_find
+                    .next(None, 1, &Cancellation::default())
+                    .unwrap(),
+            )
+        })
     });
 
     let len = 200_000;
@@ -114,7 +121,13 @@ fn find_scans(c: &mut Criterion) {
     let (_large_list_file, large_list_doc) = document(vec![("value", large_list)]);
     let large_list_find = large_list_doc.prepare_find(0, "absent", &[0]).unwrap();
     group.bench_function("one_list_children_200k", |b| {
-        b.iter(|| black_box(large_list_find.next(None, 1).unwrap()))
+        b.iter(|| {
+            black_box(
+                large_list_find
+                    .next(None, 1, &Cancellation::default())
+                    .unwrap(),
+            )
+        })
     });
 
     let rows = 100_000;
@@ -129,14 +142,15 @@ fn find_scans(c: &mut Criterion) {
     }));
     let (_wide_file, wide_doc) = document(columns);
     let sorted = wide_doc
-        .apply_view(&QuerySpec::new().with_sort(0, true, 0))
+        .prepare_view(&QuerySpec::new().with_sort(0, true, 0))
+        .and_then(|operation| operation.run())
         .unwrap();
     let wide_columns: Vec<u32> = (0..8).collect();
     let wide_find = wide_doc
         .prepare_find(sorted.version, "absent", &wide_columns)
         .unwrap();
     group.bench_function("sorted_wide_no_hit_100k_8_columns", |b| {
-        b.iter(|| black_box(wide_find.next(None, 1).unwrap()))
+        b.iter(|| black_box(wide_find.next(None, 1, &Cancellation::default()).unwrap()))
     });
     group.finish();
 }

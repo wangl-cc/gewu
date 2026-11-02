@@ -20,7 +20,7 @@ pub use super::bound::Bound;
 use crate::{
     predicate::Predicate,
     types::{self, Domain, Encoding},
-    Error, Filter, Result,
+    Cancellation, Error, Filter, Result,
 };
 
 /// Types with a useful displayed-text or element-containment filter.
@@ -57,27 +57,29 @@ pub(crate) fn supports_equals(data_type: &DataType) -> bool {
 pub(crate) fn prepare_filter<'a>(
     column: &'a super::Column,
     filter: &Filter,
+    cancel: &Cancellation,
 ) -> Result<Predicate<'a>> {
+    cancel.check()?;
     use crate::FilterCondition;
     if let FilterCondition::Exact { values, exclude } = &filter.condition {
         if !values.is_empty() && supports_equals(column.array.data_type()) {
-            if let Some(dictionary) = column.dictionary() {
-                let selection = prepare_condition(dictionary.values(), &FilterCondition::Exact {
-                    values: values.clone(),
-                    exclude: false,
-                })?;
-                let mut matched = vec![false; dictionary.values().len()];
-                selection.evaluate(
-                    0..matched.len(),
-                    &mut matched,
-                    &crate::engine::CancelToken::never(),
+            if let Some(dictionary) = column.dictionary(cancel)? {
+                let selection = prepare_condition(
+                    dictionary.values(),
+                    &FilterCondition::Exact {
+                        values: values.clone(),
+                        exclude: false,
+                    },
+                    cancel,
                 )?;
+                let mut matched = vec![false; dictionary.values().len()];
+                selection.evaluate(0..matched.len(), &mut matched, cancel)?;
                 return Ok(dictionary.matching_codes(&matched, *exclude, filter.include_nulls));
             }
         }
     }
     let array = &column.array;
-    let predicate = prepare_condition(array, &filter.condition)?;
+    let predicate = prepare_condition(array, &filter.condition, cancel)?;
     let nulls = array.logical_nulls();
     let include_nulls = filter.include_nulls;
     Ok(Predicate::new(Box::new(
@@ -96,7 +98,9 @@ pub(crate) fn prepare_filter<'a>(
 fn prepare_condition<'a>(
     array: &'a ArrayRef,
     condition: &crate::FilterCondition,
+    cancel: &Cancellation,
 ) -> Result<Predicate<'a>> {
+    cancel.check()?;
     use crate::FilterCondition;
     if let FilterCondition::Exact { values, exclude } = condition {
         if values.is_empty() {
@@ -113,7 +117,7 @@ fn prepare_condition<'a>(
     }
     if types::encoding(array.data_type()) == Encoding::Dictionary {
         return nested::dictionary(array, |values| {
-            prepare_condition(values, condition).map(Some)
+            prepare_condition(values, condition, cancel).map(Some)
         })?
         .ok_or_else(|| {
             Error::InvalidArgument("filter cannot be applied to dictionary values".into())
@@ -139,12 +143,15 @@ fn prepare_condition<'a>(
         }
         FilterCondition::Exact { values, exclude } if supports_equals(array.data_type()) => {
             let predicate = if types::domain(array.data_type()) == Some(Domain::Text) {
-                text::selected_values(array, values)?
+                text::selected_values(array, values, cancel)?
             } else {
                 Predicate::any_of(
                     values
                         .iter()
-                        .map(|value| scalar::equals(array, value))
+                        .map(|value| {
+                            cancel.check()?;
+                            scalar::equals(array, value)
+                        })
                         .collect::<Result<Vec<_>>>()?,
                 )
             };

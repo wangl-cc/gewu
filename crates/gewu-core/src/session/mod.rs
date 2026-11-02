@@ -20,12 +20,14 @@ mod query;
 
 pub use choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use facet::{DistinctResult, DistinctValue, FilterChoices, ValueChoice};
+pub use query::ViewOperation;
 
 /// An active viewing session over an immutable dataset.
 /// Holds a reference to the dataset and manages view versions, filters, and display order.
+#[derive(Clone)]
 pub struct Session {
     dataset: Arc<Dataset>,
-    views: ViewEngine,
+    views: Arc<ViewEngine>,
 }
 
 impl Session {
@@ -37,7 +39,7 @@ impl Session {
         let n_columns = dataset.columns().len();
         Ok(Self {
             dataset,
-            views: ViewEngine::new(n_rows, n_columns),
+            views: Arc::new(ViewEngine::new(n_rows, n_columns)),
         })
     }
 
@@ -48,7 +50,7 @@ impl Session {
         let n_columns = dataset.columns().len();
         Ok(Self {
             dataset,
-            views: ViewEngine::new(n_rows, n_columns),
+            views: Arc::new(ViewEngine::new(n_rows, n_columns)),
         })
     }
 
@@ -58,7 +60,7 @@ impl Session {
         let n_columns = dataset.columns().len();
         Self {
             dataset,
-            views: ViewEngine::new(n_rows, n_columns),
+            views: Arc::new(ViewEngine::new(n_rows, n_columns)),
         }
     }
 

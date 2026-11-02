@@ -10,15 +10,15 @@
 
 use std::ops::Range;
 
-use super::{engine::CancelToken, selection::RowSelection};
-use crate::Result;
+use super::selection::RowSelection;
+use crate::{Cancellation, Result};
 
 pub(crate) const CHUNK: usize = 8 * 1024;
 
 /// Chunk-level vectorized evaluator: populates the output boolean slice for a selection of rows,
 /// optionally taking an incoming mask to support short-circuiting or branchless bitwise AND.
 pub(crate) type ChunkEvaluator<'a> = Box<
-    dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool], &CancelToken) -> Result<()>
+    dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool], &Cancellation) -> Result<()>
         + Send
         + Sync
         + 'a,
@@ -46,7 +46,7 @@ impl<'a> Predicate<'a> {
         rows: RowSelection<'_>,
         incoming: Option<&[bool]>,
         output: &mut [bool],
-        cancel: &CancelToken,
+        cancel: &Cancellation,
     ) -> Result<()> {
         (self.0)(rows, incoming, output, cancel)
     }
@@ -95,7 +95,7 @@ impl<'a> Predicate<'a> {
         &self,
         source_rows: impl Into<RowSelection<'r>>,
         matched: &mut [bool],
-        cancel: &CancelToken,
+        cancel: &Cancellation,
     ) -> Result<()> {
         let source_rows = source_rows.into();
         assert_eq!(source_rows.len(), matched.len());
@@ -114,7 +114,7 @@ impl<'a> Predicate<'a> {
         source_rows: Range<usize>,
         matched: &mut [bool],
         scratch: &mut [bool],
-        cancel: &CancelToken,
+        cancel: &Cancellation,
     ) -> Result<()> {
         assert_eq!(source_rows.len(), matched.len());
         assert_eq!(matched.len(), scratch.len());

@@ -18,6 +18,13 @@ pub struct GewuSession {
 
 #[uniffi::export]
 impl GewuSession {
+    /// Register request order before queueing the returned operation's run.
+    pub fn prepare_view(&self, spec: QuerySpec) -> Result<Arc<crate::ViewOperation>, GewuError> {
+        Ok(Arc::new(crate::ViewOperation {
+            inner: self.inner.prepare_view(&spec.into())?,
+        }))
+    }
+
     /// Capture a bounded scatter job over the current view; stale versions fail.
     /// A nil X column means source row IDs. Limit must be in 1...4096.
     pub fn prepare_scatter(
@@ -87,6 +94,14 @@ impl GewuSession {
         self.inner.current_view().into()
     }
 
+    pub fn current_query(&self) -> crate::QueryState {
+        let (view, spec) = self.inner.current_query();
+        crate::QueryState {
+            view: view.into(),
+            spec: spec.into(),
+        }
+    }
+
     /// Capture the current result and displayed column order without copying
     /// cells. Later queries do not change this export's contents.
     pub fn prepare_export(
@@ -104,16 +119,6 @@ impl GewuSession {
 
     pub fn nested_export_columns(&self, columns: Vec<u32>) -> Result<Vec<String>, GewuError> {
         Ok(self.inner.nested_export_columns(&columns)?)
-    }
-
-    /// Sort and filter. Slow: call off the main thread. A newer call makes
-    /// this one return `Cancelled`.
-    pub fn apply_view(&self, spec: QuerySpec) -> Result<ViewInfo, GewuError> {
-        Ok(self.inner.apply_view(&spec.into())?.into())
-    }
-
-    pub fn cancel_pending(&self) {
-        self.inner.cancel_pending();
     }
 
     /// Formatted cells for display rows `start..start+count`. Fast.
@@ -189,8 +194,12 @@ impl GewuSession {
         version: u64,
         column: u32,
         bins: u32,
+        cancellation: Arc<crate::Cancellation>,
     ) -> Result<Histogram, GewuError> {
-        Ok(self.inner.view_histogram(version, column, bins)?.into())
+        Ok(self
+            .inner
+            .view_histogram(version, column, bins, &cancellation.inner)?
+            .into())
     }
 
     /// Display text for a raw value of a date, time or timestamp column
@@ -203,9 +212,13 @@ impl GewuSession {
         &self,
         column: u32,
         spec: Option<QuerySpec>,
+        cancellation: Arc<crate::Cancellation>,
     ) -> Result<FilterChoices, GewuError> {
         let spec = spec.map(Into::into);
-        Ok(self.inner.filter_choices(column, spec.as_ref())?.into())
+        Ok(self
+            .inner
+            .filter_choices(column, spec.as_ref(), &cancellation.inner)?
+            .into())
     }
 
     pub fn filter_distribution(
@@ -214,36 +227,61 @@ impl GewuSession {
         spec: Option<QuerySpec>,
         bins: u32,
         scale: AxisScale,
+        cancellation: Arc<crate::Cancellation>,
     ) -> Result<Option<RangeHistogram>, GewuError> {
         let spec = spec.map(Into::into);
         Ok(self
             .inner
-            .filter_distribution(column, spec.as_ref(), bins, scale.into())?
+            .filter_distribution(
+                column,
+                spec.as_ref(),
+                bins,
+                scale.into(),
+                &cancellation.inner,
+            )?
             .map(Into::into))
     }
 
     /// Compute the facet off the UI thread. The resulting paging session has
-    /// independent cancellation; preparation itself completes before it can be cancelled.
+    /// independent cancellation; the supplied handle cancels preparation itself.
     pub fn prepare_text_choices(
         &self,
         column: u32,
         spec: Option<QuerySpec>,
+        cancellation: Arc<crate::Cancellation>,
     ) -> Result<Arc<TextChoices>, GewuError> {
         let spec = spec.map(Into::into);
         Ok(Arc::new(TextChoices {
-            inner: self.inner.prepare_text_choices(column, spec.as_ref())?,
+            inner: self
+                .inner
+                .prepare_text_choices(column, spec.as_ref(), &cancellation.inner)?,
         }))
     }
 
     /// Validate a filter without changing the current view.
-    pub fn validate_filter(&self, column: u32, filter: Filter) -> Result<(), GewuError> {
-        Ok(self.inner.validate_filter(column, &filter.into())?)
+    pub fn validate_filter(
+        &self,
+        column: u32,
+        filter: Filter,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<(), GewuError> {
+        Ok(self
+            .inner
+            .validate_filter(column, &filter.into(), &cancellation.inner)?)
     }
 
     /// Summary of a column over the current view (explicit filters apply).
     /// Call off the main thread.
-    pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary, GewuError> {
-        Ok(self.inner.column_summary(column, top)?.into())
+    pub fn column_summary(
+        &self,
+        column: u32,
+        top: u32,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<ColumnSummary, GewuError> {
+        Ok(self
+            .inner
+            .column_summary(column, top, &cancellation.inner)?
+            .into())
     }
 }
 
@@ -296,16 +334,24 @@ mod tests {
         // Chart coordinates may round a large ID; typed filters below must not.
         let before = doc.current_view();
         assert!(matches!(
-            doc.validate_filter(0, Filter {
-                condition: FilterCondition::Range {
-                    min: Some("not a number".into()),
-                    max: None
+            doc.validate_filter(
+                0,
+                Filter {
+                    condition: FilterCondition::Range {
+                        min: Some("not a number".into()),
+                        max: None
+                    },
+                    include_nulls: false,
                 },
-                include_nulls: false,
-            }),
+                crate::Cancellation::new()
+            ),
             Err(GewuError::InvalidArgument { .. })
         ));
-        let values = doc.filter_choices(0, None).unwrap().values.unwrap();
+        let values = doc
+            .filter_choices(0, None, crate::Cancellation::new())
+            .unwrap()
+            .values
+            .unwrap();
         assert_eq!(values[1].value, "9007199254740993");
         assert_eq!(doc.current_view().version, before.version);
         for condition in [
@@ -319,10 +365,11 @@ mod tests {
             },
         ] {
             let view = doc
-                .apply_view(query(0, Filter {
+                .prepare_view(query(0, Filter {
                     condition,
                     include_nulls: false,
                 }))
+                .and_then(|operation| operation.run())
                 .unwrap();
             let rows = doc.rows(view.version, 0, 10, vec![0]).unwrap();
             assert_eq!(rows.source_rows, [1]);
@@ -359,31 +406,38 @@ mod tests {
             },
             include_nulls: false,
         });
-        let choices = doc.prepare_text_choices(0, Some(state)).unwrap();
-        let first = choices.page(String::new(), None, 1).unwrap();
+        let choices = doc
+            .prepare_text_choices(0, Some(state), crate::Cancellation::new())
+            .unwrap();
+        let first = choices
+            .page(String::new(), None, 1, crate::Cancellation::new())
+            .unwrap();
         assert_eq!(first.values.len(), 1);
         assert_eq!(first.values[0].value, "cat");
         assert_eq!(first.values[0].count, 1);
-        let second = choices.page(String::new(), first.next, 1).unwrap();
+        let second = choices
+            .page(String::new(), first.next, 1, crate::Cancellation::new())
+            .unwrap();
         assert_eq!(second.values.len(), 1);
         assert_eq!(second.values[0].value, "dog");
         assert_eq!(second.values[0].count, 0);
         assert!(second.next.is_none());
         let view = doc
-            .apply_view(query(0, Filter {
+            .prepare_view(query(0, Filter {
                 condition: FilterCondition::Exact {
                     values: vec!["dog".into()],
                     exclude: false,
                 },
                 include_nulls: false,
             }))
+            .and_then(|operation| operation.run())
             .unwrap();
         assert_eq!(doc.rows(view.version, 0, 10, vec![0]).unwrap().cells, [
             Some("dog".into())
         ]);
         choices.cancel();
         assert!(matches!(
-            choices.page(String::new(), None, 1),
+            choices.page(String::new(), None, 1, crate::Cancellation::new()),
             Err(GewuError::Cancelled)
         ));
         std::fs::remove_file(source).unwrap();
@@ -403,17 +457,17 @@ mod tests {
         std::fs::write(&source, csv).unwrap();
         let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
         let custom = doc
-            .filter_distribution(0, None, 10, AxisScale::Linear)
+            .filter_distribution(0, None, 10, AxisScale::Linear, crate::Cancellation::new())
             .unwrap()
             .unwrap();
         assert_eq!(custom.histogram.counts.len(), 10);
         assert_eq!(custom.histogram.counts.iter().sum::<u64>(), 1_000);
         assert!(matches!(
-            doc.filter_distribution(0, None, 0, AxisScale::Linear),
+            doc.filter_distribution(0, None, 0, AxisScale::Linear, crate::Cancellation::new()),
             Err(GewuError::InvalidArgument { .. })
         ));
         let distribution = doc
-            .filter_distribution(0, None, 60, AxisScale::Linear)
+            .filter_distribution(0, None, 60, AxisScale::Linear, crate::Cancellation::new())
             .unwrap()
             .unwrap();
         assert_eq!(distribution.histogram.min_label, Some(base.to_string()));
@@ -434,13 +488,14 @@ mod tests {
         ] {
             let bounds = &distribution.ranges[bin];
             let view = doc
-                .apply_view(query(0, Filter {
+                .prepare_view(query(0, Filter {
                     condition: FilterCondition::Range {
                         min: bounds.min.as_ref().map(|b| b.value.clone()),
                         max: bounds.max.as_ref().map(|b| b.value.clone()),
                     },
                     include_nulls: false,
                 }))
+                .and_then(|operation| operation.run())
                 .unwrap();
             assert_eq!(view.row_count, distribution.histogram.counts[bin]);
         }
@@ -493,13 +548,14 @@ mod tests {
                     "cat".into()
                 )]);
                 selected
-                    .apply_view(query(0, Filter {
+                    .prepare_view(query(0, Filter {
                         condition: FilterCondition::Exact {
                             values: vec!["cat".into()],
                             exclude: false,
                         },
                         include_nulls: false,
                     }))
+                    .and_then(|operation| operation.run())
                     .unwrap();
                 assert_eq!(selected.current_view().row_count, 1);
                 assert_eq!(reopened.current_view().row_count, 2);

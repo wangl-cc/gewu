@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! The dictionary is constructed via [`Dictionary::from_array`]:
+//! The dictionary is constructed via [`Dictionary::build`]:
 //! - Native Arrow dictionary columns reuse their referenced dictionary entries directly.
 //! - Canonical primitive and boolean columns scan native values in a single pass via
 //!   [`primitive::CanonicalizeArray`].
@@ -32,7 +32,9 @@ use arrow::{
 use rapidhash::RapidHashMap;
 
 use super::DistinctValue;
-use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
+use crate::{
+    predicate::Predicate, scope::Selection, selection::RowSelection, Cancellation, Result,
+};
 
 mod primitive;
 
@@ -78,24 +80,23 @@ impl Dictionary {
         self.predicate_from_allowed(allowed, include_nulls)
     }
 
-    /// Encode `array`, or `None` for unsupported types and columns with more
-    /// than [`MAX_DISTINCT_VALUES`] non-null values.
-    pub(crate) fn from_array(array: &ArrayRef) -> Option<Self> {
+    pub(crate) fn build(array: &ArrayRef, cancel: &Cancellation) -> Result<Option<Self>> {
+        cancel.check()?;
         macro_rules! from_canonical_array {
             ($ty:ident) => {{
                 let array = array.as_primitive::<$ty>();
-                Self::from_canonical_array(array)
+                Self::from_canonical_array(array, cancel)
             }};
         }
 
         use DataType::*;
         match array.data_type() {
-            Dictionary(..) => Self::from_dict_array(array),
+            Dictionary(..) => Self::from_dict_array(array, cancel),
             Boolean => {
                 let array = array.as_boolean();
-                Self::from_canonical_array(array)
+                Self::from_canonical_array(array, cancel)
             }
-            Null => Some(Self::all_null(array)),
+            Null => Ok(Some(Self::all_null(array))),
             Int8 => from_canonical_array!(Int8Type),
             Int16 => from_canonical_array!(Int16Type),
             Int32 => from_canonical_array!(Int32Type),
@@ -129,13 +130,13 @@ impl Dictionary {
             Decimal64(..) => from_canonical_array!(Decimal64Type),
             Decimal128(..) => from_canonical_array!(Decimal128Type),
             Decimal256(..) => from_canonical_array!(Decimal256Type),
-            _ => Self::from_row_array(array),
+            _ => Self::from_row_array(array, cancel),
         }
     }
 
     /// Build a dictionary from a canonical primitive or boolean array in a single pass.
     /// Values array is assembled directly from canonical native values without sorting or `take`.
-    fn from_canonical_array<A>(array: &A) -> Option<Self>
+    fn from_canonical_array<A>(array: &A, cancel: &Cancellation) -> Result<Option<Self>>
     where
         A: primitive::PrimitiveArray,
     {
@@ -148,6 +149,7 @@ impl Dictionary {
         let mut codes = vec![0u8; len];
 
         for (i, code) in codes.iter_mut().enumerate() {
+            cancel.check_at(i)?;
             if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
                 continue;
             }
@@ -156,7 +158,7 @@ impl Dictionary {
                 Some(&code) => code,
                 None => {
                     if native_of.len() == MAX_DISTINCT_VALUES {
-                        return None;
+                        return Ok(None);
                     }
                     let code = native_of.len() as u8;
                     seen.insert(key, code);
@@ -169,16 +171,19 @@ impl Dictionary {
 
         let values = array.build_array(native_of.into_iter());
         let all_counts = buf[..values.len()].to_vec();
-        Self::sort_and_remap(codes, nulls, values, all_counts)
+        Self::sort_and_remap(codes, nulls, values, all_counts, cancel)
     }
 
     /// Row-format fallback for text, binary and nested arrays: discover
     /// distinct values by hashing rows, then write one `u8` code per row.
-    fn from_row_array(array: &ArrayRef) -> Option<Self> {
+    fn from_row_array(array: &ArrayRef, cancel: &Cancellation) -> Result<Option<Self>> {
         /// Rows converted to row format at a time, to bound memory.
         const CHUNK: usize = 64 * 1024;
 
-        let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
+        let Ok(converter) = RowConverter::new(vec![SortField::new(array.data_type().clone())])
+        else {
+            return Ok(None);
+        };
         let nulls = array.nulls().cloned();
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
         let mut representative_row: Vec<usize> = Vec::new();
@@ -186,11 +191,11 @@ impl Dictionary {
         let mut buf = [0u64; 256];
 
         for start in (0..array.len()).step_by(CHUNK) {
+            cancel.check()?;
             let len = CHUNK.min(array.len() - start);
-            let rows = converter
-                .convert_columns(std::slice::from_ref(&array.slice(start, len)))
-                .ok()?;
+            let rows = converter.convert_columns(std::slice::from_ref(&array.slice(start, len)))?;
             for (i, row) in rows.iter().enumerate() {
+                cancel.check_at(i)?;
                 let source_row: usize = start + i;
                 if array.is_null(source_row) {
                     codes.push(0);
@@ -201,7 +206,7 @@ impl Dictionary {
                     Some(&code) => code,
                     None => {
                         if representative_row.len() == MAX_DISTINCT_VALUES {
-                            return None;
+                            return Ok(None);
                         }
                         let code = representative_row.len() as u8;
                         seen.insert(bytes.into(), code);
@@ -216,27 +221,27 @@ impl Dictionary {
 
         let rows =
             UInt32Array::from_iter_values(representative_row.into_iter().map(|row| row as u32));
-        let values = take(array.as_ref(), &rows, None).ok()?;
+        let values = take(array.as_ref(), &rows, None)?;
         let all_counts = buf[..values.len()].to_vec();
-        Self::sort_and_remap(codes, nulls, values, all_counts)
+        Self::sort_and_remap(codes, nulls, values, all_counts, cancel)
     }
 
     /// Encode a native Dictionary. Arrow already encodes the values into
     /// `keys`/`values`, so no row hashing is needed: collect the referenced
-    /// dictionary values, reuse [`Self::from_array`] on that small array, then
+    /// dictionary values, reuse [`Self::build`] on that small array, then
     /// walk the keys once to write the shared per-row code array.
-    fn from_dict_array(array: &ArrayRef) -> Option<Self> {
+    fn from_dict_array(array: &ArrayRef, cancel: &Cancellation) -> Result<Option<Self>> {
         let dictionary = array.as_any_dictionary();
         let keys = dictionary.keys();
         let dictionary_values = dictionary.values().clone();
         if dictionary_values.len() > MAX_DISTINCT_VALUES + 1 {
-            return None;
+            return Ok(None);
         }
 
         let value_nulls = dictionary_values.logical_nulls();
         let mut referenced: Vec<u32> = Vec::new();
         let mut entry_slot = vec![u32::MAX; dictionary_values.len()];
-        if !scan_keys(keys, |key| {
+        if !scan_keys(keys, cancel, |key| {
             let Some(entry) = key else {
                 return;
             };
@@ -253,17 +258,18 @@ impl Dictionary {
                 *slot = referenced.len() as u32;
                 referenced.push(entry as u32);
             }
-        }) {
-            return None;
+        })? {
+            return Ok(None);
         }
 
         let referenced_values = take(
             dictionary_values.as_ref(),
             &UInt32Array::from(referenced),
             None,
-        )
-        .ok()?;
-        let encoded = Self::from_array(&referenced_values)?;
+        )?;
+        let Some(encoded) = Self::build(&referenced_values, cancel)? else {
+            return Ok(None);
+        };
 
         let mut key_to_code = vec![u8::MAX; dictionary_values.len()];
         for (entry, &slot) in entry_slot.iter().enumerate() {
@@ -277,7 +283,7 @@ impl Dictionary {
         let mut null_bits = BooleanBufferBuilder::new(array.len());
         let mut has_null = false;
 
-        if !scan_keys(keys, |key| {
+        if !scan_keys(keys, cancel, |key| {
             let code =
                 key.and_then(|entry| key_to_code.get(entry).copied().filter(|&c| c != u8::MAX));
             match code {
@@ -292,8 +298,8 @@ impl Dictionary {
                     codes.push(0);
                 }
             }
-        }) {
-            return None;
+        })? {
+            return Ok(None);
         }
 
         let nulls = if has_null {
@@ -302,13 +308,13 @@ impl Dictionary {
             None
         };
         let all_counts = buf[..encoded.values.len()].to_vec();
-        Some(Self {
+        Ok(Some(Self {
             codes,
             nulls,
             values: encoded.values,
             labels: encoded.labels,
             all_counts,
-        })
+        }))
     }
 
     /// A column with no values: every row is null and there is nothing to
@@ -331,28 +337,34 @@ impl Dictionary {
         nulls: Option<NullBuffer>,
         values: ArrayRef,
         all_counts: Vec<u64>,
-    ) -> Option<Self> {
+        cancel: &Cancellation,
+    ) -> Result<Option<Self>> {
+        cancel.check()?;
         let len = values.len();
         if len <= 1 {
             let labels = if len == 0 {
                 Vec::new()
             } else {
-                let formatter = crate::format::formatter(values.as_ref()).ok()?;
+                let formatter = crate::format::formatter(values.as_ref())?;
                 vec![crate::format::cell(values.as_ref(), &formatter, 0).unwrap_or_default()]
             };
-            return Some(Self {
+            return Ok(Some(Self {
                 codes,
                 nulls,
                 values,
                 labels,
                 all_counts,
-            });
+            }));
         }
 
-        let sort_indices = arrow::compute::sort_to_indices(&values, None, None).ok()?;
-        let sorted_values = arrow::compute::take(&values, &sort_indices, None).ok()?;
+        // Some row-encodable nested types cannot use Arrow's single-array sort.
+        // They have no compact encoding; this is a completed negative result.
+        let Ok(sort_indices) = arrow::compute::sort_to_indices(&values, None, None) else {
+            return Ok(None);
+        };
+        let sorted_values = arrow::compute::take(&values, &sort_indices, None)?;
         let labels = {
-            let formatter = crate::format::formatter(sorted_values.as_ref()).ok()?;
+            let formatter = crate::format::formatter(sorted_values.as_ref())?;
             (0..sorted_values.len())
                 .map(|i| {
                     crate::format::cell(sorted_values.as_ref(), &formatter, i).unwrap_or_default()
@@ -367,12 +379,14 @@ impl Dictionary {
 
         if let Some(nulls) = &nulls {
             for (row, c) in codes.iter_mut().enumerate() {
+                cancel.check_at(row)?;
                 if !nulls.is_null(row) {
                     *c = remap[*c as usize];
                 }
             }
         } else {
-            for c in &mut codes {
+            for (row, c) in codes.iter_mut().enumerate() {
+                cancel.check_at(row)?;
                 *c = remap[*c as usize];
             }
         }
@@ -381,13 +395,13 @@ impl Dictionary {
             .map(|sorted_rank| all_counts[sort_indices.value(sorted_rank) as usize])
             .collect();
 
-        Some(Self {
+        Ok(Some(Self {
             codes,
             nulls,
             values: sorted_values,
             labels,
             all_counts: sorted_all_counts,
-        })
+        }))
     }
 }
 
@@ -427,14 +441,15 @@ impl Dictionary {
         self.codes[row]
     }
 
-    /// Return distinct values with precomputed labels, keys, and frequencies over `rows`.
     pub(crate) fn distinct_values(
         &self,
         rows: &Selection,
         include_zero: bool,
-    ) -> Vec<DistinctValue> {
+        cancel: &Cancellation,
+    ) -> Result<Vec<DistinctValue>> {
+        cancel.check()?;
         let mut result = Vec::with_capacity(self.labels.len() + 1);
-        let tally = self.tally(rows);
+        let tally = self.tally(rows, cancel)?;
         if self.has_null() && (include_zero || tally.null_count > 0) {
             result.push(DistinctValue {
                 key: Self::NULL_KEY,
@@ -452,12 +467,11 @@ impl Dictionary {
                 });
             }
         }
-        result
+        Ok(result)
     }
 
-    /// Tally occurrences of each distinct value over `rows`.
-    fn tally(&self, rows: &Selection) -> Tally {
-        match rows {
+    fn tally(&self, rows: &Selection, cancel: &Cancellation) -> Result<Tally> {
+        Ok(match rows {
             Selection::All(_) => Tally {
                 counts: self.all_counts.clone(),
                 null_count: self.null_count(),
@@ -466,7 +480,8 @@ impl Dictionary {
                 let mut buf = [0u64; 256];
                 let mut null_count = 0u64;
                 if let Some(nulls) = &self.nulls {
-                    for &row in rows.iter() {
+                    for (index, &row) in rows.iter().enumerate() {
+                        cancel.check_at(index)?;
                         let r = row as usize;
                         if nulls.is_null(r) {
                             null_count += 1;
@@ -475,7 +490,8 @@ impl Dictionary {
                         }
                     }
                 } else {
-                    for &row in rows.iter() {
+                    for (index, &row) in rows.iter().enumerate() {
+                        cancel.check_at(index)?;
                         buf[self.codes[row as usize] as usize] += 1;
                     }
                 }
@@ -484,7 +500,7 @@ impl Dictionary {
                     null_count,
                 }
             }
-        }
+        })
     }
 
     fn fill_matches(
@@ -572,10 +588,15 @@ impl Dictionary {
 
 /// Visit every key of a native Dictionary array; `None` for a null key.
 /// Returns false if the key type is not an Arrow dictionary index type.
-fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
+fn scan_keys(
+    keys: &dyn Array,
+    cancel: &Cancellation,
+    mut f: impl FnMut(Option<usize>),
+) -> Result<bool> {
     macro_rules! visit {
         ($array:expr) => {{
             for row in 0..$array.len() {
+                cancel.check_at(row)?;
                 f(if $array.is_null(row) {
                     None
                 } else {
@@ -593,9 +614,10 @@ fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
         DataType::UInt16 => visit!(keys.as_primitive::<UInt16Type>()),
         DataType::UInt32 => visit!(keys.as_primitive::<UInt32Type>()),
         DataType::UInt64 => visit!(keys.as_primitive::<UInt64Type>()),
-        _ => return false,
+        _ => return Ok(false),
     }
-    true
+    cancel.check()?;
+    Ok(true)
 }
 
 #[cfg(test)]

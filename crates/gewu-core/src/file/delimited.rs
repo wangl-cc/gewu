@@ -108,7 +108,7 @@ pub(super) fn write(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use arrow::{
         array::{
@@ -118,6 +118,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::Cancellation;
 
     #[test]
     fn cancellation_during_a_write_stops_before_processing_every_chunk() {
@@ -129,7 +130,7 @@ mod tests {
         .unwrap();
         let schema = batch.schema();
         let rows: Vec<u32> = (0..rows as u32).collect();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let written = AtomicU64::new(0);
         let data = ExportData {
             schema: &schema,
@@ -137,16 +138,16 @@ mod tests {
             rows: &rows,
         };
         let progress = WriteProgress {
-            cancelled: &cancelled,
+            cancellation: &cancelled,
             rows_written: &written,
         };
-        struct CancellingWriter<'a>(&'a AtomicBool);
+        struct CancellingWriter<'a>(&'a Cancellation);
         impl Write for CancellingWriter<'_> {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
                 // Let header emission finish, then cancel while row data is
                 // being written so this exercises the chunk boundary.
                 if bytes != b"id\r\n" {
-                    self.0.store(true, Ordering::Relaxed);
+                    self.0.cancel();
                 }
                 Ok(bytes.len())
             }
@@ -175,7 +176,7 @@ mod tests {
         ])
         .unwrap();
         let schema = batch.schema();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let written = AtomicU64::new(0);
         let data = ExportData {
             schema: &schema,
@@ -183,7 +184,7 @@ mod tests {
             rows: &[0, 1],
         };
         let progress = WriteProgress {
-            cancelled: &cancelled,
+            cancellation: &cancelled,
             rows_written: &written,
         };
         let mut bytes = Vec::new();

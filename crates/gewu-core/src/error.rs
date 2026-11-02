@@ -11,7 +11,7 @@ pub enum Error {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
-    /// The operation was replaced by a newer one before it finished.
+    /// The operation was explicitly cancelled or replaced before completion.
     #[error("cancelled")]
     Cancelled,
 

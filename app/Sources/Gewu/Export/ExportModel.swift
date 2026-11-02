@@ -21,7 +21,7 @@ final class ExportModel: ObservableObject {
 
     var isIdle: Bool { !choosingExport && progress == nil }
 
-    func choose(document doc: GewuDocument, view: ViewInfo, columns: [UInt32], source: URL, window: NSWindow) {
+    func choose(document doc: GewuSession, view: ViewInfo, columns: [UInt32], source: URL, window: NSWindow) {
         guard isIdle else { return }
         let version = view.version
         let nestedColumns: [String]

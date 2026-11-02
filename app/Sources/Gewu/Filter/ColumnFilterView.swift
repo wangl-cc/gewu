@@ -7,7 +7,7 @@ private enum FilterMode: String, CaseIterable {
 }
 
 struct ColumnFilterView: View {
-    let doc: GewuDocument
+    let doc: GewuSession
     let column: UInt32
     let info: ColumnInfo
     let querySpec: QuerySpec
@@ -28,7 +28,7 @@ struct ColumnFilterView: View {
     @State private var applyTask: Task<Void, Never>?
 
     init(
-        doc: GewuDocument, column: UInt32, info: ColumnInfo, querySpec: QuerySpec, current: Filter?,
+        doc: GewuSession, column: UInt32, info: ColumnInfo, querySpec: QuerySpec, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
         self.doc = doc
@@ -141,16 +141,28 @@ struct ColumnFilterView: View {
         let mode = mode
         let bins = histogramBins
         let scale = histogramScale
+        let cancellation = Cancellation()
         do {
             if mode == .range {
-                let result = try await Task.detached {
-                    try doc.filterDistribution(column: column, spec: spec, bins: bins, scale: scale)
-                }.value
+                let result = try await withTaskCancellationHandler {
+                    try await Task.detached {
+                        try doc.filterDistribution(
+                            column: column, spec: spec, bins: bins, scale: scale, cancellation: cancellation)
+                    }.value
+                } onCancel: {
+                    cancellation.cancel()
+                }
                 guard !Task.isCancelled else { return }
                 distribution = result
                 range.restoreLabels(from: result)
             } else if mode == .exact, choices == nil {
-                let result = try await Task.detached { try doc.filterChoices(column: column, spec: spec) }.value
+                let result = try await withTaskCancellationHandler {
+                    try await Task.detached {
+                        try doc.filterChoices(column: column, spec: spec, cancellation: cancellation)
+                    }.value
+                } onCancel: {
+                    cancellation.cancel()
+                }
                 guard !Task.isCancelled else { return }
                 choices = result
             }
@@ -177,7 +189,14 @@ struct ColumnFilterView: View {
                 let doc = doc
                 let column = column
                 if let filter {
-                    try await Task.detached { try doc.validateFilter(column: column, filter: filter) }.value
+                    let cancellation = Cancellation()
+                    try await withTaskCancellationHandler {
+                        try await Task.detached {
+                            try doc.validateFilter(column: column, filter: filter, cancellation: cancellation)
+                        }.value
+                    } onCancel: {
+                        cancellation.cancel()
+                    }
                 }
                 guard !Task.isCancelled else { return }
                 onApply(filter)

@@ -5,8 +5,8 @@ use arrow::array::Array;
 use super::Session;
 use crate::{
     scope::RowScope,
-    stats::{self, AnalysisContext, ArrayView, AxisScale, ColumnSummary, Histogram},
-    Result,
+    stats::{self, ArrayView, AxisScale, ColumnSummary, Histogram},
+    Cancellation, Result,
 };
 
 impl Session {
@@ -31,20 +31,26 @@ impl Session {
         crate::ScatterAnalysis::new(x, y, view.rows.clone(), version, limit)
     }
 
-    /// Distribution over the displayed rows, including this column's own
-    /// filters and the text search. The axis still spans the source column.
-    pub fn view_histogram(&self, version: u64, column: u32, bins: u32) -> Result<Histogram> {
+    pub fn view_histogram(
+        &self,
+        version: u64,
+        column: u32,
+        bins: u32,
+        cancel: &Cancellation,
+    ) -> Result<Histogram> {
+        cancel.check()?;
         let col = self.column(column)?;
         let view = self.views.snapshot(version)?;
-        let rows = self.rows_in(RowScope::Rows(view.rows.clone()))?;
-        ArrayView::new(&col.array, &rows).histogram(bins, AxisScale::Linear, &AnalysisContext::default())
+        let rows = self.rows_in(RowScope::Rows(view.rows.clone()), cancel)?;
+        let result =
+            ArrayView::new(&col.array, &rows).histogram(bins, AxisScale::Linear, cancel)?;
+        cancel.check()?;
+        Ok(result)
     }
 
     /// Available analysis sections, determined from type metadata without scanning rows.
     pub fn analysis_capabilities(&self, column: u32) -> Result<Vec<crate::AnalysisSection>> {
-        Ok(stats::capabilities(
-            self.column(column)?.array.data_type(),
-        ))
+        Ok(stats::capabilities(self.column(column)?.array.data_type()))
     }
 
     /// Capture one column and the requested current view for an independently
@@ -66,12 +72,23 @@ impl Session {
         )
     }
 
-    /// Summary of one column over the current view's rows, with up to
-    /// `top` most common values for non-numeric columns.
-    pub fn column_summary(&self, column: u32, top: u32) -> Result<ColumnSummary> {
+    pub fn column_summary(
+        &self,
+        column: u32,
+        top: u32,
+        cancel: &Cancellation,
+    ) -> Result<ColumnSummary> {
+        cancel.check()?;
         let col = self.column(column)?;
-        let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()))?;
+        let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()), cancel)?;
         let view = ArrayView::new(&col.array, &rows);
-        view.summary(col.choices(&rows, false), top as usize)
+        let result = stats::summary(
+            view,
+            col.choices(&rows, false, cancel)?,
+            top as usize,
+            cancel,
+        )?;
+        cancel.check()?;
+        Ok(result)
     }
 }

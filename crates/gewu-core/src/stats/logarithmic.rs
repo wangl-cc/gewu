@@ -7,14 +7,14 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use super::{AnalysisContext, Histogram, Output, RangeBounds};
+use super::{Cancellation, Histogram, Output, RangeBounds};
 use crate::{scope::Selection, AxisScale, Bound, Error, Result};
 
 pub(super) fn build<H: Output>(
     array: &ArrayRef,
     rows: &Selection,
     bins: u32,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<H> {
     context.check()?;
     if bins == 0 {
@@ -76,7 +76,7 @@ pub(super) fn build<H: Output>(
 
 fn positive_extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    context: &AnalysisContext,
+    context: &Cancellation,
     positive: impl Fn(T::Native) -> bool,
 ) -> Result<Option<(T::Native, T::Native)>>
 where
@@ -107,7 +107,7 @@ fn cuts<N: Copy + PartialOrd>(
     log_min: f64,
     log_max: f64,
     bins: usize,
-    context: &AnalysisContext,
+    context: &Cancellation,
     native: impl Fn(f64) -> Option<N>,
 ) -> Result<Vec<N>> {
     let mut cuts = Vec::with_capacity(bins.saturating_sub(1));
@@ -130,7 +130,7 @@ fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<H>
 where
     T::Native: Into<i128> + TryFrom<i128> + Ord,
@@ -188,7 +188,7 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
-    context: &AnalysisContext,
+    context: &Cancellation,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
     narrow: impl Fn(i256) -> T::Native,
@@ -263,7 +263,7 @@ fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     bins: usize,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<H>
 where
     T::Native: Into<f64> + PartialOrd,
@@ -357,7 +357,7 @@ fn plot_edges(
     lo: f64,
     hi: f64,
     cuts: impl ExactSizeIterator<Item = f64>,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<Vec<f64>> {
     let mut edges = Vec::with_capacity(cuts.len() + 2);
     edges.push(lo);
@@ -391,7 +391,7 @@ fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
     mut histogram: Histogram,
-    context: &AnalysisContext,
+    context: &Cancellation,
     classify: impl Fn(T::Native) -> Class,
 ) -> Result<Histogram> {
     for (index, row) in rows.iter().enumerate() {
@@ -415,7 +415,7 @@ fn finite_ranges<N: Copy>(
     cuts: &[N],
     min: Bound,
     max: Bound,
-    context: &AnalysisContext,
+    context: &Cancellation,
     lower: impl Fn(N) -> Result<Bound>,
     upper: impl Fn(N) -> Result<Bound>,
 ) -> Result<Vec<RangeBounds>> {
@@ -448,12 +448,11 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, engine::CancelToken, Filter, RangeHistogram};
+    use crate::{column::Column, Cancellation, Filter, RangeHistogram};
 
     fn verify(array: ArrayRef, rows: Selection, bins: u32) -> Histogram {
-        let result: RangeHistogram =
-            build(&array, &rows, bins, &AnalysisContext::default()).unwrap();
-        let histogram: Histogram = build(&array, &rows, bins, &AnalysisContext::default()).unwrap();
+        let result: RangeHistogram = build(&array, &rows, bins, &Cancellation::default()).unwrap();
+        let histogram: Histogram = build(&array, &rows, bins, &Cancellation::default()).unwrap();
         assert_eq!(histogram, result.histogram);
         assert_eq!(histogram.scale, AxisScale::Log10);
         assert_eq!(result.ranges.len(), histogram.counts.len());
@@ -474,15 +473,18 @@ mod tests {
         for (range, &expected) in result.ranges.iter().zip(&histogram.counts) {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = column
-                .prepare_filter(&Filter::range(
-                    (range.min.clone()).map(|b: crate::Bound| b.filter_text()),
-                    (range.max.clone()).map(|b: crate::Bound| b.filter_text()),
-                    false,
-                ))
+                .prepare_filter(
+                    &Filter::range(
+                        (range.min.clone()).map(|b: crate::Bound| b.filter_text()),
+                        (range.max.clone()).map(|b: crate::Bound| b.filter_text()),
+                        false,
+                    ),
+                    &Cancellation::default(),
+                )
                 .unwrap();
             let mut matched = vec![false; array.len()];
             predicate
-                .evaluate(0..array.len(), &mut matched, &CancelToken::never())
+                .evaluate(0..array.len(), &mut matched, &Cancellation::default())
                 .unwrap();
             assert_eq!(
                 rows.iter().filter(|&row| matched[row]).count() as u64,
@@ -656,7 +658,7 @@ mod tests {
         );
         let histogram = verify(array.clone(), Selection::Rows(Arc::new(vec![])), 5);
         assert_eq!(histogram.total, 0);
-        let context = AnalysisContext::default();
+        let context = Cancellation::default();
         assert!(build::<Histogram>(&array, &Selection::All(5), 0, &context).is_err());
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1, 10]));
         assert!(build::<Histogram>(&dates, &Selection::All(2), 5, &context).is_err());

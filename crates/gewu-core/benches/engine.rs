@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{AnalysisSection, Filter, QuerySpec, Session};
+use gewu_core::{AnalysisSection, Cancellation, Filter, QuerySpec, Session};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -50,7 +50,8 @@ fn apply_view(c: &mut Criterion) {
     );
     let (amount, uuid) = (col(&doc, "amount"), col(&doc, "uuid"));
     // Build the label index once, so InValues measures filtering only.
-    doc.filter_choices(label, None).unwrap();
+    doc.filter_choices(label, None, &Cancellation::default())
+        .unwrap();
 
     let cases: Vec<(&str, QuerySpec)> = vec![
         ("no_filter", QuerySpec::default()),
@@ -121,7 +122,11 @@ fn apply_view(c: &mut Criterion) {
     g.sample_size(20).measurement_time(Duration::from_secs(5));
     for (name, spec) in &cases {
         g.bench_function(*name, |b| {
-            b.iter(|| doc.apply_view(black_box(spec)).unwrap())
+            b.iter(|| {
+                doc.prepare_view(black_box(spec))
+                    .and_then(|operation| operation.run())
+                    .unwrap()
+            })
         });
     }
     g.finish();
@@ -132,7 +137,10 @@ fn rows(c: &mut Criterion) {
     let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
     let mut g = c.benchmark_group("rows");
 
-    let plain = doc.apply_view(&QuerySpec::default()).unwrap();
+    let plain = doc
+        .prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
     g.bench_function("block_256_all_columns", |b| {
         b.iter(|| doc.rows(plain.version, 1_000_000, 256, &columns).unwrap())
     });
@@ -141,7 +149,10 @@ fn rows(c: &mut Criterion) {
         .prepare_find(plain.version, "2024-03", &columns)
         .unwrap();
     g.bench_function("find_highlight_256_all_columns", |b| {
-        b.iter(|| find.highlight(1_000, 256).unwrap())
+        b.iter(|| {
+            find.highlight(1_000, 256, &Cancellation::default())
+                .unwrap()
+        })
     });
     g.finish();
 }
@@ -174,42 +185,64 @@ fn facets(c: &mut Criterion) {
         g.bench_function(format!("distinct_cold_{name}"), |b| {
             b.iter_batched(
                 || Session::open(&path).unwrap(),
-                |doc| doc.distinct_values(column, None, 10_000).unwrap(),
+                |doc| {
+                    doc.distinct_values(column, None, 10_000, &Cancellation::default())
+                        .unwrap()
+                },
                 BatchSize::PerIteration,
             )
         });
     }
     // Hot: index cached; counts only rows passing the other columns' filters.
-    doc.distinct_values(city, None, 1).unwrap();
+    doc.distinct_values(city, None, 1, &Cancellation::default())
+        .unwrap();
     g.bench_function("distinct_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.distinct_values(city, Some(&other_filter), 10_000)
+            doc.distinct_values(city, Some(&other_filter), 10_000, &Cancellation::default())
                 .unwrap()
         })
     });
 
     g.bench_function("histogram_price", |b| {
-        b.iter(|| doc.histogram(price, None, 60).unwrap())
+        b.iter(|| {
+            doc.histogram(price, None, 60, &Cancellation::default())
+                .unwrap()
+        })
     });
     let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
-        b.iter(|| doc.histogram(price, Some(&label_filter), 60).unwrap())
+        b.iter(|| {
+            doc.histogram(price, Some(&label_filter), 60, &Cancellation::default())
+                .unwrap()
+        })
     });
 
-    doc.apply_view(&QuerySpec::default()).unwrap();
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
     g.bench_function("summary_price", |b| {
-        b.iter(|| doc.column_summary(price, 8).unwrap())
+        b.iter(|| {
+            doc.column_summary(price, 8, &Cancellation::default())
+                .unwrap()
+        })
     });
     g.bench_function("summary_label_hot", |b| {
-        doc.column_summary(label, 8).unwrap();
-        b.iter(|| doc.column_summary(label, 8).unwrap())
+        doc.column_summary(label, 8, &Cancellation::default())
+            .unwrap();
+        b.iter(|| {
+            doc.column_summary(label, 8, &Cancellation::default())
+                .unwrap()
+        })
     });
     // Null count, distinct count, min and max of a freshly opened column
     // (`column_stats` before it was merged into the summary).
     g.bench_function("stats_price_cold", |b| {
         b.iter_batched(
             || Session::open(&path).unwrap(),
-            |doc| doc.column_summary(price, 8).unwrap(),
+            |doc| {
+                doc.column_summary(price, 8, &Cancellation::default())
+                    .unwrap()
+            },
             BatchSize::PerIteration,
         )
     });

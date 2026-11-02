@@ -8,7 +8,7 @@ struct QuerySpecTests {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-query-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "a,b,c\n1,2,x\n1,1,y\n2,0,z\n".write(to: path, atomically: true, encoding: .utf8)
-        return DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        return DocumentModel(url: path, document: try GewuSession.open(path: path.path))
     }
 
     private func settled(_ model: DocumentModel) async throws {
@@ -109,5 +109,42 @@ struct QuerySpecTests {
         }
         draft.all(true)
         #expect(NullMode.include.applying(to: draft.condition) == nil)
+    }
+
+    @Test func failedReplacementRestoresAViewCommittedBeforeCancellation() async throws {
+        let model = try model()
+        defer { model.stop() }
+        let accepted = QuerySpec(columns: [
+            ColSpec(
+                column: 0, sort: nil,
+                filter: Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false))
+        ])
+        // Rust committed the obsolete operation before Swift could publish it.
+        let operation = try model.doc.prepareView(spec: accepted)
+        let committed = try operation.run()
+        operation.cancel()
+        model.setFilter(Filter(condition: .range(min: "invalid", max: nil), includeNulls: false), column: 0)
+        try await settled(model)
+        #expect(model.errorMessage != nil)
+        #expect(model.current.version == committed.version)
+        #expect(model.appliedSpec == accepted && model.spec == accepted)
+        #expect(try model.doc.rows(version: model.current.version, start: 0, count: 3, columns: [0]).nRows == 2)
+    }
+
+    @Test func cancellingCandidateRequestDoesNotCloseReplacement() async throws {
+        let document = try model()
+        defer { document.stop() }
+        let choices = TextChoicesModel()
+        defer { choices.cancel() }
+        let old = Task {
+            await choices.load(document: document.doc, column: 2, querySpec: document.spec, query: "x", after: nil)
+        }
+        await Task.yield()
+        old.cancel()
+        choices.pause()
+        await choices.load(document: document.doc, column: 2, querySpec: document.spec, query: "y", after: nil)
+        await old.value
+        #expect(choices.page?.values.map(\.value) == ["y"])
+        #expect(!choices.loading && choices.error == nil)
     }
 }

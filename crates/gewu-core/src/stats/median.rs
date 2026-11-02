@@ -12,13 +12,10 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{numeric::Numeric, AnalysisContext, ArrayView};
+use super::{numeric::Numeric, ArrayView, Cancellation};
 use crate::{format, Error, Result};
 
-pub(crate) fn label(
-    view: ArrayView<'_>,
-    context: &AnalysisContext,
-) -> Result<Option<String>> {
+pub(crate) fn label(view: ArrayView<'_>, context: &Cancellation) -> Result<Option<String>> {
     let value = Numeric::new(view.array)
         .expect("validated numeric statistics")
         .accessor();
@@ -32,7 +29,11 @@ pub(crate) fn label(
     if ids.is_empty() {
         return Ok(None);
     }
-    let compare = make_comparator(view.array.as_ref(), view.array.as_ref(), SortOptions::default())?;
+    let compare = make_comparator(
+        view.array.as_ref(),
+        view.array.as_ref(),
+        SortOptions::default(),
+    )?;
     let middle = ids.len() / 2;
     select(&mut ids, middle, &compare, &mut || context.check())?;
     let high = ids[middle] as usize;
@@ -289,11 +290,7 @@ mod tests {
 
     fn median(array: ArrayRef) -> Option<String> {
         let all = crate::scope::Selection::All(array.len());
-        label(
-            ArrayView::new(&array, &all),
-            &AnalysisContext::default(),
-        )
-        .unwrap()
+        label(ArrayView::new(&array, &all), &Cancellation::default()).unwrap()
     }
 
     #[test]
@@ -437,15 +434,12 @@ mod tests {
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
         let rows = crate::scope::Selection::Rows(Arc::new(vec![3, 1]));
         assert_eq!(
-            label(
-                ArrayView::new(&array, &rows),
-                &AnalysisContext::default()
-            )
-            .unwrap()
-            .as_deref(),
+            label(ArrayView::new(&array, &rows), &Cancellation::default())
+                .unwrap()
+                .as_deref(),
             Some("51.5")
         );
-        let context = AnalysisContext::default();
+        let context = Cancellation::default();
         context.cancel();
         let all = crate::scope::Selection::All(4);
         assert!(matches!(

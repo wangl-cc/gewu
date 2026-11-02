@@ -5,7 +5,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use super::{AnalysisContext, ArrayView, LengthSummary};
+use super::{ArrayView, Cancellation, LengthSummary};
 use crate::{scope::Selection, Error, Histogram, Result};
 
 /// What a length measurement counts.
@@ -31,7 +31,7 @@ pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
 pub(crate) fn analyze(
     view: ArrayView<'_>,
     bins: u32,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<LengthSummary> {
     context.check()?;
     let array = view.array;
@@ -87,7 +87,7 @@ fn summarize(
     rows: &Selection,
     unit: LengthUnit,
     bins: u32,
-    context: &AnalysisContext,
+    context: &Cancellation,
     length: impl Fn(usize) -> u64,
 ) -> Result<LengthSummary> {
     let mut min = u64::MAX;
@@ -203,7 +203,7 @@ mod tests {
             Some(""),
             None,
         ]));
-        let context = AnalysisContext::default();
+        let context = Cancellation::default();
         let all = crate::scope::Selection::All(4);
         let result = analyze(ArrayView::new(&array, &all), 40, &context).unwrap();
         assert_eq!(result.unit, LengthUnit::Characters);
@@ -241,12 +241,7 @@ mod tests {
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
         let sel = crate::scope::Selection::Rows(Arc::new(vec![0, 1, 2]));
-        let result = analyze(
-            ArrayView::new(&array, &sel),
-            40,
-            &AnalysisContext::default(),
-        )
-        .unwrap();
+        let result = analyze(ArrayView::new(&array, &sel), 40, &Cancellation::default()).unwrap();
         assert_eq!(result.unit, LengthUnit::Elements);
         assert_eq!(
             (result.min, result.max, result.mean),

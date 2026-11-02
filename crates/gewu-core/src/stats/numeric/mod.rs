@@ -12,7 +12,7 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use crate::{
-    stats::{AnalysisContext, ColumnSummary},
+    stats::{Cancellation, ColumnSummary},
     types::{direct_domain, Domain},
     Result,
 };
@@ -87,7 +87,7 @@ impl<'a> Numeric<'a> {
         rows: impl Iterator<Item = usize>,
         summary: &mut ColumnSummary,
         collect_distinct: bool,
-        context: &AnalysisContext,
+        context: &Cancellation,
     ) -> Result<summary::SummaryDetails> {
         dispatch!(self.0, summarize(rows, summary, collect_distinct, context))
     }
@@ -100,7 +100,7 @@ impl<'a> Numeric<'a> {
 
 pub(crate) fn analyze(
     view: super::ArrayView<'_>,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<super::NumericStatistics> {
     let mut summary = ColumnSummary::default();
     let details = Numeric::new(view.array)

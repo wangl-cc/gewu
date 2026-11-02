@@ -17,7 +17,7 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use super::{AnalysisContext, ArrayView};
+use super::{ArrayView, Cancellation};
 use crate::{column::DistinctValue, format, scope::Selection, Result};
 
 const CHUNK: usize = 64 * 1024;
@@ -32,19 +32,10 @@ pub(crate) struct ValueCounts {
     pub top: Vec<DistinctValue>,
 }
 
-/// Count the distinct values of `array` over `rows`, keeping the `keep`
-/// most common. Values are told apart by a 64-bit hash, so memory is a few
-/// words per distinct value; a collision (unlikely below billions of
-/// values) would merge two values. Floats use exact normalized bit keys instead:
-/// signed zeros form one group, all NaNs another, and null remains separate.
-pub(crate) fn count_values(view: ArrayView<'_>, keep: usize) -> Result<ValueCounts> {
-    count_values_with_context(view, keep, &AnalysisContext::default())
-}
-
-pub(crate) fn count_values_with_context(
+pub(crate) fn count_values(
     view: ArrayView<'_>,
     keep: usize,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<ValueCounts> {
     context.check()?;
     let array = view.array;
@@ -142,7 +133,7 @@ pub(crate) fn count_values_with_context(
 fn count_floats<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     rows: &Selection,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<HashMap<u64, (u64, u32)>>
 where
     T::Native: Into<f64>,
@@ -201,7 +192,9 @@ mod tests {
                 crate::scope::Selection::All(array.len()),
                 crate::scope::Selection::Rows(Arc::new(vec![7, 6, 5, 4, 3, 2, 1, 0])),
             ] {
-                let result = count_values(ArrayView::new(&array, &rows), 8).unwrap();
+                let result =
+                    count_values(ArrayView::new(&array, &rows), 8, &Cancellation::default())
+                        .unwrap();
                 assert_eq!(result.distinct, 4);
                 assert_eq!(result.top.len(), 4);
                 for value in result.top {
@@ -232,7 +225,7 @@ mod tests {
             Some("a"),
         ]));
         let all = crate::scope::Selection::All(a.len());
-        let all = count_values(ArrayView::new(&a, &all), 2).unwrap();
+        let all = count_values(ArrayView::new(&a, &all), 2, &Cancellation::default()).unwrap();
         assert_eq!(all.distinct, 4);
         let top: Vec<_> = all
             .top
@@ -242,7 +235,8 @@ mod tests {
         assert_eq!(top, [("a".to_string(), 2), ("b".to_string(), 3)]);
 
         let some_sel = crate::scope::Selection::Rows(Arc::new(vec![2, 4]));
-        let some = count_values(ArrayView::new(&a, &some_sel), 10).unwrap();
+        let some =
+            count_values(ArrayView::new(&a, &some_sel), 10, &Cancellation::default()).unwrap();
         assert_eq!(some.distinct, 2);
         assert_eq!(some.top[0].label, None);
     }

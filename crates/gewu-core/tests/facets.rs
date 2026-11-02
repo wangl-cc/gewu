@@ -6,7 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -54,7 +54,7 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Session) {
 }
 
 fn labels_of(doc: &Session, column: u32, spec: Option<&QuerySpec>) -> Vec<(String, u64)> {
-    doc.distinct_values(column, spec, 100)
+    doc.distinct_values(column, spec, 100, &Cancellation::default())
         .unwrap()
         .values
         .into_iter()
@@ -111,7 +111,9 @@ fn distinct_and_histogram_apply_column_filters() {
         .collect();
     assert_eq!(names, ["a", "d"]);
 
-    let h = doc.histogram(3, Some(&spec), 6).unwrap();
+    let h = doc
+        .histogram(3, Some(&spec), 6, &Cancellation::default())
+        .unwrap();
     assert_eq!(h.total, 2);
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
     std::fs::remove_file(path).ok();
@@ -122,10 +124,14 @@ fn histogram_ignores_only_its_own_column() {
     let (path, doc) = sample("hist");
     let spec = busy_spec().with_filter(3, Filter::range(Some("60".into()), None, false));
     // id: label and price filters apply -> rows a, f; its own range does not.
-    let h = doc.histogram(3, Some(&spec), 6).unwrap();
+    let h = doc
+        .histogram(3, Some(&spec), 6, &Cancellation::default())
+        .unwrap();
     assert_eq!(h.total, 2);
     // price: label and id filters apply -> row f only.
-    let h = doc.histogram(2, Some(&spec), 4).unwrap();
+    let h = doc
+        .histogram(2, Some(&spec), 4, &Cancellation::default())
+        .unwrap();
     assert_eq!(h.total, 1);
     // Axis always spans the whole column.
     assert_eq!(h.lo, Some(1.0));
@@ -137,19 +143,26 @@ fn histogram_ignores_only_its_own_column() {
 fn view_histogram_and_summary_follow_the_current_view() {
     let (path, doc) = sample("view");
     let spec = busy_spec();
-    let v = doc.apply_view(&spec).unwrap();
+    let v = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(v.row_count, 2); // a, f
 
-    let h = doc.view_histogram(v.version, 3, 6).unwrap();
+    let h = doc
+        .view_histogram(v.version, 3, 6, &Cancellation::default())
+        .unwrap();
     assert_eq!(h.total, 2);
-    let s = doc.column_summary(2, 5).unwrap();
+    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
     assert_eq!(s.rows, 2);
     assert_eq!(s.min, Some(3.5));
     assert_eq!(s.max, Some(7.0));
 
-    doc.apply_view(&QuerySpec::default()).unwrap();
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert!(matches!(
-        doc.view_histogram(v.version, 3, 6),
+        doc.view_histogram(v.version, 3, 6, &Cancellation::default()),
         Err(Error::StaleVersion { .. })
     ));
     std::fs::remove_file(path).ok();
@@ -160,7 +173,10 @@ fn failed_apply_keeps_the_old_view() {
     let (path, doc) = sample("failed");
     let before = doc.current_view();
     let bad = QuerySpec::single(0, Filter::range(Some("1".into()), None, false));
-    assert!(doc.apply_view(&bad).is_err());
+    assert!(doc
+        .prepare_view(&bad)
+        .and_then(|operation| operation.run())
+        .is_err());
     assert_eq!(doc.current_view(), before);
     std::fs::remove_file(path).ok();
 }
@@ -169,11 +185,11 @@ fn failed_apply_keeps_the_old_view() {
 fn unknown_column_is_an_argument_error() {
     let (path, doc) = sample("unknown");
     assert!(matches!(
-        doc.distinct_values(9, None, 10),
+        doc.distinct_values(9, None, 10, &Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
     assert!(matches!(
-        doc.histogram(9, None, 10),
+        doc.histogram(9, None, 10, &Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
     let v = doc.current_view();
@@ -196,11 +212,12 @@ fn cancelled_apply_never_replaces_the_view() {
 
     let spec = QuerySpec::single(0, Filter::exact(vec!["12345".into()], false, false))
         .with_sort(0, true, 0);
+    let operation = Arc::new(doc.prepare_view(&spec).unwrap());
     let worker = {
-        let doc = doc.clone();
-        std::thread::spawn(move || doc.apply_view(&spec))
+        let operation = operation.clone();
+        std::thread::spawn(move || operation.run())
     };
-    doc.cancel_pending();
+    operation.cancel();
     match worker.join().unwrap() {
         // Finished before the cancel landed: it committed a new view.
         Ok(info) => assert_eq!(doc.current_view(), info),
@@ -224,7 +241,9 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
     let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
     let (path, doc) = write("many", &batch);
 
-    let d = doc.distinct_values(0, None, 3).unwrap();
+    let d = doc
+        .distinct_values(0, None, 3, &Cancellation::default())
+        .unwrap();
     assert!(!d.keyed);
     assert!(d.truncated);
     assert_eq!(d.total, (n - n / 1000 + 1) as u64);
@@ -236,12 +255,17 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
 
     let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
     assert_eq!(
-        doc.apply_view(&by_value).unwrap().row_count,
+        doc.prepare_view(&by_value)
+            .and_then(|operation| operation.run())
+            .unwrap()
+            .row_count,
         (n / 1000) as u64
     );
-    doc.apply_view(&QuerySpec::all(1)).unwrap();
+    doc.prepare_view(&QuerySpec::all(1))
+        .and_then(|operation| operation.run())
+        .unwrap();
 
-    let s = doc.column_summary(0, 2).unwrap();
+    let s = doc.column_summary(0, 2, &Cancellation::default()).unwrap();
     assert_eq!(s.rows, n as u64);
     assert_eq!(s.null_count, 0);
     assert_eq!(s.distinct_count, d.total);
@@ -254,7 +278,7 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
 #[test]
 fn summary_of_text_counts_nulls_apart() {
     let (path, doc) = sample("summary");
-    let s = doc.column_summary(1, 2).unwrap();
+    let s = doc.column_summary(1, 2, &Cancellation::default()).unwrap();
     assert_eq!(s.null_count, 1);
     assert_eq!(s.distinct_count, 3);
     let top: Vec<_> = s
@@ -312,9 +336,13 @@ fn summary_extrema_cover_single_values_nulls_and_filtered_views() {
         if let Some(f) = filter {
             spec = spec.with_filter(0, f);
         }
-        doc.apply_view(&spec).unwrap();
+        doc.prepare_view(&spec)
+            .and_then(|operation| operation.run())
+            .unwrap();
         for (column, extremes) in expected.into_iter().enumerate() {
-            let summary = doc.column_summary(column as u32, 2).unwrap();
+            let summary = doc
+                .column_summary(column as u32, 2, &Cancellation::default())
+                .unwrap();
             assert_eq!(
                 (summary.min_label.as_deref(), summary.max_label.as_deref()),
                 (extremes.map(|(min, _)| min), extremes.map(|(_, max)| max)),
@@ -336,7 +364,7 @@ fn min_and_max_leave_out_nan() {
     ]));
     let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
     let (path, doc) = write("nan", &batch);
-    let s = doc.column_summary(0, 5).unwrap();
+    let s = doc.column_summary(0, 5, &Cancellation::default()).unwrap();
     assert_eq!(s.nan_count, 1);
     assert_eq!(s.min_label.as_deref(), Some("-1.5"));
     assert_eq!(s.max_label.as_deref(), Some("2.0"));

@@ -10,7 +10,9 @@ use arrow::{
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, Schema},
 };
-use gewu_core::{Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, Session};
+use gewu_core::{
+    Cancellation, Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, Session,
+};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
@@ -156,9 +158,10 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
 }
 
 fn filtered(doc: &Session) -> u64 {
-    doc.apply_view(
+    doc.prepare_view(
         &QuerySpec::single(0, Filter::range(Some("2".into()), None, false)).with_sort(0, true, 0),
     )
+    .and_then(|operation| operation.run())
     .unwrap()
     .version
 }
@@ -206,8 +209,10 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
         .prepare_export(version, &[1, 0, 2, 3], FileType::Parquet)
         .unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
-    doc.apply_view(&QuerySpec::default()).unwrap();
-    doc.cancel_pending();
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
+    doc.prepare_view(&QuerySpec::default()).unwrap().cancel();
     let path = directory.path().join("result.parquet");
     export.write(&path).unwrap();
     let builder = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&path).unwrap()).unwrap();
@@ -282,10 +287,11 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let version = doc
-        .apply_view(&QuerySpec::single(
+        .prepare_view(&QuerySpec::single(
             0,
             Filter::exact(vec!["-1".into()], false, false),
         ))
+        .and_then(|operation| operation.run())
         .unwrap()
         .version;
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
@@ -414,15 +420,24 @@ fn source_file_and_aliases_cannot_be_overwritten() {
 fn view_histogram_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
     let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
-    let view = doc.apply_view(&spec).unwrap();
-    let filter_histogram = doc.histogram(0, Some(&spec), 8).unwrap();
-    let view_histogram = doc.view_histogram(view.version, 0, 8).unwrap();
+    let view = doc
+        .prepare_view(&spec)
+        .and_then(|operation| operation.run())
+        .unwrap();
+    let filter_histogram = doc
+        .histogram(0, Some(&spec), 8, &Cancellation::default())
+        .unwrap();
+    let view_histogram = doc
+        .view_histogram(view.version, 0, 8, &Cancellation::default())
+        .unwrap();
     assert_eq!(filter_histogram.total, 5);
     assert_eq!(view_histogram.total, 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
-    doc.apply_view(&QuerySpec::default()).unwrap();
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert!(matches!(
-        doc.view_histogram(view.version, 0, 8),
+        doc.view_histogram(view.version, 0, 8, &Cancellation::default()),
         Err(Error::StaleVersion { .. })
     ));
 }

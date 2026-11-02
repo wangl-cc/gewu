@@ -6,7 +6,7 @@ use std::{collections::BinaryHeap, sync::Arc};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
-use super::{numeric::Numeric, AnalysisContext, AxisScale};
+use super::{numeric::Numeric, AxisScale, Cancellation};
 use crate::{format, Error, Result};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
@@ -71,7 +71,7 @@ pub struct ScatterAnalysis {
     limit: usize,
     x_scale: AxisScale,
     y_scale: AxisScale,
-    context: AnalysisContext,
+    context: Cancellation,
 }
 
 impl ScatterAnalysis {
@@ -103,7 +103,7 @@ impl ScatterAnalysis {
             limit: limit as usize,
             x_scale: AxisScale::Linear,
             y_scale: AxisScale::Linear,
-            context: AnalysisContext::default(),
+            context: Cancellation::default(),
         })
     }
 

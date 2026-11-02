@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, Error, Filter, QuerySpec, Session, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    Cancellation, CellMatch, Error, Filter, QuerySpec, Session, MAX_FIND_HIGHLIGHT_ROWS,
+    MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -28,7 +29,13 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let mut cursor = None;
     let mut expected = 0;
     loop {
-        let page = find.next(cursor.as_ref(), MAX_FIND_PAGE_SIZE).unwrap();
+        let page = find
+            .next(
+                cursor.as_ref(),
+                MAX_FIND_PAGE_SIZE,
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert!(page.len() <= MAX_FIND_PAGE_SIZE as usize);
         if page.is_empty() {
             break;
@@ -48,7 +55,13 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let mut expected = len - 1;
     let mut seen = 0;
     loop {
-        let page = find.previous(cursor.as_ref(), MAX_FIND_PAGE_SIZE).unwrap();
+        let page = find
+            .previous(
+                cursor.as_ref(),
+                MAX_FIND_PAGE_SIZE,
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert!(page.len() <= MAX_FIND_PAGE_SIZE as usize);
         if page.is_empty() {
             break;
@@ -69,7 +82,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     assert_eq!(seen, len);
     for limit in [0, MAX_FIND_PAGE_SIZE + 1] {
         assert!(matches!(
-            find.next(None, limit),
+            find.next(None, limit, &Cancellation::default()),
             Err(Error::InvalidArgument(_))
         ));
     }
@@ -82,27 +95,31 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
-        .apply_view(
+        .prepare_view(
             &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
                 .with_sort(0, true, 0),
         )
+        .and_then(|operation| operation.run())
         .unwrap();
     let find = doc.prepare_find(view.version, "12", &[0, 1]).unwrap();
-    assert_eq!(find.next(None, 10).unwrap(), vec![
-        CellMatch {
-            display_row: 0,
-            column: 1,
-        },
-        CellMatch {
-            display_row: 1,
-            column: 0,
-        },
-        CellMatch {
-            display_row: 2,
-            column: 0,
-        },
-    ]);
-    let highlight = find.highlight(0, 3).unwrap();
+    assert_eq!(
+        find.next(None, 10, &Cancellation::default()).unwrap(),
+        vec![
+            CellMatch {
+                display_row: 0,
+                column: 1,
+            },
+            CellMatch {
+                display_row: 1,
+                column: 0,
+            },
+            CellMatch {
+                display_row: 2,
+                column: 0,
+            },
+        ]
+    );
+    let highlight = find.highlight(0, 3, &Cancellation::default()).unwrap();
     assert_eq!(highlight.version, view.version);
     assert_eq!(highlight.n_cols, 2);
     assert_eq!(highlight.matched, [false, true, true, false, true, false]);
@@ -112,8 +129,15 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     ]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.apply_view(&QuerySpec::default()).unwrap();
-    assert_eq!(find.highlight(0, 3).unwrap().matched, highlight.matched);
+    doc.prepare_view(&QuerySpec::default())
+        .and_then(|operation| operation.run())
+        .unwrap();
+    assert_eq!(
+        find.highlight(0, 3, &Cancellation::default())
+            .unwrap()
+            .matched,
+        highlight.matched
+    );
 }
 
 #[test]
@@ -133,12 +157,14 @@ fn find_rejects_invalid_scopes_queries_and_highlight_sizes() {
     let find = doc.prepare_find(0, "a", &[0]).unwrap();
     for count in [0, MAX_FIND_HIGHLIGHT_ROWS + 1] {
         assert!(matches!(
-            find.highlight(0, count),
+            find.highlight(0, count, &Cancellation::default()),
             Err(Error::InvalidArgument(_))
         ));
     }
     assert_eq!(
-        find.highlight(0, MAX_FIND_HIGHLIGHT_ROWS).unwrap().n_rows,
+        find.highlight(0, MAX_FIND_HIGHLIGHT_ROWS, &Cancellation::default())
+            .unwrap()
+            .n_rows,
         2
     );
 }
@@ -149,7 +175,7 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     let second: ArrayRef = Arc::new(StringArray::from(vec!["hit", "hit"]));
     let (_file, doc) = document(vec![("first", first), ("second", second)]);
     let find = doc.prepare_find(0, "hit", &[1, 0]).unwrap();
-    assert_eq!(find.next(None, 3).unwrap(), [
+    assert_eq!(find.next(None, 3, &Cancellation::default()).unwrap(), [
         CellMatch {
             display_row: 0,
             column: 1,
@@ -170,6 +196,7 @@ fn pages_and_cursors_follow_the_captured_column_order() {
             column: 1,
         }),
         2,
+        &Cancellation::default(),
     );
     assert_eq!(after.unwrap(), [
         CellMatch {
@@ -187,12 +214,18 @@ fn pages_and_cursors_follow_the_captured_column_order() {
             column: 0,
         }),
         1,
+        &Cancellation::default(),
     );
     assert_eq!(before.unwrap(), [CellMatch {
         display_row: 1,
         column: 1,
     }]);
-    assert_eq!(find.highlight(0, 1).unwrap().matched, [true, true]);
+    assert_eq!(
+        find.highlight(0, 1, &Cancellation::default())
+            .unwrap()
+            .matched,
+        [true, true]
+    );
 }
 
 #[test]
@@ -202,16 +235,27 @@ fn cancelling_a_stale_snapshot_does_not_cancel_the_current_find() {
     let stale = doc.prepare_find(0, "old", &[0]).unwrap();
     let current = doc.prepare_find(0, "new", &[0]).unwrap();
     stale.cancel();
-    assert!(matches!(stale.next(None, 1), Err(Error::Cancelled)));
-    assert!(matches!(stale.highlight(0, 1), Err(Error::Cancelled)));
-    assert_eq!(current.next(None, 1).unwrap(), [CellMatch {
-        display_row: 1,
-        column: 0,
-    }]);
-    assert_eq!(current.previous(None, 1).unwrap(), [CellMatch {
-        display_row: 2,
-        column: 0,
-    }]);
+    assert!(matches!(
+        stale.next(None, 1, &Cancellation::default()),
+        Err(Error::Cancelled)
+    ));
+    assert!(matches!(
+        stale.highlight(0, 1, &Cancellation::default()),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(current.next(None, 1, &Cancellation::default()).unwrap(), [
+        CellMatch {
+            display_row: 1,
+            column: 0,
+        }
+    ]);
+    assert_eq!(
+        current.previous(None, 1, &Cancellation::default()).unwrap(),
+        [CellMatch {
+            display_row: 2,
+            column: 0,
+        }]
+    );
 }
 
 #[test]
@@ -219,24 +263,19 @@ fn obsolete_operation_cancellation_leaves_new_navigation_and_highlights_usable()
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(["hit", "hit"]));
     let (_file, doc) = document(vec![("value", values)]);
     let find = doc.prepare_find(0, "hit", &[0]).unwrap();
-    let obsolete = find.operation();
+    let obsolete = Cancellation::default();
     obsolete.cancel();
     assert!(matches!(
-        find.next_with_operation(None, 1, &obsolete),
+        find.next(None, 1, &obsolete),
         Err(Error::Cancelled)
     ));
-    let navigation = find.operation();
-    assert_eq!(find.next_with_operation(None, 1, &navigation).unwrap(), [
-        CellMatch {
-            display_row: 0,
-            column: 0,
-        }
+    let navigation = Cancellation::default();
+    assert_eq!(find.next(None, 1, &navigation).unwrap(), [CellMatch {
+        display_row: 0,
+        column: 0,
+    }]);
+    let highlight = Cancellation::default();
+    assert_eq!(find.highlight(0, 2, &highlight).unwrap().matched, [
+        true, true
     ]);
-    let highlight = find.operation();
-    assert_eq!(
-        find.highlight_with_operation(0, 2, &highlight)
-            .unwrap()
-            .matched,
-        [true, true]
-    );
 }

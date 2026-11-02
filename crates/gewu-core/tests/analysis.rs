@@ -18,10 +18,11 @@ fn analysis_keeps_its_snapshot_and_cancels_independently_of_queries() {
         .unwrap();
     cancelled.cancel();
     let current = doc
-        .apply_view(&QuerySpec::single(
+        .prepare_view(&QuerySpec::single(
             1,
             Filter::contains("b".into(), true, false),
         ))
+        .and_then(|operation| operation.run())
         .unwrap();
     assert_eq!(current.row_count, 2);
     assert!(matches!(cancelled.run(), Err(Error::Cancelled)));

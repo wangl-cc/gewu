@@ -110,12 +110,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::engine::CancelToken;
+    use crate::Cancellation;
 
     fn matches(predicate: Predicate<'_>, len: usize) -> Vec<bool> {
         let mut matched = vec![false; len];
         predicate
-            .evaluate(0..len, &mut matched, &CancelToken::never())
+            .evaluate(0..len, &mut matched, &Cancellation::default())
             .unwrap();
         matched
     }

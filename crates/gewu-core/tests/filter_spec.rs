@@ -5,7 +5,7 @@ use arrow::array::{
     ArrayRef, Decimal128Array, Float64Array, Int32Array, RecordBatch, StringArray,
     TimestampNanosecondArray, UInt64Array,
 };
-use gewu_core::{AxisScale, Error, Filter, QuerySpec, Session};
+use gewu_core::{AxisScale, Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> Session {
@@ -32,17 +32,29 @@ fn capabilities_are_static_and_choices_keep_source_values_with_facet_counts() {
             )),
         ),
     ]);
-    let original = doc.filter_choices(0, None).unwrap().values.unwrap();
+    let original = doc
+        .filter_choices(0, None, &Cancellation::default())
+        .unwrap()
+        .values
+        .unwrap();
     assert_eq!(original.iter().map(|v| v.count).collect::<Vec<_>>(), [
         200, 200, 200
     ]);
-    assert!(doc.filter_choices(1, None).unwrap().values.is_none());
+    assert!(doc
+        .filter_choices(1, None, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
     assert!(doc.column_capabilities(1).unwrap().range);
     assert!(doc.column_capabilities(1).unwrap().exact);
     assert!(doc.column_capabilities(2).unwrap().contains);
     assert!(doc.column_capabilities(2).unwrap().exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
-    let values = doc.filter_choices(0, Some(&spec)).unwrap().values.unwrap();
+    let values = doc
+        .filter_choices(0, Some(&spec), &Cancellation::default())
+        .unwrap()
+        .values
+        .unwrap();
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
         1, 0, 0
     ]);
@@ -54,9 +66,15 @@ fn capabilities_are_static_and_choices_keep_source_values_with_facet_counts() {
         0,
         Filter::exact(vec![values[1].value.clone()], false, false),
     );
-    assert_eq!(doc.apply_view(&chosen).unwrap().row_count, 200);
     assert_eq!(
-        doc.filter_choices(0, Some(&chosen))
+        doc.prepare_view(&chosen)
+            .and_then(|operation| operation.run())
+            .unwrap()
+            .row_count,
+        200
+    );
+    assert_eq!(
+        doc.filter_choices(0, Some(&chosen), &Cancellation::default())
             .unwrap()
             .values
             .unwrap(),
@@ -72,12 +90,12 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
         Arc::new(UInt64Array::from_iter_values(base..=u64::MAX)),
     )]);
     let distribution = doc
-        .filter_distribution(0, None, 60, AxisScale::Linear)
+        .filter_distribution(0, None, 60, AxisScale::Linear, &Cancellation::default())
         .unwrap()
         .unwrap();
     for (bin, bounds) in distribution.ranges.iter().enumerate() {
         let view = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 0,
                 Filter::range(
                     bounds.min.as_ref().map(|b| b.filter_text()),
@@ -85,6 +103,7 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
                     false,
                 ),
             ))
+            .and_then(|operation| operation.run())
             .unwrap();
         assert_eq!(view.row_count, distribution.histogram.counts[bin]);
     }
@@ -95,10 +114,11 @@ fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
     let before = doc.current_view();
     assert!(matches!(
-        doc.apply_view(&QuerySpec::single(
+        doc.prepare_view(&QuerySpec::single(
             0,
             Filter::range(Some("invalid".into()), None, false)
-        )),
+        ))
+        .and_then(|operation| operation.run()),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(doc.current_view(), before);
@@ -117,7 +137,9 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
             None,
         ])),
     )]);
-    let choices = doc.filter_choices(0, None).unwrap();
+    let choices = doc
+        .filter_choices(0, None, &Cancellation::default())
+        .unwrap();
     assert_eq!(choices.null_count, 1);
     let values = choices.values.unwrap();
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
@@ -125,10 +147,11 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
     ]);
     for value in values {
         assert_eq!(
-            doc.apply_view(&QuerySpec::single(
+            doc.prepare_view(&QuerySpec::single(
                 0,
                 Filter::exact(vec![value.value], false, false)
             ))
+            .and_then(|operation| operation.run())
             .unwrap()
             .row_count,
             value.count
@@ -143,7 +166,9 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
             "value",
             Arc::new(Int32Array::from_iter((0..count).map(Some).chain([None]))),
         )]);
-        let choices = doc.filter_choices(0, None).unwrap();
+        let choices = doc
+            .filter_choices(0, None, &Cancellation::default())
+            .unwrap();
         assert_eq!(choices.null_count, 1);
         assert_eq!(choices.values.is_some(), bounded);
     }
@@ -152,7 +177,7 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
         Arc::new(Int32Array::from(Vec::<i32>::new())),
     )]);
     assert!(doc
-        .filter_choices(0, None)
+        .filter_choices(0, None, &Cancellation::default())
         .unwrap()
         .values
         .unwrap()
@@ -167,15 +192,20 @@ fn high_cardinality_text_pages_do_not_require_a_value_index() {
             (0..100_001).map(|i| format!("value-{i:06}")),
         )),
     )]);
-    let choices = doc.prepare_text_choices(0, None).unwrap();
-    let page = choices.page("value-100000", None, 100).unwrap();
+    let choices = doc
+        .prepare_text_choices(0, None, &Cancellation::default())
+        .unwrap();
+    let page = choices
+        .page("value-100000", None, 100, &Cancellation::default())
+        .unwrap();
     assert_eq!(page.values.len(), 1);
     assert_eq!(page.values[0].count, 1);
     let view = doc
-        .apply_view(&QuerySpec::single(
+        .prepare_view(&QuerySpec::single(
             0,
             Filter::exact(vec![page.values[0].value.clone()], false, false),
         ))
+        .and_then(|operation| operation.run())
         .unwrap();
     assert_eq!(doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows, [
         100_000
@@ -200,11 +230,15 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
     let spec = QuerySpec::all(2)
         .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
         .with_filter(1, Filter::exact(vec!["1".into()], false, false));
-    let choices = doc.prepare_text_choices(0, Some(&spec)).unwrap();
-    doc.apply_view(&QuerySpec::all(2)).unwrap();
+    let choices = doc
+        .prepare_text_choices(0, Some(&spec), &Cancellation::default())
+        .unwrap();
+    doc.prepare_view(&QuerySpec::all(2))
+        .and_then(|operation| operation.run())
+        .unwrap();
     assert_eq!(
         choices
-            .page("", None, 10)
+            .page("", None, 10, &Cancellation::default())
             .unwrap()
             .values
             .iter()
@@ -212,7 +246,12 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
             .collect::<Vec<_>>(),
         [("", 1), ("Cat", 1), ("cat", 1)]
     );
-    assert_eq!(doc.filter_choices(0, Some(&spec)).unwrap().null_count, 1);
+    assert_eq!(
+        doc.filter_choices(0, Some(&spec), &Cancellation::default())
+            .unwrap()
+            .null_count,
+        1
+    );
     for (values, exclude, include_nulls, expected) in [
         (vec!["cat".into()], false, true, vec![0, 2, 4]),
         (vec!["cat".into()], true, false, vec![1, 3]),
@@ -222,10 +261,11 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 0,
                 Filter::exact(values, exclude, include_nulls),
             ))
+            .and_then(|operation| operation.run())
             .unwrap();
         assert_eq!(
             doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows,
@@ -233,9 +273,12 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         );
     }
     choices.cancel();
-    assert!(matches!(choices.page("", None, 10), Err(Error::Cancelled)));
     assert!(matches!(
-        doc.prepare_text_choices(1, None),
+        choices.page("", None, 10, &Cancellation::default()),
+        Err(Error::Cancelled)
+    ));
+    assert!(matches!(
+        doc.prepare_text_choices(1, None, &Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
 }
@@ -265,7 +308,7 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
     ]);
     for column in 0..3 {
         for (row, value) in doc
-            .filter_choices(column, None)
+            .filter_choices(column, None, &Cancellation::default())
             .unwrap()
             .values
             .unwrap()
@@ -273,10 +316,11 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             .enumerate()
         {
             let view = doc
-                .apply_view(&QuerySpec::single(
+                .prepare_view(&QuerySpec::single(
                     column,
                     Filter::exact(vec![value.value.clone()], false, false),
                 ))
+                .and_then(|operation| operation.run())
                 .unwrap();
             assert_eq!(
                 doc.rows(view.version, 0, 10, &[column])
@@ -294,7 +338,11 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         "value",
         Arc::new(Int32Array::from_iter((0..300).map(Some).chain([None]))),
     )]);
-    assert!(doc.filter_choices(0, None).unwrap().values.is_none());
+    assert!(doc
+        .filter_choices(0, None, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
     for (exclude, include_nulls, count) in [
         (false, false, 2),
         (false, true, 3),
@@ -302,10 +350,11 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         (true, true, 299),
     ] {
         let view = doc
-            .apply_view(&QuerySpec::single(
+            .prepare_view(&QuerySpec::single(
                 0,
                 Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
             ))
+            .and_then(|operation| operation.run())
             .unwrap();
         assert_eq!(view.row_count, count);
     }

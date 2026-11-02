@@ -7,7 +7,7 @@ use std::{
     fs::File,
     io::{Read, Seek},
     path::Path,
-    sync::atomic::{AtomicBool, AtomicU64},
+    sync::atomic::AtomicU64,
 };
 
 use arrow::{
@@ -15,7 +15,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::{ColumnInfo, Error, Result};
+use crate::{Cancellation, ColumnInfo, Error, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
@@ -286,18 +286,14 @@ impl ExportData<'_> {
     expect(dead_code, reason = "No codec reports progress in this configuration")
 )]
 pub(crate) struct WriteProgress<'a> {
-    pub cancelled: &'a AtomicBool,
+    pub cancellation: &'a Cancellation,
     pub rows_written: &'a AtomicU64,
 }
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 impl WriteProgress<'_> {
     pub fn check(self) -> Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
-        }
+        self.cancellation.check()
     }
 
     pub fn advance(self, rows: usize) {

@@ -173,7 +173,7 @@ final class ScatterModel: ObservableObject {
     }
 
     func load(
-        document: GewuDocument, version: UInt64, x: Int?, y: Int,
+        document: GewuSession, version: UInt64, x: Int?, y: Int,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,

@@ -4,6 +4,8 @@
 //! filters, and display order over an immutable in-memory [`Dataset`]. Sorting and
 //! filtering never move data; they only produce a new list of row numbers.
 
+mod cancellation;
+pub use cancellation::Cancellation;
 pub mod column;
 pub mod dataset;
 mod error;
@@ -25,11 +27,12 @@ pub use file::{
 };
 pub(crate) use query::{engine, predicate, scope, selection};
 pub use query::{
-    CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, FindOperation,
-    QuerySpec, RowBlock, ViewInfo, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, QuerySpec, RowBlock,
+    ViewInfo, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use session::{
     FilterChoices, Session, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, ValueChoice,
+    ViewOperation,
 };
 pub use stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,

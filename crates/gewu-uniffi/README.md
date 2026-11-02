@@ -2,17 +2,18 @@
 
 The UniFFI boundary between [gewu-core](../gewu-core/README.md) and the macOS app. It exposes Rust objects, records and enums to Swift, converts arguments and results, and maps Core errors to `GewuError`. Query execution and file codecs remain in Core.
 
-This document describes the calling contract. See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for Rust and Swift builds and tests. Method names below use Rust spelling; generated Swift methods use camel case, such as `apply_view` → `applyView`.
+This document describes the calling contract. See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md) and [file formats](../../docs/file-formats.md) for data behavior, and the [development guide](../../DEVELOPMENT.md) for Rust and Swift builds and tests. Method names below use Rust spelling; generated Swift methods use camel case, such as `prepare_view` → `prepareView`.
 
 ## Objects and ownership
 
 | Object | Responsibility and lifetime |
 | --- | --- |
 | `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
+| `ViewOperation` | Registers one query request, then runs or cancels that single-use operation. |
+| `Cancellation` | Caller-owned terminal cancellation for one filter, candidate, summary or Find request. |
 | `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
 | `FindSession` | Captures a view, typed query and ordered column scope, with independent terminal cancellation and bounded cell results. |
-| `FindOperation` | Cancels one page or highlight scan without closing its Find session or affecting newer operations. |
 | `FindLimits` | `find_limits()` reports the maximum page size and highlight row count, so frontends do not duplicate Core constants. |
 | `GewuExport` | Captures a view and selected columns, with its own progress and cancellation. Each export can be written only once. |
 
@@ -24,7 +25,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 1. Call `GewuSession::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuSession::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
 2. Read `info()` for schema and file metadata, and `current_view()` for the initial `ViewInfo`.
-3. Construct a `QuerySpec.columns` list in visible display order. Each entry has its source-schema index, an optional `ColSort { priority, descending }`, and one optional filter. Initialize it with every source column; an empty list hides all columns. Run `apply_view(spec)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
+3. Construct a `QuerySpec.columns` list in visible display order. Each entry has its source-schema index, an optional `ColSort { priority, descending }`, and one optional filter. Initialize it with every source column; an empty list hides all columns. Call `prepare_view(spec)` when accepting the UI request, then queue the returned `ViewOperation::run()` in the background. Publish its `ViewInfo` only if the UI request is still current.
 4. Pass that view's `version` to `rows(version, start, count, columns)`. Column indexes refer to the source schema, even when the UI reorders columns; the returned cells follow the requested column order.
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.
@@ -46,13 +47,13 @@ let session = try GewuSession.openSheet(path: path, sheet: name)
 
 The name is matched exactly, without trimming or case folding. Missing names produce `InvalidArgument`. Opening uses the first occupied row as headers, including when that leaves an empty table. Each call rereads the file and creates an independent document with an unfiltered initial view; listing does not retain a workbook snapshot. If the file changes between calls, opening uses its new contents and may reject a previously listed name. `document.info().sheet` and `.sheets` describe the workbook at open time.
 
-For switching, keep the old document until the new one opens successfully. Gate results by a UI request ID; neither listing nor opening is interruptible by Swift task cancellation or `cancel_pending()`. Serialize loads and skip obsolete queued requests to avoid decoding multiple sheets concurrently. On success, replace the document, schema and table together, reset sheet-specific query/selection state, and invalidate old row caches, filter sessions and analysis tasks. View versions are local to each document and start at zero: use document identity as well as version, or recreate the sheet's table/inspector subtree on replacement. Releasing a document does not release Arrow buffers still retained by analysis/export snapshots.
+For switching, keep the old document until the new one opens successfully. Gate results by a UI request ID; neither listing nor opening is interruptible by Swift task cancellation. Serialize loads and skip obsolete queued requests to avoid decoding multiple sheets concurrently. On success, replace the document, schema and table together, reset sheet-specific query/selection state, and invalidate old row caches, filter sessions and analysis tasks. View versions are local to each document and start at zero: use document identity as well as version, or recreate the sheet's table/inspector subtree on replacement. Releasing a document does not release Arrow buffers still retained by analysis/export snapshots.
 
 ## Cell Find
 
 Call `prepare_find(version, query, columns)` to capture the current view and ordered query scope. `FindSession::next` and `previous` transfer at most 256 cell cursors, while `highlight` transfers flags for at most 256 display rows and no formatted strings. An empty directional page marks a boundary; wrap by calling again without a cursor. No total hit count is implied. Call `find_limits()` for those bounds instead of hard-coding them. Text matching is compiled once per session and shared by every page and highlight.
 
-For replaceable UI work, create `operation()` and pass it to `next_with_operation`, `previous_with_operation` or `highlight_with_operation`. Capture the operation and UI request identity before queueing. Replacing work cancels only its own operation; cancelling the session is terminal and reserved for query/view invalidation or disposal. Serialize scans and keep only the latest navigation and visible-highlight operations queued.
+For replaceable UI work, create a `Cancellation` and pass it to `next`, `previous` or `highlight`. Capture the operation and UI request identity before queueing. Replacing work cancels only its own operation; cancelling the session is terminal and reserved for query/view invalidation or disposal. Serialize scans and keep only the latest navigation and visible-highlight operations queued.
 
 ## Threading and cancellation
 
@@ -60,10 +61,10 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 | Calls | Scheduling |
 | --- | --- |
-| `open`, `open_sheet`, `xlsx_sheet_names`, `apply_view`, `filter_choices`, `filter_distribution`, `view_histogram`, `column_summary` | Background: file I/O, scans, sorting or index construction. |
-| `ColumnAnalysis::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
+| `open`, `open_sheet`, `xlsx_sheet_names`, `filter_choices`, `filter_distribution`, `prepare_text_choices`, `view_histogram`, `column_summary` | Background: file I/O, scans, sorting or index construction. |
+| `ViewOperation::run`, `ColumnAnalysis::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
 | `FindSession` page/highlight methods | Background: execute bounded batches; no-hit and sparse scans can cover the captured view. |
-| `info`, `current_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
+| `info`, `current_view`, `current_query`, `prepare_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
 | `format_value` | Scalar display formatting. |
 | `validate_filter` | Scalar preparation for most filters; `Exact` may build the column's compact encoding, so allow background execution. |
@@ -71,13 +72,15 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 Cancellation has independent scopes:
 
-- A new `apply_view` supersedes older view work when it enters Core. `GewuSession::cancel_pending()` invalidates pending work; a concurrent request past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible. It does not cancel file opening, analysis or export.
+- `prepare_view` supersedes older pending view operations immediately, before background execution. `ViewOperation::cancel()` cancels only that operation. An obsolete operation queued late cannot replace a newer one. A concurrent operation past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible.
+- Create a `Cancellation` before queueing `filter_choices`, `filter_distribution`, `validate_filter`, `prepare_text_choices`, `view_histogram` or `column_summary`, and pass it as the `cancellation` argument. Cancellation reaches preparation and scans, including other-column facet filters and lazy dictionary construction. Cancelled construction never becomes a cached negative result. Handles are terminal; create a new one for each replacement request.
+- `TextChoices::page(query, after, limit, cancellation)` observes both the request's cancellation and the session's terminal `cancel()`. Cancelling one page preserves the facet and does not affect subsequent pages. No generation counter crosses the interface.
 - `ColumnAnalysis::cancel()` cancels only that analysis job. Cancellation is terminal for the handle; prepare a new job to run it again after cancellation.
 - `ScatterAnalysis::cancel()` similarly cancels only its scatter scan, not table queries or other analysis jobs.
-- `FindOperation::cancel()` interrupts one Find scan at predicate and batch checkpoints without closing its session. `FindSession::cancel()` permanently closes only that captured Find.
+- `Cancellation::cancel()` interrupts one Find scan at predicate and batch checkpoints without closing its session. `FindSession::cancel()` permanently closes only that captured Find.
 - `GewuExport::cancel()` cancels only that export. A failed or cancelled export cannot be retried; prepare another job.
 
-Keep a UI request identifier in addition to the Core version. Work queued by an obsolete UI request must be rejected before it calls `apply_view`: Core orders requests by when they enter the engine, not when the user initiated them. Also check the identifier before publishing a result. The app's [DocumentModel](../../app/Sources/Gewu/Document/DocumentModel.swift) uses a serial worker and request gate for this purpose.
+Keep a UI request identifier in addition to the Core version, and check it before publishing a result. Query ordering is already registered by `prepare_view`; the app's [DocumentModel](../../app/Sources/Gewu/Document/DocumentModel.swift) uses a serial worker to limit computation, not to establish ordering. Connect Swift task cancellation to the operation's `cancel()` using a cancellation handler. If the latest query fails, recover with `current_query()`, which returns a `QueryState` containing the committed spec and view from one snapshot. An older request may have committed just before it was cancelled, so the last state Swift displayed is not necessarily the committed state. Cancellation does not roll back a committed query or export.
 
 For detached analysis work, connect a Swift task cancellation handler to the Rust job's `cancel()` method and check cancellation before updating UI state. Cancelling a Swift `Task` alone does not interrupt a synchronous Rust call. See [InspectorModel](../../app/Sources/Gewu/Inspector/InspectorModel.swift) for this pattern.
 
@@ -87,11 +90,11 @@ For detached analysis work, connect a Swift task cancellation handler to the Rus
 
 `Filter { condition, include_nulls }` wraps one of `Range { min: Option<String>, max: Option<String> }`, `Contains { text, case_sensitive }`, or `Exact { values: Vec<String>, exclude }`. Null is never a value string. Exact inclusion/exclusion applies to non-null rows; `include_nulls` independently controls missing rows. Each column contributes one condition and columns combine with AND. `validate_filter` checks the typed input without publishing a view; call it on a worker because exact selection may initialize the bounded dictionary.
 
-`filter_choices(column, spec)` returns `ValueChoice { label, value, count }` records and a separate `null_count`. Display `label`, retain and return `value` verbatim. `values: None` means no complete bounded list is available, not an empty column. The filter protocol still supports exact selection without a dictionary. Counts use the other columns' filters, excluding the requested column's own filter.
+`filter_choices(column, spec, cancellation)` returns `ValueChoice { label, value, count }` records and a separate `null_count`. Display `label`, retain and return `value` verbatim. `values: None` means no complete bounded list is available, not an empty column. The filter protocol still supports exact selection without a dictionary. Counts use the other columns' filters, excluding the requested column's own filter.
 
-For string paging, call `prepare_text_choices(column, spec)` and `TextChoices::page(query, after, limit)` off the UI thread. Values and exclusive cursors are non-null strings in UTF-8 order; pages retain bounded candidate storage and include zero-count source values. Reuse the captured facet across searches. `invalidate_pages()` cancels obsolete scans while keeping the facet; capture its generation before queueing and call `page_for_generation`. `cancel()` permanently closes the session; preparation has no cancellation handle. Swift selection identities must compare UTF-8 bytes because ordinary `String` equality merges canonically equivalent spellings.
+For string paging, call `prepare_text_choices(column, spec, cancellation)` and `TextChoices::page(query, after, limit, cancellation)` off the UI thread. Values and exclusive cursors are non-null strings in UTF-8 order; pages retain bounded candidate storage and include zero-count source values. Reuse the captured facet across searches. Cancel the current request handle when changing the search or page; close the session with `cancel()` when dismissing the editor. Preparation itself uses the supplied cancellation, so obsolete facet scans can stop before a paging session exists. Swift selection identities must compare UTF-8 bytes because ordinary `String` equality merges canonically equivalent spellings.
 
-`filter_distribution(column, spec, bins, scale)` supplies `RangeBound { value, label, coordinate }` endpoints. Display labels, plot coordinates or ordinal bin indexes, and send `value` unchanged. Numeric text preserves native integer/decimal precision. Date/time/timestamp canonical values use `@` followed by physical Arrow ticks, interpreted in the source type; human-entered date/time strings are also accepted. Duration inputs use the stored unit. Never reconstruct a value from approximate coordinates. Changing bins preserves the drafted value text.
+`filter_distribution(column, spec, bins, scale, cancellation)` supplies `RangeBound { value, label, coordinate }` endpoints. Display labels, plot coordinates or ordinal bin indexes, and send `value` unchanged. Numeric text preserves native integer/decimal precision. Date/time/timestamp canonical values use `@` followed by physical Arrow ticks, interpreted in the source type; human-entered date/time strings are also accepted. Duration inputs use the stored unit. Never reconstruct a value from approximate coordinates. Changing bins preserves the drafted value text.
 
 The app holds a query draft and an applied snapshot. Find and default export use the applied snapshot's column order. Hiding removes a column's sort/filter; showing it adds a fresh empty configuration. Sorting priority is independent of display position. See [Find and filtering](../../docs/search-and-filter.md) for UI interactions and empty-selection semantics.
 
@@ -101,7 +104,7 @@ Scatter results carry axis kinds independently of column presentation. Nested an
 
 Call `analysis_capabilities(column)` to discover supported sections without scanning the column. For each expanded section, call `prepare_analysis(version, column, section)`, then execute the returned `ColumnAnalysis::run()` off the UI thread. Each job computes only its requested section.
 
-`prepare_analysis_with_bins(version, column, section, bins, scale)` selects a nonzero histogram resolution and an `AxisScale` (`Linear` or `Log10`); the default analysis API uses 40 linear bins. Logarithmic binning is available for numeric distribution sections, while length sections use linear binning. `filter_distribution(column, spec, bins, scale)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
+`prepare_analysis_with_bins(version, column, section, bins, scale)` selects a nonzero histogram resolution and an `AxisScale` (`Linear` or `Log10`); the default analysis API uses 40 linear bins. Logarithmic binning is available for numeric distribution sections, while length sections use linear binning. `filter_distribution(column, spec, bins, scale, cancellation)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
 
 | Section | `AnalysisData` payload |
 | --- | --- |
@@ -118,7 +121,7 @@ Display `NumericStatistics.median_label` verbatim. The median excludes nulls and
 
 For scatter plots, filter candidate axes using `ColumnInfo.capabilities.scatter`, then call `prepare_scatter(version, x_column, y_column, limit, x_scale, y_scale)` followed by `ScatterAnalysis::run()` on a worker. The generated Swift method is `prepareScatter(version:xColumn:yColumn:limit:xScale:yScale:)`; `xColumn: nil` means zero-based source row IDs. The limit must be in 1...4096. `ColumnInfo.capabilities.logarithmic` enables independent `Log10` scales for numeric columns; dates and source row IDs remain linear. A `ScatterResult` contains `version`, `x_column`, `y_column`, `total_rows`, `eligible_rows`, `non_positive_rows`, `sampled` and `points`; each point has `source_row`, approximate original `x`/`y` and exact `x_label`/`y_label`. Missing/non-finite pairs are omitted first, then finite pairs with nonpositive values on logarithmic axes are counted in `non_positive_rows` and excluded before sampling. Show a sampling indicator when `sampled` is true, and use labels for tooltips rather than reformatting rounded coordinates. Temporal coordinates remain in the column's physical Arrow unit. Validate document/request identity, axis selection and scales before publication, and cancel the job when the plot disappears or its inputs change. Releasing a document does not invalidate an already captured scatter snapshot.
 
-The FFI also exposes `column_summary(column, top)` and `view_histogram(version, column, bins)`. The former reads the current view without returning a version; the latter checks a supplied version. Use section jobs for an inspector that needs explicit snapshot identity and independent cancellation. Display exact extrema labels rather than converting approximate numeric coordinates back into values.
+The FFI also exposes `column_summary(column, top, cancellation)` and `view_histogram(version, column, bins, cancellation)`. The former reads the current view without returning a version; the latter checks a supplied version. Use section jobs for an inspector that needs explicit snapshot identity and independent cancellation. Display exact extrema labels rather than converting approximate numeric coordinates back into values.
 
 ## Export
 
@@ -157,4 +160,4 @@ Edit the Rust interface rather than generated Swift or C files. The App compiles
 
 ## Implementation
 
-Start with the [document handle](src/document.rs) for Swift-facing operations. Feature modules group exported types with their Core conversions; [lib.rs](src/lib.rs) declares the public interface and initializes UniFFI. [uniffi-bindgen.rs](uniffi-bindgen.rs) is the binding-generator entry point, enabled by the `bindgen` feature.
+Start with the [session handle](src/session.rs) for Swift-facing operations. Feature modules group exported types with their Core conversions; [lib.rs](src/lib.rs) declares the public interface and initializes UniFFI. [uniffi-bindgen.rs](uniffi-bindgen.rs) is the binding-generator entry point, enabled by the `bindgen` feature.

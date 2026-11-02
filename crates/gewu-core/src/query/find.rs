@@ -6,17 +6,14 @@
 
 use std::{
     ops::Range,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, OnceLock,
-    },
+    sync::{Arc, OnceLock},
 };
 
 use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
-use super::{engine::CancelToken, predicate::Predicate};
-use crate::{column::filter::prepare_find, Error, Result};
+use super::predicate::Predicate;
+use crate::{column::filter::prepare_find, Cancellation, Error, Result};
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;
@@ -42,19 +39,6 @@ pub struct FindHighlight {
     pub n_cols: u32,
     /// Row-major flags in the Find session's captured column order.
     pub matched: Vec<bool>,
-}
-
-/// Cancellation for one page or highlight scan, independent of its Find session.
-/// Cancelling an obsolete scan does not close the session or affect newer scans.
-pub struct FindOperation {
-    cancellation: Arc<AtomicU64>,
-    token: CancelToken,
-}
-
-impl FindOperation {
-    pub fn cancel(&self) {
-        self.cancellation.fetch_add(1, Ordering::SeqCst);
-    }
 }
 
 /// A Find query prepared once per captured session. The parsed literal matcher
@@ -103,8 +87,7 @@ pub struct Find {
     rows: Arc<Vec<u32>>,
     version: u64,
     query: FindQuery,
-    cancellation: Arc<AtomicU64>,
-    token: CancelToken,
+    token: Cancellation,
 }
 
 #[derive(Default)]
@@ -129,88 +112,49 @@ impl Find {
         for (_, array) in &columns {
             drop(prepare_find(array, query.text(), Some(&matcher))?);
         }
-        let (token, cancellation) = CancelToken::independent();
+        let token = Cancellation::default();
         Ok(Self {
             columns,
             rows,
             version,
             query,
-            cancellation,
             token,
         })
     }
 
     /// Permanently cancel this session without affecting any other operation.
     pub fn cancel(&self) {
-        self.cancellation.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Create independently cancellable work for one page or highlight request.
-    pub fn operation(&self) -> FindOperation {
-        let (token, cancellation) = CancelToken::independent();
-        FindOperation {
-            cancellation,
-            token,
-        }
+        self.token.cancel();
     }
 
     /// Return at most `limit` matches strictly after `after`, in display order.
-    /// `None` starts before the first cell. An empty page means the end was reached;
-    /// callers may wrap by calling again with `None`.
-    pub fn next(&self, after: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {
-        self.scan(after, limit, Direction::Forward, &self.token)
-    }
-
-    /// [`Self::next`] with cancellation scoped to this request only.
-    pub fn next_with_operation(
+    /// None starts before the first cell; an empty page marks the end.
+    pub fn next(
         &self,
         after: Option<&CellMatch>,
         limit: u32,
-        operation: &FindOperation,
+        operation: &Cancellation,
     ) -> Result<Vec<CellMatch>> {
-        self.scan(after, limit, Direction::Forward, &operation.token)
+        self.scan(after, limit, Direction::Forward, operation)
     }
 
     /// Return at most `limit` matches strictly before `before`, in display order.
-    /// `None` starts after the last cell. Use the first returned match as the
-    /// continuation cursor for another backwards page. An empty page means the
-    /// beginning was reached; callers may wrap by calling again with `None`.
-    pub fn previous(&self, before: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {
-        self.scan(before, limit, Direction::Backward, &self.token)
-    }
-
-    /// [`Self::previous`] with cancellation scoped to this request only.
-    pub fn previous_with_operation(
+    /// None starts after the last cell; use the first match as the next cursor.
+    pub fn previous(
         &self,
         before: Option<&CellMatch>,
         limit: u32,
-        operation: &FindOperation,
+        operation: &Cancellation,
     ) -> Result<Vec<CellMatch>> {
-        self.scan(before, limit, Direction::Backward, &operation.token)
+        self.scan(before, limit, Direction::Backward, operation)
     }
 
-    /// Evaluate the same typed query for a visible block without formatting cells.
-    /// The result uses this session's captured column order and remains valid if
-    /// the document later publishes another view.
-    pub fn highlight(&self, start: u64, count: u32) -> Result<FindHighlight> {
-        self.highlight_with_token(start, count, &self.token)
-    }
-
-    /// [`Self::highlight`] with cancellation scoped to this request only.
-    pub fn highlight_with_operation(
+    /// Evaluate a visible block in captured column order with per-request cancellation.
+    pub fn highlight(
         &self,
         start: u64,
         count: u32,
-        operation: &FindOperation,
-    ) -> Result<FindHighlight> {
-        self.highlight_with_token(start, count, &operation.token)
-    }
-
-    fn highlight_with_token(
-        &self,
-        start: u64,
-        count: u32,
-        operation: &CancelToken,
+        operation: &Cancellation,
     ) -> Result<FindHighlight> {
         let token = self.token.combined_with(operation);
         token.check()?;
@@ -244,7 +188,7 @@ impl Find {
         cursor: Option<&CellMatch>,
         limit: u32,
         direction: Direction,
-        operation: &CancelToken,
+        operation: &Cancellation,
     ) -> Result<Vec<CellMatch>> {
         self.token.check()?;
         operation.check()?;
@@ -263,7 +207,7 @@ impl Find {
         cursor: Option<&CellMatch>,
         limit: u32,
         direction: Direction,
-        operation: &CancelToken,
+        operation: &Cancellation,
         predicates: &[Option<Predicate<'_>>],
     ) -> Result<Vec<CellMatch>> {
         let token = self.token.combined_with(operation);
@@ -330,7 +274,7 @@ impl Find {
         &self,
         predicates: &[Option<Predicate<'_>>],
         display_rows: Range<usize>,
-        token: &CancelToken,
+        token: &Cancellation,
         scratch: &mut FindScratch,
     ) -> Result<()> {
         token.check()?;
@@ -430,7 +374,7 @@ mod tests {
         const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
         let array: ArrayRef = Arc::new(StringArray::from(vec!["value"]));
         let find = Find::new(vec![(0, array)], Arc::new(vec![0]), 0, "value".into()).unwrap();
-        let operation = find.operation();
+        let operation = Cancellation::default();
         let (started, start) = std::sync::mpsc::channel();
         let (resume, resumed) = std::sync::mpsc::channel();
         let resumed = std::sync::Mutex::new(resumed);
@@ -444,9 +388,8 @@ mod tests {
             result
         })))];
         std::thread::scope(|scope| {
-            let worker = scope.spawn(|| {
-                find.scan_prepared(None, 1, Direction::Forward, &operation.token, &predicates)
-            });
+            let worker = scope
+                .spawn(|| find.scan_prepared(None, 1, Direction::Forward, &operation, &predicates));
             start.recv_timeout(TIMEOUT).unwrap();
             if session {
                 find.cancel();

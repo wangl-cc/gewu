@@ -8,7 +8,7 @@ struct HistogramScaleTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
         try "value\n-1\n0\n1\n10\n100\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuDocument.open(path: url.path) }.value
+        let document = try await Task.detached { try GewuSession.open(path: url.path) }.value
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(

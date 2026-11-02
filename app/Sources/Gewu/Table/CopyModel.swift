@@ -13,7 +13,7 @@ final class CopyModel: ObservableObject {
 
     init(reportError: @escaping (Error, String) -> Void) { self.reportError = reportError }
 
-    func copy(document: GewuDocument, version: UInt64, rows: [Range<Int>], columns: [UInt32], names: [String]) {
+    func copy(document: GewuSession, version: UInt64, rows: [Range<Int>], columns: [UInt32], names: [String]) {
         cancel()
         request &+= 1
         let mine = request

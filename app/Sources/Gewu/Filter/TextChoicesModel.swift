@@ -8,38 +8,49 @@ final class TextChoicesModel: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private let session = TextChoiceSession()
+    private var current: Cancellation?
 
     func load(
-        document: GewuDocument, column: UInt32, querySpec: QuerySpec,
+        document: GewuSession, column: UInt32, querySpec: QuerySpec,
         query: String, after: TextChoiceCursor?
     ) async {
         guard !Task.isCancelled else { return }
-        let ticket = session.advance()
+        current?.cancel()
+        let cancellation = Cancellation()
+        current = cancellation
         loading = true
         error = nil
         page = nil
-        defer { if session.isCurrent(ticket) { loading = false } }
+        defer { if current === cancellation { loading = false } }
         do {
             try await Task.sleep(for: .milliseconds(200))
-            let result = try await session.page(
-                document: document, column: column, querySpec: querySpec,
-                query: query, after: after, ticket: ticket)
-            guard !Task.isCancelled, session.isCurrent(ticket) else { return }
+            let result = try await withTaskCancellationHandler {
+                try await session.page(
+                    document: document, column: column, querySpec: querySpec,
+                    query: query, after: after, cancellation: cancellation)
+            } onCancel: {
+                cancellation.cancel()
+            }
+            guard !Task.isCancelled, current === cancellation else { return }
             page = result
         } catch {
-            guard !Task.isCancelled, session.isCurrent(ticket) else { return }
+            guard !Task.isCancelled, current === cancellation else { return }
+            if case GewuError.Cancelled = error { return }
             self.error = error.userMessage
         }
     }
 
     func pause() {
-        _ = session.advance()
+        current?.cancel()
+        current = nil
         loading = false
         page = nil
         error = nil
     }
 
     func cancel() {
+        current?.cancel()
+        current = nil
         session.cancel()
         loading = false
     }
@@ -48,26 +59,10 @@ final class TextChoicesModel: ObservableObject {
 private final class TextChoiceSession: @unchecked Sendable {
     private let worker = DispatchQueue(label: "gewu.filter.text-choices", qos: .userInitiated)
     private let lock = NSLock()
-    private var request: UInt64 = 0
     private var closed = false
     private var job: TextChoices?
-    private var generation: UInt64 = 0
 
     deinit { cancel() }
-
-    func advance() -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        request &+= 1
-        if let job { generation = job.invalidatePages() }
-        return request
-    }
-
-    func isCurrent(_ ticket: UInt64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return !closed && ticket == request
-    }
 
     func cancel() {
         lock.lock()
@@ -78,19 +73,20 @@ private final class TextChoiceSession: @unchecked Sendable {
         job?.cancel()
     }
 
-    private func prepared(document: GewuDocument, column: UInt32, querySpec: QuerySpec) throws -> TextChoices {
+    private func prepared(document: GewuSession, column: UInt32, querySpec: QuerySpec, cancellation: Cancellation)
+        throws -> TextChoices
+    {
         lock.lock()
         let existing = job
+        let wasClosed = closed
         lock.unlock()
+        if wasClosed { throw CancellationError() }
         if let existing { return existing }
-        // Preparation computes the facet and currently has no cancellation handle.
-        // If closed meanwhile, cancel the returned job before starting any page.
-        let prepared = try document.prepareTextChoices(column: column, spec: querySpec)
+        let prepared = try document.prepareTextChoices(column: column, spec: querySpec, cancellation: cancellation)
         lock.lock()
         let closed = closed
         if !closed {
             job = prepared
-            generation = prepared.invalidatePages()
         }
         lock.unlock()
         if closed {
@@ -100,27 +96,18 @@ private final class TextChoiceSession: @unchecked Sendable {
         return prepared
     }
 
-    private func pageGeneration(for ticket: UInt64) throws -> UInt64 {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !closed, ticket == request else { throw CancellationError() }
-        return generation
-    }
-
     func page(
-        document: GewuDocument, column: UInt32, querySpec: QuerySpec,
-        query: String, after: TextChoiceCursor?, ticket: UInt64
+        document: GewuSession, column: UInt32, querySpec: QuerySpec,
+        query: String, after: TextChoiceCursor?, cancellation: Cancellation
     ) async throws -> TextChoicePage {
         try await withCheckedThrowingContinuation { continuation in
             worker.async {
                 do {
-                    guard self.isCurrent(ticket) else { throw CancellationError() }
-                    let job = try self.prepared(document: document, column: column, querySpec: querySpec)
-                    let generation = try self.pageGeneration(for: ticket)
-                    let page = try job.pageForGeneration(
+                    let job = try self.prepared(
+                        document: document, column: column, querySpec: querySpec, cancellation: cancellation)
+                    let page = try job.page(
                         query: query, after: after, limit: 100,
-                        generation: generation)
-                    guard self.isCurrent(ticket) else { throw CancellationError() }
+                        cancellation: cancellation)
                     continuation.resume(returning: page)
                 } catch {
                     continuation.resume(throwing: error)

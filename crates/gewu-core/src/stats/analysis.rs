@@ -9,9 +9,7 @@ use arrow::{
 };
 
 pub use super::LengthUnit;
-use super::{
-    AnalysisContext, ArrayView, Histogram, LengthSummary, NumericStatistics, ValueSummary,
-};
+use super::{ArrayView, Cancellation, Histogram, LengthSummary, NumericStatistics, ValueSummary};
 use crate::{column::display_type, scope::Selection, types, Error, Result};
 
 /// A section of the column inspector.
@@ -61,7 +59,7 @@ pub struct ColumnAnalysis {
     section: AnalysisSection,
     histogram_bins: u32,
     histogram_scale: crate::AxisScale,
-    context: AnalysisContext,
+    context: Cancellation,
 }
 
 impl ColumnAnalysis {
@@ -93,7 +91,7 @@ impl ColumnAnalysis {
             section,
             histogram_bins: 40,
             histogram_scale: crate::AxisScale::Linear,
-            context: AnalysisContext::default(),
+            context: Cancellation::default(),
         })
     }
 

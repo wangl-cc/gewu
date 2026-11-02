@@ -8,7 +8,10 @@ use arrow::{
 };
 
 use super::{IntegerColumn, RealColumn, RealType};
-use crate::{stats::AnalysisContext, stats::ColumnSummary, Result};
+use crate::{
+    stats::{Cancellation, ColumnSummary},
+    Result,
+};
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
@@ -19,7 +22,7 @@ where
         rows: impl Iterator<Item = usize>,
         summary: &mut ColumnSummary,
         collect_distinct: bool,
-        context: &AnalysisContext,
+        context: &Cancellation,
     ) -> Result<SummaryDetails> {
         summarize(
             self.0,
@@ -39,7 +42,7 @@ impl<'a, T: RealType> RealColumn<'a, T> {
         rows: impl Iterator<Item = usize>,
         summary: &mut ColumnSummary,
         collect_distinct: bool,
-        context: &AnalysisContext,
+        context: &Cancellation,
     ) -> Result<SummaryDetails> {
         summarize(
             self.array,
@@ -67,7 +70,7 @@ fn summarize<T, F, K, H>(
     key: K,
     summary: &mut ColumnSummary,
     collect_distinct: bool,
-    context: &AnalysisContext,
+    context: &Cancellation,
 ) -> Result<SummaryDetails>
 where
     T: ArrowPrimitiveType,
@@ -158,7 +161,7 @@ mod tests {
                 0..values.len(),
                 &mut result,
                 false,
-                &AnalysisContext::default(),
+                &Cancellation::default(),
             )
             .unwrap();
         result

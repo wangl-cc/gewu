@@ -82,7 +82,7 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
-    use crate::{column::Column, engine::CancelToken, Filter};
+    use crate::{column::Column, Cancellation, Filter};
 
     #[test]
     fn physical_values_roundtrip_without_formatting_or_float_widening() {
@@ -116,9 +116,9 @@ mod tests {
                 let filter = Filter::exact(vec![text], false, false);
                 let mut matched = [false; 2];
                 column
-                    .prepare_filter(&filter)
+                    .prepare_filter(&filter, &Cancellation::default())
                     .unwrap()
-                    .evaluate(0..2, &mut matched, &CancelToken::never())
+                    .evaluate(0..2, &mut matched, &Cancellation::default())
                     .unwrap();
                 assert_eq!(matched, [row == 0, row == 1], "{:?}", array.data_type());
             }

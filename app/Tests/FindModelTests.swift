@@ -8,7 +8,7 @@ struct FindModelTests {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-find-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let document = try GewuDocument.open(path: path.path)
+        let document = try GewuSession.open(path: path.path)
         let model = DocumentModel(url: path, document: document)
         let originalView = model.current
 
@@ -54,7 +54,7 @@ struct FindModelTests {
             "gewu-find-refresh-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        let model = DocumentModel(url: path, document: try GewuSession.open(path: path.path))
         model.find.query = "12"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
@@ -78,7 +78,7 @@ struct FindModelTests {
             "gewu-find-highlight-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "value\nnew\nold\n".write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        let model = DocumentModel(url: path, document: try GewuSession.open(path: path.path))
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
@@ -101,7 +101,7 @@ struct FindModelTests {
             "gewu-find-burst-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "value\nnew\nnew\nnew\nnew\nnew\nnew\n".write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        let model = DocumentModel(url: path, document: try GewuSession.open(path: path.path))
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
@@ -124,7 +124,7 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let rows = (0..<40).map { _ in "new" }.joined(separator: "\n")
         try "value\n\(rows)\n".write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        let model = DocumentModel(url: path, document: try GewuSession.open(path: path.path))
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
@@ -141,7 +141,7 @@ struct FindModelTests {
             "gewu-find-reorder-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, document: try GewuDocument.open(path: path.path))
+        let model = DocumentModel(url: path, document: try GewuSession.open(path: path.path))
         model.find.query = "12"
         model.updateFind()
         try await waitUntil { model.find.currentMatch?.displayRow == 1 }

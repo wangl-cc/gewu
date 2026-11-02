@@ -4,12 +4,10 @@
 //! later pages. Each page scans the source but retains at most `limit + 1`
 //! borrowed candidates, without building a document-wide distinct index.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
 use arrow::array::{Array, ArrayRef};
 use regex::RegexBuilder;
 
-use crate::{column::filter::text, scope::Selection, Error, Result};
+use crate::{column::filter::text, scope::Selection, Cancellation, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoice {
@@ -34,12 +32,11 @@ pub struct TextChoicePage {
 
 /// Reusable candidate query for one captured facet. Run pages off the UI thread.
 /// Cancellation is independent of table queries. `cancel` closes the session;
-/// `invalidate_pages` cancels obsolete pages while retaining the facet.
+/// individual pages receive their own cancellation without discarding the facet.
 pub struct TextChoices {
     array: ArrayRef,
     rows: Selection,
-    cancelled: AtomicBool,
-    generation: AtomicU64,
+    cancellation: Cancellation,
 }
 
 impl TextChoices {
@@ -65,56 +62,24 @@ impl TextChoices {
         Ok(Self {
             array,
             rows,
-            cancelled: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
+            cancellation: Cancellation::default(),
         })
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        self.cancellation.cancel();
     }
 
-    /// Invalidate all previously captured page generations and return the new
-    /// one. Capture this when accepting a request, before queueing its scan.
-    /// Executing a queued page never advances this generation.
-    pub fn invalidate_pages(&self) -> u64 {
-        self.generation
-            .fetch_add(1, Ordering::SeqCst)
-            .wrapping_add(1)
-    }
-
-    fn check(&self, generation: u64) -> Result<()> {
-        if self.cancelled.load(Ordering::Relaxed)
-            || self.generation.load(Ordering::SeqCst) != generation
-        {
-            Err(Error::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Return up to `limit` non-null values in bytewise order after an exclusive
-    /// cursor. Search is a case-insensitive literal substring. Counts use the
-    /// captured facet, including zero-count source candidates. Limits are 1..=200.
+    /// Cancelling this request never affects a later page or its session.
     pub fn page(
         &self,
         query: &str,
         after: Option<&TextChoiceCursor>,
         limit: u32,
+        cancel: &Cancellation,
     ) -> Result<TextChoicePage> {
-        self.page_for_generation(query, after, limit, self.generation.load(Ordering::SeqCst))
-    }
-
-    /// Scan only while the captured generation remains current. A stale page
-    /// returns `Cancelled` without invalidating any newer page or the session.
-    pub fn page_for_generation(
-        &self,
-        query: &str,
-        after: Option<&TextChoiceCursor>,
-        limit: u32,
-        generation: u64,
-    ) -> Result<TextChoicePage> {
-        self.page_checked(query, after, limit, || self.check(generation))
+        let token = self.cancellation.combined_with(cancel);
+        self.page_checked(query, after, limit, || token.check())
     }
 
     fn page_checked(
@@ -216,11 +181,12 @@ mod tests {
             (0..12_000).map(|row| format!("value-{row:05}")),
         ));
         let choices = TextChoices::new(array, Selection::All(12_000)).unwrap();
-        let obsolete = choices.invalidate_pages();
+        let obsolete = Cancellation::default();
         let (reached, running) = std::sync::mpsc::sync_channel(0);
         let (resume, resumed) = std::sync::mpsc::sync_channel(0);
         std::thread::scope(|scope| {
             let choices = &choices;
+            let obsolete = &obsolete;
             let worker = scope.spawn(move || {
                 let mut checks = 0;
                 let result = choices.page_checked("", None, 10, || {
@@ -230,30 +196,30 @@ mod tests {
                         reached.send(()).unwrap();
                         resumed.recv().unwrap();
                     }
-                    choices.check(obsolete)
+                    choices.cancellation.check()?;
+                    obsolete.check()
                 });
                 assert_eq!(checks, 3, "obsolete scan must stop at its next checkpoint");
                 result
             });
             running.recv().unwrap();
-            let current = choices.invalidate_pages();
+            obsolete.cancel();
+            let current = Cancellation::default();
             resume.send(()).unwrap();
             assert!(matches!(worker.join().unwrap(), Err(Error::Cancelled)));
             assert!(matches!(
-                choices.page_for_generation("", None, 10, obsolete),
+                choices.page("", None, 10, obsolete),
                 Err(Error::Cancelled)
             ));
-            let page = choices
-                .page_for_generation("value-11999", None, 10, current)
-                .unwrap();
+            let page = choices.page("value-11999", None, 10, &current).unwrap();
             assert_eq!(page.values, [TextChoice {
                 value: "value-11999".into(),
                 count: 1
             }]);
             choices.cancel();
-            let after_close = choices.invalidate_pages();
+            let after_close = Cancellation::default();
             assert!(matches!(
-                choices.page_for_generation("", None, 10, after_close),
+                choices.page("", None, 10, &after_close),
                 Err(Error::Cancelled)
             ));
         });
@@ -277,7 +243,9 @@ mod tests {
         let mut cursor = None;
         let mut found = Vec::new();
         loop {
-            let page = choices.page("", cursor.as_ref(), 2).unwrap();
+            let page = choices
+                .page("", cursor.as_ref(), 2, &Cancellation::default())
+                .unwrap();
             assert!(page.values.len() <= 2);
             found.extend(
                 page.values
@@ -309,31 +277,50 @@ mod tests {
             Some("(null)"),
         ]));
         let choices = TextChoices::new(array, Selection::All(6)).unwrap();
-        let first = choices.page("", None, 1).unwrap();
+        let first = choices.page("", None, 1, &Cancellation::default()).unwrap();
         assert_eq!(first.values[0].value, "");
-        let next = choices.page("", first.next.as_ref(), 1).unwrap();
+        let next = choices
+            .page("", first.next.as_ref(), 1, &Cancellation::default())
+            .unwrap();
         assert_eq!(next.values[0].value, "(null)");
-        assert_eq!(choices.page("K", None, 10).unwrap().values.len(), 2);
         assert_eq!(
-            choices.page("%_[", None, 10).unwrap().values[0]
+            choices
+                .page("K", None, 10, &Cancellation::default())
+                .unwrap()
+                .values
+                .len(),
+            2
+        );
+        assert_eq!(
+            choices
+                .page("%_[", None, 10, &Cancellation::default())
+                .unwrap()
+                .values[0]
                 .value
                 .as_str(),
             "a%_[b"
         );
-        let nulls = choices.page("(NULL)", None, 10).unwrap();
+        let nulls = choices
+            .page("(NULL)", None, 10, &Cancellation::default())
+            .unwrap();
         assert_eq!(nulls.values.len(), 1);
         assert_eq!(nulls.values[0].value, "(null)");
-        let missing = choices.page("absent", None, 10).unwrap();
+        let missing = choices
+            .page("absent", None, 10, &Cancellation::default())
+            .unwrap();
         assert!(missing.values.is_empty());
         assert!(missing.next.is_none());
         for limit in [0, 201] {
             assert!(matches!(
-                choices.page("", None, limit),
+                choices.page("", None, limit, &Cancellation::default()),
                 Err(Error::InvalidArgument(_))
             ));
         }
         choices.cancel();
-        assert!(matches!(choices.page("", None, 1), Err(Error::Cancelled)));
+        assert!(matches!(
+            choices.page("", None, 1, &Cancellation::default()),
+            Err(Error::Cancelled)
+        ));
     }
 
     #[test]
@@ -351,7 +338,9 @@ mod tests {
         .unwrap();
         let array: ArrayRef = Arc::new(array.slice(1, 5));
         let choices = TextChoices::new(array, Selection::All(5)).unwrap();
-        let page = choices.page("", None, 10).unwrap();
+        let page = choices
+            .page("", None, 10, &Cancellation::default())
+            .unwrap();
         assert_eq!(
             page.values
                 .iter()

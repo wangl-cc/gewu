@@ -317,12 +317,13 @@ fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use arrow::array::{Decimal128Array, UInt64Array};
     use calamine::{ExcelDateTime, ExcelDateTimeType};
 
     use super::*;
+    use crate::Cancellation;
 
     #[test]
     fn inference_uses_all_values_and_preserves_mixed_values() {
@@ -480,7 +481,7 @@ mod tests {
         ])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let rows_written = AtomicU64::new(0);
         write(
             file.as_file_mut(),
@@ -490,7 +491,7 @@ mod tests {
                 rows: &[1, 0],
             },
             WriteProgress {
-                cancelled: &cancelled,
+                cancellation: &cancelled,
                 rows_written: &rows_written,
             },
         )
@@ -572,7 +573,7 @@ mod tests {
         )])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let rows_written = AtomicU64::new(0);
         let schema = batch.schema();
         let data = ExportData {
@@ -581,7 +582,7 @@ mod tests {
             rows: &[],
         };
         let progress = WriteProgress {
-            cancelled: &cancelled,
+            cancellation: &cancelled,
             rows_written: &rows_written,
         };
         write(file.as_file_mut(), data, progress).unwrap();
@@ -614,7 +615,7 @@ mod tests {
             Err(Error::InvalidArgument(_))
         ));
 
-        cancelled.store(true, Ordering::Relaxed);
+        cancelled.cancel();
         assert!(matches!(
             write(file.as_file_mut(), data, progress),
             Err(Error::Cancelled)
