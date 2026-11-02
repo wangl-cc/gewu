@@ -12,7 +12,7 @@ fn query(column: u32, filter: Filter) -> QuerySpec {
 }
 
 #[test]
-fn typed_filters_validate_and_execute_across_ffi() {
+fn typed_filters_compile_and_execute_across_ffi() {
     let source = std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
     std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
@@ -52,15 +52,14 @@ fn typed_filters_validate_and_execute_across_ffi() {
     // Chart coordinates may round a large ID; typed filters below must not.
     let before = doc.view();
     assert!(matches!(
-        doc.validate_filter(
-            0,
-            Filter {
+        before.query(
+            query(0, Filter {
                 condition: FilterCondition::Range {
                     min: Some("not a number".into()),
                     max: None
                 },
                 include_nulls: false,
-            },
+            }),
             crate::Cancellation::new()
         ),
         Err(GewuError::InvalidArgument { .. })

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{AnalysisCapabilities, FileInfo, Filter, GewuError};
+use crate::{AnalysisCapabilities, FileInfo, GewuError};
 
 #[derive(uniffi::Object)]
 pub struct GewuDataset {
@@ -65,17 +65,6 @@ impl GewuDataset {
 
     pub fn format_value(&self, column: u32, value: i64) -> Result<String, GewuError> {
         Ok(self.inner.format_value(column, value)?)
-    }
-
-    pub fn validate_filter(
-        &self,
-        column: u32,
-        filter: Filter,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<(), GewuError> {
-        Ok(self
-            .inner
-            .validate_filter(column, &filter.into(), &cancellation.inner)?)
     }
 
     pub fn view(&self) -> Arc<crate::GewuView> {

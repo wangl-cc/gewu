@@ -47,16 +47,6 @@ impl Dataset {
         self.column(column)?.parse_bound(text)
     }
 
-    pub fn validate_filter(
-        &self,
-        column: u32,
-        filter: &crate::Filter,
-        cancellation: &crate::Cancellation,
-    ) -> Result<()> {
-        self.column(column)?.compile_filter(filter, cancellation)?;
-        cancellation.check()
-    }
-
     /// Open a supported file using its format's default options.
     /// CSV/TSV and XLSX use the first record as headers; XLSX opens its first sheet.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

@@ -1,6 +1,6 @@
 import Foundation
 
-// Compile with freshly generated gewu.swift; no App sources are needed.
+// Compile with freshly generated gewu.swift and the pure InspectorSection projection.
 @main
 enum ViewSmoke {
     static func check(_ condition: Bool) {
@@ -21,6 +21,15 @@ enum ViewSmoke {
             ColSpec(column: 1, sort: nil, filter: nil),
         ])
         var spec = full
+        spec.columns[0].filter = Filter(
+            condition: .range(min: "not a number", max: nil), includeNulls: false)
+        do {
+            _ = try original.query(spec: spec, cancellation: Cancellation())
+            preconditionFailure("invalid filter returned a View")
+        } catch GewuError.InvalidArgument(let message) {
+            check(!message.isEmpty)
+        }
+        check(original.rowCount() == 3)
         spec.columns[0].filter = Filter(
             condition: .range(min: "2", max: nil), includeNulls: false)
         spec.columns[0].sort = ColSort(priority: 0, descending: true)

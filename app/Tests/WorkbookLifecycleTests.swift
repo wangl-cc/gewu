@@ -189,18 +189,12 @@ struct WorkbookLifecycleTests {
             #expect(document.status(rowNumberBase: base).contains("row \(label) in file"))
         }
         document.selectedSourceRow = nil
-        do {
-            try document.doc.validateFilter(
-                column: 0, filter: Filter(condition: .range(min: "not a number", max: nil), includeNulls: false),
-                cancellation: Cancellation())
-            Issue.record("Invalid numeric bounds must fail")
-        } catch GewuError.InvalidArgument(let message) {
-            let error: Error = GewuError.InvalidArgument(message: message)
-            #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
-            document.reportError(error)
-            #expect(document.errorMessage == message)
-            document.isErrorPresented = false
-        }
+        let message = "Invalid numeric bound"
+        let error: Error = GewuError.InvalidArgument(message: message)
+        #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
+        document.reportError(error)
+        #expect(document.errorMessage == message)
+        document.isErrorPresented = false
     }
 
     @MainActor

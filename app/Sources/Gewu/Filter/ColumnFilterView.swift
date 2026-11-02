@@ -24,8 +24,6 @@ struct ColumnFilterView: View {
     @State private var histogramScale: AxisScale = .linear
     @State private var literal = ""
     @State private var loading = false
-    @State private var applying = false
-    @State private var applyTask: Task<Void, Never>?
 
     init(
         doc: GewuSession, column: UInt32, info: ColumnInfo, querySpec: QuerySpec, current: Filter?,
@@ -88,11 +86,10 @@ struct ColumnFilterView: View {
                 NullModePicker(selection: $nullMode, nullCount: choices?.nullCount)
                 Spacer()
                 Button("Clear") { onApply(nil) }
-                Button("Apply", action: apply).keyboardShortcut(.defaultAction).disabled(applying)
+                Button("Apply", action: apply).keyboardShortcut(.defaultAction)
             }
-        }.padding(14).frame(width: 440).disabled(applying)
+        }.padding(14).frame(width: 440)
             .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale)) { await load() }
-            .onDisappear { applyTask?.cancel() }
     }
 
     @ViewBuilder private var exactEditor: some View {
@@ -181,29 +178,6 @@ struct ColumnFilterView: View {
             case .exact: exact.condition
             }
         let filter = nullMode.applying(to: modes.isEmpty ? nil : activeCondition)
-        applying = true
-        applyTask?.cancel()
-        applyTask = Task { @MainActor in
-            defer { applying = false }
-            do {
-                let doc = doc
-                let column = column
-                if let filter {
-                    let cancellation = Cancellation()
-                    try await withTaskCancellationHandler {
-                        try await Task.detached {
-                            try doc.validateFilter(column: column, filter: filter, cancellation: cancellation)
-                        }.value
-                    } onCancel: {
-                        cancellation.cancel()
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                onApply(filter)
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.error = error.userMessage
-            }
-        }
+        onApply(filter)
     }
 }

@@ -14,7 +14,7 @@ Core and FFI now expose immutable Dataset/View handles. The App still uses the p
 | --- | --- |
 | `GewuDataset` | Wraps shared decoded data, metadata and lazy column caches. |
 | `GewuView` | Wraps an immutable row/column projection over that Dataset. |
-| `Cancellation` | Caller-owned terminal signal for one query, analysis, candidate, validation or Find request. |
+| `Cancellation` | Caller-owned terminal signal for one query, analysis, candidate or Find request. |
 | `FindSession` | Captures shared data, typed query and ordered column scope for navigation/highlights. |
 | `TextChoices` | Captures a string column and selected rows for bounded candidate paging. |
 | `GewuExport` | Captures row/column data, progress and cancellation for one atomic file write. |
@@ -64,7 +64,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor for
 | Calls | Scheduling |
 | --- | --- |
 | Opening, sheet listing, initial `view()` | Background I/O, decoding or row-ID allocation. |
-| `query`, `analyze_*`, `filter_choices`, `filter_distribution`, `validate_filter` | Background scans, native kernels or dictionary construction. |
+| `query`, `analyze_*`, `filter_choices`, `filter_distribution` | Background scans, native kernels or dictionary construction. |
 | Find pages/highlights, text pages, export writes | Background; even bounded outputs can require full scans. |
 | Metadata, `reorder_columns`, `find`, `text_choices`, `export` creation | Metadata access or shared snapshot capture. |
 | `rows` | Small visible blocks; cost grows with cell count and formatting. |
@@ -84,7 +84,7 @@ Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or ro
 
 ## Filter candidates
 
-`dataset.info().columns` reports static capabilities; the frontend chooses its editor. `dataset.validate_filter(column, filter, cancellation)` checks typed input without querying. Exact filters may build a shared compact dictionary, so validation can require a worker.
+`dataset.info().columns` reports static capabilities; the frontend chooses its editor. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
 
 `view.filter_choices(column, cancellation)` returns `ValueChoice { label, value, count }` and a separate null count, all from the View's visible rows, including the edited column's filter. Zero-count values are absent. `Some([])` is an empty complete list; `None` means no complete bounded dictionary list is available. Exact filters remain valid without that list; no unbounded distinct calculation is introduced.
 

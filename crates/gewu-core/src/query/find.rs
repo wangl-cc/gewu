@@ -4,10 +4,7 @@
 //! retain bounded cursors, while borrowed row selections and predicate scratch
 //! are reused across bounded display-row batches.
 
-use std::{
-    ops::Range,
-    sync::{Arc, OnceLock},
-};
+use std::{ops::Range, sync::Arc};
 
 use arrow::array::ArrayRef;
 use regex::RegexBuilder;
@@ -40,51 +37,16 @@ pub struct FindHighlight {
     pub matched: Vec<bool>,
 }
 
-/// A Find query compiled once per captured session. The parsed literal matcher
-/// is shared across text columns, so a page or highlight never recompiles it.
-pub(crate) struct FindQuery {
-    text: String,
-    matcher: OnceLock<std::result::Result<Arc<regex::Regex>, String>>,
-}
-
-impl FindQuery {
-    pub(crate) fn new(text: &str) -> Self {
-        Self {
-            text: text.to_owned(),
-            matcher: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn text(&self) -> &str {
-        &self.text
-    }
-
-    /// Case-insensitive literal matcher for text columns, compiled at most once.
-    pub(crate) fn matcher(&self) -> Result<Arc<regex::Regex>> {
-        let matcher = self.matcher.get_or_init(|| {
-            RegexBuilder::new(&regex::escape(&self.text))
-                .case_insensitive(true)
-                .build()
-                .map(Arc::new)
-                .map_err(|error| error.to_string())
-        });
-        match matcher {
-            Ok(matcher) => Ok(matcher.clone()),
-            Err(error) => Err(Error::InvalidArgument(format!(
-                "cannot compile text search: {error}"
-            ))),
-        }
-    }
-}
-
-/// A compiled query over a captured view and ordered column scope.
+/// A literal matcher over a captured view and ordered column scope.
+/// Typed column predicates are compiled and used by each page or highlight request.
 ///
 /// The snapshot shares Arrow buffers and row IDs with its document. Cancellation
 /// is terminal and independent of table queries and every other Find session.
 pub struct Find {
     columns: Vec<(u32, ArrayRef)>,
     rows: Arc<[u32]>,
-    query: FindQuery,
+    query: String,
+    matcher: regex::Regex,
     token: Cancellation,
 }
 
@@ -101,19 +63,22 @@ impl Find {
         rows: Arc<[u32]>,
         query: String,
     ) -> Result<Self> {
-        let query = FindQuery::new(query.trim());
-        if query.text().is_empty() {
+        let query = query.trim().to_owned();
+        if query.is_empty() {
             return Err(Error::InvalidArgument("find query cannot be empty".into()));
         }
-        let matcher = query.matcher()?;
-        for (_, array) in &columns {
-            drop(compile_find(array, query.text(), Some(&matcher))?);
-        }
+        let matcher = RegexBuilder::new(&regex::escape(&query))
+            .case_insensitive(true)
+            .build()
+            .map_err(|error| {
+                Error::InvalidArgument(format!("cannot compile text search: {error}"))
+            })?;
         let token = Cancellation::default();
         Ok(Self {
             columns,
             rows,
             query,
+            matcher,
             token,
         })
     }
@@ -256,10 +221,9 @@ impl Find {
     }
 
     fn predicates(&self) -> Result<Vec<Option<Predicate<'_>>>> {
-        let matcher = self.query.matcher()?;
         self.columns
             .iter()
-            .map(|(_, array)| compile_find(array, self.query.text(), Some(&matcher)))
+            .map(|(_, array)| compile_find(array, &self.query, Some(&self.matcher)))
             .collect()
     }
 
