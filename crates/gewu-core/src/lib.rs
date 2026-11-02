@@ -33,9 +33,8 @@ pub use session::{
     ViewOperation,
 };
 pub use stats::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,
-    ColumnAnalysis, Histogram, LengthSummary, LengthUnit, NumericStatistics, RangeBounds,
-    RangeHistogram, ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency,
-    ValueSummary, MAX_SCATTER_POINTS,
+    AnalysisField, AnalysisSection, ArrayView, AxisScale, ColumnOverview, Histogram, LengthSummary,
+    LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAnalysis, ScatterAxisKind,
+    ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use types::Encoding;

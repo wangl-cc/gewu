@@ -14,7 +14,7 @@ struct HistogramScaleTests {
             await model.load(
                 document: document, version: 0, column: 0, expanded: AnalysisSection.distribution.mask,
                 bins: 2, scale: scale)
-            guard case .distribution(let histogram) = model.results[.distribution] else {
+            guard let histogram = model.distribution else {
                 Issue.record("Missing distribution: \(model.errors)")
                 return
             }

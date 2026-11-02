@@ -1,15 +1,8 @@
-//! On-demand column analysis over an immutable view snapshot. Jobs own their
-//! cancellation state; cancelling an inspector never cancels a table query.
+//! Column analysis metadata and logical-null counts.
 
-use std::sync::Arc;
+use arrow::{array::Array, datatypes::DataType};
 
-use arrow::{
-    array::{Array, ArrayRef},
-    datatypes::DataType,
-};
-
-pub use super::LengthUnit;
-use super::{ArrayView, Cancellation, Histogram, LengthSummary, NumericStatistics, ValueSummary};
+use super::{ArrayView, Cancellation};
 use crate::{column::display_type, scope::Selection, types, Error, Result};
 
 /// A section of the column inspector.
@@ -31,150 +24,41 @@ pub struct AnalysisField {
     pub nullable: bool,
 }
 
-#[derive(Debug, Clone)]
-pub enum AnalysisData {
-    Overview { rows: u64, null_count: u64 },
-    Statistics { statistics: NumericStatistics },
-    Distribution { histogram: Histogram },
-    Values { summary: ValueSummary },
-    Lengths { summary: LengthSummary },
-    Structure { fields: Vec<AnalysisField> },
+/// Row and logical-null counts in the requested view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnOverview {
+    pub rows: u64,
+    pub null_count: u64,
 }
 
-#[derive(Debug, Clone)]
-pub struct AnalysisResult {
-    pub version: u64,
-    pub column: u32,
-    pub data: AnalysisData,
-}
-
-/// A read-only job for exactly one section. Array buffers and source row IDs
-/// are shared, not copied. Results keep the captured version even if the table
-/// subsequently changes; clients must reject results for an obsolete selection.
-pub struct ColumnAnalysis {
-    array: ArrayRef,
-    rows: Selection,
-    version: u64,
-    column: u32,
-    section: AnalysisSection,
-    histogram_bins: u32,
-    histogram_scale: crate::AxisScale,
-    context: Cancellation,
-}
-
-impl ColumnAnalysis {
-    pub(crate) fn new(
-        array: ArrayRef,
-        rows: Arc<Vec<u32>>,
-        version: u64,
-        column: u32,
-        section: AnalysisSection,
-    ) -> Result<Self> {
-        if !capabilities(array.data_type()).contains(&section) {
-            return Err(Error::InvalidArgument(format!(
-                "{} does not support {section:?} analysis",
-                array.data_type()
-            )));
-        }
-        // All analysis sections are order-independent. A full view can use
-        // Arrow's cached null count and contiguous buffers even after sorting.
-        let rows = if rows.len() == array.len() {
-            Selection::All(array.len())
-        } else {
-            Selection::Rows(rows)
+impl ArrayView<'_> {
+    pub(crate) fn overview(&self, cancellation: &Cancellation) -> Result<ColumnOverview> {
+        let null_count = match self.array.logical_nulls() {
+            None => 0,
+            Some(nulls) if matches!(self.rows, Selection::All(_)) => nulls.null_count() as u64,
+            Some(nulls) => {
+                let mut count = 0;
+                for (i, row) in self.rows.iter().enumerate() {
+                    cancellation.check_at(i)?;
+                    count += u64::from(nulls.is_null(row));
+                }
+                count
+            }
         };
-        Ok(Self {
-            array,
-            rows,
-            version,
-            column,
-            section,
-            histogram_bins: 40,
-            histogram_scale: crate::AxisScale::Linear,
-            context: Cancellation::default(),
+        Ok(ColumnOverview {
+            rows: self.len() as u64,
+            null_count,
         })
     }
+}
 
-    pub fn cancel(&self) {
-        self.context.cancel();
+pub(crate) fn ensure_supported(data_type: &DataType, section: AnalysisSection) -> Result<()> {
+    if !capabilities(data_type).contains(&section) {
+        return Err(Error::InvalidArgument(format!(
+            "{data_type} does not support {section:?} analysis"
+        )));
     }
-
-    /// Set the maximum bin count for distribution and length histograms.
-    /// The default is 40; discrete data may need fewer bins. Zero is rejected.
-    pub fn with_histogram_bins(mut self, bins: u32) -> Result<Self> {
-        if bins == 0 {
-            return Err(Error::InvalidArgument("bins must be at least 1".into()));
-        }
-        self.histogram_bins = bins;
-        Ok(self)
-    }
-
-    /// Choose numeric distribution binning; other sections remain untransformed.
-    pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
-        if scale == crate::AxisScale::Log10
-            && (self.section != AnalysisSection::Distribution
-                || !super::supports_logarithmic(self.array.data_type()))
-        {
-            return Err(Error::InvalidArgument(
-                "logarithmic binning requires a numeric distribution".into(),
-            ));
-        }
-        self.histogram_scale = scale;
-        Ok(self)
-    }
-
-    /// Execute off the UI thread. Only the requested section is computed.
-    /// Cancellation is terminal for this job and checked throughout scans.
-    pub fn run(&self) -> Result<AnalysisResult> {
-        self.context.check()?;
-        let view = ArrayView::new(&self.array, &self.rows);
-        let data = match self.section {
-            AnalysisSection::Overview => AnalysisData::Overview {
-                rows: view.len() as u64,
-                null_count: self.null_count()?,
-            },
-            AnalysisSection::Statistics => AnalysisData::Statistics {
-                statistics: view.numeric_statistics(&self.context)?,
-            },
-            AnalysisSection::Distribution => AnalysisData::Distribution {
-                histogram: view.histogram(
-                    self.histogram_bins,
-                    self.histogram_scale,
-                    &self.context,
-                )?,
-            },
-            AnalysisSection::Values => AnalysisData::Values {
-                summary: view.value_summary(&self.context)?,
-            },
-            AnalysisSection::Lengths => AnalysisData::Lengths {
-                summary: view.length_summary(self.histogram_bins, &self.context)?,
-            },
-            AnalysisSection::Structure => AnalysisData::Structure {
-                fields: structure(self.array.data_type())?,
-            },
-        };
-        self.context.check()?;
-        Ok(AnalysisResult {
-            version: self.version,
-            column: self.column,
-            data,
-        })
-    }
-
-    fn null_count(&self) -> Result<u64> {
-        let Some(nulls) = self.array.logical_nulls() else {
-            return Ok(0);
-        };
-        if matches!(self.rows, Selection::All(_)) {
-            return Ok(nulls.null_count() as u64);
-        }
-        let mut count = 0;
-        for (i, row) in self.rows.iter().enumerate() {
-            self.context.check_at(i)?;
-            count += u64::from(nulls.is_null(row));
-        }
-        Ok(count)
-    }
+    Ok(())
 }
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
@@ -212,7 +96,8 @@ pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
     sections
 }
 
-fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
+pub(crate) fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
+    ensure_supported(data_type, AnalysisSection::Structure)?;
     let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
         if !types::is_describable(data_type) {
             return Err(Error::Unsupported(format!(
@@ -247,25 +132,28 @@ fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::{
-        array::{new_null_array, DictionaryArray, Float64Array, Int8Array, StringArray},
+        array::{new_null_array, ArrayRef, DictionaryArray, Float64Array, Int8Array, StringArray},
         datatypes::{Field, Int8Type},
+        record_batch::RecordBatch,
     };
 
     use super::*;
+    use crate::{AxisScale, Cancellation, Session};
 
-    fn run(array: &ArrayRef, section: AnalysisSection) -> AnalysisData {
-        ColumnAnalysis::new(
-            array.clone(),
-            Arc::new((0..array.len() as u32).collect()),
-            1,
-            0,
-            section,
-        )
-        .unwrap()
-        .run()
-        .unwrap()
-        .data
+    fn session(array: &ArrayRef) -> Session {
+        let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
+        Session::from_dataset(Arc::new(crate::Dataset {
+            source_path: Default::default(),
+            schema: batch.schema(),
+            columns: vec![crate::Column::new("value", array.clone()).unwrap()],
+            n_rows: array.len(),
+            file_size: 0,
+            format: crate::FileType::Csv,
+            metadata: crate::FileMetadata::Delimited,
+        }))
     }
 
     #[test]
@@ -305,29 +193,50 @@ mod tests {
         let text: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..100).map(|n| "x".repeat(n)),
         ));
-        for (array, section) in [
-            (numbers, AnalysisSection::Distribution),
-            (text, AnalysisSection::Lengths),
-        ] {
-            let job = || {
-                ColumnAnalysis::new(array.clone(), Arc::new((0..100).collect()), 1, 0, section)
-                    .unwrap()
-            };
-            assert!(matches!(
-                job().with_histogram_bins(0),
-                Err(Error::InvalidArgument(_))
-            ));
-            for bins in [10, 20] {
-                let result = job().with_histogram_bins(bins).unwrap().run().unwrap();
-                let histogram = match result.data {
-                    AnalysisData::Distribution { histogram } => histogram,
-                    AnalysisData::Lengths { summary } => summary.histogram,
-                    _ => panic!("histogram"),
-                };
+        let numbers = session(&numbers);
+        let text = session(&text);
+        let cancel = Cancellation::default();
+        assert!(matches!(
+            numbers.analyze_distribution(0, 0, 0, AxisScale::Linear, &cancel),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            text.analyze_lengths(0, 0, 0, &cancel),
+            Err(Error::InvalidArgument(_))
+        ));
+        for bins in [10, 20] {
+            for histogram in [
+                numbers
+                    .analyze_distribution(0, 0, bins, AxisScale::Linear, &cancel)
+                    .unwrap(),
+                text.analyze_lengths(0, 0, bins, &cancel).unwrap().histogram,
+            ] {
                 assert_eq!(histogram.counts.len(), bins as usize);
                 assert_eq!(histogram.counts.iter().sum::<u64>(), 100);
             }
         }
+    }
+
+    #[test]
+    fn distribution_rejects_unsupported_types_and_logarithmic_temporal_axes() {
+        let text: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
+        let dates: ArrayRef = Arc::new(arrow::array::Date32Array::from(vec![1, 2]));
+        let cancellation = Cancellation::default();
+        assert!(matches!(
+            session(&text).analyze_distribution(0, 0, 2, AxisScale::Linear, &cancellation),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            session(&dates).analyze_distribution(0, 0, 2, AxisScale::Log10, &cancellation),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert_eq!(
+            session(&dates)
+                .analyze_distribution(0, 0, 2, AxisScale::Linear, &cancellation)
+                .unwrap()
+                .total,
+            2
+        );
     }
 
     #[test]
@@ -339,10 +248,9 @@ mod tests {
             None,
         ]] {
             let array: ArrayRef = Arc::new(Float64Array::from(values));
-            let AnalysisData::Statistics { statistics } = run(&array, AnalysisSection::Statistics)
-            else {
-                panic!("statistics")
-            };
+            let statistics = session(&array)
+                .analyze_statistics(0, 0, &Cancellation::default())
+                .unwrap();
             assert_eq!(statistics.infinite_count, 1);
             assert_eq!(statistics.nan_count, u64::from(array.len() > 1));
             assert_eq!((statistics.mean, statistics.std_dev), (None, None));
@@ -360,14 +268,13 @@ mod tests {
             )
             .unwrap(),
         );
-        let AnalysisData::Overview { rows, null_count } = run(&array, AnalysisSection::Overview)
-        else {
-            panic!("overview")
-        };
+        let ColumnOverview { rows, null_count } = session(&array)
+            .analyze_overview(0, 0, &Cancellation::default())
+            .unwrap();
         assert_eq!((rows, null_count), (5, 2));
-        let AnalysisData::Values { summary } = run(&array, AnalysisSection::Values) else {
-            panic!("values")
-        };
+        let summary = session(&array)
+            .analyze_values(0, 0, &Cancellation::default())
+            .unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
             summary
@@ -399,9 +306,7 @@ mod tests {
                 &DataType::Struct(vec![Field::new("child", data_type.clone(), false)].into()),
                 0,
             );
-            let AnalysisData::Structure { fields } = run(&array, AnalysisSection::Structure) else {
-                panic!("structure")
-            };
+            let fields = session(&array).column_structure(0).unwrap();
             assert_eq!(fields, vec![AnalysisField {
                 name: "child".into(),
                 display_type: label.into(),
@@ -423,9 +328,7 @@ mod tests {
             assert!(!sections.contains(&AnalysisSection::Statistics));
             assert!(!sections.contains(&AnalysisSection::Values));
             let array = new_null_array(&data_type, 0);
-            let AnalysisData::Structure { fields } = run(&array, AnalysisSection::Structure) else {
-                panic!("structure")
-            };
+            let fields = session(&array).column_structure(0).unwrap();
             assert_eq!(fields.len(), 1);
             assert_eq!(
                 (

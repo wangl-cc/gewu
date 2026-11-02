@@ -19,9 +19,7 @@ mod scale;
 pub mod scatter;
 mod values;
 
-pub use analysis::{
-    capabilities, AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis,
-};
+pub use analysis::{capabilities, AnalysisField, AnalysisSection, ColumnOverview};
 pub use lengths::LengthUnit;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;

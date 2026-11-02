@@ -2,7 +2,7 @@
 //!
 //! All methods are synchronous. The app calls scans and I/O from background
 //! tasks. A newer `prepare_view` cancels an older view request inside the core;
-//! analysis and export jobs have independent cancellation handles. Snapshot
+//! column analyses use caller-owned cancellation, and exports have independent handles. Snapshot
 //! preparation, capability metadata and visible row blocks are UI-thread APIs.
 
 mod analysis;
@@ -19,8 +19,8 @@ mod text_choices;
 mod view;
 
 pub use analysis::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, Histogram,
-    LengthSummary, LengthUnit, NumericStatistics, ValueFrequency, ValueSummary,
+    AnalysisField, AnalysisSection, ColumnOverview, Histogram, LengthSummary, LengthUnit,
+    NumericStatistics, ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;
 pub use error::GewuError;

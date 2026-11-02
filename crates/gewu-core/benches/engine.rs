@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{AnalysisSection, Cancellation, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Filter, QuerySpec, Session};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -234,14 +234,14 @@ fn facets(c: &mut Criterion) {
     doc.prepare_view(&QuerySpec::default())
         .and_then(|operation| operation.run())
         .unwrap();
-    let statistics = doc
-        .prepare_analysis(
-            doc.current_view().version,
-            price,
-            AnalysisSection::Statistics,
-        )
-        .unwrap();
-    g.bench_function("statistics_price", |b| b.iter(|| statistics.run().unwrap()));
+    let version = doc.current_view().version;
+    let cancellation = Cancellation::default();
+    g.bench_function("statistics_price", |b| {
+        b.iter(|| {
+            doc.analyze_statistics(version, price, &cancellation)
+                .unwrap()
+        })
+    });
     g.finish();
 }
 
@@ -250,14 +250,12 @@ fn inspector_values(c: &mut Criterion) {
     let mut group = c.benchmark_group("inspector_values");
     group.sample_size(10);
     for name in ["label", "id", "uuid"] {
-        let job = doc
-            .prepare_analysis(
-                doc.current_view().version,
-                col(&doc, name),
-                AnalysisSection::Values,
-            )
-            .unwrap();
-        group.bench_function(name, |b| b.iter(|| job.run().unwrap()));
+        let version = doc.current_view().version;
+        let column = col(&doc, name);
+        let cancellation = Cancellation::default();
+        group.bench_function(name, |b| {
+            b.iter(|| doc.analyze_values(version, column, &cancellation).unwrap())
+        });
     }
     group.finish();
 }

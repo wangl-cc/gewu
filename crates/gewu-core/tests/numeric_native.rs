@@ -8,33 +8,26 @@ use arrow::array::{
     UInt32Array, UInt64Array, UInt8Array,
 };
 use gewu_core::{
-    AnalysisData, AnalysisSection, Bound, Cancellation, Error, Filter, NumericStatistics,
-    QuerySpec, Session, ValueSummary,
+    Bound, Cancellation, Error, Filter, NumericStatistics, QuerySpec, Session, ValueSummary,
 };
 use parquet::arrow::ArrowWriter;
 
 fn statistics(doc: &Session) -> NumericStatistics {
-    let result = doc
-        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Statistics)
-        .unwrap()
-        .run()
-        .unwrap();
-    let AnalysisData::Statistics { statistics } = result.data else {
-        panic!("statistics");
-    };
-    statistics
+    doc.analyze_statistics(
+        doc.current_view().version,
+        0,
+        &gewu_core::Cancellation::default(),
+    )
+    .unwrap()
 }
 
 fn values(doc: &Session) -> ValueSummary {
-    let result = doc
-        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Values)
-        .unwrap()
-        .run()
-        .unwrap();
-    let AnalysisData::Values { summary } = result.data else {
-        panic!("values");
-    };
-    summary
+    doc.analyze_values(
+        doc.current_view().version,
+        0,
+        &gewu_core::Cancellation::default(),
+    )
+    .unwrap()
 }
 
 fn document(array: ArrayRef) -> Session {
@@ -404,16 +397,15 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         ),
         (2, 2, Some(2.5))
     );
-    let result = doc
-        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Distribution)
-        .unwrap()
-        .with_histogram_bins(2)
-        .unwrap()
-        .run()
+    let histogram = doc
+        .analyze_distribution(
+            doc.current_view().version,
+            0,
+            2,
+            gewu_core::AxisScale::Linear,
+            &gewu_core::Cancellation::default(),
+        )
         .unwrap();
-    let AnalysisData::Distribution { histogram } = result.data else {
-        panic!("distribution");
-    };
     assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
     assert_eq!(histogram.counts, [0, 2]);
 }

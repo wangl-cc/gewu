@@ -5,8 +5,8 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    AnalysisSection, AxisScale, ColumnAnalysis, FileInfo, FileType, Filter, FilterChoices,
-    FindSession, GewuError, GewuExport, QuerySpec, RangeHistogram, RowBlock, TextChoices, ViewInfo,
+    AnalysisSection, AxisScale, FileInfo, FileType, Filter, FilterChoices, FindSession, GewuError,
+    GewuExport, QuerySpec, RangeHistogram, RowBlock, TextChoices, ViewInfo,
 };
 
 /// One open viewing session over a table.
@@ -154,36 +154,82 @@ impl GewuSession {
             .collect())
     }
 
-    /// Capture the current view without computing the section. Safe on the UI thread.
-    pub fn prepare_analysis(
+    /// Slow: execute off the UI thread with a fresh caller-owned cancellation signal.
+    pub fn analyze_overview(
         &self,
         version: u64,
         column: u32,
-        section: AnalysisSection,
-    ) -> Result<Arc<ColumnAnalysis>, GewuError> {
-        Ok(Arc::new(ColumnAnalysis {
-            inner: self
-                .inner
-                .prepare_analysis(version, column, section.into())?,
-        }))
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<crate::ColumnOverview, GewuError> {
+        Ok(self
+            .inner
+            .analyze_overview(version, column, &cancellation.inner)?
+            .into())
     }
 
-    /// Capture a section with a caller-selected histogram resolution.
-    pub fn prepare_analysis_with_bins(
+    /// Slow: execute off the UI thread with a fresh caller-owned cancellation signal.
+    pub fn analyze_statistics(
         &self,
         version: u64,
         column: u32,
-        section: AnalysisSection,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<crate::NumericStatistics, GewuError> {
+        Ok(self
+            .inner
+            .analyze_statistics(version, column, &cancellation.inner)?
+            .into())
+    }
+
+    /// Slow: execute off the UI thread with a fresh caller-owned cancellation signal.
+    pub fn analyze_distribution(
+        &self,
+        version: u64,
+        column: u32,
         bins: u32,
         scale: AxisScale,
-    ) -> Result<Arc<ColumnAnalysis>, GewuError> {
-        Ok(Arc::new(ColumnAnalysis {
-            inner: self
-                .inner
-                .prepare_analysis(version, column, section.into())?
-                .with_histogram_bins(bins)?
-                .with_histogram_scale(scale.into())?,
-        }))
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<crate::Histogram, GewuError> {
+        Ok(self
+            .inner
+            .analyze_distribution(version, column, bins, scale.into(), &cancellation.inner)?
+            .into())
+    }
+
+    /// Slow: execute off the UI thread with a fresh caller-owned cancellation signal.
+    pub fn analyze_values(
+        &self,
+        version: u64,
+        column: u32,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<crate::ValueSummary, GewuError> {
+        Ok(self
+            .inner
+            .analyze_values(version, column, &cancellation.inner)?
+            .into())
+    }
+
+    /// Slow: execute off the UI thread with a fresh caller-owned cancellation signal.
+    pub fn analyze_lengths(
+        &self,
+        version: u64,
+        column: u32,
+        bins: u32,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<crate::LengthSummary, GewuError> {
+        Ok(self
+            .inner
+            .analyze_lengths(version, column, bins, &cancellation.inner)?
+            .into())
+    }
+
+    /// Nested type metadata only; does not scan the column or depend on a view.
+    pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>, GewuError> {
+        Ok(self
+            .inner
+            .column_structure(column)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     /// Display text for a raw value of a date, time or timestamp column
@@ -288,14 +334,9 @@ mod tests {
         assert_eq!(points.points[1].y_label, "9007199254740993");
         scatter.cancel();
         assert!(matches!(scatter.run(), Err(GewuError::Cancelled)));
-        let stats = doc
-            .prepare_analysis(0, 0, AnalysisSection::Statistics)
-            .unwrap()
-            .run()
+        let statistics = doc
+            .analyze_statistics(0, 0, crate::Cancellation::new())
             .unwrap();
-        let crate::AnalysisData::Statistics { statistics } = stats.data else {
-            panic!("statistics");
-        };
         assert_eq!(
             statistics.median_label.as_deref(),
             Some("9007199254740992.5")

@@ -10,14 +10,13 @@ This document describes the calling contract. See [data types](../../docs/data-t
 | --- | --- |
 | `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
 | `ViewOperation` | Registers one query request, then runs or cancels that single-use operation. |
-| `Cancellation` | Caller-owned terminal cancellation for one filter, candidate or Find request. |
-| `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
+| `Cancellation` | Caller-owned terminal cancellation for one analysis, filter, candidate or Find request. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
 | `FindSession` | Captures a view, typed query and ordered column scope, with independent terminal cancellation and bounded cell results. |
 | `FindLimits` | `find_limits()` reports the maximum page size and highlight row count, so frontends do not duplicate Core constants. |
 | `GewuExport` | Captures a view and selected columns, with its own progress and cancellation. Each export can be written only once. |
 
-UniFFI manages Rust object handles through generated Swift classes; callers retain and release these objects normally rather than freeing raw pointers. Analysis and export jobs share immutable Arrow buffers and row selections with Core. They keep their captured data alive even after the UI releases the document or changes its current view. Release finished jobs when their snapshots are no longer needed.
+UniFFI manages Rust object handles through generated Swift classes; callers retain and release these objects normally rather than freeing raw pointers. Running column analyses and prepared scatter/export jobs share immutable Arrow buffers and row selections with Core. They keep their captured data alive even after the UI releases the document or changes its current view. Column-analysis calls release their snapshots on return; release prepared jobs when their snapshots are no longer needed.
 
 Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the boundary. Row blocks contain owned formatted strings, not borrowed Arrow buffers. Request bounded blocks for display instead of materializing every row through FFI.
 
@@ -30,7 +29,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.
 
-Versions identify published views within a document. `rows`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` reject a version that is no longer current with `StaleVersion`; they do not retrieve historical views. A successfully prepared Find, analysis or export owns its snapshot and can continue after a newer view is published.
+Versions identify published views within a document. `rows`, column-analysis calls, `prepare_find`, `prepare_scatter`, `prepare_export` reject a version that is no longer current with `StaleVersion`; they do not retrieve historical views. A successfully prepared Find, scatter or export owns its snapshot and can continue after a newer view is published. Column analyses acquire their snapshot when the function starts, not when Swift queues the call.
 
 `FileInfo` flattens format-specific metadata into optional fields and arrays. Parquet supplies row groups, compression and footer metadata; XLSX supplies worksheet metadata. Missing values for other formats are not errors.
 
@@ -61,10 +60,10 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 | Calls | Scheduling |
 | --- | --- |
-| `open`, `open_sheet`, `xlsx_sheet_names`, `filter_choices`, `filter_distribution`, `prepare_text_choices` | Background: file I/O, scans, sorting or index construction. |
-| `ViewOperation::run`, `ColumnAnalysis::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
+| `open`, `open_sheet`, `xlsx_sheet_names`, `filter_choices`, `filter_distribution`, `prepare_text_choices`, `analyze_overview`, `analyze_statistics`, `analyze_distribution`, `analyze_values`, `analyze_lengths` | Background: file I/O, scans, sorting or index construction. |
+| `ViewOperation::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
 | `FindSession` page/highlight methods | Background: execute bounded batches; no-hit and sparse scans can cover the captured view. |
-| `info`, `current_view`, `current_query`, `prepare_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
+| `info`, `current_view`, `current_query`, `prepare_view`, `analysis_capabilities`, `column_structure`, `prepare_find`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
 | `format_value` | Scalar display formatting. |
 | `validate_filter` | Scalar preparation for most filters; `Exact` may build the column's compact encoding, so allow background execution. |
@@ -75,14 +74,14 @@ Cancellation has independent scopes:
 - `prepare_view` supersedes older pending view operations immediately, before background execution. `ViewOperation::cancel()` cancels only that operation. An obsolete operation queued late cannot replace a newer one. A concurrent operation past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible.
 - Create a `Cancellation` before queueing `filter_choices`, `filter_distribution`, `validate_filter` or `prepare_text_choices`, and pass it as the `cancellation` argument. Cancellation reaches preparation and scans, including other-column facet filters and lazy dictionary construction. Cancelled construction never becomes a cached negative result. Handles are terminal; create a new one for each replacement request.
 - `TextChoices::page(query, after, limit, cancellation)` observes both the request's cancellation and the session's terminal `cancel()`. Cancelling one page preserves the facet and does not affect subsequent pages. No generation counter crosses the interface.
-- `ColumnAnalysis::cancel()` cancels only that analysis job. Cancellation is terminal for the handle; prepare a new job to run it again after cancellation.
+- Column analyses receive a fresh caller-owned `Cancellation`, created before queueing. Cancelling it affects only that request. A new view does not automatically cancel a running analysis; the UI cancels obsolete requests.
 - `ScatterAnalysis::cancel()` similarly cancels only its scatter scan, not table queries or other analysis jobs.
 - `Cancellation::cancel()` interrupts one Find scan at predicate and batch checkpoints without closing its session. `FindSession::cancel()` permanently closes only that captured Find.
 - `GewuExport::cancel()` cancels only that export. A failed or cancelled export cannot be retried; prepare another job.
 
 Keep a UI request identifier in addition to the Core version, and check it before publishing a result. Query ordering is already registered by `prepare_view`; the app's [DocumentModel](../../app/Sources/Gewu/Document/DocumentModel.swift) uses a serial worker to limit computation, not to establish ordering. Connect Swift task cancellation to the operation's `cancel()` using a cancellation handler. If the latest query fails, recover with `current_query()`, which returns a `QueryState` containing the committed spec and view from one snapshot. An older request may have committed just before it was cancelled, so the last state Swift displayed is not necessarily the committed state. Cancellation does not roll back a committed query or export.
 
-For detached analysis work, connect a Swift task cancellation handler to the Rust job's `cancel()` method and check cancellation before updating UI state. Cancelling a Swift `Task` alone does not interrupt a synchronous Rust call. See [InspectorModel](../../app/Sources/Gewu/Inspector/InspectorModel.swift) for this pattern.
+For detached analysis work, connect a Swift task cancellation handler to the caller-owned `Cancellation::cancel()` method and check cancellation before updating UI state. Cancelling a Swift `Task` alone does not interrupt a synchronous Rust call. See [InspectorModel](../../app/Sources/Gewu/Inspector/InspectorModel.swift) for this pattern.
 
 ## Filters and exact bounds
 
@@ -102,20 +101,24 @@ Scatter results carry axis kinds independently of column presentation. Nested an
 
 ## On-demand analysis
 
-Call `analysis_capabilities(column)` to discover supported sections without scanning the column. For each expanded section, call `prepare_analysis(version, column, section)`, then execute the returned `ColumnAnalysis::run()` off the UI thread. Each job computes only its requested section.
+Call `analysis_capabilities(column)` to discover supported sections without scanning the column. `AnalysisSection` describes UI availability and presentation; it does not select a computation or wrap its result. Request expanded sections using concrete functions:
 
-`prepare_analysis_with_bins(version, column, section, bins, scale)` selects a nonzero histogram resolution and an `AxisScale` (`Linear` or `Log10`); the default analysis API uses 40 linear bins. Logarithmic binning is available for numeric distribution sections, while length sections use linear binning. `filter_distribution(column, spec, bins, scale, cancellation)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
-
-| Section | `AnalysisData` payload |
+| Function | Result |
 | --- | --- |
-| `Overview` | Row and null counts. |
-| `Statistics` | Exact extrema and median labels, numeric mean and standard deviation, NaN and infinity counts. |
-| `Distribution` | Numeric histogram. |
-| `Values` | Fixed-capacity distinct and candidate estimates. Candidate counts are recounted over the full view; `estimated` also covers candidate selection and possible hash collisions. |
-| `Lengths` | Length unit, empty count, extrema, mean and histogram. |
-| `Structure` | Child field names, types and nullability. |
+| `analyze_overview(version, column, cancellation)` | `ColumnOverview`: row and logical-null counts. |
+| `analyze_statistics(version, column, cancellation)` | `NumericStatistics`: extrema and median labels, mean, standard deviation, NaN and infinity counts. |
+| `analyze_distribution(version, column, bins, scale, cancellation)` | `Histogram`: numeric distribution. |
+| `analyze_values(version, column, cancellation)` | `ValueSummary`: estimated distinct count and recounted candidate frequencies. |
+| `analyze_lengths(version, column, bins, cancellation)` | `LengthSummary`: length unit, empty count, extrema, mean and histogram. |
+| `column_structure(column)` | `Vec<AnalysisField>`: nested field metadata, independent of the current view. |
 
-The returned `AnalysisResult` carries its captured version and column. Match both, plus document identity and the UI request identifier, before displaying it. A completed job for an obsolete selection is a valid snapshot result, not necessarily an error. Cancel jobs when the section collapses or the selection changes; new table queries do not cancel them automatically.
+Histogram bin counts must be positive. Only numeric distributions accept `AxisScale::Log10`; lengths use linear bins. The App defaults to 40 bins.
+
+`filter_distribution(column, spec, bins, scale, cancellation)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
+
+Results carry only the requested data. The caller retains document identity, view version, column and request identifier, and checks that context before displaying a result. Each scanning call validates the version and captures a snapshot when execution starts; queued obsolete calls fail with `StaleVersion`. A running call can finish over its original snapshot after a new view is committed. Cancel its signal when the section collapses, selection changes or inspector disappears, and create a new signal for its replacement. Neither changing the view nor cancelling a Swift Task alone interrupts the Rust scan.
+
+The App stores typed optional results and runs expanded sections sequentially. Changing document, version or column invalidates all results; changing bins invalidates Distribution and Lengths; changing scale invalidates only Distribution. Cancellation and stale-version errors are silent; other failures remain visible and retryable.
 
 Display `NumericStatistics.median_label` verbatim. The median excludes nulls and NaNs and preserves native precision, including fractional temporal units; an empty input or an opposite-infinity midpoint returns `nil`. Exact median calculation temporarily stores selected source-row IDs. See [Core statistics](../gewu-core/README.md#statistics-and-histograms) for midpoint semantics and memory costs.
 

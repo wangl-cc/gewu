@@ -434,19 +434,15 @@ fn analysis_distribution_includes_the_columns_own_filter() {
         )
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    let result = doc
-        .prepare_analysis(view.version, 0, gewu_core::AnalysisSection::Distribution)
-        .unwrap()
-        .with_histogram_bins(8)
-        .unwrap()
-        .run()
+    let view_histogram = doc
+        .analyze_distribution(
+            view.version,
+            0,
+            8,
+            gewu_core::AxisScale::Linear,
+            &gewu_core::Cancellation::default(),
+        )
         .unwrap();
-    let gewu_core::AnalysisData::Distribution {
-        histogram: view_histogram,
-    } = result.data
-    else {
-        panic!("distribution");
-    };
     assert_eq!(filter_histogram.total, 5);
     assert_eq!(view_histogram.total, 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
@@ -454,7 +450,13 @@ fn analysis_distribution_includes_the_columns_own_filter() {
         .and_then(|operation| operation.run())
         .unwrap();
     assert!(matches!(
-        doc.prepare_analysis(view.version, 0, gewu_core::AnalysisSection::Distribution),
+        doc.analyze_distribution(
+            view.version,
+            0,
+            8,
+            gewu_core::AxisScale::Linear,
+            &gewu_core::Cancellation::default()
+        ),
         Err(Error::StaleVersion { .. })
     ));
 }

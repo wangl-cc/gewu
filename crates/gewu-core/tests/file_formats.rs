@@ -254,20 +254,15 @@ mod xlsx {
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
-        let result = doc
-            .prepare_analysis(
+        let histogram = doc
+            .analyze_distribution(
                 doc.current_view().version,
                 0,
-                gewu_core::AnalysisSection::Distribution,
+                3,
+                gewu_core::AxisScale::Linear,
+                &gewu_core::Cancellation::default(),
             )
-            .unwrap()
-            .with_histogram_bins(3)
-            .unwrap()
-            .run()
             .unwrap();
-        let gewu_core::AnalysisData::Distribution { histogram } = result.data else {
-            panic!("distribution");
-        };
         assert_eq!(histogram, h);
     }
 

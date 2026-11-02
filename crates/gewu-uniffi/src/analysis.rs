@@ -1,8 +1,6 @@
-//! Section-sized analysis records and independently cancellable jobs.
+//! Concrete column-analysis results and inspector capability metadata.
 
 use gewu_core as core;
-
-use crate::GewuError;
 
 #[derive(uniffi::Enum, Clone, Copy)]
 pub enum AnalysisSection {
@@ -23,19 +21,6 @@ impl From<core::AnalysisSection> for AnalysisSection {
             core::AnalysisSection::Values => Self::Values,
             core::AnalysisSection::Lengths => Self::Lengths,
             core::AnalysisSection::Structure => Self::Structure,
-        }
-    }
-}
-
-impl From<AnalysisSection> for core::AnalysisSection {
-    fn from(section: AnalysisSection) -> Self {
-        match section {
-            AnalysisSection::Overview => Self::Overview,
-            AnalysisSection::Statistics => Self::Statistics,
-            AnalysisSection::Distribution => Self::Distribution,
-            AnalysisSection::Values => Self::Values,
-            AnalysisSection::Lengths => Self::Lengths,
-            AnalysisSection::Structure => Self::Structure,
         }
     }
 }
@@ -83,100 +68,70 @@ pub struct AnalysisField {
     pub nullable: bool,
 }
 
-#[derive(uniffi::Enum)]
-pub enum AnalysisData {
-    Overview { rows: u64, null_count: u64 },
-    Statistics { statistics: NumericStatistics },
-    Distribution { histogram: Histogram },
-    Values { summary: ValueSummary },
-    Lengths { summary: LengthSummary },
-    Structure { fields: Vec<AnalysisField> },
-}
-
 #[derive(uniffi::Record)]
-pub struct AnalysisResult {
-    pub version: u64,
-    pub column: u32,
-    pub data: AnalysisData,
+pub struct ColumnOverview {
+    pub rows: u64,
+    pub null_count: u64,
 }
 
-impl From<core::AnalysisResult> for AnalysisResult {
-    fn from(result: core::AnalysisResult) -> Self {
-        let data = match result.data {
-            core::AnalysisData::Overview { rows, null_count } => {
-                AnalysisData::Overview { rows, null_count }
-            }
-            core::AnalysisData::Statistics { statistics } => AnalysisData::Statistics {
-                statistics: NumericStatistics {
-                    min_label: statistics.min_label,
-                    max_label: statistics.max_label,
-                    median_label: statistics.median_label,
-                    mean: statistics.mean,
-                    std_dev: statistics.std_dev,
-                    nan_count: statistics.nan_count,
-                    infinite_count: statistics.infinite_count,
-                },
-            },
-            core::AnalysisData::Distribution { histogram } => AnalysisData::Distribution {
-                histogram: histogram.into(),
-            },
-            core::AnalysisData::Values { summary } => AnalysisData::Values {
-                summary: ValueSummary {
-                    distinct_count: summary.distinct_count,
-                    estimated: summary.estimated,
-                    values: summary.values.into_iter().map(Into::into).collect(),
-                },
-            },
-            core::AnalysisData::Lengths { summary } => AnalysisData::Lengths {
-                summary: LengthSummary {
-                    unit: match summary.unit {
-                        core::LengthUnit::Characters => LengthUnit::Characters,
-                        core::LengthUnit::Bytes => LengthUnit::Bytes,
-                        core::LengthUnit::Elements => LengthUnit::Elements,
-                    },
-                    empty_count: summary.empty_count,
-                    min: summary.min,
-                    max: summary.max,
-                    mean: summary.mean,
-                    histogram: summary.histogram.into(),
-                },
-            },
-            core::AnalysisData::Structure { fields } => AnalysisData::Structure {
-                fields: fields
-                    .into_iter()
-                    .map(|field| AnalysisField {
-                        name: field.name,
-                        display_type: field.display_type,
-                        technical_type: field.technical_type,
-                        nullable: field.nullable,
-                    })
-                    .collect(),
-            },
-        };
+impl From<core::ColumnOverview> for ColumnOverview {
+    fn from(value: core::ColumnOverview) -> Self {
         Self {
-            version: result.version,
-            column: result.column,
-            data,
+            rows: value.rows,
+            null_count: value.null_count,
         }
     }
 }
 
-/// A captured column/view section with independent, terminal cancellation.
-#[derive(uniffi::Object)]
-pub struct ColumnAnalysis {
-    pub(crate) inner: core::ColumnAnalysis,
+impl From<core::NumericStatistics> for NumericStatistics {
+    fn from(value: core::NumericStatistics) -> Self {
+        Self {
+            min_label: value.min_label,
+            max_label: value.max_label,
+            median_label: value.median_label,
+            mean: value.mean,
+            std_dev: value.std_dev,
+            nan_count: value.nan_count,
+            infinite_count: value.infinite_count,
+        }
+    }
 }
 
-#[uniffi::export]
-impl ColumnAnalysis {
-    /// Slow: execute off the UI thread. Returned metadata identifies the snapshot.
-    pub fn run(&self) -> Result<AnalysisResult, GewuError> {
-        Ok(self.inner.run()?.into())
+impl From<core::ValueSummary> for ValueSummary {
+    fn from(value: core::ValueSummary) -> Self {
+        Self {
+            distinct_count: value.distinct_count,
+            estimated: value.estimated,
+            values: value.values.into_iter().map(Into::into).collect(),
+        }
     }
+}
 
-    /// Thread-safe; does not cancel table queries or other analysis jobs.
-    pub fn cancel(&self) {
-        self.inner.cancel();
+impl From<core::LengthSummary> for LengthSummary {
+    fn from(value: core::LengthSummary) -> Self {
+        Self {
+            unit: match value.unit {
+                core::LengthUnit::Characters => LengthUnit::Characters,
+                core::LengthUnit::Bytes => LengthUnit::Bytes,
+                core::LengthUnit::Elements => LengthUnit::Elements,
+            },
+            empty_count: value.empty_count,
+            min: value.min,
+            max: value.max,
+            mean: value.mean,
+            histogram: value.histogram.into(),
+        }
+    }
+}
+
+impl From<core::AnalysisField> for AnalysisField {
+    fn from(value: core::AnalysisField) -> Self {
+        Self {
+            name: value.name,
+            display_type: value.display_type,
+            technical_type: value.technical_type,
+            nullable: value.nullable,
+        }
     }
 }
 

@@ -6,7 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{AnalysisData, AnalysisSection, Cancellation, Error, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -281,14 +281,9 @@ fn high_cardinality_choices_use_paging_and_exact_filters_without_a_dictionary() 
 #[test]
 fn value_analysis_excludes_nulls_and_recounts_candidates() {
     let (path, doc) = sample("summary");
-    let result = doc
-        .prepare_analysis(0, 1, AnalysisSection::Values)
-        .unwrap()
-        .run()
+    let summary = doc
+        .analyze_values(0, 1, &gewu_core::Cancellation::default())
         .unwrap();
-    let AnalysisData::Values { summary } = result.data else {
-        panic!("values");
-    };
     assert_eq!(summary.distinct_count, 3);
     let top: Vec<_> = summary
         .values
@@ -296,15 +291,12 @@ fn value_analysis_excludes_nulls_and_recounts_candidates() {
         .map(|v| (v.label.as_str(), v.count))
         .collect();
     assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
-    let result = doc
-        .prepare_analysis(0, 1, AnalysisSection::Overview)
-        .unwrap()
-        .run()
-        .unwrap();
-    assert!(matches!(result.data, AnalysisData::Overview {
-        null_count: 1,
-        ..
-    }));
+    assert_eq!(
+        doc.analyze_overview(0, 1, &Cancellation::default())
+            .unwrap()
+            .null_count,
+        1
+    );
     std::fs::remove_file(path).ok();
 }
 
@@ -318,14 +310,9 @@ fn min_and_max_leave_out_nan() {
     ]));
     let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
     let (path, doc) = write("nan", &batch);
-    let result = doc
-        .prepare_analysis(0, 0, AnalysisSection::Statistics)
-        .unwrap()
-        .run()
+    let s = doc
+        .analyze_statistics(0, 0, &gewu_core::Cancellation::default())
         .unwrap();
-    let AnalysisData::Statistics { statistics: s } = result.data else {
-        panic!("statistics");
-    };
     assert_eq!(s.nan_count, 1);
     assert_eq!(s.min_label.as_deref(), Some("-1.5"));
     assert_eq!(s.max_label.as_deref(), Some("2.0"));

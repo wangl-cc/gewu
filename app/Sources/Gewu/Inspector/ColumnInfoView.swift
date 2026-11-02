@@ -101,8 +101,8 @@ struct ColumnAnalysisView: View {
             VStack(alignment: .leading, spacing: 10) {
                 if analysis.matches(document: model.doc, version: model.current.version, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
-                    if case .overview(let rows, let nulls) = analysis.results[.overview] {
-                        Text("Missing \(countWithPercent(nulls, total: rows))")
+                    if let overview = analysis.overview {
+                        Text("Missing \(countWithPercent(overview.nullCount, total: overview.rows))")
                             .font(.caption).foregroundStyle(.secondary)
                             .help(
                                 "Missing values in the current results. Column type: \(model.info.columns[column].technicalType)"
@@ -132,7 +132,7 @@ struct ColumnAnalysisView: View {
                                 }
                                 if analysis.loading == section { ProgressView().controlSize(.small) }
                                 if let error = analysis.errors[section] { failure(error) }
-                                if let result = analysis.results[section] { content(result) }
+                                content(section)
                             }
                             .padding(.top, 6).frame(maxWidth: .infinity, alignment: .leading)
                         } label: {
@@ -170,55 +170,65 @@ struct ColumnAnalysisView: View {
         }
     }
 
-    @ViewBuilder private func content(_ data: AnalysisData) -> some View {
-        switch data {
+    @ViewBuilder private func content(_ section: AnalysisSection) -> some View {
+        switch section {
         case .overview:
             EmptyView()
-        case .statistics(let statistics):
-            if let min = statistics.minLabel { detail("Min", min) }
-            if let max = statistics.maxLabel { detail("Max", max) }
-            if let median = statistics.medianLabel { detail("Median", median) }
-            if let mean = statistics.mean { detail("Mean", value(mean)) }
-            if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
-                detail("Std dev", decimal(sd))
+        case .statistics:
+            if let statistics = analysis.statistics {
+                if let min = statistics.minLabel { detail("Min", min) }
+                if let max = statistics.maxLabel { detail("Max", max) }
+                if let median = statistics.medianLabel { detail("Median", median) }
+                if let mean = statistics.mean { detail("Mean", value(mean)) }
+                if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
+                    detail("Std dev", decimal(sd))
+                }
+                if statistics.nanCount > 0 { detail("NaN", formatCount(statistics.nanCount)) }
+                if statistics.infiniteCount > 0 { detail("Infinite", formatCount(statistics.infiniteCount)) }
+                if statistics.minLabel == nil && statistics.maxLabel == nil {
+                    Text("No numeric values").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            if statistics.nanCount > 0 { detail("NaN", formatCount(statistics.nanCount)) }
-            if statistics.infiniteCount > 0 { detail("Infinite", formatCount(statistics.infiniteCount)) }
-            if statistics.minLabel == nil && statistics.maxLabel == nil {
-                Text("No numeric values").font(.caption).foregroundStyle(.secondary)
+        case .distribution:
+            if let histogram = analysis.distribution {
+                distribution(histogram)
             }
-        case .distribution(let histogram):
-            distribution(histogram)
-        case .values(let summary):
-            detail("Distinct", (summary.estimated ? "≈ " : "") + formatCount(summary.distinctCount))
-            if !summary.values.isEmpty {
-                Text(summary.estimated ? "Common values · estimated" : "Values")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .help(
-                        "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
-                    )
-                ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
-                    VStack(alignment: .leading, spacing: 3) {
-                        detail(item.label, countWithPercent(item.count, total: model.current.rowCount))
-                        ProgressView(value: Double(item.count), total: Double(max(model.current.rowCount, 1)))
-                            .tint(.accentColor)
+        case .values:
+            if let summary = analysis.values {
+                detail("Distinct", (summary.estimated ? "≈ " : "") + formatCount(summary.distinctCount))
+                if !summary.values.isEmpty {
+                    Text(summary.estimated ? "Common values · estimated" : "Values")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .help(
+                            "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
+                        )
+                    ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            detail(item.label, countWithPercent(item.count, total: model.current.rowCount))
+                            ProgressView(value: Double(item.count), total: Double(max(model.current.rowCount, 1)))
+                                .tint(.accentColor)
+                        }
                     }
                 }
             }
-        case .lengths(let summary):
-            detail("Unit", summary.unit.label)
-            detail("Empty", formatCount(summary.emptyCount))
-            if let min = summary.min { detail("Min", formatCount(min)) }
-            if let max = summary.max { detail("Max", formatCount(max)) }
-            if let mean = summary.mean { detail("Mean", decimal(mean)) }
-            distribution(summary.histogram)
-        case .structure(let fields):
-            ForEach(Array(fields.enumerated()), id: \.offset) { _, field in
-                detail(
-                    field.name,
-                    field.displayType + (field.nullable ? " · nullable" : ""),
-                    help: field.technicalType
-                )
+        case .lengths:
+            if let summary = analysis.lengths {
+                detail("Unit", summary.unit.label)
+                detail("Empty", formatCount(summary.emptyCount))
+                if let min = summary.min { detail("Min", formatCount(min)) }
+                if let max = summary.max { detail("Max", formatCount(max)) }
+                if let mean = summary.mean { detail("Mean", decimal(mean)) }
+                distribution(summary.histogram)
+            }
+        case .structure:
+            if let fields = analysis.structure {
+                ForEach(Array(fields.enumerated()), id: \.offset) { _, field in
+                    detail(
+                        field.name,
+                        field.displayType + (field.nullable ? " · nullable" : ""),
+                        help: field.technicalType
+                    )
+                }
             }
         }
     }
