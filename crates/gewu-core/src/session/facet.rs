@@ -56,28 +56,6 @@ impl Session {
         self.column(column)?.parse_bound(text)
     }
 
-    pub fn make_bound_i64(&self, column: u32, value: i64) -> Result<crate::Bound> {
-        self.column(column)?.make_bound_i64(value)
-    }
-
-    pub fn make_bound_u64(&self, column: u32, value: u64) -> Result<crate::Bound> {
-        self.column(column)?.make_bound_u64(value)
-    }
-
-    pub fn make_bound_f64(&self, column: u32, value: f64) -> Result<crate::Bound> {
-        self.column(column)?.make_bound_f64(value)
-    }
-
-    /// Decimal coefficient is transported as text to accommodate 256-bit values.
-    pub fn make_bound_decimal(
-        &self,
-        column: u32,
-        coefficient: &str,
-        scale: i8,
-    ) -> Result<crate::Bound> {
-        self.column(column)?.make_bound_decimal(coefficient, scale)
-    }
-
     /// Describe the filter editor using whole-column cardinality. Facet counts
     /// respect other columns' explicit filters without changing the editor.
     pub fn filter_spec(&self, column: u32, spec: Option<&QuerySpec>) -> Result<FilterSpec> {

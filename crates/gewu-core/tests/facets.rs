@@ -171,7 +171,7 @@ fn failed_apply_keeps_the_old_view() {
     let before = doc.current_view();
     let bad = QuerySpec::single(0, Filter::Range {
         include_nulls: false,
-        min: Some(doc.make_bound_i64(3, 1).unwrap()),
+        min: Some(doc.parse_bound(3, "1").unwrap()),
         max: None,
     });
     assert!(doc.apply_view(&bad).is_err());

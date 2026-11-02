@@ -34,6 +34,14 @@ fn check_range(doc: &Session, min: Option<Bound>, max: Option<Bound>, expected: 
     );
 }
 
+fn bound_i64(doc: &Session, column: u32, value: i64) -> Bound {
+    Bound::from_i64(doc.schema().field(column as usize).data_type(), value).unwrap()
+}
+
+fn bound_u64(doc: &Session, column: u32, value: u64) -> Bound {
+    Bound::from_u64(doc.schema().field(column as usize).data_type(), value).unwrap()
+}
+
 #[test]
 fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
     macro_rules! check {
@@ -59,11 +67,11 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
                 let max = max.map(|text| doc.parse_bound(0, text).unwrap());
                 check_range(&doc, min, max, expected);
             }
-            let max = doc.make_bound_i64(0, <$native>::MAX as i64).unwrap();
-            let min = doc.make_bound_i64(0, <$native>::MIN as i64).unwrap();
+            let max = bound_i64(&doc, 0, <$native>::MAX as i64);
+            let min = bound_i64(&doc, 0, <$native>::MIN as i64);
             check_range(&doc, Some(max), None, &[6]);
             check_range(&doc, None, Some(min), &[0]);
-            let outside = doc.make_bound_u64(0, u64::MAX).unwrap();
+            let outside = bound_u64(&doc, 0, u64::MAX);
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
@@ -102,7 +110,7 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
                 let max = max.map(|text| doc.parse_bound(0, text).unwrap());
                 check_range(&doc, min, max, expected);
             }
-            let max = doc.make_bound_u64(0, <$native>::MAX as u64).unwrap();
+            let max = bound_u64(&doc, 0, <$native>::MAX as u64);
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
@@ -129,14 +137,14 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &signed,
-        Some(signed.make_bound_i64(0, large + 1).unwrap()),
-        Some(signed.make_bound_i64(0, large + 1).unwrap()),
+        Some(bound_i64(&signed, 0, large + 1)),
+        Some(bound_i64(&signed, 0, large + 1)),
         &[2],
     );
     check_range(
         &signed,
-        Some(signed.make_bound_i64(0, large).unwrap()),
-        Some(signed.make_bound_i64(0, large).unwrap()),
+        Some(bound_i64(&signed, 0, large)),
+        Some(bound_i64(&signed, 0, large)),
         &[1],
     );
     check_range(
@@ -160,8 +168,8 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &unsigned,
-        Some(unsigned.make_bound_u64(0, large as u64 + 1).unwrap()),
-        Some(unsigned.make_bound_u64(0, large as u64 + 1).unwrap()),
+        Some(bound_u64(&unsigned, 0, large as u64 + 1)),
+        Some(bound_u64(&unsigned, 0, large as u64 + 1)),
         &[2],
     );
     check_range(
@@ -256,11 +264,11 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
             .parse_bound(0, &(u64::MAX - 1).to_string())
             .unwrap()
             .axis_value(),
-        unsigned.make_bound_u64(0, u64::MAX).unwrap().axis_value()
+        bound_u64(&unsigned, 0, u64::MAX).axis_value()
     );
     check_range(
         &unsigned,
-        Some(unsigned.make_bound_u64(0, u64::MAX).unwrap()),
+        Some(bound_u64(&unsigned, 0, u64::MAX)),
         None,
         &[1],
     );
@@ -304,38 +312,38 @@ fn float64_ranges_compare_large_integer_bounds_exactly() {
     // The odd integer between these adjacent floats cannot be represented by f64.
     check_range(
         &doc,
-        Some(doc.make_bound_i64(0, large + 1).unwrap()),
+        Some(bound_i64(&doc, 0, large + 1)),
         None,
         &[3, 4],
     );
     check_range(
         &doc,
         None,
-        Some(doc.make_bound_i64(0, large + 1).unwrap()),
+        Some(bound_i64(&doc, 0, large + 1)),
         &[0, 1, 2],
     );
     check_range(
         &doc,
-        Some(doc.make_bound_i64(0, -large - 1).unwrap()),
+        Some(bound_i64(&doc, 0, -large - 1)),
         None,
         &[1, 2, 3, 4],
     );
     check_range(
         &doc,
         None,
-        Some(doc.make_bound_i64(0, -large - 1).unwrap()),
+        Some(bound_i64(&doc, 0, -large - 1)),
         &[0],
     );
     check_range(
         &doc,
-        Some(doc.make_bound_u64(0, u64::MAX).unwrap()),
+        Some(bound_u64(&doc, 0, u64::MAX)),
         None,
         &[4],
     );
     check_range(
         &doc,
         None,
-        Some(doc.make_bound_u64(0, u64::MAX).unwrap()),
+        Some(bound_u64(&doc, 0, u64::MAX)),
         &[0, 1, 2, 3],
     );
 }

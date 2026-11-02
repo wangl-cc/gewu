@@ -58,8 +58,8 @@ fn apply_view(c: &mut Criterion) {
             "range_1",
             QuerySpec::default().with_filter(price, Filter::Range {
                 include_nulls: false,
-                min: Some(doc.make_bound_i64(price, 100).unwrap()),
-                max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                min: Some(doc.parse_bound(price, "100").unwrap()),
+                max: Some(doc.parse_bound(price, "5000").unwrap()),
             }),
         ),
         (
@@ -67,18 +67,18 @@ fn apply_view(c: &mut Criterion) {
             QuerySpec::default()
                 .with_filter(price, Filter::Range {
                     include_nulls: false,
-                    min: Some(doc.make_bound_i64(price, 100).unwrap()),
-                    max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                    min: Some(doc.parse_bound(price, "100").unwrap()),
+                    max: Some(doc.parse_bound(price, "5000").unwrap()),
                 })
                 .with_filter(score, Filter::Range {
                     include_nulls: false,
-                    min: Some(doc.make_bound_i64(score, 80).unwrap()),
-                    max: Some(doc.make_bound_i64(score, 120).unwrap()),
+                    min: Some(doc.parse_bound(score, "80").unwrap()),
+                    max: Some(doc.parse_bound(score, "120").unwrap()),
                 })
                 .with_filter(rating, Filter::Range {
                     include_nulls: false,
-                    min: Some(doc.make_bound_i64(rating, 20).unwrap()),
-                    max: Some(doc.make_bound_i64(rating, 40).unwrap()),
+                    min: Some(doc.parse_bound(rating, "20").unwrap()),
+                    max: Some(doc.parse_bound(rating, "40").unwrap()),
                 }),
         ),
         (
@@ -121,8 +121,8 @@ fn apply_view(c: &mut Criterion) {
             "range_decimal",
             QuerySpec::default().with_filter(amount, Filter::Range {
                 include_nulls: false,
-                min: Some(doc.make_bound_i64(amount, 50).unwrap()),
-                max: Some(doc.make_bound_i64(amount, 500).unwrap()),
+                min: Some(doc.parse_bound(amount, "50").unwrap()),
+                max: Some(doc.parse_bound(amount, "500").unwrap()),
             }),
         ),
         ("sort_uuid", QuerySpec {
@@ -137,8 +137,8 @@ fn apply_view(c: &mut Criterion) {
             QuerySpec::default()
                 .with_filter(price, Filter::Range {
                     include_nulls: false,
-                    min: Some(doc.make_bound_i64(price, 100).unwrap()),
-                    max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+                    min: Some(doc.parse_bound(price, "100").unwrap()),
+                    max: Some(doc.parse_bound(price, "5000").unwrap()),
                 })
                 .with_sort(vec![SortKey {
                     column: score,
@@ -187,8 +187,8 @@ fn facets(c: &mut Criterion) {
     );
     let other_filter = QuerySpec::single(price, Filter::Range {
         include_nulls: false,
-        min: Some(doc.make_bound_i64(price, 100).unwrap()),
-        max: Some(doc.make_bound_i64(price, 5000).unwrap()),
+        min: Some(doc.parse_bound(price, "100").unwrap()),
+        max: Some(doc.parse_bound(price, "5000").unwrap()),
     });
 
     let mut g = c.benchmark_group("facets");

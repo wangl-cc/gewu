@@ -66,7 +66,7 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 | `FindSession` page/highlight methods | Background: execute bounded batches; no-hit and sparse scans can cover the captured view. |
 | `info`, `current_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
-| `parse_bound`, `make_bound_*`, `Bound` methods, `format_value` | Scalar operations. |
+| `parse_bound`, `Bound` methods, `format_value` | Scalar operations. |
 | `validate_filter` | Scalar preparation for most filters; `InValues` may build the column's compact encoding, so allow background execution. |
 | Cancellation methods and export `progress` | Control calls that can be made while background work runs. |
 
@@ -102,7 +102,7 @@ String choices use `prepare_text_choices(column, state)` followed by `TextChoice
 
 Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the 255-value encoding limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
 
-For text endpoints, call `parse_bound(column, text)`. Native controls can call `make_bound_int`, `make_bound_uint`, `make_bound_float` or `make_bound_decimal`; decimal coefficients cross the boundary as integer strings with an explicit scale. These constructors validate against the column's logical type.
+For text endpoints, call `parse_bound(column, text)`. This parses and validates the text against the column's logical type.
 
 Preserve `Bound` objects when submitting `Filter::Range`. Its endpoints are inclusive, and `None` means an open end. `display()` supplies text, `same_value()` compares exact typed values, and `axis_value()` is only an approximate plotting coordinate. Never rebuild a filter from histogram coordinates or a rounded floating-point value. Use the supplied histogram bin bounds directly.
 

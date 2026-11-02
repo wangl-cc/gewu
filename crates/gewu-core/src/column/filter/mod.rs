@@ -11,7 +11,7 @@ pub mod scalar;
 pub mod text;
 
 use arrow::array::{Array, ArrayRef};
-pub use range::Bound;
+pub use super::bound::Bound;
 
 use crate::{
     predicate::Predicate,

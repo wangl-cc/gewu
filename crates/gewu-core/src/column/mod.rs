@@ -5,14 +5,15 @@
 //! - [`dictionary`]: compact distinct-value dictionary encoding
 //! - [`filter`]: Single-column filter and Find predicate compilation
 
+pub mod bound;
 pub mod dictionary;
 pub mod filter;
 
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
+pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
-pub use filter::range::Bound;
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
 use crate::{
@@ -242,25 +243,6 @@ impl Column {
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {
         Bound::parse(self.logical_data_type(), text)
-    }
-
-    pub fn make_bound_i64(&self, value: i64) -> Result<Bound> {
-        Bound::from_i64(self.logical_data_type(), value)
-    }
-
-    pub fn make_bound_u64(&self, value: u64) -> Result<Bound> {
-        Bound::from_u64(self.logical_data_type(), value)
-    }
-
-    pub fn make_bound_f64(&self, value: f64) -> Result<Bound> {
-        Bound::from_f64(self.logical_data_type(), value)
-    }
-
-    pub fn make_bound_decimal(&self, coefficient: &str, scale: i8) -> Result<Bound> {
-        let coeff = coefficient
-            .parse::<arrow::datatypes::i256>()
-            .map_err(|_| crate::Error::InvalidArgument("invalid decimal coefficient".into()))?;
-        Bound::from_decimal(self.logical_data_type(), coeff, scale)
     }
 }
 

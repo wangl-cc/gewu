@@ -62,7 +62,7 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
     let spec = QuerySpec::single(1, Filter::Range {
         include_nulls: false,
         min: None,
-        max: Some(doc.make_bound_i64(1, 0).unwrap()),
+        max: Some(doc.parse_bound(1, "0").unwrap()),
     });
     let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&spec)).unwrap().editor else {
         panic!("stable choices")

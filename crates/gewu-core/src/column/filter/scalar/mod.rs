@@ -1,15 +1,16 @@
 //! Scalar type semantics. Preparation borrows the native array and parses
 //! inputs once; evaluating a predicate is the executor's responsibility.
 
-pub(super) mod decimal;
-pub(super) mod float;
-pub(super) mod integer;
-pub(super) mod temporal;
+pub(crate) mod decimal;
+pub(crate) mod float;
+pub(crate) mod integer;
+pub(crate) mod temporal;
 
 use arrow::array::{Array, ArrayRef, AsArray};
 
-use super::range::{prepare_range, Bound};
+use super::range::prepare_range;
 use crate::{
+    column::Bound,
     predicate::Predicate,
     selection::RowSelection,
     types::{direct_domain, Domain},

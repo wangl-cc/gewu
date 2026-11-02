@@ -24,7 +24,7 @@ The whole input is decoded into memory. Query execution reads native Arrow array
 
 `QuerySpec` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
-`Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
+`Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Session::parse_bound` once. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
 
 `Document::column_capabilities` reports supported operations. `Document::validate_filter` validates and prepares a filter without applying a view. Preparation parses scalar inputs and binds borrowed arrays; value-list filters may build the column's compact encoding. String matching prepares one reusable Unicode matcher per query, without recompiling it for every batch.
 

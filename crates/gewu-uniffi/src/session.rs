@@ -242,32 +242,6 @@ impl GewuSession {
         Ok(Arc::new(self.inner.parse_bound(column, &text)?.into()))
     }
 
-    pub fn make_bound_int(&self, column: u32, value: i64) -> Result<Arc<Bound>, GewuError> {
-        Ok(Arc::new(self.inner.make_bound_i64(column, value)?.into()))
-    }
-
-    pub fn make_bound_uint(&self, column: u32, value: u64) -> Result<Arc<Bound>, GewuError> {
-        Ok(Arc::new(self.inner.make_bound_u64(column, value)?.into()))
-    }
-
-    pub fn make_bound_float(&self, column: u32, value: f64) -> Result<Arc<Bound>, GewuError> {
-        Ok(Arc::new(self.inner.make_bound_f64(column, value)?.into()))
-    }
-
-    /// Decimal coefficient transported as an integer string to preserve all digits.
-    pub fn make_bound_decimal(
-        &self,
-        column: u32,
-        coefficient: String,
-        scale: i8,
-    ) -> Result<Arc<Bound>, GewuError> {
-        Ok(Arc::new(
-            self.inner
-                .make_bound_decimal(column, &coefficient, scale)?
-                .into(),
-        ))
-    }
-
     /// Validate a filter without changing the current view.
     pub fn validate_filter(&self, column: u32, filter: Filter) -> Result<(), GewuError> {
         Ok(self.inner.validate_filter(column, &filter.into())?)
@@ -320,8 +294,8 @@ mod tests {
         let large = doc.parse_bound(0, "9007199254740993".into()).unwrap();
         assert_eq!(large.display(), "9007199254740993");
         assert_eq!(large.axis_value(), 9_007_199_254_740_992.0);
-        assert!(large.same_value(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()));
-        assert!(!large.same_value(doc.make_bound_int(0, 9_007_199_254_740_992).unwrap()));
+        assert!(large.same_value(doc.parse_bound(0, "9007199254740993".into()).unwrap()));
+        assert!(!large.same_value(doc.parse_bound(0, "9007199254740992".into()).unwrap()));
         assert!(matches!(
             doc.parse_bound(0, "NaN".into()),
             Err(GewuError::InvalidArgument { .. })
@@ -348,7 +322,7 @@ mod tests {
             },
             Filter::Range {
                 include_nulls: false,
-                min: Some(doc.make_bound_int(0, 9_007_199_254_740_993).unwrap()),
+                min: Some(doc.parse_bound(0, "9007199254740993".into()).unwrap()),
                 max: None,
             },
         ] {
