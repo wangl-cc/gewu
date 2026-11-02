@@ -30,7 +30,7 @@ A normal header click clears other keys and cycles unsorted → ascending → de
 | Condition | Meaning |
 | --- | --- |
 | `Range { min, max }` | Inclusive endpoints, sent as optional text; missing endpoints are open. Reversed bounds are errors. |
-| `Contains { text, case_sensitive }` | Match displayed text on supported types, with optional case sensitivity. |
+| `Contains { text, case_sensitive }` | Match a substring of a text value, with optional case sensitivity; dictionary-encoded text is supported. |
 | `Exact { values, exclude }` | Parse non-null text values using the source column's type; select or exclude the resulting values. |
 
 `Filter` wraps one condition and `include_nulls`. Null never occupies a `values` entry. Empty exact inclusion matches no non-null rows; empty exclusion matches every non-null row. Combined with `include_nulls`, these represent null-only, non-null-only, all rows or no rows without extra filter variants.
@@ -39,7 +39,7 @@ Parsing, precision, case sensitivity and nested-value behavior are defined in [d
 
 ## Editor selection
 
-Core reports static type capabilities (`range`, `contains`, `exact`); the app owns editor selection. Ordered columns initially show Range, text initially shows Contains, and other exact-capable columns show Exact. Users can switch among supported modes. Each mode retains its own draft, and Apply submits only the current mode with the shared null option.
+Core reports static type capabilities (`range`, `contains`, `exact`); the app owns editor selection. Ordered columns initially show Range, text initially shows Contains, and other exact-capable columns show Exact. Users can switch among supported modes. Each mode retains its own draft, and Apply submits only the current mode with the shared null option. Columns without content-filter support show only null options and do not request filter candidates or distributions.
 
 Candidate values and range distributions are requested on demand. Exact selection can use a complete bounded list, text pages, or manually entered values. Dictionary availability is an execution optimization, not a restriction on the filter protocol.
 

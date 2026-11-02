@@ -37,8 +37,8 @@ struct ColumnFilterView: View {
         var initial: FilterMode = info.capabilities.range ? .range : (info.capabilities.contains ? .contains : .exact)
         if let current {
             switch current.condition {
-            case .range: initial = .range
-            case .contains: initial = .contains
+            case .range: if info.capabilities.range { initial = .range }
+            case .contains: if info.capabilities.contains { initial = .contains }
             case .exact: if info.capabilities.exact { initial = .exact }
             }
         }
@@ -130,6 +130,7 @@ struct ColumnFilterView: View {
         let scale: AxisScale
     }
     @MainActor private func load() async {
+        guard modes.contains(mode) else { return }
         loading = true
         error = nil
         let doc = doc

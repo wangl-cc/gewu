@@ -4,7 +4,7 @@ A column's type determines how Gewu displays values and interprets Find and filt
 
 ## Text
 
-Find uses case-insensitive substring matching. Explicit equality and selected values use exact, case-sensitive strings; an empty string is distinct from null. A Contains filter can choose case sensitivity. These rules also apply to dictionary-encoded text.
+Find uses case-insensitive substring matching. Explicit equality and selected values use exact, case-sensitive strings; an empty string is distinct from null. A Contains filter matches only text values and can choose case sensitivity. These rules also apply to dictionary-encoded text.
 
 ## Integers
 
@@ -54,9 +54,9 @@ Find and equality accept `true` or `false`, ignoring ASCII case. They compare th
 
 ## Nested and other values
 
-Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a nested type instead searches its displayed text, so it can differ from recursive typed Find.
+Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. Nested types currently support only null/non-null filtering, not content filters. An empty list or a list/struct with null children is not itself null; filtering checks the parent cell.
 
-Binary columns are excluded from Find, and map columns are not searched. Available filter operations depend on the logical type and its encoding: dictionary-encoded columns follow their value type for exact and range filtering, and a displayed string does not imply every filter operation is supported. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
+Binary columns are excluded from Find, and map columns are not searched. Binary and interval columns also support only null/non-null filtering. Available filter operations follow the Arrow value type: dictionary-encoded columns inherit their value type's operations, including Contains for text. Display formatting never defines Contains semantics. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
 
 ## Nulls
 

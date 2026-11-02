@@ -1,6 +1,6 @@
 //! Text predicates compile their pattern once and scan only execution batches.
 
-use std::{collections::HashSet, fmt::Write, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use arrow::{
     array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
@@ -8,7 +8,7 @@ use arrow::{
 };
 use regex::RegexBuilder;
 
-use crate::{format, predicate::Predicate, selection::RowSelection, Error, Result};
+use crate::{predicate::Predicate, selection::RowSelection, Error, Result};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.
@@ -100,63 +100,32 @@ pub(super) fn contains<'a>(
     case_sensitive: bool,
     matcher: Option<&regex::Regex>,
 ) -> Result<Predicate<'a>> {
-    if matches!(
+    if !matches!(
         array.data_type(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
-        if case_sensitive {
-            let text = text.to_owned();
-            return Ok(strings(array, move |value| value.contains(&text)));
-        }
-        // If a session-wide matcher was provided, reuse it; otherwise compile one.
-        let matcher = match matcher {
-            Some(m) => Arc::new(m.clone()),
-            None => Arc::new(
-                RegexBuilder::new(&regex::escape(text))
-                    .case_insensitive(true)
-                    .build()
-                    .map_err(|error| {
-                        Error::InvalidArgument(format!("cannot compile text search: {error}"))
-                    })?,
-            ),
-        };
-        return Ok(strings(array, move |value| matcher.is_match(value)));
+        return Err(Error::InvalidArgument(format!(
+            "Contains requires text values, got {}",
+            array.data_type()
+        )));
     }
-
-    // A formatted fallback retains existing Contains semantics for non-ordered
-    // values. One buffer per batch, reused across cells, never a column of strings.
-    let text = text.to_owned();
-    let lower = (!case_sensitive && !text.is_ascii()).then(|| text.to_lowercase());
-    Ok(Predicate::new(Box::new(move |rows, incoming, hits, _| {
-        let f = format::formatter(array.as_ref())?;
-        let mut buf = String::new();
-        for (index, row) in rows.iter().enumerate() {
-            if let Some(mask) = incoming {
-                if !mask[index] {
-                    hits[index] = false;
-                    continue;
-                }
-            }
-            if array.is_null(row) {
-                hits[index] = false;
-                continue;
-            }
-            buf.clear();
-            write!(buf, "{}", f.value(row)).expect("writing to String cannot fail");
-            hits[index] = if case_sensitive {
-                buf.contains(&text)
-            } else if let Some(lower) = &lower {
-                buf.to_lowercase().contains(lower)
-            } else {
-                text.is_empty()
-                    || buf
-                        .as_bytes()
-                        .windows(text.len())
-                        .any(|w| w.eq_ignore_ascii_case(text.as_bytes()))
-            };
-        }
-        Ok(())
-    })))
+    if case_sensitive {
+        let text = text.to_owned();
+        return Ok(strings(array, move |value| value.contains(&text)));
+    }
+    // If a session-wide matcher was provided, reuse it; otherwise compile one.
+    let matcher = match matcher {
+        Some(m) => Arc::new(m.clone()),
+        None => Arc::new(
+            RegexBuilder::new(&regex::escape(text))
+                .case_insensitive(true)
+                .build()
+                .map_err(|error| {
+                    Error::InvalidArgument(format!("cannot compile text search: {error}"))
+                })?,
+        ),
+    };
+    Ok(strings(array, move |value| matcher.is_match(value)))
 }
 
 fn strings<'a>(

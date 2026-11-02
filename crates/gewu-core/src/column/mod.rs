@@ -300,7 +300,7 @@ mod tests {
             (DataType::Date32, false, true, true, false),
             (DataType::Utf8, true, true, false, false),
             (DataType::Boolean, false, true, false, false),
-            (DataType::Binary, true, false, false, false),
+            (DataType::Binary, false, false, false, false),
             (dictionary(DataType::Int64), false, true, true, false),
             (dictionary(DataType::Utf8), true, true, false, false),
         ] {
@@ -407,63 +407,125 @@ mod tests {
     }
 
     #[test]
-    fn included_nulls_cover_dictionary_keys_values_and_nested_batches() {
-        let dictionary: ArrayRef = Arc::new(
+    fn contains_null_policy_covers_dictionary_keys_and_values() {
+        let array: ArrayRef = Arc::new(
             DictionaryArray::<Int8Type>::try_new(
                 Int8Array::from(vec![Some(0), None, Some(1), Some(2), Some(0)]),
                 Arc::new(StringArray::from(vec![Some("keep"), None, Some("skip")])),
             )
             .unwrap(),
         );
-        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
-            Some(vec![Some(12)]),
-            None,
-            Some(vec![]),
-            Some(vec![Some(12)]),
-            Some(vec![Some(34)]),
-        ]));
-        for (array, text, excluded, included) in [
-            (dictionary, "keep", [false, false, false, true], [
-                true, true, false, true,
-            ]),
-            (list, "12", [false, false, true, false], [
-                true, false, true, false,
-            ]),
+        let column = col(array);
+        for (include_nulls, expected) in [
+            (false, [false, false, false, true]),
+            (true, [true, true, false, true]),
         ] {
-            let column = col(array.clone());
-            for (include_nulls, expected) in [(false, excluded), (true, included)] {
-                let test = column
-                    .compile_filter(
-                        &Filter::contains(text.into(), true, include_nulls),
-                        &Cancellation::default(),
-                    )
-                    .unwrap();
-                let mut hits = [false; 4];
-                test.evaluate(1..5, &mut hits, &Cancellation::default())
-                    .unwrap();
-                assert_eq!(hits, expected);
+            let test = column
+                .compile_filter(
+                    &Filter::contains("keep".into(), true, include_nulls),
+                    &Cancellation::default(),
+                )
+                .unwrap();
+            let mut hits = [false; 4];
+            test.evaluate(1..5, &mut hits, &Cancellation::default())
+                .unwrap();
+            assert_eq!(hits, expected);
+        }
+    }
+
+    #[test]
+    fn non_text_contains_is_rejected_even_for_empty_text_and_null_arrays() {
+        use arrow::datatypes::{Field, Fields, IntervalUnit};
+
+        let item = Arc::new(Field::new("item", DataType::Utf8, true));
+        let entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        ));
+        for data_type in [
+            DataType::Null,
+            DataType::Boolean,
+            DataType::Int32,
+            DataType::Date32,
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::FixedSizeBinary(2),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::List(item.clone()),
+            DataType::LargeList(item.clone()),
+            DataType::ListView(item.clone()),
+            DataType::LargeListView(item.clone()),
+            DataType::FixedSizeList(item.clone(), 2),
+            DataType::Struct(Fields::from(vec![item])),
+            DataType::Map(entries, false),
+        ] {
+            for data_type in [
+                data_type.clone(),
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type)),
+            ] {
+                let column = col(arrow::array::new_null_array(&data_type, 2));
+                assert!(!column.capabilities().contains, "{data_type}");
+                for text in ["", "needle"] {
+                    assert!(
+                        matches!(
+                            column.compile_filter(
+                                &Filter::contains(text.into(), false, true),
+                                &Cancellation::default(),
+                            ),
+                            Err(Error::InvalidArgument(_))
+                        ),
+                        "{data_type}: {text:?}"
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn empty_contains_fallback_matches_non_null_without_panicking() {
-        let array: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+    fn nested_null_filters_distinguish_parent_nulls_from_empty_and_null_children() {
+        use arrow::{buffer::NullBuffer, datatypes::Field};
+
+        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
             Some(vec![Some(12)]),
             None,
             Some(vec![]),
+            Some(vec![None]),
         ]));
-        let column = col(array);
-        let test = column
-            .compile_filter(
-                &Filter::contains(String::new(), false, false),
-                &Cancellation::default(),
-            )
-            .unwrap();
-        let mut hits = vec![false; 3];
-        test.evaluate(0..3, &mut hits, &Cancellation::default())
-            .unwrap();
-        assert_eq!(hits, [true, false, true]);
+        let structure: ArrayRef = Arc::new(StructArray::new(
+            vec![Field::new("value", DataType::Int32, true)].into(),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(12),
+                None,
+                None,
+                Some(34),
+            ]))],
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        ));
+        for array in [list, structure] {
+            let column = col(array);
+            for (exclude, include_nulls, expected) in [
+                (false, true, [false, true, false, false]),
+                (true, false, [true, false, true, true]),
+                (true, true, [true; 4]),
+                (false, false, [false; 4]),
+            ] {
+                let test = column
+                    .compile_filter(
+                        &Filter::exact(vec![], exclude, include_nulls),
+                        &Cancellation::default(),
+                    )
+                    .unwrap();
+                let mut hits = [false; 4];
+                test.evaluate(0..4, &mut hits, &Cancellation::default())
+                    .unwrap();
+                assert_eq!(hits, expected);
+            }
+        }
     }
 
     #[test]

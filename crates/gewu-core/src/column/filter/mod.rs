@@ -23,23 +23,9 @@ use crate::{
     Cancellation, Error, Filter, Result,
 };
 
-/// Types with a useful displayed-text or element-containment filter.
+/// Substring matching is defined only for text values, including dictionaries.
 pub(crate) fn supports_contains(data_type: &DataType) -> bool {
-    let data_type = types::value_type(data_type);
-    matches!(
-        types::direct_domain(data_type),
-        Some(Domain::Text | Domain::Binary | Domain::Interval)
-    ) || matches!(
-        data_type,
-        DataType::Null
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::FixedSizeList(..)
-            | DataType::Struct(_)
-            | DataType::Map(..)
-    )
+    types::domain(data_type) == Some(Domain::Text)
 }
 
 /// Equality parses scalar values or compares text; dictionaries follow values.
