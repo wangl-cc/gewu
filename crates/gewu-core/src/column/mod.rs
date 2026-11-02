@@ -9,6 +9,7 @@ pub mod bound;
 pub mod dictionary;
 pub mod filter;
 mod metadata;
+pub(crate) mod value_text;
 
 use std::sync::{Arc, OnceLock};
 
@@ -17,7 +18,7 @@ pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{predicate::Predicate, scope::Selection, types, Error, Filter, Result};
+use crate::{predicate::Predicate, scope::Selection, types, Filter, Result};
 
 /// Operations supported by a column's type. Value-list availability
 /// additionally depends on cardinality and is reported by `DistinctResult`.
@@ -25,7 +26,7 @@ use crate::{predicate::Predicate, scope::Selection, types, Error, Filter, Result
 pub struct ColumnCapabilities {
     pub contains: bool,
     pub range: bool,
-    pub equals: bool,
+    pub exact: bool,
     /// Histograms currently require a directly stored numeric array.
     pub histogram: bool,
     /// Direct numeric and temporal arrays support approximate plot coordinates.
@@ -37,7 +38,7 @@ pub struct ColumnCapabilities {
 /// A single distinct value in a column or summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistinctValue {
-    /// Stable for the lifetime of the document; pass it to [`crate::Filter::InValues`].
+    /// Identifier within this distinct-value report.
     /// Codes `0..=254` name non-null values and `255` names null.
     pub key: u64,
     /// Displayed text; `None` is the null value.
@@ -53,7 +54,7 @@ pub struct DistinctResult {
     /// Number of distinct values before `limit` was applied.
     pub total: u64,
     pub truncated: bool,
-    /// Whether the keys name values for [`crate::Filter::InValues`]. False for
+    /// Whether this report comes from the bounded dictionary. False for
     /// columns with too many distinct values to encode; `values` then holds
     /// the most common ones.
     pub keyed: bool,
@@ -132,7 +133,7 @@ impl Column {
         ColumnCapabilities {
             contains: filter::supports_contains(data_type),
             range: filter::range::supports(data_type),
-            equals: filter::supports_equals(data_type),
+            exact: filter::supports_equals(data_type),
             histogram: crate::stats::supports_histogram(data_type),
             scatter: crate::stats::scatter::supports(data_type),
             logarithmic: crate::stats::supports_logarithmic(data_type),
@@ -154,11 +155,6 @@ impl Column {
         matcher: Option<&regex::Regex>,
     ) -> Result<Option<Predicate<'a>>> {
         filter::prepare_find(&self.array, query, matcher)
-    }
-
-    #[inline]
-    pub(crate) fn has_dictionary(&self) -> bool {
-        self.dictionary().is_some()
     }
 
     /// Precomputed choices with counts, or `None` if the column is not dictionary-encoded.
@@ -195,47 +191,8 @@ impl Column {
         }
     }
 
-    /// Keys for the given displayed labels (`None` = null). Unknown labels are ignored.
-    pub(crate) fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        let dictionary = self.dictionary().ok_or_else(|| {
-            Error::InvalidArgument(format!("{} is not an indexed column", self.name))
-        })?;
-        let target: std::collections::HashSet<&Option<String>> = labels.iter().collect();
-        let mut keys = Vec::new();
-        if dictionary.has_null() && labels.iter().any(Option::is_none) {
-            keys.push(Dictionary::NULL_KEY);
-        }
-        for (code, label) in dictionary.labels().iter().enumerate() {
-            if target.contains(&Some(label.clone())) {
-                keys.push(code as u64);
-            }
-        }
-        Ok(keys)
-    }
-
     pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
-        match filter {
-            Filter::InValues { keys } => {
-                let dict = self.dictionary().ok_or_else(|| {
-                    Error::InvalidArgument(format!("{} is not an indexed column", self.name))
-                })?;
-                Ok(dict.prepare_predicate(keys))
-            }
-            Filter::TextValues { values, exclude } => {
-                if types::domain(self.array.data_type()) != Some(crate::types::Domain::Text) {
-                    return Err(Error::InvalidArgument(format!(
-                        "{} is not a string column",
-                        self.array.data_type()
-                    )));
-                }
-                if let Some(dict) = self.dictionary() {
-                    let keys = self.keys_for_labels(values)?;
-                    return Ok(dict.prepare_predicate_with_exclude(&keys, *exclude));
-                }
-                filter::prepare_filter(&self.array, filter)
-            }
-            _ => filter::prepare_filter(&self.array, filter),
-        }
+        filter::prepare_filter(self, filter)
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {
@@ -283,7 +240,7 @@ mod tests {
             (DataType::Utf8, true, true, false, false),
             (DataType::Boolean, false, true, false, false),
             (DataType::Binary, true, false, false, false),
-            (dictionary(DataType::Int64), false, true, false, false),
+            (dictionary(DataType::Int64), false, true, true, false),
             (dictionary(DataType::Utf8), true, true, false, false),
         ] {
             assert_eq!(
@@ -291,9 +248,9 @@ mod tests {
                 ColumnCapabilities {
                     contains,
                     range: ordered,
-                    equals,
-                    histogram: ordered,
-                    scatter: ordered,
+                    exact: equals,
+                    histogram: ordered && !matches!(data_type, DataType::Dictionary(..)),
+                    scatter: ordered && !matches!(data_type, DataType::Dictionary(..)),
                     logarithmic,
                 },
                 "{data_type}"
@@ -329,16 +286,18 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
         let column = col(array);
         let test = column
-            .prepare_filter(&Filter::EqualsAny { values: Vec::new() })
+            .prepare_filter(&Filter::exact(Vec::new(), false, false))
             .unwrap();
         let mut hits = [true; 3];
         test.evaluate(0..3, &mut hits, &CancelToken::never())
             .unwrap();
         assert_eq!(hits, [false; 3]);
         assert!(matches!(
-            column.prepare_filter(&Filter::EqualsAny {
-                values: vec!["1".into(), "invalid".into()],
-            }),
+            column.prepare_filter(&Filter::exact(
+                vec!["1".into(), "invalid".into()],
+                false,
+                false
+            )),
             Err(Error::InvalidArgument(_))
         ));
 
@@ -351,9 +310,7 @@ mod tests {
         );
         let column = col(array);
         let test = column
-            .prepare_filter(&Filter::EqualsAny {
-                values: vec!["01".into(), "2".into()],
-            })
+            .prepare_filter(&Filter::exact(vec!["01".into(), "2".into()], false, false))
             .unwrap();
         let mut hits = [false; 4];
         test.evaluate(0..4, &mut hits, &CancelToken::never())
@@ -372,9 +329,7 @@ mod tests {
         assert_eq!(matches(&array, "%_\\z", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .prepare_filter(&Filter::Equals {
-                value: "A%_\\z".into(),
-            })
+            .prepare_filter(&Filter::exact(vec!["A%_\\z".into()], false, false))
             .unwrap();
         let mut hits = vec![false; 3];
         test.evaluate(1..4, &mut hits, &CancelToken::never())
@@ -409,11 +364,7 @@ mod tests {
             let column = col(array.clone());
             for (include_nulls, expected) in [(false, excluded), (true, included)] {
                 let test = column
-                    .prepare_filter(&Filter::Contains {
-                        text: text.into(),
-                        case_sensitive: true,
-                        include_nulls,
-                    })
+                    .prepare_filter(&Filter::contains(text.into(), true, include_nulls))
                     .unwrap();
                 let mut hits = [false; 4];
                 test.evaluate(1..5, &mut hits, &CancelToken::never())
@@ -432,11 +383,7 @@ mod tests {
         ]));
         let column = col(array);
         let test = column
-            .prepare_filter(&Filter::Contains {
-                include_nulls: false,
-                text: String::new(),
-                case_sensitive: false,
-            })
+            .prepare_filter(&Filter::contains(String::new(), false, false))
             .unwrap();
         let mut hits = vec![false; 3];
         test.evaluate(0..3, &mut hits, &CancelToken::never())
@@ -504,7 +451,7 @@ mod tests {
         assert_eq!(matches(&array, "2", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .prepare_filter(&Filter::Equals { value: "2".into() })
+            .prepare_filter(&Filter::exact(vec!["2".into()], false, false))
             .unwrap();
         let mut first = [false; 2];
         let mut second = [false; 2];
@@ -531,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_capabilities_are_discrete() {
+    fn dictionary_filter_capabilities_follow_the_value_type() {
         let array: ArrayRef = Arc::new(
             DictionaryArray::<Int8Type>::try_new(
                 Int8Array::from(vec![0]),
@@ -541,8 +488,8 @@ mod tests {
         );
         assert_eq!(col(array).capabilities(), ColumnCapabilities {
             contains: false,
-            range: false,
-            equals: true,
+            range: true,
+            exact: true,
             histogram: false,
             scatter: false,
             logarithmic: false,
@@ -557,7 +504,7 @@ mod tests {
                 vec![Some(2)],
             )])),
         ];
-        let engine = ViewEngine::new(1);
+        let engine = ViewEngine::new(1, 1);
         let token = engine.begin();
         engine.cancel_pending();
         for array in arrays {

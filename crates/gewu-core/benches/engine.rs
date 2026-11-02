@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{AnalysisSection, Filter, QuerySpec, Session, SortKey};
+use gewu_core::{AnalysisSection, Filter, QuerySpec, Session};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -50,100 +50,70 @@ fn apply_view(c: &mut Criterion) {
     );
     let (amount, uuid) = (col(&doc, "amount"), col(&doc, "uuid"));
     // Build the label index once, so InValues measures filtering only.
-    let cat = doc.keys_for_labels(label, &[Some("cat".into())]).unwrap();
+    doc.filter_choices(label, None).unwrap();
 
     let cases: Vec<(&str, QuerySpec)> = vec![
         ("no_filter", QuerySpec::default()),
         (
             "range_1",
-            QuerySpec::default().with_filter(price, Filter::Range {
-                include_nulls: false,
-                min: Some(doc.parse_bound(price, "100").unwrap()),
-                max: Some(doc.parse_bound(price, "5000").unwrap()),
-            }),
+            QuerySpec::default().with_filter(
+                price,
+                Filter::range(Some("100".into()), Some("5000".into()), false),
+            ),
         ),
         (
             "range_3",
             QuerySpec::default()
-                .with_filter(price, Filter::Range {
-                    include_nulls: false,
-                    min: Some(doc.parse_bound(price, "100").unwrap()),
-                    max: Some(doc.parse_bound(price, "5000").unwrap()),
-                })
-                .with_filter(score, Filter::Range {
-                    include_nulls: false,
-                    min: Some(doc.parse_bound(score, "80").unwrap()),
-                    max: Some(doc.parse_bound(score, "120").unwrap()),
-                })
-                .with_filter(rating, Filter::Range {
-                    include_nulls: false,
-                    min: Some(doc.parse_bound(rating, "20").unwrap()),
-                    max: Some(doc.parse_bound(rating, "40").unwrap()),
-                }),
+                .with_filter(
+                    price,
+                    Filter::range(Some("100".into()), Some("5000".into()), false),
+                )
+                .with_filter(
+                    score,
+                    Filter::range(Some("80".into()), Some("120".into()), false),
+                )
+                .with_filter(
+                    rating,
+                    Filter::range(Some("20".into()), Some("40".into()), false),
+                ),
         ),
         (
             "in_values_label",
-            QuerySpec::default().with_filter(label, Filter::InValues { keys: cat }),
+            QuerySpec::default()
+                .with_filter(label, Filter::exact(vec!["cat".into()], false, false)),
         ),
         (
             "contains_city",
-            QuerySpec::default().with_filter(city, Filter::Contains {
-                include_nulls: false,
-                text: "city-12".into(),
-                case_sensitive: false,
-            }),
+            QuerySpec::default()
+                .with_filter(city, Filter::contains("city-12".into(), false, false)),
         ),
         (
             "is_null_label",
-            QuerySpec::default().with_filter(label, Filter::IsNull { negate: false }),
+            QuerySpec::default().with_filter(label, Filter::exact(vec![], false, true)),
         ),
-        ("sort_price", QuerySpec {
-            sort: vec![SortKey {
-                column: price,
-                descending: true,
-            }],
-            ..Default::default()
-        }),
-        ("sort_city_price", QuerySpec {
-            sort: vec![
-                SortKey {
-                    column: city,
-                    descending: false,
-                },
-                SortKey {
-                    column: price,
-                    descending: true,
-                },
-            ],
-            ..Default::default()
-        }),
+        ("sort_price", QuerySpec::new().with_sort(price, true, 0)),
+        (
+            "sort_city_price",
+            QuerySpec::new()
+                .with_sort(city, false, 0)
+                .with_sort(price, true, 1),
+        ),
         (
             "range_decimal",
-            QuerySpec::default().with_filter(amount, Filter::Range {
-                include_nulls: false,
-                min: Some(doc.parse_bound(amount, "50").unwrap()),
-                max: Some(doc.parse_bound(amount, "500").unwrap()),
-            }),
+            QuerySpec::default().with_filter(
+                amount,
+                Filter::range(Some("50".into()), Some("500".into()), false),
+            ),
         ),
-        ("sort_uuid", QuerySpec {
-            sort: vec![SortKey {
-                column: uuid,
-                descending: false,
-            }],
-            ..Default::default()
-        }),
+        ("sort_uuid", QuerySpec::new().with_sort(uuid, false, 0)),
         (
             "range_then_sort",
             QuerySpec::default()
-                .with_filter(price, Filter::Range {
-                    include_nulls: false,
-                    min: Some(doc.parse_bound(price, "100").unwrap()),
-                    max: Some(doc.parse_bound(price, "5000").unwrap()),
-                })
-                .with_sort(vec![SortKey {
-                    column: score,
-                    descending: false,
-                }]),
+                .with_filter(
+                    price,
+                    Filter::range(Some("100".into()), Some("5000".into()), false),
+                )
+                .with_sort(score, false, 0),
         ),
     ];
 
@@ -185,11 +155,10 @@ fn facets(c: &mut Criterion) {
         col(&doc, "id"),
         col(&doc, "price"),
     );
-    let other_filter = QuerySpec::single(price, Filter::Range {
-        include_nulls: false,
-        min: Some(doc.parse_bound(price, "100").unwrap()),
-        max: Some(doc.parse_bound(price, "5000").unwrap()),
-    });
+    let other_filter = QuerySpec::single(
+        price,
+        Filter::range(Some("100".into()), Some("5000".into()), false),
+    );
 
     let mut g = c.benchmark_group("facets");
     g.sample_size(10).measurement_time(Duration::from_secs(8));
@@ -222,7 +191,7 @@ fn facets(c: &mut Criterion) {
     g.bench_function("histogram_price", |b| {
         b.iter(|| doc.histogram(price, None, 60).unwrap())
     });
-    let label_filter = QuerySpec::single(label, Filter::IsNull { negate: true });
+    let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| doc.histogram(price, Some(&label_filter), 60).unwrap())
     });

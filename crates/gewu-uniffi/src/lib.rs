@@ -28,13 +28,13 @@ pub use file::{
     TimeUnit, ValueCategory,
 };
 pub use filter::{
-    Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,
+    Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, ValueChoice,
 };
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindOperation, FindSession};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult};
 pub use session::GewuSession;
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use view::{QuerySpec, RowBlock, SortKey, ViewInfo};
+pub use view::{ColSort, ColSpec, QuerySpec, RowBlock, ViewInfo};
 
 uniffi::setup_scaffolding!();

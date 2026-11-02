@@ -26,12 +26,11 @@ pub use file::{
 };
 pub(crate) use query::{engine, predicate, scope, selection};
 pub use query::{
-    CellMatch, Filter, Find, FindHighlight, FindOperation, QuerySpec, RowBlock, SortKey, ViewInfo,
-    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, FindOperation,
+    QuerySpec, RowBlock, ViewInfo, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use session::{
-    FilterEditor, FilterSpec, Session, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices,
-    TextFilterMode,
+    FilterChoices, Session, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, ValueChoice,
 };
 pub use stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,

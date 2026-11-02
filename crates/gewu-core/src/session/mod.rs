@@ -19,7 +19,7 @@ mod find;
 mod query;
 
 pub use choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use facet::{DistinctResult, DistinctValue, FilterEditor, FilterSpec, TextFilterMode};
+pub use facet::{DistinctResult, DistinctValue, FilterChoices, ValueChoice};
 
 /// An active viewing session over an immutable dataset.
 /// Holds a reference to the dataset and manages view versions, filters, and display order.
@@ -34,9 +34,10 @@ impl Session {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let dataset = Arc::new(Dataset::open(path)?);
         let n_rows = dataset.n_rows;
+        let n_columns = dataset.columns().len();
         Ok(Self {
             dataset,
-            views: ViewEngine::new(n_rows),
+            views: ViewEngine::new(n_rows, n_columns),
         })
     }
 
@@ -44,18 +45,20 @@ impl Session {
     pub fn open_with_options(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Self> {
         let dataset = Arc::new(Dataset::open_with_options(path, options)?);
         let n_rows = dataset.n_rows;
+        let n_columns = dataset.columns().len();
         Ok(Self {
             dataset,
-            views: ViewEngine::new(n_rows),
+            views: ViewEngine::new(n_rows, n_columns),
         })
     }
 
     /// Create a viewing session from an existing in-memory dataset.
     pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
         let n_rows = dataset.n_rows;
+        let n_columns = dataset.columns().len();
         Self {
             dataset,
-            views: ViewEngine::new(n_rows),
+            views: ViewEngine::new(n_rows, n_columns),
         }
     }
 

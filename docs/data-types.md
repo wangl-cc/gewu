@@ -8,7 +8,7 @@ Find uses case-insensitive substring matching. Explicit equality and selected va
 
 ## Integers
 
-Signed and unsigned 8-, 16-, 32- and 64-bit integer columns compare in their original type. Finding `170` matches 170, not 1700. Equality and range endpoints must fit the column's type; integers are not widened to floating point for comparison.
+Signed and unsigned 8-, 16-, 32- and 64-bit integer columns compare in their original type. Finding `170` matches 170, not 1700. Equality and range inputs are parsed without widening source integers to floating point. Fractional range endpoints round inward; out-of-domain endpoints remain outside the domain instead of saturating to a matching value.
 
 ## Floating-point numbers
 
@@ -30,7 +30,7 @@ Numeric charts offer Linear and Log10 scales. Scatter X and Y scales are indepen
 
 Decimal32, Decimal64, Decimal128 and Decimal256 store an integer coefficient with a decimal scale. For example, coefficient 123 with scale 2 represents 1.23. Find uses the same input-precision intervals as floating-point Find, but comparisons retain exact decimal coefficients, including Decimal256. Equality and range bounds also retain decimal precision.
 
-Floating-point statistics and plot coordinates can approximate large integers and decimals. Use the displayed extrema and supplied typed bounds when exact values matter; do not reconstruct a filter endpoint from a rounded floating-point value.
+Floating-point statistics and plot coordinates can approximate large integers and decimals. Use the displayed extrema and supplied exact endpoint text when exact values matter; do not reconstruct a filter endpoint from a rounded floating-point value.
 
 ## Dates, times and timestamps
 
@@ -56,10 +56,10 @@ Find and equality accept `true` or `false`, ignoring ASCII case. They compare th
 
 Find follows dictionary values, list elements and struct fields, applying each child's own type rules. A matching child can match the cell; null parents do not match. A Contains filter on a nested type instead searches its displayed text, so it can differ from recursive typed Find.
 
-Binary columns are excluded from Find, and map columns are not searched. Available filter operations depend on the logical type and its encoding: a dictionary-encoded column is discrete, so it offers value choices instead of range filters, and a displayed string does not imply every filter operation is supported. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
+Binary columns are excluded from Find, and map columns are not searched. Available filter operations depend on the logical type and its encoding: dictionary-encoded columns follow their value type for exact and range filtering, and a displayed string does not imply every filter operation is supported. A file whose column has an Arrow type without Gewu semantics is rejected when it is opened rather than shown with reduced behavior.
 
 ## Nulls
 
-Null is a missing value, distinct from an empty string, zero, false and NaN. Use null-only or non-null filtering to select missingness explicitly. Range and Contains filters can include nulls alongside matching values. Value selection can also include null; an empty inclusion selects no rows, while an empty exclusion selects all rows.
+Null is a missing value, distinct from an empty string, zero, false and NaN. Use null-only or non-null filtering to select missingness explicitly. Every filter kind has an independent `include_nulls` flag. Exact selection contains only non-null values: an empty inclusion matches no non-null rows, and an empty exclusion matches every non-null row. The flag separately determines whether either selection includes nulls.
 
 Sorting places nulls last in either direction. See [filter composition](search-and-filter.md#combining-filter-conditions) for how null-inclusive conditions interact with other filters.

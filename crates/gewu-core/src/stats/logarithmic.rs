@@ -474,11 +474,11 @@ mod tests {
         for (range, &expected) in result.ranges.iter().zip(&histogram.counts) {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = column
-                .prepare_filter(&Filter::Range {
-                    min: range.min.clone(),
-                    max: range.max.clone(),
-                    include_nulls: false,
-                })
+                .prepare_filter(&Filter::range(
+                    (range.min.clone()).map(|b: crate::Bound| b.filter_text()),
+                    (range.max.clone()).map(|b: crate::Bound| b.filter_text()),
+                    false,
+                ))
                 .unwrap();
             let mut matched = vec![false; array.len()];
             predicate

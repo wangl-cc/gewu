@@ -1,172 +1,56 @@
 import SwiftUI
 
-/// Swift String equality folds canonical Unicode equivalents. Filter values are
-/// literal UTF-8 identities, including distinct null and empty-string values.
+/// Arrow text equality compares UTF-8, unlike Swift's canonical-equivalence equality.
 struct LiteralTextValue: Hashable {
-    let value: String?
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        switch (lhs.value, rhs.value) {
-        case (nil, nil): true
-        case (let left?, let right?): left.utf8.elementsEqual(right.utf8)
-        default: false
-        }
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(value != nil)
-        if let value { for byte in value.utf8 { hasher.combine(byte) } }
-    }
-
-    var label: String {
-        guard let value else { return "(null)" }
-        return value.isEmpty ? "(empty string)" : value
-    }
+    let value: String
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.value.utf8.elementsEqual(rhs.value.utf8) }
+    func hash(into hasher: inout Hasher) { for byte in value.utf8 { hasher.combine(byte) } }
+    var label: String { value.isEmpty ? "(empty string)" : value }
 }
 
-struct TextChoiceDraft {
+struct ExactFilterDraft {
     var exclude = true
     var values: Set<LiteralTextValue> = []
-
-    init(_ filters: [Filter]) {
-        for filter in filters {
-            switch filter {
-            case .textValues(let values, let exclude):
-                self.values = Set(values.map { LiteralTextValue(value: $0) })
-                self.exclude = exclude
-            case .isNull(let negate):
-                values = [LiteralTextValue(value: nil)]
-                exclude = negate
-            case .equals(let value):
-                values = [LiteralTextValue(value: value)]
-                exclude = false
-            case .equalsAny(let values):
-                self.values = Set(values.map { LiteralTextValue(value: $0) })
-                exclude = false
-            default: break
-            }
+    init(_ filter: Filter?) {
+        if let filter, case .exact(let values, let exclude) = filter.condition {
+            self.values = Set(values.map { LiteralTextValue(value: $0) })
+            self.exclude = exclude
         }
     }
-
     func contains(_ value: LiteralTextValue) -> Bool { values.contains(value) != exclude }
-
     mutating func set(_ value: LiteralTextValue, selected: Bool) {
         if selected != exclude { values.insert(value) } else { values.remove(value) }
     }
-
     mutating func all(_ selected: Bool) {
         exclude = selected
         values.removeAll()
     }
-
-    func filters() -> [Filter] {
-        if exclude && values.isEmpty { return [] }
-        let sorted = values.map(\.value).sorted { lhs, rhs in
-            switch (lhs, rhs) {
-            case (nil, .some): true
-            case (let left?, let right?): left.utf8.lexicographicallyPrecedes(right.utf8)
-            default: false
-            }
-        }
-        return [.textValues(values: sorted, exclude: exclude)]
-    }
-}
-
-struct TextContainsDraft {
-    var text = ""
-    var caseSensitive = false
-    var nullMode: NullMode
-
-    init(_ filters: [Filter]) {
-        nullMode = NullMode(filters)
-        for case .contains(let text, let caseSensitive, _) in filters {
-            self.text = text
-            self.caseSensitive = caseSensitive
-        }
-    }
-
-    func filters() -> [Filter] {
-        if nullMode != .only && !text.isEmpty {
-            return [
-                .contains(
-                    text: text, caseSensitive: caseSensitive,
-                    includeNulls: nullMode == .include)
-            ]
-        }
-        return nullMode.filter.map { [$0] } ?? []
+    var condition: FilterCondition {
+        .exact(values: values.map(\.value).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }, exclude: exclude)
     }
 }
 
 struct TextFilterView: View {
     let document: GewuDocument
     let column: UInt32
-    let nullable: Bool
     let querySpec: QuerySpec
-    let modes: [TextFilterMode]
-    let onApply: ([Filter]) -> Void
-    @State private var mode: TextFilterMode
-    @State private var choiceDraft: TextChoiceDraft
-    @State private var containsDraft: TextContainsDraft
+    @Binding var draft: ExactFilterDraft
     @State private var query = ""
     @State private var after: TextChoiceCursor?
     @State private var revision = 0
     @StateObject private var choices = TextChoicesModel()
-
-    init(
-        document: GewuDocument, column: UInt32, nullable: Bool, querySpec: QuerySpec,
-        modes: [TextFilterMode], recommended: TextFilterMode, current: [Filter],
-        onApply: @escaping ([Filter]) -> Void
-    ) {
-        self.document = document
-        self.column = column
-        self.nullable = nullable
-        self.querySpec = querySpec
-        self.modes = modes
-        self.onApply = onApply
-        var initial = recommended
-        for filter in current {
-            switch filter {
-            case .contains: initial = .contains
-            case .textValues, .isNull, .equals, .equalsAny: initial = .choices
-            default: break
-            }
-        }
-        _mode = State(initialValue: initial)
-        _choiceDraft = State(initialValue: TextChoiceDraft(current))
-        _containsDraft = State(initialValue: TextContainsDraft(current))
-    }
-
-    private struct Request: Equatable {
-        let mode: TextFilterMode
-        let revision: Int
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("Filter mode", selection: $mode) {
-                ForEach(modes, id: \.self) { mode in
-                    Text(mode == .choices ? "Select Values" : "Contains Text").tag(mode)
-                }
-            }.pickerStyle(.segmented)
-            switch mode {
-            case .choices: candidateEditor
-            case .contains: containsEditor
+        candidateEditor
+            .task(id: revision) {
+                await choices.load(document: document, column: column, querySpec: querySpec, query: query, after: after)
             }
-        }
-        .task(id: Request(mode: mode, revision: revision)) {
-            guard mode == .choices else {
-                choices.pause()
-                return
-            }
-            await choices.load(document: document, column: column, querySpec: querySpec, query: query, after: after)
-        }
-        .onDisappear { choices.cancel() }
+            .onDisappear { choices.cancel() }
     }
 
     private var candidateEditor: some View {
         // Read the parent draft now; deferred Binding getters alone do not make
         // SwiftUI invalidate the checkbox list when selection changes.
-        let selected = choiceDraft
+        let selected = draft
         return VStack(alignment: .leading, spacing: 10) {
             TextField(
                 "Find value",
@@ -186,7 +70,7 @@ struct TextFilterView: View {
                                 identity.label,
                                 isOn: Binding(
                                     get: { selected.contains(identity) },
-                                    set: { choiceDraft.set(identity, selected: $0) }
+                                    set: { draft.set(identity, selected: $0) }
                                 )
                             ).toggleStyle(.checkbox).lineLimit(1)
                             Spacer(minLength: 6)
@@ -212,25 +96,11 @@ struct TextFilterView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
-                Button("All Values") { choiceDraft.all(true) }
-                Button("No Values") { choiceDraft.all(false) }
                 Spacer()
                 Button("Select Page") { selectPage(true) }.disabled(choices.page == nil)
                 Button("Clear Page") { selectPage(false) }.disabled(choices.page == nil)
             }.controlSize(.small)
-            HStack {
-                Text(selectionSummary).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Apply") { onApply(choiceDraft.filters()) }
-                    .keyboardShortcut(.defaultAction)
-            }
         }
-    }
-
-    private var selectionSummary: String {
-        if choiceDraft.values.isEmpty { return choiceDraft.exclude ? "All values selected" : "No values selected" }
-        let count = formatCount(UInt64(choiceDraft.values.count))
-        return choiceDraft.exclude ? "All values except \(count)" : "\(count) values selected"
     }
 
     private func requestPage(after cursor: TextChoiceCursor?) {
@@ -240,12 +110,9 @@ struct TextFilterView: View {
     }
 
     private func selectPage(_ selected: Bool) {
-        for item in choices.page?.values ?? [] { choiceDraft.set(item.literalIdentity, selected: selected) }
+        for item in choices.page?.values ?? [] { draft.set(item.literalIdentity, selected: selected) }
     }
 
-    private var containsEditor: some View {
-        ContainsEditor(column: column, nullable: nullable, draft: $containsDraft, onApply: onApply)
-    }
 }
 
 extension TextChoice {

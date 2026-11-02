@@ -55,6 +55,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var initiallyFitted: Set<Int> = []
     private var popover: NSPopover?
     private var builtColumns = false
+    private var applyingColumns = false
     private var version: UInt64?
     private var showsNumbers: Bool?
     private var reloading = false
@@ -76,7 +77,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let root = NSView()
         let header = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
         header.onFilterClick = { [weak self] in self?.showFilter(at: $0) }
+        header.columnMenu = { [weak self] in self?.columnMenu(at: $0) }
         header.onColumnClick = { [weak self] in self?.selectColumn(at: $0) }
+        header.onShiftSort = { [weak self] index in
+            guard let self, index < self.table.tableColumns.count,
+                let column = self.columnIndex(self.table.tableColumns[index])
+            else { return }
+            self.model.cycleSort(column: UInt32(column), multiple: true)
+        }
         table.headerView = header
         table.target = self
         table.action = #selector(tableClicked(_:))
@@ -165,12 +173,23 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             fitGutter(info)
             gutter.needsDisplay = true
         }
+        applyingColumns = true
+        let visible = model.appliedSpec.columns.map(\.column)
+        for column in table.tableColumns {
+            if let i = columnIndex(column) { column.isHidden = !visible.contains(UInt32(i)) }
+        }
+        for (offset, column) in visible.enumerated() {
+            let from = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
+            if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
+        }
+        applyingColumns = false
         for column in table.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.textSize = textSize
             header.filtered = model.appliedFilterColumns.contains(UInt32(i))
-            let sort = model.appliedSpec.sort.first { $0.column == UInt32(i) }
+            let sort = model.appliedSpec.columns.first { $0.column == UInt32(i) }?.sort
             header.sorted = sort != nil
+            header.sortPriority = sort.map { Int($0.priority) + 1 } ?? 0
             header.sortAscending = !(sort?.descending ?? false)
         }
         table.headerView?.needsDisplay = true
@@ -209,10 +228,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             header.showsFunnel = true
             c.headerCell = header
             c.headerToolTip =
-                "\(column.name): \(column.technicalType)\nClick to sort; use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
+                "\(column.name): \(column.technicalType)\nClick to cycle sorting; Shift-click for multiple keys. Use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
             c.width = fittedWidth(column: i, texts: [], maxWidth: 320)
             c.minWidth = 50
-            c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
             table.addTableColumn(c)
         }
     }
@@ -412,7 +430,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableViewColumnDidMove(_ notification: Notification) {
-        model.findColumnsChanged()
+        guard !applyingColumns else { return }
+        model.reorderColumns(displayedColumns)
         requestHighlights()
     }
 
@@ -444,19 +463,41 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         return table.tableColumns[column].width
     }
 
-    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-        guard let first = table.sortDescriptors.first, let key = first.key,
-            let column = UInt32(key.dropFirst())
-        else {
-            model.setSort([])
-            return
-        }
-        if table.sortDescriptors.count > 1 {
-            table.sortDescriptors = [first]
-            return
-        }
-        model.setSort([SortKey(column: column, descending: !first.ascending)])
+    func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        guard let column = columnIndex(tableColumn) else { return }
+        model.cycleSort(column: UInt32(column), multiple: NSEvent.modifierFlags.contains(.shift))
     }
+
+    private func columnMenu(at index: Int) -> NSMenu? {
+        guard index >= 0, index < table.tableColumns.count, let column = columnIndex(table.tableColumns[index]) else {
+            return nil
+        }
+        let menu = NSMenu()
+        for (title, action) in [
+            ("Filter Column…", #selector(filterMenuColumn(_:))),
+            ("Hide Column", #selector(hideMenuColumn(_:))),
+            ("Cancel Column Sort", #selector(clearMenuColumnSort(_:))),
+            ("Clear All Sorting", #selector(clearMenuSort(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = UInt32(column)
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func filterMenuColumn(_ item: NSMenuItem) {
+        guard let column = item.representedObject as? UInt32 else { return }
+        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+    }
+    @objc private func hideMenuColumn(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.hideColumn(column) }
+    }
+    @objc private func clearMenuColumnSort(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.removeSort(column: column) }
+    }
+    @objc private func clearMenuSort(_ item: NSMenuItem) { model.clearSort() }
 
     @objc private func tableClicked(_ sender: Any?) { selectColumn(at: table.clickedColumn) }
     private func selectColumn(at index: Int) {
@@ -500,7 +541,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         showFilter(at: index)
     }
 
-    var displayedColumns: [UInt32] { table.tableColumns.compactMap(columnIndex).map(UInt32.init) }
+    var displayedColumns: [UInt32] {
+        table.tableColumns.filter { !$0.isHidden }.compactMap(columnIndex).map(UInt32.init)
+    }
 
     private func showFilter(at index: Int) {
         guard let header = table.headerView,
@@ -510,10 +553,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let column = UInt32(col)
         let content = ColumnFilterView(
             doc: model.doc, column: column, info: model.info.columns[col],
-            querySpec: model.spec, current: model.columnFilters[column] ?? []
+            querySpec: model.spec, current: model.spec.columns.first { $0.column == column }?.filter
         ) { [weak self] filters in
             self?.closePopover()
-            self?.model.setFilters(filters, column: column)
+            self?.model.setFilter(filters, column: column)
         }
         let popover = NSPopover()
         popover.behavior = .transient

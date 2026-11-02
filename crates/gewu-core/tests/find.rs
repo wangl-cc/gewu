@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, Error, Filter, QuerySpec, Session, SortKey, MAX_FIND_HIGHLIGHT_ROWS,
-    MAX_FIND_PAGE_SIZE,
+    CellMatch, Error, Filter, QuerySpec, Session, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -84,13 +83,8 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
         .apply_view(
-            &QuerySpec::single(2, Filter::Equals {
-                value: "true".into(),
-            })
-            .with_sort(vec![SortKey {
-                column: 0,
-                descending: true,
-            }]),
+            &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
+                .with_sort(0, true, 0),
         )
         .unwrap();
     let find = doc.prepare_find(view.version, "12", &[0, 1]).unwrap();

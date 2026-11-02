@@ -190,7 +190,8 @@ struct WorkbookLifecycleTests {
         }
         document.selectedSourceRow = nil
         do {
-            _ = try document.doc.parseBound(column: 0, text: "not a number")
+            try document.doc.validateFilter(
+                column: 0, filter: Filter(condition: .range(min: "not a number", max: nil), includeNulls: false))
             Issue.record("Invalid numeric bounds must fail")
         } catch GewuError.InvalidArgument(let message) {
             let error: Error = GewuError.InvalidArgument(message: message)

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    AnalysisSection, AxisScale, Bound, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
-    FilterSpec, FindSession, GewuError, GewuExport, Histogram, QuerySpec, RowBlock, TextChoices,
-    ViewInfo,
+    AnalysisSection, AxisScale, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
+    FilterChoices, FindSession, GewuError, GewuExport, Histogram, QuerySpec, RangeHistogram,
+    RowBlock, TextChoices, ViewInfo,
 };
 
 /// One open viewing session over a table.
@@ -199,30 +199,27 @@ impl GewuSession {
         Ok(self.inner.format_value(column, value)?)
     }
 
-    /// The core selects the editor and supplies its values or typed histogram bins.
-    /// Slow: call off the main thread.
-    pub fn filter_spec(
+    pub fn filter_choices(
         &self,
         column: u32,
         spec: Option<QuerySpec>,
-    ) -> Result<FilterSpec, GewuError> {
+    ) -> Result<FilterChoices, GewuError> {
         let spec = spec.map(Into::into);
-        Ok(self.inner.filter_spec(column, spec.as_ref())?.into())
+        Ok(self.inner.filter_choices(column, spec.as_ref())?.into())
     }
 
-    /// Filter editor with a caller-selected histogram resolution (1 through 60).
-    pub fn filter_spec_with_bins(
+    pub fn filter_distribution(
         &self,
         column: u32,
         spec: Option<QuerySpec>,
         bins: u32,
         scale: AxisScale,
-    ) -> Result<FilterSpec, GewuError> {
+    ) -> Result<Option<RangeHistogram>, GewuError> {
         let spec = spec.map(Into::into);
         Ok(self
             .inner
-            .filter_spec_with_scale(column, spec.as_ref(), bins, scale.into())?
-            .into())
+            .filter_distribution(column, spec.as_ref(), bins, scale.into())?
+            .map(Into::into))
     }
 
     /// Compute the facet off the UI thread. The resulting paging session has
@@ -236,10 +233,6 @@ impl GewuSession {
         Ok(Arc::new(TextChoices {
             inner: self.inner.prepare_text_choices(column, spec.as_ref())?,
         }))
-    }
-
-    pub fn parse_bound(&self, column: u32, text: String) -> Result<Arc<Bound>, GewuError> {
-        Ok(Arc::new(self.inner.parse_bound(column, &text)?.into()))
     }
 
     /// Validate a filter without changing the current view.
@@ -257,7 +250,17 @@ impl GewuSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FilterEditor, TextFilterMode};
+    use crate::{ColSpec, FilterCondition};
+
+    fn query(column: u32, filter: Filter) -> QuerySpec {
+        QuerySpec {
+            columns: vec![ColSpec {
+                column,
+                filter: Some(filter),
+                sort: None,
+            }],
+        }
+    }
 
     #[test]
     fn typed_filters_validate_and_execute_across_ffi() {
@@ -291,46 +294,35 @@ mod tests {
         );
         assert!(!doc.info().columns[0].capabilities.contains);
         // Chart coordinates may round a large ID; typed filters below must not.
-        let large = doc.parse_bound(0, "9007199254740993".into()).unwrap();
-        assert_eq!(large.display(), "9007199254740993");
-        assert_eq!(large.axis_value(), 9_007_199_254_740_992.0);
-        assert!(large.same_value(doc.parse_bound(0, "9007199254740993".into()).unwrap()));
-        assert!(!large.same_value(doc.parse_bound(0, "9007199254740992".into()).unwrap()));
-        assert!(matches!(
-            doc.parse_bound(0, "NaN".into()),
-            Err(GewuError::InvalidArgument { .. })
-        ));
         let before = doc.current_view();
         assert!(matches!(
-            doc.parse_bound(0, "not a number".into()),
+            doc.validate_filter(0, Filter {
+                condition: FilterCondition::Range {
+                    min: Some("not a number".into()),
+                    max: None
+                },
+                include_nulls: false,
+            }),
             Err(GewuError::InvalidArgument { .. })
         ));
-        assert!(matches!(
-            doc.filter_spec(0, None).unwrap().editor,
-            FilterEditor::Choices { .. }
-        ));
+        let values = doc.filter_choices(0, None).unwrap().values.unwrap();
+        assert_eq!(values[1].value, "9007199254740993");
         assert_eq!(doc.current_view().version, before.version);
-
-        for filter in [
-            Filter::Equals {
-                value: "9007199254740993".into(),
+        for condition in [
+            FilterCondition::Exact {
+                values: vec![values[1].value.clone()],
+                exclude: false,
             },
-            Filter::Range {
-                include_nulls: false,
-                min: Some(large),
-                max: None,
-            },
-            Filter::Range {
-                include_nulls: false,
-                min: Some(doc.parse_bound(0, "9007199254740993".into()).unwrap()),
+            FilterCondition::Range {
+                min: Some(values[1].value.clone()),
                 max: None,
             },
         ] {
             let view = doc
-                .apply_view(QuerySpec {
-                    sort: Vec::new(),
-                    filters: [(0, vec![filter])].into_iter().collect(),
-                })
+                .apply_view(query(0, Filter {
+                    condition,
+                    include_nulls: false,
+                }))
                 .unwrap();
             let rows = doc.rows(view.version, 0, 10, vec![0]).unwrap();
             assert_eq!(rows.source_rows, [1]);
@@ -358,41 +350,33 @@ mod tests {
         ));
         assert_eq!(info.columns[0].display_type, "string");
         assert_eq!(info.columns[1].display_type, "int64");
-        let FilterEditor::Text { modes, recommended } = doc.filter_spec(0, None).unwrap().editor
-        else {
-            panic!("strings should offer both filter modes");
-        };
-        assert!(matches!(modes.as_slice(), [
-            TextFilterMode::Choices,
-            TextFilterMode::Contains
-        ]));
-        assert!(matches!(recommended, TextFilterMode::Choices));
-        let state = QuerySpec {
-            sort: vec![],
-            filters: [(1, vec![Filter::Equals { value: "10".into() }])]
-                .into_iter()
-                .collect(),
-        };
+        assert!(info.columns[0].capabilities.contains);
+        assert!(info.columns[0].capabilities.exact);
+        let state = query(1, Filter {
+            condition: FilterCondition::Exact {
+                values: vec!["10".into()],
+                exclude: false,
+            },
+            include_nulls: false,
+        });
         let choices = doc.prepare_text_choices(0, Some(state)).unwrap();
         let first = choices.page(String::new(), None, 1).unwrap();
         assert_eq!(first.values.len(), 1);
-        assert_eq!(first.values[0].value.as_deref(), Some("cat"));
+        assert_eq!(first.values[0].value, "cat");
         assert_eq!(first.values[0].count, 1);
         let second = choices.page(String::new(), first.next, 1).unwrap();
         assert_eq!(second.values.len(), 1);
-        assert_eq!(second.values[0].value.as_deref(), Some("dog"));
+        assert_eq!(second.values[0].value, "dog");
         assert_eq!(second.values[0].count, 0);
         assert!(second.next.is_none());
         let view = doc
-            .apply_view(QuerySpec {
-                sort: vec![],
-                filters: [(0, vec![Filter::TextValues {
-                    values: vec![Some("dog".into())],
+            .apply_view(query(0, Filter {
+                condition: FilterCondition::Exact {
+                    values: vec!["dog".into()],
                     exclude: false,
-                }])]
-                .into_iter()
-                .collect(),
-            })
+                },
+                include_nulls: false,
+            }))
             .unwrap();
         assert_eq!(doc.rows(view.version, 0, 10, vec![0]).unwrap().cells, [
             Some("dog".into())
@@ -418,29 +402,20 @@ mod tests {
         }
         std::fs::write(&source, csv).unwrap();
         let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
-        let FilterEditor::Range {
-            distribution: Some(custom),
-            ..
-        } = doc
-            .filter_spec_with_bins(0, None, 10, AxisScale::Linear)
+        let custom = doc
+            .filter_distribution(0, None, 10, AxisScale::Linear)
             .unwrap()
-            .editor
-        else {
-            panic!("custom histogram");
-        };
+            .unwrap();
         assert_eq!(custom.histogram.counts.len(), 10);
         assert_eq!(custom.histogram.counts.iter().sum::<u64>(), 1_000);
         assert!(matches!(
-            doc.filter_spec_with_bins(0, None, 0, AxisScale::Linear),
+            doc.filter_distribution(0, None, 0, AxisScale::Linear),
             Err(GewuError::InvalidArgument { .. })
         ));
-        let FilterEditor::Range {
-            distribution: Some(distribution),
-            ..
-        } = doc.filter_spec(0, None).unwrap().editor
-        else {
-            panic!("many distinct integers should offer a typed range histogram");
-        };
+        let distribution = doc
+            .filter_distribution(0, None, 60, AxisScale::Linear)
+            .unwrap()
+            .unwrap();
         assert_eq!(distribution.histogram.min_label, Some(base.to_string()));
         assert_eq!(
             distribution.histogram.max_label,
@@ -459,16 +434,13 @@ mod tests {
         ] {
             let bounds = &distribution.ranges[bin];
             let view = doc
-                .apply_view(QuerySpec {
-                    sort: vec![],
-                    filters: [(0, vec![Filter::Range {
-                        include_nulls: false,
-                        min: bounds.min.clone(),
-                        max: bounds.max.clone(),
-                    }])]
-                    .into_iter()
-                    .collect(),
-                })
+                .apply_view(query(0, Filter {
+                    condition: FilterCondition::Range {
+                        min: bounds.min.as_ref().map(|b| b.value.clone()),
+                        max: bounds.max.as_ref().map(|b| b.value.clone()),
+                    },
+                    include_nulls: false,
+                }))
                 .unwrap();
             assert_eq!(view.row_count, distribution.histogram.counts[bin]);
         }
@@ -521,14 +493,13 @@ mod tests {
                     "cat".into()
                 )]);
                 selected
-                    .apply_view(QuerySpec {
-                        sort: vec![],
-                        filters: [(0, vec![Filter::Equals {
-                            value: "cat".into(),
-                        }])]
-                        .into_iter()
-                        .collect(),
-                    })
+                    .apply_view(query(0, Filter {
+                        condition: FilterCondition::Exact {
+                            values: vec!["cat".into()],
+                            exclude: false,
+                        },
+                        include_nulls: false,
+                    }))
                     .unwrap();
                 assert_eq!(selected.current_view().row_count, 1);
                 assert_eq!(reopened.current_view().row_count, 2);

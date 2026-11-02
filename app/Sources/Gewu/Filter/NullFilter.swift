@@ -1,60 +1,36 @@
 import SwiftUI
 
-/// What to do with null values in a column filter.
 enum NullMode: Int {
     case include, exclude, only
 
-    init(_ filters: [Filter]) {
-        self = .include
-        for filter in filters {
-            switch filter {
-            case .isNull(let negate): self = negate ? .exclude : .only
-            case .range(_, _, let includeNulls), .contains(_, _, let includeNulls):
-                // An explicit null-only condition takes precedence if filters are combined.
-                if self != .only { self = includeNulls ? .include : .exclude }
-            default: break
-            }
+    init(_ filter: Filter?) {
+        if let filter, case .exact(let values, let exclude) = filter.condition, values.isEmpty, !exclude,
+            filter.includeNulls
+        {
+            self = .only
+        } else {
+            self = filter?.includeNulls == false ? .exclude : .include
         }
     }
 
-    var filter: Filter? {
-        switch self {
-        case .include: nil
-        case .exclude: .isNull(negate: true)
-        case .only: .isNull(negate: false)
+    func applying(to condition: FilterCondition?) -> Filter? {
+        if self == .only { return Filter(condition: .exact(values: [], exclude: false), includeNulls: true) }
+        guard let condition else {
+            return self == .include ? nil : Filter(condition: .exact(values: [], exclude: true), includeNulls: false)
         }
-    }
-}
-
-struct NullFilterView: View {
-    let column: UInt32
-    let current: [Filter]
-    let onApply: ([Filter]) -> Void
-    @State private var nullMode = NullMode.include
-
-    var body: some View {
-        HStack {
-            NullModePicker(selection: $nullMode)
-            Spacer()
-            Button("Apply") { onApply(nullMode.filter.map { [$0] } ?? []) }
-                .keyboardShortcut(.defaultAction)
-        }
-        .onAppear { nullMode = NullMode(current) }
+        if case .exact(let values, let exclude) = condition, values.isEmpty, exclude, self == .include { return nil }
+        return Filter(condition: condition, includeNulls: self == .include)
     }
 }
 
 struct NullModePicker: View {
     @Binding var selection: NullMode
     var nullCount: UInt64?
-
     var body: some View {
         Picker("Null values", selection: $selection) {
             Text("Include nulls").tag(NullMode.include)
             Text("Hide nulls").tag(NullMode.exclude)
-            Text("Only nulls" + (nullCount.map { " (\(formatCount($0)))" } ?? ""))
-                .tag(NullMode.only)
-        }
-        .labelsHidden()
-        .fixedSize()
+            Text("Only nulls" + (nullCount.map { " (\(formatCount($0)))" } ?? "")).tag(NullMode.only)
+        }.labelsHidden().fixedSize()
     }
 }

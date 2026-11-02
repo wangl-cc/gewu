@@ -308,7 +308,7 @@ mod tests {
         // Check 1 starts sorting; check 2 precedes the first run; check 3
         // follows that run, before the second kernel can start.
         for cancel_at in [2, 3] {
-            let engine = ViewEngine::new(len);
+            let engine = ViewEngine::new(len, 1);
             let token = engine.begin();
             let mut checks = 0;
             let result = sort_rows(
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn cancellation_during_merge_stops_work_and_keeps_the_published_view() {
         let len = RUN * 3 + 17;
-        let engine = ViewEngine::new(len);
+        let engine = ViewEngine::new(len, 1);
         let token = engine.begin();
         let comparisons = Arc::new(AtomicUsize::new(0));
         let count = comparisons.clone();
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(checkpoints, first_merge_check + 1);
         assert_eq!(engine.current().version, 0);
         assert!(matches!(
-            engine.commit(&token, Vec::new()),
+            engine.commit(&token, Arc::new(Vec::new()), crate::QuerySpec::all(1)),
             Err(Error::Cancelled)
         ));
         assert_eq!(engine.current().rows.len(), len);

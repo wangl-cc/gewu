@@ -9,7 +9,6 @@ This document describes the calling contract. See [data types](../../docs/data-t
 | Object | Responsibility and lifetime |
 | --- | --- |
 | `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
-| `Bound` | Immutable, exact typed range endpoint. Obtained from a document's parsing or native constructors, or from filter histogram bins. |
 | `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
 | `FindSession` | Captures a view, typed query and ordered column scope, with independent terminal cancellation and bounded cell results. |
@@ -25,7 +24,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 1. Call `GewuSession::open(path)` on a background executor. The default opening policy uses the first XLSX worksheet and treats the first record as column names. To choose a worksheet explicitly, use `GewuSession::open_sheet(path, sheet)`. Use `open_with_options(path, sheet, has_header)` for explicit CSV, TSV or XLSX header interpretation; Parquet ignores the header option.
 2. Read `info()` for schema and file metadata, and `current_view()` for the initial `ViewInfo`.
-3. Construct a `QuerySpec` containing sort keys and explicit column filters. Run `apply_view(spec)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
+3. Construct a `QuerySpec.columns` list in visible display order. Each entry has its source-schema index, an optional `ColSort { priority, descending }`, and one optional filter. Initialize it with every source column; an empty list hides all columns. Run `apply_view(spec)` in the background and publish its returned `ViewInfo` only if the UI request is still current.
 4. Pass that view's `version` to `rows(version, start, count, columns)`. Column indexes refer to the source schema, even when the UI reorders columns; the returned cells follow the requested column order.
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.
@@ -61,13 +60,13 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 | Calls | Scheduling |
 | --- | --- |
-| `open`, `open_sheet`, `xlsx_sheet_names`, `apply_view`, `filter_spec`, `view_histogram`, `column_summary` | Background: file I/O, scans, sorting or index construction. |
+| `open`, `open_sheet`, `xlsx_sheet_names`, `apply_view`, `filter_choices`, `filter_distribution`, `view_histogram`, `column_summary` | Background: file I/O, scans, sorting or index construction. |
 | `ColumnAnalysis::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
 | `FindSession` page/highlight methods | Background: execute bounded batches; no-hit and sparse scans can cover the captured view. |
 | `info`, `current_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
 | `rows` | Suitable for small visible blocks; cost grows with requested cells and formatting. |
-| `parse_bound`, `Bound` methods, `format_value` | Scalar operations. |
-| `validate_filter` | Scalar preparation for most filters; `InValues` may build the column's compact encoding, so allow background execution. |
+| `format_value` | Scalar display formatting. |
+| `validate_filter` | Scalar preparation for most filters; `Exact` may build the column's compact encoding, so allow background execution. |
 | Cancellation methods and export `progress` | Control calls that can be made while background work runs. |
 
 Cancellation has independent scopes:
@@ -84,39 +83,25 @@ For detached analysis work, connect a Swift task cancellation handler to the Rus
 
 ## Filters and exact bounds
 
-`ColumnInfo.value_category` supplies the coarse cell category (`Number`, `Temporal`, or `Text`); the app chooses alignment and fonts. `display_type` is the human-readable type label and `technical_type` is the underlying Arrow description. Use `ColumnInfo.capabilities` for supported operations and `filter_spec(column, state)` for the editor to render, rather than inferring support from the category or parsing the labels. Supply the intended query state explicitly for contextual counts; `None` uses the unfiltered source. The specification does not change the current view.
+`ColumnInfo.value_category` supplies coarse cell presentation (`Number`, `Temporal`, or `Text`). `display_type` is a human-readable label; `technical_type` is the Arrow description. Supported filter operations come from `ColumnInfo.capabilities`, not presentation categories. The app chooses editors and retains a draft per mode.
 
-Scatter results carry `x_axis_kind` and `y_axis_kind` (`Number`, `Date`, or `DateTime`), so chart presentation does not depend on column type metadata. Coordinates retain source units and exact labels retain their existing format. The filter and nested-analysis interfaces still expose `LogicalType`; column metadata no longer does.
+`Filter { condition, include_nulls }` wraps one of `Range { min: Option<String>, max: Option<String> }`, `Contains { text, case_sensitive }`, or `Exact { values: Vec<String>, exclude }`. Null is never a value string. Exact inclusion/exclusion applies to non-null rows; `include_nulls` independently controls missing rows. Each column contributes one condition and columns combine with AND. `validate_filter` checks the typed input without publishing a view; call it on a worker because exact selection may initialize the bounded dictionary.
 
-| `FilterEditor` | UI contract |
-| --- | --- |
-| `Choices` | Show supplied labels and counts; send selected keys through `Filter::InValues`. Keys belong to that document and column. A `nil` label represents null. |
-| `Text` | Offer the supplied `modes` and use `recommended` initially. Preserve each mode's draft when switching; submit only the active mode on Apply. |
-| `Range` | Offer typed endpoints. An optional distribution supplies exact `RangeBounds` alongside histogram counts. |
-| `Contains` | Offer text input and case sensitivity. |
-| `NullOnly` | Offer null/non-null filtering through `Filter::IsNull`. |
+`filter_choices(column, spec)` returns `ValueChoice { label, value, count }` records and a separate `null_count`. Display `label`, retain and return `value` verbatim. `values: None` means no complete bounded list is available, not an empty column. The filter protocol still supports exact selection without a dictionary. Counts use the other columns' filters, excluding the requested column's own filter.
 
-Core chooses the editor using type capabilities and cardinality. Do not infer it solely from `LogicalType`. Filter facet counts include other columns' explicit filters, excluding the inspected column's own filters. See [Find and filtering](../../docs/search-and-filter.md) for the full contract.
+For string paging, call `prepare_text_choices(column, spec)` and `TextChoices::page(query, after, limit)` off the UI thread. Values and exclusive cursors are non-null strings in UTF-8 order; pages retain bounded candidate storage and include zero-count source values. Reuse the captured facet across searches. `invalidate_pages()` cancels obsolete scans while keeping the facet; capture its generation before queueing and call `page_for_generation`. `cancel()` permanently closes the session; preparation has no cancellation handle. Swift selection identities must compare UTF-8 bytes because ordinary `String` equality merges canonically equivalent spellings.
 
-String choices use `prepare_text_choices(column, state)` followed by `TextChoices::page(query, after, limit)`, both off the UI thread. Reuse the captured session across searches and pages. Pages use an exclusive value cursor, retain bounded candidate storage, and include zero-count source values. Preparation is not cancellable. For a new search, call `invalidate_pages()` when accepting the request, then pass the returned generation to `page_for_generation`; this interrupts obsolete scans while retaining the facet. Queued requests must not advance generations themselves. `cancel()` permanently closes the session independently of table queries. Debounce requests, serialize scans, and reject obsolete results before publishing them.
+`filter_distribution(column, spec, bins, scale)` supplies `RangeBound { value, label, coordinate }` endpoints. Display labels, plot coordinates or ordinal bin indexes, and send `value` unchanged. Numeric text preserves native integer/decimal precision. Date/time/timestamp canonical values use `@` followed by physical Arrow ticks, interpreted in the source type; human-entered date/time strings are also accepted. Duration inputs use the stored unit. Never reconstruct a value from approximate coordinates. Changing bins preserves the drafted value text.
 
-`Filter::EqualsAny` accepts multiple text inputs interpreted using the column's typed equality rules without building the column's value encoding.
+The app holds a query draft and an applied snapshot. Find and default export use the applied snapshot's column order. Hiding removes a column's sort/filter; showing it adds a fresh empty configuration. Sorting priority is independent of display position. See [Find and filtering](../../docs/search-and-filter.md) for UI interactions and empty-selection semantics.
 
-Submit `Filter::TextValues` with exact string values (`None` for null). `exclude = false` means only these values; `exclude = true` means all except these values. This represents all-selected without enumerating the column and supports strings above the 255-value encoding limit. Swift selection identities must compare UTF-8 bytes, since ordinary `String` equality merges canonically equivalent Unicode spellings. Keep global All Values / No Values actions distinct from Select Page / Clear Page actions.
-
-For text endpoints, call `parse_bound(column, text)`. This parses and validates the text against the column's logical type.
-
-Preserve `Bound` objects when submitting `Filter::Range`. Its endpoints are inclusive, and `None` means an open end. `display()` supplies text, `same_value()` compares exact typed values, and `axis_value()` is only an approximate plotting coordinate. Never rebuild a filter from histogram coordinates or a rounded floating-point value. Use the supplied histogram bin bounds directly.
-
-`Filter::InValues` takes the keys reported for a column's distinct values. Non-null values use stable small codes; null uses the reserved key `255`. A column with more than 255 non-null distinct values has no keys, so its value selection fails with `InvalidArgument`; use `TextValues`, `Range` or `Contains` instead.
-
-`Range` and `Contains` can include nulls through `include_nulls`; `IsNull` handles null-only filtering. `validate_filter` checks a candidate without applying a view. Invalid filter inputs become `InvalidArgument`. Find instead skips columns whose types cannot interpret its query, according to the [type-specific semantics](../../docs/data-types.md).
+Scatter results carry axis kinds independently of column presentation. The filter protocol no longer exports `LogicalType` or scalar object handles; nested analysis metadata still uses `LogicalType`.
 
 ## On-demand analysis
 
 Call `analysis_capabilities(column)` to discover supported sections without scanning the column. For each expanded section, call `prepare_analysis(version, column, section)`, then execute the returned `ColumnAnalysis::run()` off the UI thread. Each job computes only its requested section.
 
-`prepare_analysis_with_bins(version, column, section, bins, scale)` selects a nonzero histogram resolution and an `AxisScale` (`Linear` or `Log10`); the default analysis API uses 40 linear bins. Logarithmic binning is available for numeric distribution sections, while length sections use linear binning. `filter_spec_with_bins(column, state, bins, scale)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
+`prepare_analysis_with_bins(version, column, section, bins, scale)` selects a nonzero histogram resolution and an `AxisScale` (`Linear` or `Log10`); the default analysis API uses 40 linear bins. Logarithmic binning is available for numeric distribution sections, while length sections use linear binning. `filter_distribution(column, spec, bins, scale)` selects a range-filter resolution from 1 through 60 instead of the default 60; discrete domains may use fewer bins. Rebinning must preserve drafted exact filter endpoints rather than reconstructing them from chart coordinates. For logarithmic histograms, `lo`/`hi` and `bin_edges` are log10 plotting coordinates; source extrema labels and range bounds retain original values. `bin_edges` supplies one more coordinate than the nonempty counts, reflecting rounded native cuts; an empty edge array denotes uniform spacing. `non_positive_count` and `infinite_count` report excluded values separately from nulls and NaN. Logarithmic outer bounds are finite and positive.
 
 | Section | `AnalysisData` payload |
 | --- | --- |

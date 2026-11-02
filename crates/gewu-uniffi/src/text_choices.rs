@@ -6,13 +6,13 @@ use crate::GewuError;
 
 #[derive(uniffi::Record)]
 pub struct TextChoice {
-    pub value: Option<String>,
+    pub value: String,
     pub count: u64,
 }
 
 #[derive(uniffi::Record)]
 pub struct TextChoiceCursor {
-    pub value: Option<String>,
+    pub value: String,
 }
 
 #[derive(uniffi::Record)]

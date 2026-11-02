@@ -18,11 +18,10 @@ fn analysis_keeps_its_snapshot_and_cancels_independently_of_queries() {
         .unwrap();
     cancelled.cancel();
     let current = doc
-        .apply_view(&QuerySpec::single(1, Filter::Contains {
-            text: "b".into(),
-            case_sensitive: true,
-            include_nulls: false,
-        }))
+        .apply_view(&QuerySpec::single(
+            1,
+            Filter::contains("b".into(), true, false),
+        ))
         .unwrap();
     assert_eq!(current.row_count, 2);
     assert!(matches!(cancelled.run(), Err(Error::Cancelled)));

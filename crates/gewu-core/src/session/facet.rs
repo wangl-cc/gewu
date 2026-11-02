@@ -3,50 +3,23 @@
 use super::Session;
 pub use crate::column::{DistinctResult, DistinctValue};
 use crate::{
-    predicate::Predicate,
-    scope::RowScope,
-    stats,
-    types::{Domain, LogicalType},
-    Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
+    predicate::Predicate, scope::RowScope, stats, types::Domain, Error, Filter, Histogram,
+    QuerySpec, RangeHistogram, Result,
 };
 
-/// The editor and data a frontend needs for one column's filter popover.
-/// The editor is chosen from the whole source column and stays stable as
-/// other filters change. Counts exclude this column's own filters.
+/// Complete bounded non-null candidates, or None when the column exceeds the
+/// dictionary limit. Null counts are separate from selectable values.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FilterSpec {
-    pub nullable: bool,
-    pub editor: FilterEditor,
+pub struct FilterChoices {
+    pub values: Option<Vec<ValueChoice>>,
+    pub null_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
-)]
-pub enum FilterEditor {
-    /// String filters always offer both modes. Source cardinality only selects
-    /// the initial recommendation; candidate pages are requested separately.
-    Text {
-        modes: Vec<TextFilterMode>,
-        recommended: TextFilterMode,
-    },
-    Range {
-        logical_type: LogicalType,
-        distribution: Option<RangeHistogram>,
-    },
-    /// All source values, including values with zero rows in the current facet.
-    Choices {
-        values: Vec<DistinctValue>,
-    },
-    Contains,
-    NullOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextFilterMode {
-    Choices,
-    Contains,
+pub struct ValueChoice {
+    pub label: String,
+    pub value: String,
+    pub count: u64,
 }
 
 impl Session {
@@ -55,83 +28,55 @@ impl Session {
         self.column(column)?.parse_bound(text)
     }
 
-    /// Describe the filter editor using whole-column cardinality. Facet counts
-    /// respect other columns' explicit filters without changing the editor.
-    pub fn filter_spec(&self, column: u32, spec: Option<&QuerySpec>) -> Result<FilterSpec> {
-        self.filter_spec_with_bins(column, spec, 60)
+    pub fn filter_choices(&self, column: u32, spec: Option<&QuerySpec>) -> Result<FilterChoices> {
+        let col = self.column(column)?;
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
+        let nulls = col.array.logical_nulls();
+        let null_count = rows
+            .iter()
+            .filter(|&row| nulls.as_ref().is_some_and(|nulls| nulls.is_null(row)))
+            .count() as u64;
+        let values = if col.capabilities().exact {
+            col.dictionary()
+                .map(|dictionary| {
+                    dictionary
+                        .distinct_values(&rows, true)
+                        .into_iter()
+                        .filter(|v| v.label.is_some())
+                        .map(|v| {
+                            Ok(ValueChoice {
+                                label: v.label.unwrap(),
+                                value: crate::column::value_text::encode(
+                                    dictionary.values(),
+                                    v.key as usize,
+                                )?,
+                                count: v.count,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(FilterChoices { values, null_count })
     }
 
-    /// Like filter_spec, with a requested histogram resolution (1 through 60).
-    pub fn filter_spec_with_bins(
-        &self,
-        column: u32,
-        spec: Option<&QuerySpec>,
-        bins: u32,
-    ) -> Result<FilterSpec> {
-        self.filter_spec_with_scale(column, spec, bins, crate::AxisScale::Linear)
-    }
-
-    /// Like `filter_spec_with_bins`, with an explicit numeric binning scale.
-    pub fn filter_spec_with_scale(
+    pub fn filter_distribution(
         &self,
         column: u32,
         spec: Option<&QuerySpec>,
         bins: u32,
         scale: crate::AxisScale,
-    ) -> Result<FilterSpec> {
+    ) -> Result<Option<RangeHistogram>> {
         if !(1..=60).contains(&bins) {
             return Err(Error::InvalidArgument(
                 "filter histogram bins must be between 1 and 60".into(),
             ));
         }
         let col = self.column(column)?;
-        if scale == crate::AxisScale::Log10 && !col.capabilities().logarithmic {
-            return Err(Error::InvalidArgument(
-                "logarithmic binning requires a numeric column".into(),
-            ));
-        }
-        // Dictionary-encoded text keeps its choices editor rather than the
-        // text editor; encoding and value semantics are separate here.
-        if crate::types::direct_domain(col.array.data_type()) == Some(Domain::Text) {
-            return Ok(FilterSpec {
-                nullable: col.is_nullable(),
-                editor: FilterEditor::Text {
-                    modes: vec![
-                        crate::TextFilterMode::Choices,
-                        crate::TextFilterMode::Contains,
-                    ],
-                    recommended: if col.has_dictionary() {
-                        crate::TextFilterMode::Choices
-                    } else {
-                        crate::TextFilterMode::Contains
-                    },
-                },
-            });
-        }
-        let editor = if let Some(values) =
-            col.choices(&self.rows_in(RowScope::facet(spec, column))?, true)
-        {
-            FilterEditor::Choices { values }
-        } else if col.capabilities().range {
-            let rows = self.rows_in(RowScope::facet(spec, column))?;
-            FilterEditor::Range {
-                logical_type: LogicalType::from_arrow(col.array.data_type())
-                    .expect("column type was validated at loading"),
-                distribution: stats::build_scaled(
-                    stats::ArrayView::new(&col.array, &rows),
-                    bins,
-                    scale,
-                )?,
-            }
-        } else if col.capabilities().contains {
-            FilterEditor::Contains
-        } else {
-            FilterEditor::NullOnly
-        };
-        Ok(FilterSpec {
-            nullable: col.is_nullable(),
-            editor,
-        })
+        let rows = self.rows_in(RowScope::facet(spec, column))?;
+        stats::build_scaled(stats::ArrayView::new(&col.array, &rows), bins, scale)
     }
 
     /// Capture a string column and facet rows for bounded candidate paging.
@@ -160,8 +105,7 @@ impl Session {
     /// columns (like Excel), and leaves out values with no such rows.
     ///
     /// A column with at most 255 non-null distinct values is encoded: the
-    /// result is the first `limit` values in value order, and their keys work
-    /// in [`Filter::InValues`]. A column with more is counted without an
+    /// result is the first `limit` values in value order. A column with more is counted without an
     /// encoding: the result is the `limit` most common values (still in value
     /// order), `keyed` is false and the keys only number them.
     pub fn distinct_values(
@@ -203,12 +147,6 @@ impl Session {
     /// filters may build the column's lazy index; other filters only parse scalars.
     pub fn validate_filter(&self, column: u32, filter: &Filter) -> Result<()> {
         self.prepare_filter(column, filter).map(|_| ())
-    }
-
-    /// Keys for the given displayed labels (`None` = null). Unknown labels
-    /// are ignored. Used when filtering by displayed value text.
-    pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        self.column(column)?.keys_for_labels(labels)
     }
 
     pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {

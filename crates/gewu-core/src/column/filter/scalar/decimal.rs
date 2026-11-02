@@ -20,6 +20,18 @@ pub(in crate::column) struct Literal {
 }
 
 impl Literal {
+    pub(in crate::column) fn filter_text(&self) -> String {
+        if self.digits.is_empty() {
+            return "0".into();
+        }
+        format!(
+            "{}{}e{}",
+            if self.negative { "-" } else { "" },
+            self.digits,
+            self.exponent
+        )
+    }
+
     /// Integer and duration searches accept signed digits only, including
     /// out-of-domain values, without decimal points or exponents.
     pub(in crate::column) fn parse_integer(text: &str) -> Option<Self> {

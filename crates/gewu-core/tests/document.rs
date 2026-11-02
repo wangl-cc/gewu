@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec, Session, SortKey};
+use gewu_core::{Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
@@ -70,23 +70,11 @@ fn opens_file() {
 #[test]
 fn sorts_with_nulls_last() {
     let (path, doc) = sample();
-    let spec = QuerySpec {
-        sort: vec![SortKey {
-            column: 2,
-            descending: false,
-        }],
-        ..Default::default()
-    };
+    let spec = QuerySpec::new().with_sort(2, false, 0);
     doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
-    let spec = QuerySpec {
-        sort: vec![SortKey {
-            column: 2,
-            descending: true,
-        }],
-        ..Default::default()
-    };
+    let spec = QuerySpec::new().with_sort(2, true, 0);
     doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
     std::fs::remove_file(path).ok();
@@ -105,13 +93,11 @@ fn checkbox_filter_and_distinct() {
     ]);
     assert_eq!(all.values[2].count, 2);
 
-    let keys = doc
-        .keys_for_labels(1, &[Some("cat".into()), Some("dog".into())])
-        .unwrap();
-    let spec = QuerySpec::single(1, Filter::InValues { keys }).with_sort(vec![SortKey {
-        column: 3,
-        descending: true,
-    }]);
+    let spec = QuerySpec::single(
+        1,
+        Filter::exact(vec!["cat".into(), "dog".into()], false, false),
+    )
+    .with_sort(3, true, 0);
     let v = doc.apply_view(&spec).unwrap();
     assert_eq!(v.row_count, 4);
     assert_eq!(names(&doc), ["f", "d", "b", "a"]);
@@ -128,21 +114,15 @@ fn checkbox_filter_and_distinct() {
 #[test]
 fn null_contains_and_typed_equality() {
     let (path, doc) = sample();
-    let spec = QuerySpec::single(2, Filter::IsNull { negate: false });
+    let spec = QuerySpec::single(2, Filter::exact(vec![], false, true));
     doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["d"]);
 
-    let spec = QuerySpec::single(1, Filter::Contains {
-        include_nulls: false,
-        text: "D".into(),
-        case_sensitive: false,
-    });
+    let spec = QuerySpec::single(1, Filter::contains("D".into(), false, false));
     doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
-    let spec = QuerySpec::single(2, Filter::Equals {
-        value: "2.25".into(),
-    });
+    let spec = QuerySpec::single(2, Filter::exact(vec!["2.25".into()], false, false));
     doc.apply_view(&spec).unwrap();
     assert_eq!(names(&doc), ["e"]);
     std::fs::remove_file(path).ok();
@@ -184,11 +164,14 @@ fn range_filter_on_floats_skips_nulls() {
     ] {
         let min = min.map(|text| doc.parse_bound(2, text).unwrap());
         let max = max.map(|text| doc.parse_bound(2, text).unwrap());
-        doc.apply_view(&QuerySpec::single(2, Filter::Range {
-            include_nulls: false,
-            min,
-            max,
-        }))
+        doc.apply_view(&QuerySpec::single(
+            2,
+            Filter::range(
+                min.map(|b: gewu_core::Bound| b.filter_text()),
+                max.map(|b: gewu_core::Bound| b.filter_text()),
+                false,
+            ),
+        ))
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -206,11 +189,14 @@ fn range_filter_on_integers() {
     ] {
         let min = min.map(|text| doc.parse_bound(3, text).unwrap());
         let max = max.map(|text| doc.parse_bound(3, text).unwrap());
-        doc.apply_view(&QuerySpec::single(3, Filter::Range {
-            include_nulls: false,
-            min,
-            max,
-        }))
+        doc.apply_view(&QuerySpec::single(
+            3,
+            Filter::range(
+                min.map(|b: gewu_core::Bound| b.filter_text()),
+                max.map(|b: gewu_core::Bound| b.filter_text()),
+                false,
+            ),
+        ))
         .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -373,11 +359,10 @@ fn contains_filter_is_for_text_only() {
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
-            .apply_view(&QuerySpec::single(column, Filter::Contains {
-                include_nulls: false,
-                text: "1700".into(),
-                case_sensitive: false,
-            }))
+            .apply_view(&QuerySpec::single(
+                column,
+                Filter::contains("1700".into(), false, false),
+            ))
             .unwrap_err();
         assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
     }
@@ -406,21 +391,27 @@ fn dates_format_parse_and_filter() {
 
     // Range on dates: nulls excluded, bounds inclusive.
     let min = doc.parse_bound(1, "2024-01-02").unwrap();
-    doc.apply_view(&QuerySpec::single(1, Filter::Range {
-        include_nulls: false,
-        min: Some(min),
-        max: None,
-    }))
+    doc.apply_view(&QuerySpec::single(
+        1,
+        Filter::range(
+            (Some(min)).map(|b: gewu_core::Bound| b.filter_text()),
+            None,
+            false,
+        ),
+    ))
     .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
     let max = doc.parse_bound(2, "2024-01-01T10:00:00Z").unwrap();
-    doc.apply_view(&QuerySpec::single(2, Filter::Range {
-        include_nulls: false,
-        min: None,
-        max: Some(max),
-    }))
+    doc.apply_view(&QuerySpec::single(
+        2,
+        Filter::range(
+            None,
+            (Some(max)).map(|b: gewu_core::Bound| b.filter_text()),
+            false,
+        ),
+    ))
     .unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
@@ -472,9 +463,11 @@ fn column_summary_follows_the_view() {
     assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
 
     // With a filter, only the view's rows count.
-    let keys = doc.keys_for_labels(1, &[Some("dog".into())]).unwrap();
-    doc.apply_view(&QuerySpec::single(1, Filter::InValues { keys }))
-        .unwrap();
+    doc.apply_view(&QuerySpec::single(
+        1,
+        Filter::exact(vec!["dog".into()], false, false),
+    ))
+    .unwrap();
     let s = doc.column_summary(2, 5).unwrap();
     assert_eq!((s.rows, s.min, s.max), (2, Some(1.0), Some(7.0)));
     std::fs::remove_file(path).ok();

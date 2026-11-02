@@ -1,21 +1,22 @@
-//! Query state and visible row blocks.
-
-use std::collections::HashMap;
-
+//! Ordered column projection and row query configuration.
 use gewu_core as core;
 
 use crate::Filter;
 
 #[derive(uniffi::Record)]
-pub struct SortKey {
-    pub column: u32,
+pub struct ColSort {
+    pub priority: u32,
     pub descending: bool,
 }
-
+#[derive(uniffi::Record)]
+pub struct ColSpec {
+    pub column: u32,
+    pub sort: Option<ColSort>,
+    pub filter: Option<Filter>,
+}
 #[derive(uniffi::Record)]
 pub struct QuerySpec {
-    pub sort: Vec<SortKey>,
-    pub filters: HashMap<u32, Vec<Filter>>,
+    pub columns: Vec<ColSpec>,
 }
 
 #[derive(uniffi::Record)]
@@ -36,20 +37,19 @@ pub struct RowBlock {
 }
 
 impl From<QuerySpec> for core::QuerySpec {
-    fn from(s: QuerySpec) -> Self {
-        core::QuerySpec {
-            sort: s
-                .sort
+    fn from(spec: QuerySpec) -> Self {
+        Self {
+            columns: spec
+                .columns
                 .into_iter()
-                .map(|k| core::SortKey {
-                    column: k.column,
-                    descending: k.descending,
+                .map(|c| core::ColSpec {
+                    column: c.column,
+                    filter: c.filter.map(Into::into),
+                    sort: c.sort.map(|s| core::ColSort {
+                        priority: s.priority,
+                        descending: s.descending,
+                    }),
                 })
-                .collect(),
-            filters: s
-                .filters
-                .into_iter()
-                .map(|(col, filters)| (col, filters.into_iter().map(Into::into).collect()))
                 .collect(),
         }
     }

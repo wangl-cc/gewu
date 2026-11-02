@@ -12,7 +12,7 @@ use crate::{
 
 pub(crate) fn supports(data_type: &DataType) -> bool {
     matches!(
-        direct_domain(data_type),
+        direct_domain(crate::types::value_type(data_type)),
         Some(
             Domain::Integer
                 | Domain::Float

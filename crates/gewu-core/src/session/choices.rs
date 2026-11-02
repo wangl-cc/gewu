@@ -13,21 +13,20 @@ use crate::{column::filter::text, scope::Selection, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoice {
-    pub value: Option<String>,
+    pub value: String,
     /// Rows passing the other columns' explicit filters.
     pub count: u64,
 }
 
-/// An exclusive keyset cursor. An absent cursor starts at the beginning;
-/// a cursor containing `None` starts immediately after the null value.
+/// An exclusive non-null keyset cursor. An absent cursor starts at the beginning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoiceCursor {
-    pub value: Option<String>,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoicePage {
-    /// Source values in null-first, case-sensitive UTF-8 lexical order.
+    /// Non-null source values in case-sensitive UTF-8 lexical order.
     pub values: Vec<TextChoice>,
     /// Present only when another matching distinct value follows this page.
     pub next: Option<TextChoiceCursor>,
@@ -94,11 +93,9 @@ impl TextChoices {
         }
     }
 
-    /// Return up to `limit` values in bytewise string order, with null first.
-    /// `after` is exclusive, and a cursor whose value is null means "after null".
-    /// Search is a case-insensitive literal substring; null is searched as
-    /// `(null)`. Candidates include zero-count values; counts use the captured
-    /// facet. Limits outside 1..=200 are rejected. There is no full distinct count.
+    /// Return up to `limit` non-null values in bytewise order after an exclusive
+    /// cursor. Search is a case-insensitive literal substring. Counts use the
+    /// captured facet, including zero-count source candidates. Limits are 1..=200.
     pub fn page(
         &self,
         query: &str,
@@ -148,17 +145,17 @@ impl TextChoices {
         let read = text::accessor(&self.array)?;
         let mut counted_rows = self.rows.iter().peekable();
         let keep = limit as usize + 1;
-        let mut candidates: Vec<(Option<&str>, u64)> = Vec::with_capacity(keep);
+        let mut candidates: Vec<(&str, u64)> = Vec::with_capacity(keep);
         for row in 0..self.array.len() {
             if row.is_multiple_of(4096) {
                 check()?;
             }
             let counted = counted_rows.next_if_eq(&row).is_some();
-            let value = read(row);
-            if after.is_some_and(|cursor| value <= cursor.value.as_deref())
+            let Some(value) = read(row) else { continue };
+            if after.is_some_and(|cursor| value <= cursor.value.as_str())
                 || matcher
                     .as_ref()
-                    .is_some_and(|matcher| !matcher.is_match(value.unwrap_or("(null)")))
+                    .is_some_and(|matcher| !matcher.is_match(value))
             {
                 continue;
             }
@@ -187,7 +184,7 @@ impl TextChoices {
         let values: Vec<_> = candidates
             .into_iter()
             .map(|(value, count)| TextChoice {
-                value: value.map(str::to_owned),
+                value: value.to_owned(),
                 count,
             })
             .collect();
@@ -250,7 +247,7 @@ mod tests {
                 .page_for_generation("value-11999", None, 10, current)
                 .unwrap();
             assert_eq!(page.values, [TextChoice {
-                value: Some("value-11999".into()),
+                value: "value-11999".into(),
                 count: 1
             }]);
             choices.cancel();
@@ -293,12 +290,11 @@ mod tests {
             }
         }
         assert_eq!(found, vec![
-            (None, 0),
-            (Some("".into()), 0),
-            (Some("a".into()), 2),
-            (Some("b".into()), 2),
-            (Some("c".into()), 0),
-            (Some("z".into()), 2)
+            ("".into(), 0),
+            ("a".into(), 2),
+            ("b".into(), 2),
+            ("c".into(), 0),
+            ("z".into(), 2)
         ]);
     }
 
@@ -314,19 +310,19 @@ mod tests {
         ]));
         let choices = TextChoices::new(array, Selection::All(6)).unwrap();
         let first = choices.page("", None, 1).unwrap();
-        assert_eq!(first.values[0].value, None);
+        assert_eq!(first.values[0].value, "");
         let next = choices.page("", first.next.as_ref(), 1).unwrap();
-        assert_eq!(next.values[0].value.as_deref(), Some(""));
+        assert_eq!(next.values[0].value, "(null)");
         assert_eq!(choices.page("K", None, 10).unwrap().values.len(), 2);
         assert_eq!(
             choices.page("%_[", None, 10).unwrap().values[0]
                 .value
-                .as_deref(),
-            Some("a%_[b")
+                .as_str(),
+            "a%_[b"
         );
         let nulls = choices.page("(NULL)", None, 10).unwrap();
-        assert_eq!(nulls.values.len(), 2);
-        assert_eq!(nulls.values[0].value, None);
+        assert_eq!(nulls.values.len(), 1);
+        assert_eq!(nulls.values[0].value, "(null)");
         let missing = choices.page("absent", None, 10).unwrap();
         assert!(missing.values.is_empty());
         assert!(missing.next.is_none());
@@ -359,9 +355,9 @@ mod tests {
         assert_eq!(
             page.values
                 .iter()
-                .map(|value| (value.value.as_deref(), value.count))
+                .map(|value| (value.value.as_str(), value.count))
                 .collect::<Vec<_>>(),
-            [(None, 2), (Some("a"), 1), (Some("b"), 2)]
+            [("a", 1), ("b", 2)]
         );
     }
 }

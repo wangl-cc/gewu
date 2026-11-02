@@ -20,18 +20,11 @@ impl<'a> RowScope<'a> {
     /// allocating a source-row list just because a UI supplied a spec.
     pub fn facet(spec: Option<&'a QuerySpec>, column: u32) -> Self {
         match spec {
-            Some(spec)
-                if spec
-                    .filters
-                    .iter()
-                    .any(|(&col, filters)| col != column && !filters.is_empty()) =>
-            {
-                Self::Facet {
-                    spec,
-                    except: column,
-                }
-            }
-            _ => Self::All,
+            Some(spec) => Self::Facet {
+                spec,
+                except: column,
+            },
+            None => Self::All,
         }
     }
 }

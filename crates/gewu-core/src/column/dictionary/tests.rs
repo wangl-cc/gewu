@@ -92,14 +92,14 @@ fn predicates_match_null_and_values() {
     let dictionary = Arc::new(Dictionary::from_array(&a).unwrap());
     let mut hits = [false; 3];
     dictionary
-        .prepare_predicate(&[dictionary.null_key()])
+        .matching_codes(&vec![false; dictionary.values().len()], false, true)
         .evaluate(0..3, &mut hits, &CancelToken::never())
         .unwrap();
     assert_eq!(hits, [false, true, false]);
 
     let mut hits = [false; 3];
     dictionary
-        .prepare_predicate_with_exclude(&[dictionary.null_key()], true)
+        .matching_codes(&vec![false; dictionary.values().len()], true, false)
         .evaluate(0..3, &mut hits, &CancelToken::never())
         .unwrap();
     assert_eq!(hits, [true, false, true]);
@@ -178,7 +178,9 @@ fn predicates_cover_ranges_indices_and_incoming_masks() {
     ]));
     let dictionary = Arc::new(Dictionary::from_array(&a).unwrap());
     let code_b = dictionary.code_at(0);
-    let predicate = dictionary.prepare_predicate(&[code_b as u64]);
+    let mut selected = vec![false; dictionary.values().len()];
+    selected[code_b as usize] = true;
+    let predicate = dictionary.matching_codes(&selected, false, false);
     let cancel = CancelToken::never();
 
     let mut range_hits = [false; 4];
@@ -240,7 +242,12 @@ fn arrow_null_type_encodes_every_row_as_null() {
 
 #[test]
 fn dictionary_labels_and_codes_are_natively_sorted() {
-    let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(100), Some(2), Some(10), Some(2)]));
+    let array: ArrayRef = Arc::new(Int32Array::from(vec![
+        Some(100),
+        Some(2),
+        Some(10),
+        Some(2),
+    ]));
     let dictionary = Dictionary::from_array(&array).unwrap();
     assert_eq!(dictionary.labels(), &["2", "10", "100"]);
     // code 0 -> 2, code 1 -> 10, code 2 -> 100

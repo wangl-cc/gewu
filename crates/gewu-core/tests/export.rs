@@ -10,9 +10,7 @@ use arrow::{
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
     datatypes::{DataType, Field, Schema},
 };
-use gewu_core::{
-    Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, Session, SortKey,
-};
+use gewu_core::{Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec, Session};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
@@ -159,15 +157,7 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
 
 fn filtered(doc: &Session) -> u64 {
     doc.apply_view(
-        &QuerySpec::single(0, Filter::Range {
-            include_nulls: false,
-            min: Some(doc.parse_bound(0, "2").unwrap()),
-            max: None,
-        })
-        .with_sort(vec![SortKey {
-            column: 0,
-            descending: true,
-        }]),
+        &QuerySpec::single(0, Filter::range(Some("2".into()), None, false)).with_sort(0, true, 0),
     )
     .unwrap()
     .version
@@ -292,7 +282,10 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let version = doc
-        .apply_view(&QuerySpec::single(0, Filter::Equals { value: "-1".into() }))
+        .apply_view(&QuerySpec::single(
+            0,
+            Filter::exact(vec!["-1".into()], false, false),
+        ))
         .unwrap()
         .version;
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
@@ -420,11 +413,7 @@ fn source_file_and_aliases_cannot_be_overwritten() {
 #[test]
 fn view_histogram_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
-    let spec = QuerySpec::single(0, Filter::Range {
-        include_nulls: false,
-        min: Some(doc.parse_bound(0, "2").unwrap()),
-        max: Some(doc.parse_bound(0, "4").unwrap()),
-    });
+    let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
     let view = doc.apply_view(&spec).unwrap();
     let filter_histogram = doc.histogram(0, Some(&spec), 8).unwrap();
     let view_histogram = doc.view_histogram(view.version, 0, 8).unwrap();

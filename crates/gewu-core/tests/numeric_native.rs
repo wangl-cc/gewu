@@ -20,11 +20,14 @@ fn document(array: ArrayRef) -> Session {
 }
 
 fn check_range(doc: &Session, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
-    let spec = QuerySpec::single(0, Filter::Range {
-        include_nulls: false,
-        min,
-        max,
-    });
+    let spec = QuerySpec::single(
+        0,
+        Filter::range(
+            min.map(|b: gewu_core::Bound| b.filter_text()),
+            max.map(|b: gewu_core::Bound| b.filter_text()),
+            false,
+        ),
+    );
     let view = doc.apply_view(&spec).unwrap();
     assert_eq!(
         doc.rows(view.version, 0, 100, &[0]).unwrap().source_rows,
@@ -266,12 +269,9 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
             .axis_value(),
         bound_u64(&unsigned, 0, u64::MAX).axis_value()
     );
-    check_range(
-        &unsigned,
-        Some(bound_u64(&unsigned, 0, u64::MAX)),
-        None,
-        &[1],
-    );
+    check_range(&unsigned, Some(bound_u64(&unsigned, 0, u64::MAX)), None, &[
+        1,
+    ]);
 }
 
 #[test]
@@ -310,42 +310,16 @@ fn float64_ranges_compare_large_integer_bounds_exactly() {
         2_f64.powi(64),
     ])));
     // The odd integer between these adjacent floats cannot be represented by f64.
-    check_range(
-        &doc,
-        Some(bound_i64(&doc, 0, large + 1)),
-        None,
-        &[3, 4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(bound_i64(&doc, 0, large + 1)),
-        &[0, 1, 2],
-    );
-    check_range(
-        &doc,
-        Some(bound_i64(&doc, 0, -large - 1)),
-        None,
-        &[1, 2, 3, 4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(bound_i64(&doc, 0, -large - 1)),
-        &[0],
-    );
-    check_range(
-        &doc,
-        Some(bound_u64(&doc, 0, u64::MAX)),
-        None,
-        &[4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(bound_u64(&doc, 0, u64::MAX)),
-        &[0, 1, 2, 3],
-    );
+    check_range(&doc, Some(bound_i64(&doc, 0, large + 1)), None, &[3, 4]);
+    check_range(&doc, None, Some(bound_i64(&doc, 0, large + 1)), &[0, 1, 2]);
+    check_range(&doc, Some(bound_i64(&doc, 0, -large - 1)), None, &[
+        1, 2, 3, 4,
+    ]);
+    check_range(&doc, None, Some(bound_i64(&doc, 0, -large - 1)), &[0]);
+    check_range(&doc, Some(bound_u64(&doc, 0, u64::MAX)), None, &[4]);
+    check_range(&doc, None, Some(bound_u64(&doc, 0, u64::MAX)), &[
+        0, 1, 2, 3,
+    ]);
 }
 
 #[test]

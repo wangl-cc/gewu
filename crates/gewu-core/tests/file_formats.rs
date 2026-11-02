@@ -53,7 +53,7 @@ fn assert_disabled_exports(doc: &Session) {
 #[cfg(feature = "csv")]
 mod delimited {
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
+    use gewu_core::{FileMetadata, Filter, QuerySpec};
 
     use super::*;
 
@@ -173,15 +173,8 @@ mod delimited {
         let doc = Session::open(source).unwrap();
         let version = doc
             .apply_view(
-                &QuerySpec::single(0, Filter::Range {
-                    include_nulls: false,
-                    min: Some(doc.parse_bound(0, "2").unwrap()),
-                    max: None,
-                })
-                .with_sort(vec![SortKey {
-                    column: 0,
-                    descending: true,
-                }]),
+                &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
+                    .with_sort(0, true, 0),
             )
             .unwrap()
             .version;
@@ -203,9 +196,10 @@ mod delimited {
             );
         }
         let empty = doc
-            .apply_view(&QuerySpec::single(1, Filter::Equals {
-                value: "absent-value".into(),
-            }))
+            .apply_view(&QuerySpec::single(
+                1,
+                Filter::exact(vec!["absent-value".into()], false, false),
+            ))
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
@@ -226,7 +220,7 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, QuerySpec, SortKey};
+    use gewu_core::{FileMetadata, Filter, QuerySpec};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
@@ -336,13 +330,7 @@ mod xlsx {
         workbook(&source);
         let doc = Session::open(source).unwrap();
         let version = doc
-            .apply_view(&QuerySpec {
-                sort: vec![SortKey {
-                    column: 0,
-                    descending: false,
-                }],
-                ..Default::default()
-            })
+            .apply_view(&QuerySpec::new().with_sort(0, false, 0))
             .unwrap()
             .version;
         let destination = directory.path().join("export.xlsx");
@@ -359,9 +347,10 @@ mod xlsx {
             doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .apply_view(&QuerySpec::single(1, Filter::Equals {
-                value: "absent-value".into(),
-            }))
+            .apply_view(&QuerySpec::single(
+                1,
+                Filter::exact(vec!["absent-value".into()], false, false),
+            ))
             .unwrap();
         doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
             .unwrap()

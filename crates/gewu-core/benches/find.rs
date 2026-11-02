@@ -11,7 +11,7 @@ use arrow::{
     datatypes::{DataType, Field, Int32Type},
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use gewu_core::{Filter, QuerySpec, Session, SortKey};
+use gewu_core::{Filter, QuerySpec, Session};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
@@ -91,9 +91,10 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
-        .apply_view(&QuerySpec::single(1, Filter::Equals {
-            value: "true".into(),
-        }))
+        .apply_view(&QuerySpec::single(
+            1,
+            Filter::exact(vec!["true".into()], false, false),
+        ))
         .unwrap();
     assert_eq!(filtered.row_count, 20_000);
     let dictionary_find = dictionary_doc
@@ -128,13 +129,7 @@ fn find_scans(c: &mut Criterion) {
     }));
     let (_wide_file, wide_doc) = document(columns);
     let sorted = wide_doc
-        .apply_view(&QuerySpec {
-            sort: vec![SortKey {
-                column: 0,
-                descending: true,
-            }],
-            ..Default::default()
-        })
+        .apply_view(&QuerySpec::new().with_sort(0, true, 0))
         .unwrap();
     let wide_columns: Vec<u32> = (0..8).collect();
     let wide_find = wide_doc

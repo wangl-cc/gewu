@@ -937,11 +937,11 @@ mod tests {
         let column = Column::new("test", array.clone()).unwrap();
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
             let predicate = column
-                .prepare_filter(&Filter::Range {
-                    include_nulls: false,
-                    min: bounds.min.clone(),
-                    max: bounds.max.clone(),
-                })
+                .prepare_filter(&Filter::range(
+                    (bounds.min.clone()).map(|b: crate::Bound| b.filter_text()),
+                    (bounds.max.clone()).map(|b: crate::Bound| b.filter_text()),
+                    false,
+                ))
                 .unwrap();
             let mut matched = vec![false; array.len()];
             predicate

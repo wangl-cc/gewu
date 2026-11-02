@@ -9,7 +9,7 @@ use std::sync::{
     Arc, Mutex, MutexGuard,
 };
 
-use crate::{Error, Result, ViewInfo};
+use crate::{Error, QuerySpec, Result, ViewInfo};
 
 /// Tells a long-running operation that a newer one has replaced it.
 #[derive(Clone)]
@@ -68,6 +68,7 @@ impl CancelToken {
 }
 
 pub(crate) struct View {
+    pub spec: QuerySpec,
     pub version: u64,
     /// Source row numbers in display order.
     pub rows: Arc<Vec<u32>>,
@@ -90,9 +91,10 @@ pub(crate) struct ViewEngine {
 
 impl ViewEngine {
     /// Start with every row in file order, as version 0.
-    pub fn new(n_rows: usize) -> Self {
+    pub fn new(n_rows: usize, n_columns: usize) -> Self {
         Self {
             current: Mutex::new(Arc::new(View {
+                spec: QuerySpec::all(n_columns),
                 version: 0,
                 rows: Arc::new((0..n_rows as u32).collect()),
             })),
@@ -142,12 +144,18 @@ impl ViewEngine {
     /// Switch to `rows` unless `token` was cancelled. The final check under
     /// the view lock is the commit linearization point: a concurrent cancel
     /// after that check does not roll back this already accepted publication.
-    pub fn commit(&self, token: &CancelToken, rows: Vec<u32>) -> Result<ViewInfo> {
+    pub fn commit(
+        &self,
+        token: &CancelToken,
+        rows: Arc<Vec<u32>>,
+        spec: QuerySpec,
+    ) -> Result<ViewInfo> {
         let mut current = self.lock();
         token.check()?;
         let view = View {
             version: self.next_version.fetch_add(1, Ordering::SeqCst),
-            rows: Arc::new(rows),
+            rows,
+            spec,
         };
         let info = view.info();
         *current = Arc::new(view);

@@ -111,7 +111,7 @@ impl From<core::LogicalType> for LogicalType {
 pub struct ColumnCapabilities {
     pub contains: bool,
     pub range: bool,
-    pub equals: bool,
+    pub exact: bool,
     pub histogram: bool,
     pub scatter: bool,
     pub logarithmic: bool,
@@ -122,7 +122,7 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
         Self {
             contains: capabilities.contains,
             range: capabilities.range,
-            equals: capabilities.equals,
+            exact: capabilities.exact,
             histogram: capabilities.histogram,
             scatter: capabilities.scatter,
             logarithmic: capabilities.logarithmic,

@@ -19,7 +19,7 @@ final class DocumentModel: ObservableObject {
     let kinds: [ValueCategory]
     let find: FindModel
     @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedSpec = QuerySpec(sort: [], filters: [:])
+    @Published private(set) var appliedSpec = QuerySpec(columns: [])
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -30,9 +30,10 @@ final class DocumentModel: ObservableObject {
     @Published var chartY: Int?
     @Published var selectedSourceRow: UInt64?
     @Published var selectedDisplayRow: Int?
-    @Published private(set) var sort: [SortKey] = []
-    @Published private(set) var columnFilters: [UInt32: [Filter]] = [:]
-    @Published private(set) var appliedFilterColumns: Set<UInt32> = []
+    @Published private(set) var spec = QuerySpec(columns: [])
+    var appliedFilterColumns: Set<UInt32> {
+        Set(appliedSpec.columns.filter { $0.filter != nil }.map(\.column))
+    }
     @Published var searchFocusRequest = 0
     private(set) lazy var export = ExportModel { [weak self] error, prefix in
         self?.reportError(error, prefix: prefix)
@@ -56,23 +57,20 @@ final class DocumentModel: ObservableObject {
         kinds = metadata.columns.map(\.valueCategory)
         find = FindModel()
         current = document.currentView()
+        spec = QuerySpec(columns: metadata.columns.indices.map { ColSpec(column: UInt32($0), sort: nil, filter: nil) })
+        appliedSpec = spec
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
         find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
     }
 
-    var canExport: Bool { !isBusy && export.isIdle }
+    var canExport: Bool { !isBusy && export.isIdle && !appliedSpec.columns.isEmpty }
 
     func chooseExport() {
         guard canExport, let table, let window = table.view.window else { return }
-        export.choose(document: doc, view: current, columns: table.displayedColumns, source: url, window: window)
-    }
-
-    var spec: QuerySpec {
-        QuerySpec(
-            sort: sort,
-            filters: columnFilters)
+        export.choose(
+            document: doc, view: current, columns: appliedSpec.columns.map(\.column), source: url, window: window)
     }
 
     var subtitle: String {
@@ -86,29 +84,119 @@ final class DocumentModel: ObservableObject {
             current.rowCount == info.rowCount
             ? "\(formatCount(current.rowCount)) rows"
             : "\(formatCount(current.rowCount)) of \(formatCount(info.rowCount)) rows"
-        text += " · \(info.columns.count) columns"
+        text += " · \(appliedSpec.columns.count) columns"
         if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
         if let row = selectedSourceRow { text += " · row \(formatRowNumber(row, base: rowNumberBase)) in file" }
         if let findStatus = find.status { text += " · \(findStatus)" }
         return text
     }
 
-    func setSort(_ keys: [SortKey]) {
-        guard keys != sort else { return }
-        sort = keys
+    var sortedColumns: [ColSpec] {
+        spec.columns.filter { $0.sort != nil }.sorted { $0.sort!.priority < $1.sort!.priority }
+    }
+
+    func cycleSort(column: UInt32, multiple: Bool) {
+        guard let index = spec.columns.firstIndex(where: { $0.column == column }) else { return }
+        let old = spec.columns[index].sort
+        if !multiple { for i in spec.columns.indices { spec.columns[i].sort = nil } }
+        if old?.descending == true {
+            spec.columns[index].sort = nil
+        } else {
+            let priority = multiple ? (old?.priority ?? UInt32(sortedColumns.count)) : 0
+            spec.columns[index].sort = ColSort(priority: priority, descending: old != nil)
+        }
+        normalizeSort()
         refresh()
     }
 
-    func setFilters(_ filters: [Filter], column: UInt32) {
-        columnFilters[column] = filters.isEmpty ? nil : filters
+    func setSortDirection(column: UInt32, descending: Bool) {
+        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
+        spec.columns[i].sort = ColSort(
+            priority: spec.columns[i].sort?.priority ?? UInt32(sortedColumns.count), descending: descending)
         refresh()
     }
 
-    var canClearFilters: Bool { !columnFilters.isEmpty || !appliedFilterColumns.isEmpty }
+    func removeSort(column: UInt32) {
+        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
+        spec.columns[i].sort = nil
+        normalizeSort()
+        refresh()
+    }
+
+    func clearSort() {
+        for i in spec.columns.indices { spec.columns[i].sort = nil }
+        refresh()
+    }
+
+    func reorderSort(_ columns: [UInt32]) {
+        guard Set(columns) == Set(sortedColumns.map(\.column)), columns.count == sortedColumns.count else { return }
+        for (priority, column) in columns.enumerated() {
+            if let i = spec.columns.firstIndex(where: { $0.column == column }) {
+                spec.columns[i].sort?.priority = UInt32(priority)
+            }
+        }
+        refresh()
+    }
+
+    private func normalizeSort() {
+        for (priority, column) in sortedColumns.enumerated() {
+            let i = spec.columns.firstIndex { $0.column == column.column }!
+            spec.columns[i].sort?.priority = UInt32(priority)
+        }
+    }
+
+    func setFilter(_ filter: Filter?, column: UInt32) {
+        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
+        spec.columns[i].filter = filter
+        refresh()
+    }
+
+    var canClearFilters: Bool { spec.columns.contains { $0.filter != nil } || !appliedFilterColumns.isEmpty }
 
     func clearFilters() {
         guard canClearFilters else { return }
-        columnFilters.removeAll()
+        for i in spec.columns.indices { spec.columns[i].filter = nil }
+        refresh()
+    }
+
+    func reorderColumns(_ columns: [UInt32]) {
+        guard columns != spec.columns.map(\.column), Set(columns) == Set(spec.columns.map(\.column)),
+            columns.count == spec.columns.count
+        else { return }
+        spec.columns = columns.compactMap { column in spec.columns.first { $0.column == column } }
+        refresh()
+    }
+
+    func hideColumn(_ column: UInt32) {
+        guard let col = spec.columns.first(where: { $0.column == column }) else { return }
+        if col.sort != nil || col.filter != nil, !UserDefaults.standard.bool(forKey: "SkipHideColumnWarning") {
+            let alert = NSAlert()
+            alert.messageText = "Hide \(info.columns[Int(column)].name)?"
+            alert.informativeText =
+                "Hiding this column clears its sorting and filter. This may change the visible rows and their order."
+            alert.addButton(withTitle: "Hide Column")
+            alert.addButton(withTitle: "Cancel")
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Do not ask again"
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            if alert.suppressionButton?.state == .on {
+                UserDefaults.standard.set(true, forKey: "SkipHideColumnWarning")
+            }
+        }
+        removeColumn(column)
+    }
+
+    /// Apply a hide operation after any required confirmation.
+    func removeColumn(_ column: UInt32) {
+        spec.columns.removeAll { $0.column == column }
+        normalizeSort()
+        if selectedColumn == Int(column) { selectedColumn = spec.columns.first.map { Int($0.column) } }
+        refresh()
+    }
+
+    func showColumn(_ column: UInt32) {
+        guard Int(column) < info.columns.count, !spec.columns.contains(where: { $0.column == column }) else { return }
+        spec.columns.append(ColSpec(column: column, sort: nil, filter: nil))
         refresh()
     }
 
@@ -121,7 +209,6 @@ final class DocumentModel: ObservableObject {
         let mine = request
         gate.set(mine)
         let spec = spec
-        let filterColumns = Set(columnFilters.keys)
         let worker = worker
         let gate = gate
         isBusy = true
@@ -142,7 +229,6 @@ final class DocumentModel: ObservableObject {
                 }
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.copying.cancel()
-                self.appliedFilterColumns = filterColumns
                 self.appliedSpec = spec
                 self.current = view
                 self.selectedDisplayRow = nil
@@ -152,6 +238,7 @@ final class DocumentModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.isBusy = false
+                self.spec = self.appliedSpec
                 if case GewuError.Cancelled = error {
                     self.updateFind()
                     return
@@ -167,7 +254,7 @@ final class DocumentModel: ObservableObject {
             find.invalidate()
             return
         }
-        let columns = table?.displayedColumns ?? info.columns.indices.map(UInt32.init)
+        let columns = appliedSpec.columns.map(\.column)
         find.update(
             document: doc, version: current.version, columns: columns,
             cursor: preservingMatch ? find.currentMatch : nil, debounce: debounce)

@@ -42,6 +42,7 @@ final class ColumnHeaderCell: NSTableHeaderCell {
     var rightAligned = false
     var sorted = false
     var sortAscending = true
+    var sortPriority = 0
     /// Data columns show the funnel button; the row-number column does not.
     var showsFunnel = false
     var funnelHovered = false
@@ -116,15 +117,16 @@ final class ColumnHeaderCell: NSTableHeaderCell {
                 respectFlipped: true, hints: nil)
             rect.size.width = Self.funnelRect(in: frame).minX - 4 - rect.minX
         }
-        if sorted, let arrow = sortAscending ? Self.ascendingArrow : Self.descendingArrow {
-            let size = arrow.size
-            let arrowRect = NSRect(
-                x: rect.maxX - size.width, y: frame.midY - size.height / 2,
-                width: size.width, height: size.height)
-            arrow.draw(
-                in: arrowRect, from: .zero, operation: .sourceOver, fraction: 1,
-                respectFlipped: true, hints: nil)
-            rect.size.width -= Self.sortIndicatorWidth
+        if sorted {
+            let badge = NSAttributedString(
+                string: "\(sortAscending ? "↑" : "↓")\(sortPriority)",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                ])
+            let size = badge.size()
+            badge.draw(at: NSPoint(x: rect.maxX - size.width, y: frame.midY - size.height / 2))
+            rect.size.width -= size.width + 5
         }
         guard rect.width > 4 else { return }
 
@@ -168,8 +170,10 @@ final class ColumnHeaderCell: NSTableHeaderCell {
 /// instead of a sort, and highlights the funnel under the mouse.
 final class FilterHeaderView: NSTableHeaderView {
     var onFilterClick: ((Int) -> Void)?
+    var columnMenu: ((Int) -> NSMenu?)?
     /// Any other click on a column header (it also sorts, as usual).
     var onColumnClick: ((Int) -> Void)?
+    var onShiftSort: ((Int) -> Void)?
     private var hovered: ColumnHeaderCell?
 
     override func draw(_ dirtyRect: NSRect) {
@@ -190,12 +194,22 @@ final class FilterHeaderView: NSTableHeaderView {
         return (index, cell)
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        columnMenu?(column(at: convert(event.locationInWindow, from: nil)))
+    }
+
     override func mouseDown(with event: NSEvent) {
         if let (index, _) = funnelCell(at: event) {
             onFilterClick?(index)
         } else {
             let index = column(at: convert(event.locationInWindow, from: nil))
             if index >= 0 { onColumnClick?(index) }
+            // AppKit treats Shift as column selection and skips didClick.
+            // Handle this explicit multi-sort gesture before native tracking.
+            if index >= 0, event.modifierFlags.contains(.shift) {
+                onShiftSort?(index)
+                return
+            }
             super.mouseDown(with: event)
         }
     }

@@ -41,31 +41,24 @@ where
     Box::new(move |row| array.is_valid(row).then(|| array.value(row)))
 }
 
-/// Exact membership retains only the explicitly included or excluded values.
-pub(super) fn selected_values<'a>(
-    array: &'a ArrayRef,
-    values: &[Option<String>],
-    exclude: bool,
-) -> Result<Predicate<'a>> {
+/// Non-null membership. The column compiler owns exclusion and null policy.
+pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
     let read = accessor(array)?;
-    let null_selected = values.iter().any(Option::is_none);
-    let selected: HashSet<String> = values.iter().filter_map(Clone::clone).collect();
+    let selected: HashSet<String> = values.iter().cloned().collect();
     Ok(Predicate::new(Box::new(
         move |rows, incoming, output, _cancel| {
             match (rows, incoming) {
                 (RowSelection::Range(range), None) => {
                     for (i, row) in range.enumerate() {
-                        let included =
-                            read(row).map_or(null_selected, |value| selected.contains(value));
-                        output[i] = included != exclude;
+                        let included = read(row).is_some_and(|value| selected.contains(value));
+                        output[i] = included;
                     }
                 }
                 (RowSelection::Range(range), Some(mask)) => {
                     for (i, row) in range.enumerate() {
                         if mask[i] {
-                            let included =
-                                read(row).map_or(null_selected, |value| selected.contains(value));
-                            output[i] = included != exclude;
+                            let included = read(row).is_some_and(|value| selected.contains(value));
+                            output[i] = included;
                         } else {
                             output[i] = false;
                         }
@@ -73,17 +66,15 @@ pub(super) fn selected_values<'a>(
                 }
                 (RowSelection::Indices(indices), None) => {
                     for (i, &row) in indices.iter().enumerate() {
-                        let included =
-                            read(row).map_or(null_selected, |value| selected.contains(value));
-                        output[i] = included != exclude;
+                        let included = read(row).is_some_and(|value| selected.contains(value));
+                        output[i] = included;
                     }
                 }
                 (RowSelection::Indices(indices), Some(mask)) => {
                     for (i, &row) in indices.iter().enumerate() {
                         if mask[i] {
-                            let included =
-                                read(row).map_or(null_selected, |value| selected.contains(value));
-                            output[i] = included != exclude;
+                            let included = read(row).is_some_and(|value| selected.contains(value));
+                            output[i] = included;
                         } else {
                             output[i] = false;
                         }
@@ -160,11 +151,6 @@ pub(super) fn contains<'a>(
     })))
 }
 
-pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Predicate<'a> {
-    let text = text.to_owned();
-    strings(array, move |value| value == text)
-}
-
 fn strings<'a>(
     array: &'a ArrayRef,
     test: impl Fn(&str) -> bool + Send + Sync + 'a,
@@ -223,10 +209,7 @@ mod tests {
         let array: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
         let column = Column::new("test", array.clone()).unwrap();
         for exclude in [false, true] {
-            let filter = Filter::TextValues {
-                values: vec![Some("a".into()), None, Some("a".into()), None],
-                exclude,
-            };
+            let filter = Filter::exact(vec!["a".into(), "a".into()], exclude, !exclude);
             let test = column.prepare_filter(&filter).unwrap();
             let mut actual = vec![false; array.len()];
             test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
@@ -250,7 +233,9 @@ mod tests {
         for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
             let array = cast(&input, &data_type).unwrap();
             for exclude in [false, true] {
-                let test = selected_values(&array, &[Some("a".into()), None], exclude).unwrap();
+                let column = Column::new("value", array.clone()).unwrap();
+                let filter = Filter::exact(vec!["a".into()], exclude, !exclude);
+                let test = column.prepare_filter(&filter).unwrap();
                 let mut actual = vec![false; array.len()];
                 test.evaluate(0..array.len(), &mut actual, &CancelToken::never())
                     .unwrap();

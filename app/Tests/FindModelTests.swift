@@ -59,7 +59,7 @@ struct FindModelTests {
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
 
-        model.setSort([SortKey(column: 1, descending: true)])
+        model.setSortDirection(column: 1, descending: true)
         #expect(model.isBusy)
         model.find.query = "120"
         model.updateFind()

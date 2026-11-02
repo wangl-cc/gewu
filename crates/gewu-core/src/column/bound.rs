@@ -66,6 +66,22 @@ impl Bound {
     /// Invalid inputs, NaN and unsupported types return an error.
     pub fn parse(data_type: &DataType, text: &str) -> Result<Self> {
         let text = text.trim();
+        if let Some(ticks) = text.strip_prefix('@') {
+            if matches!(
+                direct_domain(data_type),
+                Some(Domain::Date | Domain::Time | Domain::Timestamp)
+            ) {
+                let value = ticks
+                    .parse::<i64>()
+                    .map_err(|_| invalid_text(data_type, text))?;
+                return Ok(Self::new(BoundData {
+                    data_type: data_type.clone(),
+                    value: Value::Temporal(value),
+                    display: text.into(),
+                    axis: value as f64,
+                }));
+            }
+        }
         match direct_domain(data_type) {
             Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
                 let literal = Literal::parse(text).ok_or_else(|| invalid_text(data_type, text))?;
@@ -185,6 +201,15 @@ impl Bound {
             format_decimal(coefficient, scale),
             axis,
         )
+    }
+
+    /// Lossless filter protocol text, independent of display formatting.
+    pub fn filter_text(&self) -> String {
+        match &self.inner.value {
+            Value::Exact { literal, .. } => literal.filter_text(),
+            Value::Float { .. } => self.inner.display.clone(),
+            Value::Temporal(ticks) => format!("@{ticks}"),
+        }
     }
 
     /// Label to restore in a text editor. It is not used to execute a filter.
@@ -317,7 +342,10 @@ pub(in crate::column) fn coefficient_scale(data_type: &DataType) -> Result<i8> {
 
 /// Inward endpoints for an exact native coefficient. Native controls never
 /// route numerical values through the text parser, even when scales differ.
-pub(in crate::column) fn rescale_coefficient(coefficient: i256, power: i16) -> (Endpoint, Endpoint) {
+pub(in crate::column) fn rescale_coefficient(
+    coefficient: i256,
+    power: i16,
+) -> (Endpoint, Endpoint) {
     if coefficient == i256::ZERO {
         return (Endpoint::Finite(i256::ZERO), Endpoint::Finite(i256::ZERO));
     }

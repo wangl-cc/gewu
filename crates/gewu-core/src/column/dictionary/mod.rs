@@ -13,7 +13,7 @@
 //! - Text, binary and nested arrays use Arrow's row format to discover distinct byte rows.
 //!
 //! The column consumes the dictionary through [`Dictionary::distinct_values`] for
-//! projected choices and frequency counting, and [`Dictionary::prepare_predicate`]
+//! projected choices and frequency counting, and [`Dictionary::matching_codes`]
 //! for filter generation.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
@@ -29,10 +29,9 @@ use arrow::{
     datatypes::*,
     row::{RowConverter, SortField},
 };
-
-use super::DistinctValue;
 use rapidhash::RapidHashMap;
 
+use super::DistinctValue;
 use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
 
 mod primitive;
@@ -62,6 +61,23 @@ pub(crate) struct Dictionary {
 }
 
 impl Dictionary {
+    pub(crate) fn values(&self) -> &ArrayRef {
+        &self.values
+    }
+
+    pub(crate) fn matching_codes(
+        self: &Arc<Self>,
+        matched: &[bool],
+        exclude: bool,
+        include_nulls: bool,
+    ) -> Predicate<'static> {
+        let mut allowed = [false; 256];
+        for (code, &hit) in matched.iter().enumerate() {
+            allowed[code] = hit != exclude;
+        }
+        self.predicate_from_allowed(allowed, include_nulls)
+    }
+
     /// Encode `array`, or `None` for unsupported types and columns with more
     /// than [`MAX_DISTINCT_VALUES`] non-null values.
     pub(crate) fn from_array(array: &ArrayRef) -> Option<Self> {
@@ -376,15 +392,10 @@ impl Dictionary {
 }
 
 impl Dictionary {
-    /// Public key assigned to null values in [`crate::Filter::InValues`].
+    /// Null identifier in distinct-value reports.
     pub const NULL_KEY: u64 = 255;
 
     #[cfg(test)]
-    #[inline]
-    pub(crate) fn null_key(&self) -> u64 {
-        Self::NULL_KEY
-    }
-
     #[inline]
     pub(crate) fn labels(&self) -> &[String] {
         &self.labels
@@ -556,32 +567,6 @@ impl Dictionary {
             dictionary.fill_matches(rows, incoming, output, &allowed, null_allowed);
             Ok(())
         }))
-    }
-
-    /// Prepare a row-based predicate for filtering by key codes, optionally excluding them.
-    pub(crate) fn prepare_predicate_with_exclude(
-        self: &Arc<Self>,
-        keys: &[u64],
-        exclude: bool,
-    ) -> Predicate<'static> {
-        let has_null_key = keys.contains(&Self::NULL_KEY);
-        let null_allowed = if exclude { !has_null_key } else { has_null_key };
-        let mut allowed = [exclude; 256];
-        for &key in keys {
-            if key != Self::NULL_KEY {
-                if let Ok(key) = usize::try_from(key) {
-                    if let Some(slot) = allowed.get_mut(key) {
-                        *slot = !exclude;
-                    }
-                }
-            }
-        }
-        self.predicate_from_allowed(allowed, null_allowed)
-    }
-
-    /// Prepare a row-based predicate for filtering by key codes.
-    pub(crate) fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
-        self.prepare_predicate_with_exclude(keys, false)
     }
 }
 
