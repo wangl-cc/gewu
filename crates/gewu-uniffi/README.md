@@ -6,7 +6,7 @@ See [data types](../../docs/data-types.md), [Find and filtering](../../docs/sear
 
 ## Migration status
 
-Core and FFI now expose immutable Dataset/View handles. The App still uses the previous session/version interface and requires a separate migration; it cannot build against these bindings yet. This backend stage validates generated bindings with a standalone Swift client. Full App builds, UI lifecycle tests and GUI interaction checks belong to the frontend migration.
+Core and FFI now expose immutable Dataset/View handles. The App still uses the previous session/version interface and requires a separate migration; it cannot build against these bindings yet. This backend stage validates generated bindings and the local inspector-section projection with a standalone Swift client. Full App builds, UI lifecycle tests and GUI interaction checks belong to the frontend migration.
 
 ## Objects and ownership
 
@@ -96,7 +96,7 @@ Send endpoint `value` unchanged. Numeric text preserves integer/decimal precisio
 
 ## Typed analysis
 
-`dataset.analysis_capabilities(column)` returns supported sections in UI order. `AnalysisSection` is only capability/presentation metadata. `dataset.column_structure(column)` returns nested field metadata without scanning.
+`dataset.analysis_capabilities(column)` returns `AnalysisCapabilities { statistics, distribution, values, lengths, structure }` as boolean fields, without scanning. Overview is always available. The frontend owns section identities, presentation order and expansion state; no section enum crosses FFI. Each analysis can be requested directly without first querying capabilities and validates its own supported input. `dataset.column_structure(column)` returns nested field metadata without scanning.
 
 | View method | Result |
 | --- | --- |
@@ -146,10 +146,11 @@ Backend-only binding generation:
 cargo build --locked -p gewu-uniffi
 cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
   generate --library target/debug/libgewu.dylib --language swift --out-dir build/view-bindings
-xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \\
-  crates/gewu-uniffi/tests/view-smoke.swift -I build/view-bindings \\
-  -Xcc -fmodule-map-file=build/view-bindings/gewuFFI.modulemap \\
-  -L target/debug -lgewu -Xlinker -rpath -Xlinker "$PWD/target/debug" \\
+xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
+  crates/gewu-uniffi/tests/view-smoke.swift \
+  app/Sources/Gewu/Inspector/InspectorSection.swift -I build/view-bindings \
+  -Xcc -fmodule-map-file=build/view-bindings/gewuFFI.modulemap \
+  -L target/debug -lgewu -Xlinker -rpath -Xlinker "$PWD/target/debug" \
   -o build/view-bindings/view-smoke
 build/view-bindings/view-smoke
 ```

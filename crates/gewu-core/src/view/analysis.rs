@@ -3,8 +3,8 @@
 use super::View;
 use crate::{
     stats::{self, ArrayView},
-    AnalysisSection, AxisScale, Cancellation, ColumnOverview, Error, Histogram, LengthSummary,
-    NumericStatistics, Result, ValueSummary,
+    AxisScale, Cancellation, ColumnOverview, Error, Histogram, LengthSummary, NumericStatistics,
+    Result, ValueSummary,
 };
 
 impl View {
@@ -32,9 +32,7 @@ impl View {
         column: u32,
         cancellation: &Cancellation,
     ) -> Result<ColumnOverview> {
-        self.with_analysis_view(column, AnalysisSection::Overview, cancellation, |view| {
-            view.overview(cancellation)
-        })
+        self.with_analysis_view(column, cancellation, |view| view.overview(cancellation))
     }
 
     /// Native numeric statistics over the requested view. Execute off the UI thread.
@@ -43,7 +41,7 @@ impl View {
         column: u32,
         cancellation: &Cancellation,
     ) -> Result<NumericStatistics> {
-        self.with_analysis_view(column, AnalysisSection::Statistics, cancellation, |view| {
+        self.with_analysis_view(column, cancellation, |view| {
             view.numeric_statistics(cancellation)
         })
     }
@@ -56,25 +54,20 @@ impl View {
         scale: AxisScale,
         cancellation: &Cancellation,
     ) -> Result<Histogram> {
-        self.with_analysis_view(
-            column,
-            AnalysisSection::Distribution,
-            cancellation,
-            |view| {
-                validate_bins(bins)?;
-                if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {
-                    return Err(Error::InvalidArgument(
-                        "logarithmic binning requires a numeric distribution".into(),
-                    ));
-                }
-                view.histogram(bins, scale, cancellation)
-            },
-        )
+        self.with_analysis_view(column, cancellation, |view| {
+            validate_bins(bins)?;
+            if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {
+                return Err(Error::InvalidArgument(
+                    "logarithmic binning requires a numeric distribution".into(),
+                ));
+            }
+            view.histogram(bins, scale, cancellation)
+        })
     }
 
     /// Estimated non-null cardinality and recounted candidate frequencies.
     pub fn analyze_values(&self, column: u32, cancellation: &Cancellation) -> Result<ValueSummary> {
-        self.with_analysis_view(column, AnalysisSection::Values, cancellation, |view| {
+        self.with_analysis_view(column, cancellation, |view| {
             view.value_summary(cancellation)
         })
     }
@@ -86,7 +79,7 @@ impl View {
         bins: u32,
         cancellation: &Cancellation,
     ) -> Result<LengthSummary> {
-        self.with_analysis_view(column, AnalysisSection::Lengths, cancellation, |view| {
+        self.with_analysis_view(column, cancellation, |view| {
             validate_bins(bins)?;
             view.length_summary(bins, cancellation)
         })
@@ -95,13 +88,11 @@ impl View {
     fn with_analysis_view<T>(
         &self,
         column: u32,
-        section: AnalysisSection,
         cancellation: &Cancellation,
         compute: impl FnOnce(ArrayView<'_>) -> Result<T>,
     ) -> Result<T> {
         cancellation.check()?;
         let col = self.column(column)?;
-        stats::analysis::ensure_supported(col.array.data_type(), section)?;
         let rows = self.selection();
         let result = compute(ArrayView::new(&col.array, &rows))?;
         cancellation.check()?;

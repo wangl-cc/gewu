@@ -33,7 +33,7 @@ impl Dataset {
         crate::View::all(self.clone())
     }
 
-    pub fn analysis_capabilities(&self, column: u32) -> Result<Vec<crate::AnalysisSection>> {
+    pub fn analysis_capabilities(&self, column: u32) -> Result<crate::AnalysisCapabilities> {
         Ok(crate::stats::capabilities(
             self.column(column)?.array.data_type(),
         ))

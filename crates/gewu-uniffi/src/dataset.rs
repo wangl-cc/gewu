@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{AnalysisSection, FileInfo, Filter, GewuError};
+use crate::{AnalysisCapabilities, FileInfo, Filter, GewuError};
 
 #[derive(uniffi::Object)]
 pub struct GewuDataset {
@@ -50,13 +50,8 @@ impl GewuDataset {
         self.inner.as_ref().into()
     }
 
-    pub fn analysis_capabilities(&self, column: u32) -> Result<Vec<AnalysisSection>, GewuError> {
-        Ok(self
-            .inner
-            .analysis_capabilities(column)?
-            .into_iter()
-            .map(Into::into)
-            .collect())
+    pub fn analysis_capabilities(&self, column: u32) -> Result<AnalysisCapabilities, GewuError> {
+        Ok(self.inner.analysis_capabilities(column)?.into())
     }
 
     pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>, GewuError> {

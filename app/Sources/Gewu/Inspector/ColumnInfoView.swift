@@ -155,7 +155,7 @@ struct ColumnAnalysisView: View {
         .onDisappear { analysis.cancel() }
     }
 
-    private func expansion(_ section: AnalysisSection) -> Binding<Bool> {
+    private func expansion(_ section: InspectorSection) -> Binding<Bool> {
         Binding(
             get: { expanded & section.mask != 0 },
             set: { open in
@@ -170,7 +170,7 @@ struct ColumnAnalysisView: View {
         }
     }
 
-    @ViewBuilder private func content(_ section: AnalysisSection) -> some View {
+    @ViewBuilder private func content(_ section: InspectorSection) -> some View {
         switch section {
         case .overview:
             EmptyView()

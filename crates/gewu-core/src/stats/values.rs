@@ -198,6 +198,12 @@ impl Sketch {
 
 pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<ValueSummary> {
     context.check()?;
+    if !supports(view.data_type()) {
+        return Err(Error::InvalidArgument(format!(
+            "{} does not support value analysis",
+            view.data_type()
+        )));
+    }
     let value = hasher(view.array.as_ref())?;
     let mut sketch = Sketch::default();
     for (index, row) in view.rows.iter().enumerate() {

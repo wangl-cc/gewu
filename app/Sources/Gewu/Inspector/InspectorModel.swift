@@ -4,15 +4,15 @@ import SwiftUI
 /// cancels document filtering or export.
 @MainActor
 final class InspectorModel: ObservableObject {
-    @Published private(set) var sections: [AnalysisSection] = []
+    @Published private(set) var sections: [InspectorSection] = []
     @Published private(set) var overview: ColumnOverview?
     @Published private(set) var statistics: NumericStatistics?
     @Published private(set) var distribution: Histogram?
     @Published private(set) var values: ValueSummary?
     @Published private(set) var lengths: LengthSummary?
     @Published private(set) var structure: [AnalysisField]?
-    @Published private(set) var errors: [AnalysisSection: String] = [:]
-    @Published private(set) var loading: AnalysisSection?
+    @Published private(set) var errors: [InspectorSection: String] = [:]
+    @Published private(set) var loading: InspectorSection?
     @Published private(set) var error: String?
 
     private struct Context: Equatable {
@@ -76,7 +76,7 @@ final class InspectorModel: ObservableObject {
             errors[.distribution] = nil
         }
         do {
-            sections = try document.analysisCapabilities(column: column)
+            sections = InspectorSection.available(for: try document.analysisCapabilities(column: column))
             error = nil
         } catch {
             self.error = error.userMessage
@@ -123,7 +123,7 @@ final class InspectorModel: ObservableObject {
         }
     }
 
-    private func hasResult(_ section: AnalysisSection) -> Bool {
+    private func hasResult(_ section: InspectorSection) -> Bool {
         switch section {
         case .overview: overview != nil
         case .statistics: statistics != nil
@@ -168,30 +168,5 @@ func runAnalysis<T: Sendable>(
         return result
     } onCancel: {
         cancellation.cancel()
-    }
-}
-
-extension AnalysisSection {
-    var title: String {
-        switch self {
-        case .overview: "Overview"
-        case .statistics: "Statistics"
-        case .distribution: "Distribution"
-        case .values: "Values"
-        case .lengths: "Lengths"
-        case .structure: "Structure"
-        }
-    }
-
-    // Stable preference bits, independent of the order supplied by Core.
-    var mask: Int {
-        switch self {
-        case .overview: 1
-        case .statistics: 2
-        case .distribution: 4
-        case .values: 8
-        case .lengths: 16
-        case .structure: 32
-        }
     }
 }

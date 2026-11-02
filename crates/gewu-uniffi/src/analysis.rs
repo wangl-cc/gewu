@@ -2,25 +2,24 @@
 
 use gewu_core as core;
 
-#[derive(uniffi::Enum, Clone, Copy)]
-pub enum AnalysisSection {
-    Overview,
-    Statistics,
-    Distribution,
-    Values,
-    Lengths,
-    Structure,
+/// Type-level analysis support; the frontend owns its sections and their order.
+#[derive(uniffi::Record)]
+pub struct AnalysisCapabilities {
+    pub statistics: bool,
+    pub distribution: bool,
+    pub values: bool,
+    pub lengths: bool,
+    pub structure: bool,
 }
 
-impl From<core::AnalysisSection> for AnalysisSection {
-    fn from(section: core::AnalysisSection) -> Self {
-        match section {
-            core::AnalysisSection::Overview => Self::Overview,
-            core::AnalysisSection::Statistics => Self::Statistics,
-            core::AnalysisSection::Distribution => Self::Distribution,
-            core::AnalysisSection::Values => Self::Values,
-            core::AnalysisSection::Lengths => Self::Lengths,
-            core::AnalysisSection::Structure => Self::Structure,
+impl From<core::AnalysisCapabilities> for AnalysisCapabilities {
+    fn from(value: core::AnalysisCapabilities) -> Self {
+        Self {
+            statistics: value.statistics,
+            distribution: value.distribution,
+            values: value.values,
+            lengths: value.lengths,
+            structure: value.structure,
         }
     }
 }

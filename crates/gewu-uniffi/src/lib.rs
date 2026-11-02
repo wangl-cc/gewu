@@ -20,7 +20,7 @@ mod view;
 mod view_handle;
 
 pub use analysis::{
-    AnalysisField, AnalysisSection, ColumnOverview, Histogram, LengthSummary, LengthUnit,
+    AnalysisCapabilities, AnalysisField, ColumnOverview, Histogram, LengthSummary, LengthUnit,
     NumericStatistics, ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;

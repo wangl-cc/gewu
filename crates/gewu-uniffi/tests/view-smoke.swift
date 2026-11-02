@@ -28,7 +28,21 @@ enum ViewSmoke {
         check(filtered.rowCount() == 2)
         check(try filtered.rows(start: 0, count: 10, columns: [0]).sourceRows == [2, 1])
         check(try filtered.analyzeStatistics(column: 0, cancellation: Cancellation()).mean == 2.5)
-        check(try dataset!.analysisCapabilities(column: 0).contains(.statistics))
+        let numericCapabilities = try dataset!.analysisCapabilities(column: 0)
+        check(numericCapabilities.statistics && numericCapabilities.distribution && numericCapabilities.values)
+        check(!numericCapabilities.lengths && !numericCapabilities.structure)
+        let textCapabilities = try dataset!.analysisCapabilities(column: 1)
+        check(!textCapabilities.statistics && !textCapabilities.distribution)
+        check(textCapabilities.values && textCapabilities.lengths && !textCapabilities.structure)
+        check(InspectorSection.available(for: numericCapabilities) == [.overview, .statistics, .distribution, .values])
+        check(InspectorSection.available(for: textCapabilities) == [.overview, .values, .lengths])
+        check(
+            InspectorSection.available(
+                for: AnalysisCapabilities(
+                    statistics: false, distribution: false, values: false, lengths: false, structure: false)) == [
+                    .overview
+                ])
+        check(InspectorSection.values.mask == 8)
         dataset = nil
 
         let reordered = try filtered.reorderColumns(order: [1, 0])

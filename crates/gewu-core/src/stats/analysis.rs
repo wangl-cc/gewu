@@ -5,15 +5,15 @@ use arrow::{array::Array, datatypes::DataType};
 use super::{ArrayView, Cancellation};
 use crate::{column::display_type, scope::Selection, types, Error, Result};
 
-/// A section of the column inspector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AnalysisSection {
-    Overview,
-    Statistics,
-    Distribution,
-    Values,
-    Lengths,
-    Structure,
+/// Type-level analysis support. Presentation order and expansion state belong to the UI.
+/// Overview is available for every loaded column.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnalysisCapabilities {
+    pub statistics: bool,
+    pub distribution: bool,
+    pub values: bool,
+    pub lengths: bool,
+    pub structure: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,35 +52,22 @@ impl ArrayView<'_> {
     }
 }
 
-pub(crate) fn ensure_supported(data_type: &DataType, section: AnalysisSection) -> Result<()> {
-    if !capabilities(data_type).contains(&section) {
-        return Err(Error::InvalidArgument(format!(
-            "{data_type} does not support {section:?} analysis"
-        )));
+/// Type metadata only: capabilities never scan the column or compute cardinality.
+pub fn capabilities(data_type: &DataType) -> AnalysisCapabilities {
+    if !types::is_describable(data_type) {
+        return AnalysisCapabilities::default();
     }
-    Ok(())
+    AnalysisCapabilities {
+        statistics: super::numeric::supports(data_type),
+        distribution: super::supports_histogram(data_type),
+        values: super::values::supports(data_type),
+        lengths: super::lengths::unit(data_type).is_some(),
+        structure: supports_structure(data_type),
+    }
 }
 
-/// Type metadata only: capabilities never scan the column or compute cardinality.
-pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
-    use AnalysisSection::*;
-    let mut sections = vec![Overview];
-    if !crate::types::is_describable(data_type) {
-        return sections;
-    }
-    if super::numeric::supports(data_type) {
-        sections.push(Statistics);
-    }
-    if super::supports_histogram(data_type) {
-        sections.push(Distribution);
-    }
-    if super::values::supports(data_type) {
-        sections.push(Values);
-    }
-    if super::lengths::unit(data_type).is_some() {
-        sections.push(Lengths);
-    }
-    if matches!(
+fn supports_structure(data_type: &DataType) -> bool {
+    matches!(
         data_type,
         DataType::List(_)
             | DataType::LargeList(_)
@@ -90,14 +77,10 @@ pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
             | DataType::Struct(_)
             | DataType::Map(..)
             | DataType::Dictionary(..)
-    ) {
-        sections.push(Structure);
-    }
-    sections
+    )
 }
 
 pub(crate) fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
-    ensure_supported(data_type, AnalysisSection::Structure)?;
     let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
         if !types::is_describable(data_type) {
             return Err(Error::Unsupported(format!(
@@ -126,7 +109,9 @@ pub(crate) fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
             field("Key", key, false)?,
             field("Value", value, true)?,
         ]),
-        _ => Ok(Vec::new()),
+        _ => Err(Error::InvalidArgument(format!(
+            "{data_type} has no field structure"
+        ))),
     }
 }
 
@@ -158,34 +143,80 @@ mod tests {
     }
 
     #[test]
-    fn analysis_sections_preserve_presentation_order() {
+    fn capabilities_describe_supported_operations() {
         use arrow::datatypes::Fields;
-        use AnalysisSection::*;
         let item = |data_type| Arc::new(Field::new("item", data_type, true));
         let dictionary = |value| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value));
         for (data_type, expected) in [
-            (DataType::Int32, vec![
-                Overview,
-                Statistics,
-                Distribution,
-                Values,
-            ]),
-            (DataType::Utf8, vec![Overview, Values, Lengths]),
-            (DataType::Binary, vec![Overview, Lengths]),
-            (DataType::List(item(DataType::Int32)), vec![
-                Overview, Lengths, Structure,
-            ]),
+            (DataType::Int32, AnalysisCapabilities {
+                statistics: true,
+                distribution: true,
+                values: true,
+                ..Default::default()
+            }),
+            (DataType::Utf8, AnalysisCapabilities {
+                values: true,
+                lengths: true,
+                ..Default::default()
+            }),
+            (DataType::Binary, AnalysisCapabilities {
+                lengths: true,
+                ..Default::default()
+            }),
+            (
+                DataType::List(item(DataType::Int32)),
+                AnalysisCapabilities {
+                    lengths: true,
+                    structure: true,
+                    ..Default::default()
+                },
+            ),
             (
                 DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
-                vec![Overview, Structure],
+                AnalysisCapabilities {
+                    structure: true,
+                    ..Default::default()
+                },
             ),
-            (dictionary(DataType::Int64), vec![
-                Overview, Values, Structure,
-            ]),
-            (DataType::Null, vec![Overview]),
+            (dictionary(DataType::Int64), AnalysisCapabilities {
+                values: true,
+                structure: true,
+                ..Default::default()
+            }),
+            (DataType::Null, AnalysisCapabilities::default()),
         ] {
             assert_eq!(capabilities(&data_type), expected, "{data_type}");
         }
+    }
+
+    #[test]
+    fn direct_analysis_requests_reject_unsupported_types_without_capability_discovery() {
+        let array: ArrayRef = Arc::new(StringArray::from(vec!["text"]));
+        let text = view(&array);
+        let number = view(&(Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef));
+        let binary = view(&(Arc::new(arrow::array::BinaryArray::from_vec(vec![b"x"])) as ArrayRef));
+        let cancel = Cancellation::default();
+        assert!(matches!(
+            text.analyze_statistics(0, &cancel),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            number.analyze_lengths(0, 10, &cancel),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            binary.analyze_values(0, &cancel),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            text.dataset().column_structure(0),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert_eq!(text.analyze_overview(0, &cancel).unwrap().rows, 1);
+        assert_eq!(
+            number.analyze_statistics(0, &cancel).unwrap().mean,
+            Some(1.0)
+        );
     }
 
     #[test]
@@ -318,16 +349,16 @@ mod tests {
     }
 
     #[test]
-    fn structural_sections_use_type_metadata_and_never_offer_scalar_statistics() {
+    fn structural_capabilities_use_type_metadata() {
         let field = Arc::new(Field::new("child", DataType::Int32, true));
         for data_type in [
             DataType::List(field.clone()),
             DataType::Struct(vec![field.clone()].into()),
         ] {
-            let sections = capabilities(&data_type);
-            assert!(sections.contains(&AnalysisSection::Structure));
-            assert!(!sections.contains(&AnalysisSection::Statistics));
-            assert!(!sections.contains(&AnalysisSection::Values));
+            let support = capabilities(&data_type);
+            assert!(support.structure);
+            assert!(!support.statistics);
+            assert!(!support.values);
             let array = new_null_array(&data_type, 0);
             let fields = view(&array).dataset().column_structure(0).unwrap();
             assert_eq!(fields.len(), 1);

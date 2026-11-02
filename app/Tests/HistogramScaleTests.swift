@@ -12,7 +12,7 @@ struct HistogramScaleTests {
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                document: document, version: 0, column: 0, expanded: AnalysisSection.distribution.mask,
+                document: document, version: 0, column: 0, expanded: InspectorSection.distribution.mask,
                 bins: 2, scale: scale)
             guard let histogram = model.distribution else {
                 Issue.record("Missing distribution: \(model.errors)")

@@ -96,8 +96,14 @@ pub(crate) fn analyze(
     view: super::ArrayView<'_>,
     context: &Cancellation,
 ) -> Result<super::NumericStatistics> {
+    context.check()?;
     let summary = Numeric::new(view.array)
-        .expect("validated statistics capability")
+        .ok_or_else(|| {
+            crate::Error::InvalidArgument(format!(
+                "{} does not support numeric statistics",
+                view.data_type()
+            ))
+        })?
         .summarize(view.rows.iter(), context)?;
     let formatter = crate::format::formatter(view.array.as_ref())?;
     let label = |row: Option<usize>| {

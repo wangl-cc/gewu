@@ -16,8 +16,8 @@ struct InspectorModelTests {
         let doc = try document("number,text\n1,a\n2,bb\n3,ccc\n4,dddd\n")
         let model = InspectorModel()
         let all =
-            AnalysisSection.overview.mask | AnalysisSection.statistics.mask
-            | AnalysisSection.distribution.mask | AnalysisSection.values.mask | AnalysisSection.lengths.mask
+            InspectorSection.overview.mask | InspectorSection.statistics.mask
+            | InspectorSection.distribution.mask | InspectorSection.values.mask | InspectorSection.lengths.mask
         await model.load(document: doc, version: 0, column: 0, expanded: all, bins: 2)
         #expect(model.overview?.rows == 4)
         #expect(model.statistics?.mean == 2.5)
@@ -43,7 +43,7 @@ struct InspectorModelTests {
         #expect(model.overview != nil && model.values != nil)
 
         let replacement = try document("number\n100\n")
-        await model.load(document: replacement, version: 0, column: 0, expanded: AnalysisSection.statistics.mask)
+        await model.load(document: replacement, version: 0, column: 0, expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 100)
         #expect(model.overview == nil && model.values == nil && model.lengths == nil)
     }
@@ -58,12 +58,12 @@ struct InspectorModelTests {
             if section == .statistics { task?.cancel() }
         }
         task = Task {
-            await model.load(document: doc, version: 0, column: 0, expanded: AnalysisSection.statistics.mask)
+            await model.load(document: doc, version: 0, column: 0, expanded: InspectorSection.statistics.mask)
         }
         await task?.value
         observation.cancel()
         #expect(model.statistics == nil && model.loading == nil && model.errors.isEmpty)
-        await model.load(document: doc, version: 0, column: 1, expanded: AnalysisSection.statistics.mask)
+        await model.load(document: doc, version: 0, column: 1, expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 150)
         #expect(model.matches(document: doc, version: 0, column: 1))
     }
@@ -73,11 +73,11 @@ struct InspectorModelTests {
     static func staleRequestsAreSilentAndDoNotRetainPriorResults() async throws {
         let doc = try document("number\n1\n2\n")
         let model = InspectorModel()
-        await model.load(document: doc, version: 0, column: 0, expanded: AnalysisSection.statistics.mask)
+        await model.load(document: doc, version: 0, column: 0, expanded: InspectorSection.statistics.mask)
         let current = try doc.prepareView(spec: QuerySpec(columns: [ColSpec(column: 0, sort: nil, filter: nil)])).run()
-        await model.load(document: doc, version: current.version, column: 0, expanded: AnalysisSection.overview.mask)
+        await model.load(document: doc, version: current.version, column: 0, expanded: InspectorSection.overview.mask)
         #expect(model.statistics == nil && model.overview?.rows == 2)
-        await model.load(document: doc, version: 0, column: 0, expanded: AnalysisSection.statistics.mask)
+        await model.load(document: doc, version: 0, column: 0, expanded: InspectorSection.statistics.mask)
         #expect(model.statistics == nil && model.overview == nil)
         #expect(model.loading == nil && model.errors.isEmpty && model.error == nil)
     }
