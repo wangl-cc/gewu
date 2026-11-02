@@ -8,64 +8,10 @@ use arrow::{
 };
 
 use super::*;
-use crate::{
-    engine::CancelToken, format, predicate::Predicate, scope::Selection,
-    session::facet::format_choices, DistinctValue, Result,
-};
-
-impl Dictionary {
-    fn counts(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
-        format_choices(
-            self.values.as_ref(),
-            self.has_null(),
-            &self.tally(rows),
-            false,
-        )
-    }
-
-    fn counts_all(&self, rows: &Selection) -> Result<Vec<DistinctValue>> {
-        format_choices(
-            self.values.as_ref(),
-            self.has_null(),
-            &self.tally(rows),
-            true,
-        )
-    }
-
-    fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        let target: std::collections::HashSet<&Option<String>> = labels.iter().collect();
-        let mut keys = Vec::new();
-        if self.has_null() && labels.iter().any(Option::is_none) {
-            keys.push(u64::from(NULL_CODE));
-        }
-        let formatter = format::formatter(self.values.as_ref())?;
-        for code in 0..self.values.len() {
-            let label = format::cell(self.values.as_ref(), &formatter, code);
-            if target.contains(&label) {
-                keys.push(code as u64);
-            }
-        }
-        Ok(keys)
-    }
-
-    fn prepare_text_predicate(
-        self: &Arc<Self>,
-        values: &[Option<String>],
-        exclude: bool,
-    ) -> Result<Predicate<'static>> {
-        let keys = self.keys_for_labels(values)?;
-        let mut allowed = [exclude; 256];
-        for key in keys {
-            if let Some(slot) = allowed.get_mut(key as usize) {
-                *slot = !exclude;
-            }
-        }
-        Ok(self.predicate_from_allowed(allowed))
-    }
-}
+use crate::{engine::CancelToken, scope::Selection};
 
 #[test]
-fn codes_name_distinct_values_and_reserve_the_null_code() {
+fn codes_name_distinct_values_and_null_mask() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![
         Some("dog"),
         None,
@@ -77,7 +23,8 @@ fn codes_name_distinct_values_and_reserve_the_null_code() {
     assert!(dictionary.has_null());
     assert_eq!(dictionary.code_at(0), dictionary.code_at(3));
     assert_ne!(dictionary.code_at(0), dictionary.code_at(2));
-    assert_eq!(dictionary.code_at(1), NULL_CODE);
+    assert!(dictionary.is_null(1));
+    assert!(!dictionary.is_null(0));
 }
 
 #[test]
@@ -99,7 +46,7 @@ fn nulls_do_not_consume_value_codes() {
 }
 
 #[test]
-fn all_counts_keep_zero_count_options_and_stable_keys() {
+fn all_counts_project_null_first_then_values() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![
         Some("b"),
         Some("a"),
@@ -110,55 +57,23 @@ fn all_counts_keep_zero_count_options_and_stable_keys() {
     let code_b = dictionary.code_at(0);
     let code_a = dictionary.code_at(1);
     let selection = Selection::Rows(Arc::new(vec![0, 3]));
-    let all = dictionary.counts_all(&selection).unwrap();
-    assert_eq!(all, vec![
-        DistinctValue {
-            key: u64::from(NULL_CODE),
-            label: None,
-            count: 0
-        },
-        DistinctValue {
-            key: u64::from(code_a),
-            label: Some("a".into()),
-            count: 0
-        },
-        DistinctValue {
-            key: u64::from(code_b),
-            label: Some("b".into()),
-            count: 2
-        },
-    ]);
-    assert_eq!(dictionary.counts(&selection).unwrap(), vec![all[2].clone()]);
-    let empty = dictionary
-        .counts_all(&Selection::Rows(Arc::new(vec![])))
-        .unwrap();
-    assert_eq!(empty.iter().map(|value| value.key).collect::<Vec<_>>(), [
-        u64::from(NULL_CODE),
-        u64::from(code_a),
-        u64::from(code_b),
-    ]);
-    assert!(empty.iter().all(|value| value.count == 0));
-    assert_eq!(
-        dictionary.counts_all(&Selection::All(a.len())).unwrap(),
-        dictionary.counts(&Selection::All(a.len())).unwrap()
-    );
-}
+    let counts = dictionary.counts(&selection);
+    assert_eq!(counts.null_count(), 0);
+    assert_eq!(counts.count_at(code_a as usize), 0);
+    assert_eq!(counts.count_at(code_b as usize), 2);
 
-#[test]
-fn label_lookup_maps_null_to_the_reserved_key() {
-    let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), Some("a"), None]));
-    let dictionary = Dictionary::from_array(&a).unwrap();
-    let code_a = dictionary.code_at(1);
-    assert_eq!(
-        dictionary
-            .keys_for_labels(&[Some("a".into()), None])
-            .unwrap(),
-        vec![u64::from(NULL_CODE), u64::from(code_a)]
-    );
-    assert!(dictionary
-        .keys_for_labels(&[Some("missing".into())])
-        .unwrap()
-        .is_empty());
+    // Projected iteration outputs null first, then each value in discovery order
+    let projected: Vec<(Option<usize>, u64)> = counts.iter().collect();
+    assert_eq!(projected, vec![
+        (None, 0),
+        (Some(code_b as usize), 2),
+        (Some(code_a as usize), 0),
+    ]);
+
+    let all = dictionary.counts(&Selection::All(a.len()));
+    assert_eq!(all.null_count(), 1);
+    assert_eq!(all.count_at(code_a as usize), 1);
+    assert_eq!(all.count_at(code_b as usize), 2);
 }
 
 #[test]
@@ -172,34 +87,30 @@ fn empty_and_all_null_columns_still_encode() {
     let dictionary = Dictionary::from_array(&nulls).unwrap();
     assert_eq!(dictionary.n_values(), 0);
     assert!(dictionary.has_null());
-    assert_eq!(dictionary.code_at(0), NULL_CODE);
-    assert_eq!(dictionary.counts(&Selection::All(2)).unwrap(), vec![
-        DistinctValue {
-            key: u64::from(NULL_CODE),
-            label: None,
-            count: 2
-        }
-    ]);
+    assert!(dictionary.is_null(0));
+    assert!(dictionary.is_null(1));
+    let counts = dictionary.counts(&Selection::All(2));
+    assert_eq!(counts.null_count(), 2);
+    assert_eq!(counts.iter().collect::<Vec<_>>(), vec![(None, 2)]);
 }
 
 #[test]
-fn predicates_match_null_through_the_reserved_code() {
+fn predicates_match_null_and_values() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![Some("b"), None, Some("a")]));
     let dictionary = Arc::new(Dictionary::from_array(&a).unwrap());
     let mut hits = [false; 3];
     dictionary
-        .prepare_predicate(&[u64::from(NULL_CODE)])
+        .prepare_predicate(&[dictionary.null_key()])
         .evaluate(0..3, &mut hits, &CancelToken::never())
         .unwrap();
     assert_eq!(hits, [false, true, false]);
 
     let mut hits = [false; 3];
     dictionary
-        .prepare_text_predicate(&[None], false)
-        .unwrap()
+        .prepare_predicate_with_exclude(&[dictionary.null_key()], true)
         .evaluate(0..3, &mut hits, &CancelToken::never())
         .unwrap();
-    assert_eq!(hits, [false, true, false]);
+    assert_eq!(hits, [true, false, true]);
 }
 
 #[test]
@@ -215,29 +126,15 @@ fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
     let code_b = dictionary.code_at(0);
     let code_a = dictionary.code_at(3);
     assert_ne!(code_a, code_b);
-    assert_eq!(
-        (0..6)
-            .map(|row| dictionary.code_at(row))
-            .collect::<Vec<_>>(),
-        [code_b, NULL_CODE, NULL_CODE, code_a, code_a, code_b]
-    );
-    assert_eq!(dictionary.counts(&Selection::All(6)).unwrap(), vec![
-        DistinctValue {
-            key: u64::from(NULL_CODE),
-            label: None,
-            count: 2
-        },
-        DistinctValue {
-            key: u64::from(code_a),
-            label: Some("a".into()),
-            count: 2
-        },
-        DistinctValue {
-            key: u64::from(code_b),
-            label: Some("b".into()),
-            count: 2
-        },
-    ]);
+    assert!(!dictionary.is_null(0));
+    assert!(dictionary.is_null(1));
+    assert!(dictionary.is_null(2));
+    assert!(!dictionary.is_null(3));
+
+    let counts = dictionary.counts(&Selection::All(6));
+    assert_eq!(counts.null_count(), 2);
+    assert_eq!(counts.count_at(code_a as usize), 2);
+    assert_eq!(counts.count_at(code_b as usize), 2);
 }
 
 #[test]
@@ -288,8 +185,8 @@ fn predicates_cover_ranges_indices_and_incoming_masks() {
         Some("b"),
     ]));
     let dictionary = Arc::new(Dictionary::from_array(&a).unwrap());
-    let keys = dictionary.keys_for_labels(&[Some("b".into())]).unwrap();
-    let predicate = dictionary.prepare_predicate(&keys);
+    let code_b = dictionary.code_at(0);
+    let predicate = dictionary.prepare_predicate(&[code_b as u64]);
     let cancel = CancelToken::never();
 
     let mut range_hits = [false; 4];
@@ -329,27 +226,11 @@ fn plain_and_native_dictionaries_agree() {
     let plain = Dictionary::from_array(&plain).unwrap();
     let native = Dictionary::from_array(&native).unwrap();
     assert_eq!(plain.n_values(), native.n_values());
-    assert_eq!(
-        plain.counts_all(&Selection::All(5)).unwrap(),
-        native.counts_all(&Selection::All(5)).unwrap()
-    );
-    for labels in [
-        vec![Some("a".into())],
-        vec![Some("b".into())],
-        vec![None],
-        vec![Some("a".into()), None],
-    ] {
-        assert_eq!(
-            plain.keys_for_labels(&labels).unwrap(),
-            native.keys_for_labels(&labels).unwrap()
-        );
-    }
-}
-
-fn codes_of(dictionary: &Dictionary) -> Vec<u8> {
-    (0..dictionary.codes.len())
-        .map(|row| dictionary.code_at(row))
-        .collect()
+    assert_eq!(plain.has_null(), native.has_null());
+    let p_counts = plain.counts(&Selection::All(5));
+    let n_counts = native.counts(&Selection::All(5));
+    assert_eq!(p_counts.null_count(), n_counts.null_count());
+    assert_eq!(p_counts.counts(), n_counts.counts());
 }
 
 #[test]
@@ -358,11 +239,10 @@ fn arrow_null_type_encodes_every_row_as_null() {
     let dictionary = Dictionary::from_array(&array).expect("encoded");
     assert_eq!(dictionary.n_values(), 0);
     assert!(dictionary.has_null());
-    assert_eq!(codes_of(&dictionary), [255, 255, 255]);
-    let present = dictionary.counts(&Selection::All(3)).unwrap();
-    assert_eq!(present, [DistinctValue {
-        key: u64::from(NULL_CODE),
-        label: None,
-        count: 3
-    }]);
+    assert!(dictionary.is_null(0));
+    assert!(dictionary.is_null(1));
+    assert!(dictionary.is_null(2));
+    let counts = dictionary.counts(&Selection::All(3));
+    assert_eq!(counts.null_count(), 3);
+    assert_eq!(counts.iter().collect::<Vec<_>>(), vec![(None, 3)]);
 }

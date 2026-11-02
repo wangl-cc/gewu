@@ -35,6 +35,16 @@ where
     Box::new(move |row| array.is_valid(row).then(|| hash(array.value(row))))
 }
 
+fn normalize_float_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0
+    } else if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
 fn real<T: ArrowPrimitiveType>(array: &PrimitiveArray<T>) -> HashValue<'_>
 where
     T::Native: Into<f64>,
@@ -42,7 +52,7 @@ where
     Box::new(move |row| {
         array.is_valid(row).then(|| {
             let value: f64 = array.value(row).into();
-            hash(crate::column::dictionary::normalized_bits(value))
+            hash(normalize_float_bits(value))
         })
     })
 }

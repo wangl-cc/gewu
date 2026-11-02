@@ -1,7 +1,8 @@
 //! Distinct values of a column as a compact `u8` code space.
 //!
 //! A [`Dictionary`] gives every source row a code naming its distinct
-//! value: codes `0..=254` name the non-null values, and [`NULL_CODE`] names null.
+//! value: codes `0..values.len()` name the non-null values, while row-level
+//! nulls are tracked via an Arrow [`NullBuffer`].
 //!
 //! # Architecture
 //!
@@ -11,9 +12,9 @@
 //!   [`primitive::CanonicalizeArray`].
 //! - Text, binary and nested arrays use Arrow's row format to discover distinct byte rows.
 //!
-//! Other modules consume the dictionary through [`Dictionary::tally`] for
-//! frequency counting, [`Dictionary::values`] for distinct value arrays,
-//! and [`Dictionary::prepare_predicate`] for filter generation.
+//! Other modules consume the dictionary through [`Dictionary::counts`] for
+//! frequency counting and projected iteration, [`Dictionary::values`] for distinct
+//! value arrays, and [`Dictionary::prepare_predicate`] for filter generation.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
 //! and cached by [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`]
@@ -22,49 +23,69 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, UInt32Array},
+    array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, UInt32Array},
+    buffer::NullBuffer,
     compute::take,
     datatypes::*,
     row::{RowConverter, SortField},
 };
+use rapidhash::RapidHashMap;
 
 use crate::{predicate::Predicate, scope::Selection, selection::RowSelection};
 
 mod primitive;
 
-pub(crate) use primitive::normalized_bits;
-
 /// Most non-null values a column may have and still be encoded. Non-null
-/// values use codes `0..=254`; [`NULL_CODE`] is reserved for null, so one
-/// `u8` code space covers 255 values plus null. Columns with more values are
-/// not encoded.
+/// values use codes `0..=254`. Columns with more values are not encoded.
 pub(crate) const MAX_DISTINCT_VALUES: usize = 255;
-
-/// Code reserved for null. Non-null values use codes `0..=254`.
-pub(crate) const NULL_CODE: u8 = 255;
 
 /// Rows converted to row format at a time, to bound memory.
 const CHUNK: usize = 64 * 1024;
 
-/// Occurrences of distinct values over a selection of rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Tally {
-    /// Sized exactly to match `Dictionary.values.len()`, with `counts[i]` being the frequency of
-    /// `values[i]`.
-    pub counts: Vec<u64>,
-    /// Occurrences of null rows.
-    pub null_count: u64,
+/// Projected distinct value counts over a row selection.
+pub(crate) struct DistinctCounts {
+    counts: Vec<u64>,
+    null_count: u64,
+}
+
+impl DistinctCounts {
+    #[inline]
+    pub fn null_count(&self) -> u64 {
+        self.null_count
+    }
+
+    #[inline]
+    pub fn count_at(&self, code: usize) -> u64 {
+        self.counts[code]
+    }
+
+    #[inline]
+    pub fn counts(&self) -> &[u64] {
+        &self.counts
+    }
+
+    /// Iterate projected distinct values: outputs null first (if column has null),
+    /// then each non-null value code paired with its count.
+    pub fn iter(&self) -> impl Iterator<Item = (Option<usize>, u64)> + '_ {
+        let null_item = (!self.null_count.is_zero()).then_some((None, self.null_count));
+        let value_items = self
+            .counts
+            .iter()
+            .enumerate()
+            .map(|(code, &count)| (Some(code), count));
+        null_item.into_iter().chain(value_items)
+    }
 }
 
 pub(crate) struct Dictionary {
-    /// Code of each source row; [`NULL_CODE`] for null.
+    /// Non-null value codes for each source row.
     codes: Vec<u8>,
-    /// Non-null values in code order.
+    /// Row-level null mask. `None` if the column contains no null rows.
+    nulls: Option<NullBuffer>,
+    /// Unique non-null values in discovery order.
     values: ArrayRef,
-    /// Precomputed full-table counts, matching `values.len()`.
+    /// Precomputed full-table counts, matching `values.len()` 1:1.
     all_counts: Vec<u64>,
-    /// Precomputed full-table null row count.
-    all_null_count: u64,
 }
 
 impl Dictionary {
@@ -127,23 +148,22 @@ impl Dictionary {
     /// Values array is assembled directly from canonical native values without sorting or `take`.
     fn from_canonical_array<A>(array: &A) -> Option<Self>
     where
-        A: primitive::CanonicalizeArray,
+        A: primitive::PrimitiveArray,
     {
         let len = array.len();
-        let nulls = array.nulls();
-        let mut seen: HashMap<A::Key, u8> = HashMap::new();
-        let mut native_of: Vec<A::Native> = Vec::new();
-        let mut codes: Vec<u8> = Vec::with_capacity(len);
+        let nulls = array.nulls().cloned();
+        let mut seen = RapidHashMap::<A::Key, u8>::default();
+        let mut native_of = Vec::new();
         let mut buf = [0u64; 256];
 
-        for row in 0..len {
-            if nulls.as_ref().is_some_and(|n| n.is_null(row)) {
-                buf[NULL_CODE as usize] += 1;
-                codes.push(NULL_CODE);
+        let mut codes = vec![0u8; len];
+
+        for (i, code) in codes.iter_mut().enumerate() {
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
                 continue;
             }
-            let (key, native) = array.canonical_at(row);
-            let code = match seen.get(&key) {
+            let (key, native) = array.canonical_at(i);
+            *code = match seen.get(&key) {
                 Some(&code) => code,
                 None => {
                     if native_of.len() == MAX_DISTINCT_VALUES {
@@ -155,18 +175,16 @@ impl Dictionary {
                     code
                 }
             };
-            buf[code as usize] += 1;
-            codes.push(code);
+            buf[*code as usize] += 1;
         }
 
         let values = array.build_array(native_of.into_iter());
         let all_counts = buf[..values.len()].to_vec();
-        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
+            nulls,
             values,
             all_counts,
-            all_null_count,
         })
     }
 
@@ -174,11 +192,12 @@ impl Dictionary {
     /// distinct values by hashing rows, then write one `u8` code per row.
     fn from_row_array(array: &ArrayRef) -> Option<Self> {
         let converter = RowConverter::new(vec![SortField::new(array.data_type().clone())]).ok()?;
-
+        let nulls = array.nulls().cloned();
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
         let mut representative_row: Vec<usize> = Vec::new();
         let mut codes: Vec<u8> = Vec::with_capacity(array.len());
         let mut buf = [0u64; 256];
+
         for start in (0..array.len()).step_by(CHUNK) {
             let len = CHUNK.min(array.len() - start);
             let rows = converter
@@ -187,8 +206,7 @@ impl Dictionary {
             for (i, row) in rows.iter().enumerate() {
                 let source_row: usize = start + i;
                 if array.is_null(source_row) {
-                    buf[NULL_CODE as usize] += 1;
-                    codes.push(NULL_CODE);
+                    codes.push(0);
                     continue;
                 }
                 let bytes: &[u8] = row.as_ref();
@@ -213,12 +231,11 @@ impl Dictionary {
             UInt32Array::from_iter_values(representative_row.into_iter().map(|row| row as u32));
         let values = take(array.as_ref(), &rows, None).ok()?;
         let all_counts = buf[..values.len()].to_vec();
-        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
+            nulls,
             values,
             all_counts,
-            all_null_count,
         })
     }
 
@@ -230,13 +247,10 @@ impl Dictionary {
         let dictionary = array.as_any_dictionary();
         let keys = dictionary.keys();
         let dictionary_values = dictionary.values().clone();
-        // A dictionary with more entries than the code space cannot be compact.
         if dictionary_values.len() > MAX_DISTINCT_VALUES + 1 {
             return None;
         }
 
-        // Which dictionary entries are referenced, and are there logical nulls
-        // (a null key, or a key pointing at a null value)?
         let value_nulls = dictionary_values.logical_nulls();
         let mut referenced: Vec<u32> = Vec::new();
         let mut entry_slot = vec![u32::MAX; dictionary_values.len()];
@@ -261,7 +275,6 @@ impl Dictionary {
             return None;
         }
 
-        // Encode the referenced values with the same path as a plain column.
         let referenced_values = take(
             dictionary_values.as_ref(),
             &UInt32Array::from(referenced),
@@ -270,50 +283,73 @@ impl Dictionary {
         .ok()?;
         let encoded = Self::from_array(&referenced_values)?;
 
-        let mut key_to_code = vec![NULL_CODE; dictionary_values.len()];
+        let mut key_to_code = vec![u8::MAX; dictionary_values.len()];
         for (entry, &slot) in entry_slot.iter().enumerate() {
             if slot != u32::MAX {
                 key_to_code[entry] = encoded.codes[slot as usize];
             }
         }
 
-        // One key walk writes the shared per-row code array and tallies full-table counts.
         let mut codes = Vec::with_capacity(array.len());
         let mut buf = [0u64; 256];
+        let mut null_bits = BooleanBufferBuilder::new(array.len());
+        let mut has_null = false;
+
         if !scan_keys(keys, |key| {
-            let code = match key {
-                None => NULL_CODE,
-                Some(entry) => key_to_code.get(entry).copied().unwrap_or(NULL_CODE),
-            };
-            buf[code as usize] += 1;
-            codes.push(code);
+            let code =
+                key.and_then(|entry| key_to_code.get(entry).copied().filter(|&c| c != u8::MAX));
+            match code {
+                Some(code) => {
+                    null_bits.append(true);
+                    buf[code as usize] += 1;
+                    codes.push(code);
+                }
+                None => {
+                    null_bits.append(false);
+                    has_null = true;
+                    codes.push(0);
+                }
+            }
         }) {
             return None;
         }
 
+        let nulls = if has_null {
+            Some(NullBuffer::new(null_bits.finish()))
+        } else {
+            None
+        };
         let all_counts = buf[..encoded.values.len()].to_vec();
-        let all_null_count = buf[NULL_CODE as usize];
         Some(Self {
             codes,
+            nulls,
             values: encoded.values,
             all_counts,
-            all_null_count,
         })
     }
 
     /// A column with no values: every row is null and there is nothing to
     /// enumerate or label.
     fn all_null(array: &ArrayRef) -> Self {
+        let len = array.len();
         Self {
-            codes: vec![NULL_CODE; array.len()],
+            codes: vec![0; len],
+            nulls: (len > 0).then(|| NullBuffer::new_null(len)),
             values: array.slice(0, 0),
             all_counts: Vec::new(),
-            all_null_count: array.len() as u64,
         }
     }
 }
 
 impl Dictionary {
+    /// Public key assigned to null values in [`crate::Filter::InValues`].
+    pub const NULL_KEY: u64 = 255;
+
+    #[inline]
+    pub(crate) fn null_key(&self) -> u64 {
+        Self::NULL_KEY
+    }
+
     #[inline]
     pub(crate) fn values(&self) -> &ArrayRef {
         &self.values
@@ -321,7 +357,22 @@ impl Dictionary {
 
     #[inline]
     pub(crate) fn has_null(&self) -> bool {
-        self.all_null_count > 0
+        self.nulls.as_ref().is_some_and(|n| n.null_count() > 0)
+    }
+
+    #[inline]
+    pub(crate) fn null_count(&self) -> u64 {
+        self.nulls.as_ref().map_or(0, |n| n.null_count() as u64)
+    }
+
+    #[inline]
+    pub(crate) fn is_null(&self, row: usize) -> bool {
+        self.nulls.as_ref().is_some_and(|n| n.is_null(row))
+    }
+
+    #[inline]
+    pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
     }
 
     #[inline]
@@ -340,26 +391,33 @@ impl Dictionary {
     }
 
     /// Tally occurrences of each distinct value over `rows`.
-    /// Returns `Tally` containing counts strictly matching `values.len()` in length,
-    /// and the count of null rows.
-    pub(crate) fn tally(&self, rows: &Selection) -> Tally {
+    /// Returns [`DistinctCounts`] with precomputed projection: null first, then each value.
+    pub(crate) fn counts(&self, rows: &Selection) -> DistinctCounts {
         match rows {
-            Selection::All(_) => Tally {
+            Selection::All(_) => DistinctCounts {
                 counts: self.all_counts.clone(),
-                null_count: self.all_null_count,
+                null_count: self.null_count(),
             },
             Selection::Rows(rows) => {
                 let mut buf = [0u64; 256];
-                for &row in rows.iter() {
-                    buf[self.codes[row as usize] as usize] += 1;
+                let mut null_count = 0u64;
+                if let Some(nulls) = &self.nulls {
+                    for &row in rows.iter() {
+                        let r = row as usize;
+                        if nulls.is_null(r) {
+                            null_count += 1;
+                        } else {
+                            buf[self.codes[r] as usize] += 1;
+                        }
+                    }
+                } else {
+                    for &row in rows.iter() {
+                        buf[self.codes[row as usize] as usize] += 1;
+                    }
                 }
-                Tally {
+                DistinctCounts {
                     counts: buf[..self.values.len()].to_vec(),
-                    null_count: if self.all_null_count > 0 {
-                        buf[NULL_CODE as usize]
-                    } else {
-                        0
-                    },
+                    null_count,
                 }
             }
         }
@@ -371,53 +429,106 @@ impl Dictionary {
         incoming: Option<&[bool]>,
         output: &mut [bool],
         allowed: &[bool; 256],
+        null_allowed: bool,
     ) {
-        match (rows, incoming) {
-            (RowSelection::Range(range), None) => {
+        match (rows, incoming, &self.nulls) {
+            (RowSelection::Range(range), None, None) => {
                 for (i, &code) in self.codes[range].iter().enumerate() {
                     output[i] = allowed[code as usize];
                 }
             }
-            (RowSelection::Range(range), Some(mask)) => {
+            (RowSelection::Range(range), Some(mask), None) => {
                 for (i, &code) in self.codes[range].iter().enumerate() {
                     output[i] = allowed[code as usize] & mask[i];
                 }
             }
-            (RowSelection::Indices(indices), None) => {
+            (RowSelection::Range(range), None, Some(nulls)) => {
+                for (i, (&code, r)) in self.codes[range.clone()].iter().zip(range).enumerate() {
+                    output[i] = if nulls.is_null(r) {
+                        null_allowed
+                    } else {
+                        allowed[code as usize]
+                    };
+                }
+            }
+            (RowSelection::Range(range), Some(mask), Some(nulls)) => {
+                for (i, (&code, r)) in self.codes[range.clone()].iter().zip(range).enumerate() {
+                    let hit = if nulls.is_null(r) {
+                        null_allowed
+                    } else {
+                        allowed[code as usize]
+                    };
+                    output[i] = hit & mask[i];
+                }
+            }
+            (RowSelection::Indices(indices), None, None) => {
                 for (i, &row) in indices.iter().enumerate() {
                     output[i] = allowed[self.codes[row] as usize];
                 }
             }
-            (RowSelection::Indices(indices), Some(mask)) => {
+            (RowSelection::Indices(indices), Some(mask), None) => {
                 for (i, &row) in indices.iter().enumerate() {
                     output[i] = allowed[self.codes[row] as usize] & mask[i];
                 }
             }
+            (RowSelection::Indices(indices), None, Some(nulls)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    output[i] = if nulls.is_null(row) {
+                        null_allowed
+                    } else {
+                        allowed[self.codes[row] as usize]
+                    };
+                }
+            }
+            (RowSelection::Indices(indices), Some(mask), Some(nulls)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    let hit = if nulls.is_null(row) {
+                        null_allowed
+                    } else {
+                        allowed[self.codes[row] as usize]
+                    };
+                    output[i] = hit & mask[i];
+                }
+            }
         }
     }
 
-    pub(crate) fn predicate_from_allowed(
+    fn predicate_from_allowed(
         self: &Arc<Self>,
         allowed: [bool; 256],
+        null_allowed: bool,
     ) -> Predicate<'static> {
         let dictionary = Arc::clone(self);
         Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
-            dictionary.fill_matches(rows, incoming, output, &allowed);
+            dictionary.fill_matches(rows, incoming, output, &allowed, null_allowed);
             Ok(())
         }))
     }
 
-    /// Prepare a row-based predicate for filtering by key codes.
-    pub(crate) fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
-        let mut allowed = [false; 256];
+    /// Prepare a row-based predicate for filtering by key codes, optionally excluding them.
+    pub(crate) fn prepare_predicate_with_exclude(
+        self: &Arc<Self>,
+        keys: &[u64],
+        exclude: bool,
+    ) -> Predicate<'static> {
+        let has_null_key = keys.contains(&Self::NULL_KEY);
+        let null_allowed = if exclude { !has_null_key } else { has_null_key };
+        let mut allowed = [exclude; 256];
         for &key in keys {
-            if let Ok(key) = usize::try_from(key) {
-                if let Some(slot) = allowed.get_mut(key) {
-                    *slot = true;
+            if key != Self::NULL_KEY {
+                if let Ok(key) = usize::try_from(key) {
+                    if let Some(slot) = allowed.get_mut(key) {
+                        *slot = !exclude;
+                    }
                 }
             }
         }
-        self.predicate_from_allowed(allowed)
+        self.predicate_from_allowed(allowed, null_allowed)
+    }
+
+    /// Prepare a row-based predicate for filtering by key codes.
+    pub(crate) fn prepare_predicate(self: &Arc<Self>, keys: &[u64]) -> Predicate<'static> {
+        self.prepare_predicate_with_exclude(keys, false)
     }
 }
 
@@ -449,7 +560,5 @@ fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
     true
 }
 
-#[cfg(test)]
-mod primitive_tests;
 #[cfg(test)]
 mod tests;

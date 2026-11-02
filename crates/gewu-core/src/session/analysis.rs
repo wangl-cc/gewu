@@ -107,13 +107,8 @@ impl Session {
         };
         let dictionary = self.dictionary(column)?;
         if let Some(dictionary) = dictionary {
-            let tally = dictionary.tally(&rows);
-            let mut choices = format_choices(
-                dictionary.values().as_ref(),
-                dictionary.has_null(),
-                &tally,
-                false,
-            )?;
+            let counts = dictionary.counts(&rows);
+            let mut choices = format_choices(&dictionary, &counts, false)?;
             s.distinct_count = choices.len() as u64;
             let mut present = choices.iter().filter_map(|v| v.label.as_ref());
             s.min_label = present.clone().next().cloned();

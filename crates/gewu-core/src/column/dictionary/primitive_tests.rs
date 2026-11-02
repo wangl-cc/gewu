@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 
-use super::*;
+use super::{super::Dictionary, *};
 
 mod float {
     use arrow::{
@@ -10,7 +10,7 @@ mod float {
         datatypes::{DataType, Float64Type},
     };
 
-    use super::{primitive::Canonicalize, *};
+    use super::*;
 
     #[test]
     fn signed_zeros_canonicalize_to_positive_zero() {
@@ -87,7 +87,7 @@ mod float {
                 dictionary.code_at(4),
                 "{data_type:?}"
             );
-            assert_eq!(dictionary.code_at(5), NULL_CODE, "{data_type:?}");
+            assert!(dictionary.is_null(5), "{data_type:?}");
             assert_ne!(
                 dictionary.code_at(0),
                 dictionary.code_at(2),
@@ -140,7 +140,7 @@ mod integer {
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
-            assert_eq!(dictionary.code_at(3), NULL_CODE, "{data_type}");
+            assert!(dictionary.is_null(3), "{data_type}");
         }
 
         let unsigned: ArrayRef = Arc::new(UInt64Array::from(vec![
@@ -163,7 +163,7 @@ mod integer {
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
-            assert_eq!(dictionary.code_at(3), NULL_CODE, "{data_type}");
+            assert!(dictionary.is_null(3), "{data_type}");
         }
     }
 }
@@ -230,7 +230,7 @@ mod temporal {
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
-            assert_eq!(dictionary.code_at(3), NULL_CODE, "{data_type}");
+            assert!(dictionary.is_null(3), "{data_type}");
         }
     }
 }
@@ -256,7 +256,7 @@ mod decimal {
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(4));
-        assert_eq!(dictionary.code_at(3), NULL_CODE);
+        assert!(dictionary.is_null(3));
 
         let d256: ArrayRef = Arc::new(
             Decimal256Array::from(vec![
@@ -273,7 +273,7 @@ mod decimal {
         assert!(dictionary.has_null());
         assert_eq!(dictionary.code_at(0), dictionary.code_at(3));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
-        assert_eq!(dictionary.code_at(2), NULL_CODE);
+        assert!(dictionary.is_null(2));
     }
 }
 
@@ -295,6 +295,6 @@ mod boolean {
         assert!(dictionary.has_null());
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
-        assert_eq!(dictionary.code_at(3), NULL_CODE);
+        assert!(dictionary.is_null(3));
     }
 }

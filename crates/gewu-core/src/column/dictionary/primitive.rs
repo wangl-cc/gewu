@@ -1,9 +1,6 @@
 use std::{hash::Hash, sync::Arc};
 
-use arrow::{
-    array::{Array, ArrayRef, BooleanArray, PrimitiveArray},
-    datatypes::*,
-};
+use arrow::{array, datatypes::*};
 
 pub(super) trait Canonicalize: ArrowPrimitiveType {
     type Key: Copy + Eq + Ord + Hash;
@@ -85,52 +82,48 @@ impl_canonicalize!(
     Float64Type => u64 => (0.0f64, f64::NAN, 63),
 );
 
-pub(super) trait CanonicalizeArray: Array {
+pub(super) trait PrimitiveArray: array::Array {
     type Key: Copy + Eq + Ord + Hash;
     type Native: Copy;
 
-    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native);
+    fn canonical_at(&self, i: usize) -> (Self::Key, Self::Native);
 
-    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> ArrayRef;
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> array::ArrayRef;
 }
 
-impl<T: Canonicalize> CanonicalizeArray for PrimitiveArray<T> {
+impl<T: Canonicalize> PrimitiveArray for array::PrimitiveArray<T> {
     type Key = T::Key;
     type Native = T::Native;
 
     #[inline]
-    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native) {
-        T::canonical(self.value(index))
+    fn canonical_at(&self, i: usize) -> (Self::Key, Self::Native) {
+        T::canonical(self.value(i))
     }
 
-    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> ArrayRef {
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = Self::Native>) -> array::ArrayRef {
+        use array::Array;
         Arc::new(
-            PrimitiveArray::<T>::from_iter_values(sorted).with_data_type(self.data_type().clone()),
+            array::PrimitiveArray::<T>::from_iter_values(sorted)
+                .with_data_type(self.data_type().clone()),
         )
     }
 }
 
-impl CanonicalizeArray for BooleanArray {
+impl PrimitiveArray for array::BooleanArray {
     type Key = bool;
     type Native = bool;
 
     #[inline]
-    fn canonical_at(&self, index: usize) -> (Self::Key, Self::Native) {
-        let v = self.value(index);
+    fn canonical_at(&self, i: usize) -> (Self::Key, Self::Native) {
+        let v = self.value(i);
         (v, v)
     }
 
-    fn build_array(&self, sorted: impl ExactSizeIterator<Item = bool>) -> ArrayRef {
-        Arc::new(BooleanArray::from(sorted.collect::<Vec<bool>>()))
+    fn build_array(&self, sorted: impl ExactSizeIterator<Item = bool>) -> array::ArrayRef {
+        Arc::new(array::BooleanArray::from(sorted.collect::<Vec<bool>>()))
     }
 }
 
-pub(crate) fn normalized_bits(value: f64) -> u64 {
-    if value == 0.0 {
-        0
-    } else if value.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        value.to_bits()
-    }
-}
+#[cfg(test)]
+#[path = "primitive_tests.rs"]
+mod tests;

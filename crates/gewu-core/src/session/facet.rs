@@ -2,12 +2,10 @@
 
 use std::collections::HashSet;
 
-use arrow::array::Array;
-
 use super::Session;
 use crate::{
     column::{
-        dictionary::{Tally, NULL_CODE},
+        dictionary::{Dictionary, DistinctCounts},
         stats,
     },
     format,
@@ -164,14 +162,9 @@ impl Session {
         }
         let editor = if let Some(dictionary) = &dictionary {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
-            let tally = dictionary.tally(&rows);
+            let counts = dictionary.counts(&rows);
             FilterEditor::Choices {
-                values: format_choices(
-                    dictionary.values().as_ref(),
-                    dictionary.has_null(),
-                    &tally,
-                    true,
-                )?,
+                values: format_choices(dictionary, &counts, true)?,
             }
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
@@ -232,13 +225,8 @@ impl Session {
         let limit = limit as usize;
         match dictionary {
             Some(dictionary) => {
-                let tally = dictionary.tally(&rows);
-                let choices = format_choices(
-                    dictionary.values().as_ref(),
-                    dictionary.has_null(),
-                    &tally,
-                    false,
-                )?;
+                let counts = dictionary.counts(&rows);
+                let choices = format_choices(&dictionary, &counts, false)?;
                 let total = choices.len() as u64;
                 Ok(DistinctResult {
                     total,
@@ -296,7 +284,7 @@ impl Session {
         let target: HashSet<&Option<String>> = labels.iter().collect();
         let mut keys = Vec::new();
         if dictionary.has_null() && labels.iter().any(Option::is_none) {
-            keys.push(u64::from(NULL_CODE));
+            keys.push(Dictionary::NULL_KEY);
         }
         let formatter = format::formatter(dictionary.values().as_ref())?;
         for code in 0..dictionary.len() {
@@ -323,13 +311,7 @@ impl Session {
                 }
                 if let Some(dictionary) = self.dictionary(column_idx)? {
                     let keys = self.keys_for_labels(column_idx, values)?;
-                    let mut allowed = [*exclude; 256];
-                    for key in keys {
-                        if let Some(slot) = allowed.get_mut(key as usize) {
-                            *slot = !exclude;
-                        }
-                    }
-                    return Ok(dictionary.predicate_from_allowed(allowed));
+                    return Ok(dictionary.prepare_predicate_with_exclude(&keys, *exclude));
                 }
                 col.prepare_filter(filter)
             }
@@ -339,17 +321,17 @@ impl Session {
 }
 
 pub(crate) fn format_choices(
-    values: &dyn Array,
-    has_null: bool,
-    tally: &Tally,
+    dictionary: &Dictionary,
+    counts: &DistinctCounts,
     include_zero: bool,
 ) -> Result<Vec<DistinctValue>> {
+    let values = dictionary.values().as_ref();
     let formatter = format::formatter(values)?;
     let mut result = Vec::with_capacity(values.len() + 1);
-    let null_count = tally.null_count;
-    if has_null && (include_zero || null_count > 0) {
+    let null_count = counts.null_count();
+    if dictionary.has_null() && (include_zero || null_count > 0) {
         result.push(DistinctValue {
-            key: u64::from(NULL_CODE),
+            key: Dictionary::NULL_KEY,
             label: None,
             count: null_count,
         });
@@ -357,7 +339,7 @@ pub(crate) fn format_choices(
     let sort_indices = arrow::compute::sort_to_indices(values, None, None)?;
     for &code in sort_indices.values() {
         let code = code as usize;
-        let count = tally.counts[code];
+        let count = counts.count_at(code);
         if include_zero || count > 0 {
             result.push(DistinctValue {
                 key: code as u64,
