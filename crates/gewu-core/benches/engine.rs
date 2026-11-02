@@ -10,7 +10,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{Cancellation, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Filter, QuerySpec};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -26,8 +26,9 @@ fn bench_file() -> PathBuf {
     path
 }
 
-fn col(doc: &Session, name: &str) -> u32 {
-    doc.column_index(name)
+fn col(doc: &std::sync::Arc<gewu_core::View>, name: &str) -> u32 {
+    doc.dataset()
+        .column_index(name)
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
@@ -35,12 +36,20 @@ fn open(c: &mut Criterion) {
     let path = bench_file();
     let mut g = c.benchmark_group("open");
     g.sample_size(10);
-    g.bench_function("parquet_2m", |b| b.iter(|| Session::open(&path).unwrap()));
+    g.bench_function("parquet_2m", |b| {
+        b.iter(|| {
+            gewu_core::Dataset::open(&path)
+                .map(|dataset| std::sync::Arc::new(dataset).view())
+                .unwrap()
+        })
+    });
     g.finish();
 }
 
 fn apply_view(c: &mut Criterion) {
-    let doc = Session::open(bench_file()).unwrap();
+    let doc = gewu_core::Dataset::open(bench_file())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     let (price, score, rating, label, city) = (
         col(&doc, "price"),
         col(&doc, "score"),
@@ -50,8 +59,7 @@ fn apply_view(c: &mut Criterion) {
     );
     let (amount, uuid) = (col(&doc, "amount"), col(&doc, "uuid"));
     // Build the label index once, so InValues measures filtering only.
-    doc.filter_choices(label, None, &Cancellation::default())
-        .unwrap();
+    doc.filter_choices(label, &Cancellation::default()).unwrap();
 
     let cases: Vec<(&str, QuerySpec)> = vec![
         ("no_filter", QuerySpec::default()),
@@ -123,8 +131,7 @@ fn apply_view(c: &mut Criterion) {
     for (name, spec) in &cases {
         g.bench_function(*name, |b| {
             b.iter(|| {
-                doc.prepare_view(black_box(spec))
-                    .and_then(|operation| operation.run())
+                doc.query(black_box(spec), &gewu_core::Cancellation::default())
                     .unwrap()
             })
         });
@@ -133,21 +140,20 @@ fn apply_view(c: &mut Criterion) {
 }
 
 fn rows(c: &mut Criterion) {
-    let doc = Session::open(bench_file()).unwrap();
-    let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
+    let doc = gewu_core::Dataset::open(bench_file())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
+    let columns: Vec<u32> = (0..doc.dataset().info().columns.len() as u32).collect();
     let mut g = c.benchmark_group("rows");
 
     let plain = doc
-        .prepare_view(&QuerySpec::default())
-        .and_then(|operation| operation.run())
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     g.bench_function("block_256_all_columns", |b| {
-        b.iter(|| doc.rows(plain.version, 1_000_000, 256, &columns).unwrap())
+        b.iter(|| plain.rows(1_000_000, 256, &columns).unwrap())
     });
 
-    let find = doc
-        .prepare_find(plain.version, "2024-03", &columns)
-        .unwrap();
+    let find = plain.find("2024-03", &columns).unwrap();
     g.bench_function("find_highlight_256_all_columns", |b| {
         b.iter(|| {
             find.highlight(1_000, 256, &Cancellation::default())
@@ -159,7 +165,9 @@ fn rows(c: &mut Criterion) {
 
 fn facets(c: &mut Criterion) {
     let path = bench_file();
-    let doc = Session::open(&path).unwrap();
+    let doc = gewu_core::Dataset::open(&path)
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     let (label, city, id, price) = (
         col(&doc, "label"),
         col(&doc, "city"),
@@ -184,9 +192,13 @@ fn facets(c: &mut Criterion) {
     ] {
         g.bench_function(format!("choices_cold_{name}"), |b| {
             b.iter_batched(
-                || Session::open(&path).unwrap(),
+                || {
+                    gewu_core::Dataset::open(&path)
+                        .map(|dataset| std::sync::Arc::new(dataset).view())
+                        .unwrap()
+                },
                 |doc| {
-                    doc.filter_choices(column, None, &Cancellation::default())
+                    doc.filter_choices(column, &Cancellation::default())
                         .unwrap()
                 },
                 BatchSize::PerIteration,
@@ -194,11 +206,12 @@ fn facets(c: &mut Criterion) {
         });
     }
     // Hot: index cached; counts only rows passing the other columns' filters.
-    doc.filter_choices(city, None, &Cancellation::default())
-        .unwrap();
+    doc.filter_choices(city, &Cancellation::default()).unwrap();
     g.bench_function("choices_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.filter_choices(city, Some(&other_filter), &Cancellation::default())
+            doc.query(&other_filter, &gewu_core::Cancellation::default())
+                .unwrap()
+                .filter_choices(city, &Cancellation::default())
                 .unwrap()
         })
     });
@@ -207,7 +220,6 @@ fn facets(c: &mut Criterion) {
         b.iter(|| {
             doc.filter_distribution(
                 price,
-                None,
                 60,
                 gewu_core::AxisScale::Linear,
                 &Cancellation::default(),
@@ -219,42 +231,40 @@ fn facets(c: &mut Criterion) {
     let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {
-            doc.filter_distribution(
-                price,
-                Some(&label_filter),
-                60,
-                gewu_core::AxisScale::Linear,
-                &Cancellation::default(),
-            )
-            .map(|result| result.expect("histogram domain").histogram)
-            .unwrap()
+            doc.query(&label_filter, &gewu_core::Cancellation::default())
+                .unwrap()
+                .filter_distribution(
+                    price,
+                    60,
+                    gewu_core::AxisScale::Linear,
+                    &Cancellation::default(),
+                )
+                .map(|result| result.expect("histogram domain").histogram)
+                .unwrap()
         })
     });
 
-    doc.prepare_view(&QuerySpec::default())
-        .and_then(|operation| operation.run())
+    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
-    let version = doc.current_view().version;
+
     let cancellation = Cancellation::default();
     g.bench_function("statistics_price", |b| {
-        b.iter(|| {
-            doc.analyze_statistics(version, price, &cancellation)
-                .unwrap()
-        })
+        b.iter(|| doc.analyze_statistics(price, &cancellation).unwrap())
     });
     g.finish();
 }
 
 fn inspector_values(c: &mut Criterion) {
-    let doc = Session::open(bench_file()).unwrap();
+    let doc = gewu_core::Dataset::open(bench_file())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     let mut group = c.benchmark_group("inspector_values");
     group.sample_size(10);
     for name in ["label", "id", "uuid"] {
-        let version = doc.current_view().version;
         let column = col(&doc, name);
         let cancellation = Cancellation::default();
         group.bench_function(name, |b| {
-            b.iter(|| doc.analyze_values(version, column, &cancellation).unwrap())
+            b.iter(|| doc.analyze_values(column, &cancellation).unwrap())
         });
     }
     group.finish();

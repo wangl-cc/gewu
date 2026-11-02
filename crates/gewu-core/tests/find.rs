@@ -4,18 +4,21 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    Cancellation, CellMatch, Error, Filter, QuerySpec, Session, MAX_FIND_HIGHLIGHT_ROWS,
-    MAX_FIND_PAGE_SIZE,
+    Cancellation, CellMatch, Error, Filter, QuerySpec, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Session) {
+fn document(
+    columns: Vec<(&str, ArrayRef)>,
+) -> (tempfile::NamedTempFile, std::sync::Arc<gewu_core::View>) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Session::open(file.path()).unwrap();
+    let doc = gewu_core::Dataset::open(file.path())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     (file, doc)
 }
 
@@ -24,7 +27,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let len = 100_020;
     let values: ArrayRef = Arc::new(StringArray::from_iter_values((0..len).map(|_| "hit")));
     let (_file, doc) = document(vec![("value", values)]);
-    let find = doc.prepare_find(0, "hit", &[0]).unwrap();
+    let find = doc.find("hit", &[0]).unwrap();
 
     let mut cursor = None;
     let mut expected = 0;
@@ -95,13 +98,13 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
-        .prepare_view(
+        .query(
             &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
                 .with_sort(0, true, 0),
+            &gewu_core::Cancellation::default(),
         )
-        .and_then(|operation| operation.run())
         .unwrap();
-    let find = doc.prepare_find(view.version, "12", &[0, 1]).unwrap();
+    let find = view.find("12", &[0, 1]).unwrap();
     assert_eq!(
         find.next(None, 10, &Cancellation::default()).unwrap(),
         vec![
@@ -120,17 +123,13 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
         ]
     );
     let highlight = find.highlight(0, 3, &Cancellation::default()).unwrap();
-    assert_eq!(highlight.version, view.version);
     assert_eq!(highlight.n_cols, 2);
     assert_eq!(highlight.matched, [false, true, true, false, true, false]);
-    assert_eq!(doc.current_view(), view);
-    assert_eq!(doc.rows(view.version, 0, 3, &[0]).unwrap().source_rows, [
-        0, 1, 3
-    ]);
+    assert_eq!(doc.row_count(), 4);
+    assert_eq!(view.rows(0, 3, &[0]).unwrap().source_rows, [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.prepare_view(&QuerySpec::default())
-        .and_then(|operation| operation.run())
+    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         find.highlight(0, 3, &Cancellation::default())
@@ -146,15 +145,15 @@ fn find_rejects_invalid_scopes_queries_and_highlight_sizes() {
     let (_file, doc) = document(vec![("value", values)]);
     for columns in [vec![0, 0], vec![0, 1]] {
         assert!(matches!(
-            doc.prepare_find(0, "a", &columns),
+            doc.find("a", &columns),
             Err(Error::InvalidArgument(_))
         ));
     }
     assert!(matches!(
-        doc.prepare_find(0, "   ", &[0]),
+        doc.find("   ", &[0]),
         Err(Error::InvalidArgument(_))
     ));
-    let find = doc.prepare_find(0, "a", &[0]).unwrap();
+    let find = doc.find("a", &[0]).unwrap();
     for count in [0, MAX_FIND_HIGHLIGHT_ROWS + 1] {
         assert!(matches!(
             find.highlight(0, count, &Cancellation::default()),
@@ -174,7 +173,7 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     let first: ArrayRef = Arc::new(StringArray::from(vec!["hit", "hit"]));
     let second: ArrayRef = Arc::new(StringArray::from(vec!["hit", "hit"]));
     let (_file, doc) = document(vec![("first", first), ("second", second)]);
-    let find = doc.prepare_find(0, "hit", &[1, 0]).unwrap();
+    let find = doc.find("hit", &[1, 0]).unwrap();
     assert_eq!(find.next(None, 3, &Cancellation::default()).unwrap(), [
         CellMatch {
             display_row: 0,
@@ -232,8 +231,8 @@ fn pages_and_cursors_follow_the_captured_column_order() {
 fn cancelling_a_stale_snapshot_does_not_cancel_the_current_find() {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(["old", "new", "new"]));
     let (_file, doc) = document(vec![("value", values)]);
-    let stale = doc.prepare_find(0, "old", &[0]).unwrap();
-    let current = doc.prepare_find(0, "new", &[0]).unwrap();
+    let stale = doc.find("old", &[0]).unwrap();
+    let current = doc.find("new", &[0]).unwrap();
     stale.cancel();
     assert!(matches!(
         stale.next(None, 1, &Cancellation::default()),
@@ -262,7 +261,7 @@ fn cancelling_a_stale_snapshot_does_not_cancel_the_current_find() {
 fn obsolete_operation_cancellation_leaves_new_navigation_and_highlights_usable() {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(["hit", "hit"]));
     let (_file, doc) = document(vec![("value", values)]);
-    let find = doc.prepare_find(0, "hit", &[0]).unwrap();
+    let find = doc.find("hit", &[0]).unwrap();
     let obsolete = Cancellation::default();
     obsolete.cancel();
     assert!(matches!(

@@ -116,7 +116,7 @@ mod tests {
                 let filter = Filter::exact(vec![text], false, false);
                 let mut matched = [false; 2];
                 column
-                    .prepare_filter(&filter, &Cancellation::default())
+                    .compile_filter(&filter, &Cancellation::default())
                     .unwrap()
                     .evaluate(0..2, &mut matched, &Cancellation::default())
                     .unwrap();

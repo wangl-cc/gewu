@@ -28,6 +28,35 @@ pub struct Dataset {
 }
 
 impl Dataset {
+    /// A full-data initial view. Existing views remain valid independently of this handle.
+    pub fn view(self: &Arc<Self>) -> Arc<crate::View> {
+        crate::View::all(self.clone())
+    }
+
+    pub fn analysis_capabilities(&self, column: u32) -> Result<Vec<crate::AnalysisSection>> {
+        Ok(crate::stats::capabilities(
+            self.column(column)?.array.data_type(),
+        ))
+    }
+
+    pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>> {
+        crate::stats::analysis::structure(self.column(column)?.array.data_type())
+    }
+
+    pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
+        self.column(column)?.parse_bound(text)
+    }
+
+    pub fn validate_filter(
+        &self,
+        column: u32,
+        filter: &crate::Filter,
+        cancellation: &crate::Cancellation,
+    ) -> Result<()> {
+        self.column(column)?.compile_filter(filter, cancellation)?;
+        cancellation.check()
+    }
+
     /// Open a supported file using its format's default options.
     /// CSV/TSV and XLSX use the first record as headers; XLSX opens its first sheet.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

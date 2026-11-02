@@ -15,10 +15,6 @@ pub enum Error {
     #[error("cancelled")]
     Cancelled,
 
-    /// The caller asked for rows of a view that is no longer current.
-    #[error("stale view version {requested}, current is {current}")]
-    StaleVersion { requested: u64, current: u64 },
-
     #[error("arrow error: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
 

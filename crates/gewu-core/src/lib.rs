@@ -1,7 +1,7 @@
 //! Data engine for gewu, a read-only table viewer.
 //!
-//! The Mac app talks to a [`Session`] through UniFFI. A session manages active views,
-//! filters, and display order over an immutable in-memory [`Dataset`]. Sorting and
+//! The Mac app shares immutable [`Dataset`] and [`View`] objects through UniFFI.
+//! Callers own query conditions and choose which result to display. Sorting and
 //! filtering never move data; they only produce a new list of row numbers.
 
 mod cancellation;
@@ -12,29 +12,28 @@ mod error;
 pub mod file;
 pub(crate) mod format;
 pub(crate) mod query;
-pub mod session;
 pub mod stats;
 pub mod types;
+pub mod view;
 
-pub use column::{Bound, Column, ColumnCapabilities, ColumnInfo, ValueCategory};
+pub use column::{
+    Bound, Column, ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice,
+};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
     xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileInfo, FileMetadata, FileType,
     OpenOptions, ParquetCompression,
 };
-pub(crate) use query::{engine, predicate, scope, selection};
+pub(crate) use query::{predicate, scope, selection};
 pub use query::{
     CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, QuerySpec, RowBlock,
-    ViewInfo, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
-};
-pub use session::{
-    FilterChoices, Session, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, ValueChoice,
-    ViewOperation,
+    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use stats::{
     AnalysisField, AnalysisSection, ArrayView, AxisScale, ColumnOverview, Histogram, LengthSummary,
-    LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAnalysis, ScatterAxisKind,
-    ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
+    ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use types::Encoding;
+pub use view::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, View};

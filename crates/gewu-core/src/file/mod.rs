@@ -174,7 +174,7 @@ pub(crate) struct LoadedFile {
 /// cells in an individual sheet do not prevent listing the others. Workbook
 /// metadata, styles and shared strings are still read; this is blocking I/O.
 /// Returns an empty list when the workbook has no worksheets. The path must
-/// identify an XLSX file under the same detection rules as [`crate::Session::open`].
+/// identify an XLSX file under the same detection rules as [`crate::Dataset::open`].
 pub fn xlsx_sheet_names(path: impl AsRef<Path>) -> Result<Vec<String>> {
     FileType::Xlsx.require_enabled()?;
     let path = path.as_ref();

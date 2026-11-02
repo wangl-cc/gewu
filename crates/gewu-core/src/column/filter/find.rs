@@ -1,5 +1,5 @@
-//! Find predicate preparation. Type dispatch and text parsing stay inside
-//! this operation; callers provide arrays and consume prepared matches.
+//! Find predicate compilation. Type dispatch and text parsing stay inside
+//! this operation; callers provide arrays and consume compiled predicates.
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
@@ -10,7 +10,7 @@ use crate::{
     Result,
 };
 
-pub(crate) fn prepare<'a>(
+pub(crate) fn compile<'a>(
     array: &'a ArrayRef,
     query: &str,
     matcher: Option<&regex::Regex>,
@@ -20,7 +20,7 @@ pub(crate) fn prepare<'a>(
     }
     match array.data_type() {
         DataType::Dictionary(..) => {
-            nested::dictionary_find(array, |values| prepare(values, query, matcher))
+            nested::dictionary_find(array, |values| compile(values, query, matcher))
         }
         DataType::List(_)
         | DataType::LargeList(_)
@@ -58,7 +58,7 @@ mod tests {
         ] {
             let array = new_null_array(&data_type, 2);
             assert!(
-                prepare(&array, "needle", None).unwrap().is_none(),
+                compile(&array, "needle", None).unwrap().is_none(),
                 "{data_type}"
             );
         }
@@ -84,7 +84,7 @@ mod tests {
             ("42", [true, true, false]),
             ("needle", [false, false, true]),
         ] {
-            let predicate = prepare(&array, query, None).unwrap().unwrap();
+            let predicate = compile(&array, query, None).unwrap().unwrap();
             let mut matches = [false; 3];
             predicate
                 .evaluate(0..3, &mut matches, &Cancellation::default())

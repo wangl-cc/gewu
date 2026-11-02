@@ -23,9 +23,7 @@ pub use analysis::{capabilities, AnalysisField, AnalysisSection, ColumnOverview}
 pub use lengths::LengthUnit;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
-pub use scatter::{
-    ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS,
-};
+pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
 
 use crate::Cancellation;
 
@@ -165,8 +163,8 @@ pub struct Histogram {
     /// eligible finite domain (logarithmic bins require positive values).
     pub lo: Option<f64>,
     pub hi: Option<f64>,
-    /// Exact finite source extrema for display, independent of plotting coordinates.
-    /// Absent when the source has no finite domain.
+    /// Exact finite selected-value extrema for display, independent of plotting coordinates.
+    /// Absent when the selected rows have no finite domain.
     pub min_label: Option<String>,
     pub max_label: Option<String>,
     /// Linear integer grid (including dates and times). The axis encloses
@@ -443,13 +441,15 @@ fn build_bins<H: Output>(
 
 fn extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
+    rows: &Selection,
     context: &Cancellation,
 ) -> Result<Option<(T::Native, T::Native)>>
 where
     T::Native: Ord,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for (index, value) in array.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate() {
+        let value = array.is_valid(row).then(|| array.value(row));
         context.check_at(index)?;
         if let Some(value) = value {
             extrema = Some(match extrema {
@@ -471,7 +471,7 @@ fn integer<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Into<i128> + Ord,
 {
-    let Some((min, max)) = extrema(array, context)? else {
+    let Some((min, max)) = extrema(array, rows, context)? else {
         return Ok(Domain::Empty);
     };
     let (min, max) = (min.into(), max.into());
@@ -523,7 +523,7 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Ord,
 {
-    let Some((min, max)) = extrema(array, context)? else {
+    let Some((min, max)) = extrema(array, rows, context)? else {
         return Ok(Domain::Empty);
     };
     let (min, max) = (widen(min), widen(max));
@@ -587,7 +587,8 @@ where
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut has_infinite = false;
-    for (index, value) in array.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate() {
+        let value = array.is_valid(row).then(|| array.value(row));
         context.check_at(index)?;
         let Some(value) = value else { continue };
         let value: f64 = value.into();
@@ -780,7 +781,7 @@ mod tests {
         let column = Column::new("test", array.clone()).unwrap();
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
             let predicate = column
-                .prepare_filter(
+                .compile_filter(
                     &Filter::range(
                         (bounds.min.clone()).map(|b: crate::Bound| b.filter_text()),
                         (bounds.max.clone()).map(|b: crate::Bound| b.filter_text()),
@@ -830,7 +831,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(histogram.counts, vec![1; 100]);
-        let selected = Selection::Rows(Arc::new(vec![1, 99]));
+        let selected = Selection::Rows(Arc::from(vec![1, 99]));
         let histogram = counts(
             ArrayView::new(&array, &selected),
             100,
@@ -838,9 +839,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(histogram.total, 2);
-        assert_eq!(histogram.counts[0], 0);
-        assert_eq!(histogram.counts[1], 1);
-        assert_eq!(histogram.counts[99], 1);
+        assert_eq!(histogram.counts.len(), 99);
+        assert_eq!(histogram.counts[0], 1);
+        assert_eq!(histogram.counts[98], 1);
         assert_eq!(histogram.counts.iter().sum::<u64>(), 2);
     }
 
@@ -890,8 +891,8 @@ mod tests {
         ]));
         for (rows, total, nulls, nans) in [
             (Selection::All(3), 3, 1, 2),
-            (Selection::Rows(Arc::new(vec![1, 2])), 2, 1, 1),
-            (Selection::Rows(Arc::new(vec![])), 0, 0, 0),
+            (Selection::Rows(Arc::from(vec![1, 2])), 2, 1, 1),
+            (Selection::Rows(Arc::from(vec![])), 0, 0, 0),
         ] {
             let h = counts(ArrayView::new(&array, &rows), 40, &Cancellation::default()).unwrap();
             assert_eq!((h.total, h.null_count, h.nan_count), (total, nulls, nans));
@@ -959,7 +960,7 @@ mod tests {
             verify_bins(array.clone(), Selection::All(len), 60);
             verify_bins(
                 array,
-                Selection::Rows(Arc::new(vec![1, (len - 1) as u32])),
+                Selection::Rows(Arc::from(vec![1, (len - 1) as u32])),
                 3,
             );
         }
@@ -1112,8 +1113,18 @@ mod tests {
             &Cancellation::default()
         )
         .is_err());
-        let result = verify_bins(array, Selection::Rows(Arc::new(vec![])), 1000);
-        assert_eq!(result.ranges.len(), MAX_BINS as usize);
-        assert!(result.histogram.counts.iter().all(|&count| count == 0));
+        let rows = Selection::Rows(Arc::from([]));
+        assert!(build_scaled(
+            ArrayView::new(&array, &rows),
+            1000,
+            AxisScale::Linear,
+            &Cancellation::default()
+        )
+        .unwrap()
+        .is_none());
+        let histogram =
+            counts(ArrayView::new(&array, &rows), 60, &Cancellation::default()).unwrap();
+        assert_eq!(histogram.total, 0);
+        assert!(histogram.counts.is_empty());
     }
 }

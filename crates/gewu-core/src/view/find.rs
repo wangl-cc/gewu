@@ -2,15 +2,14 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::View;
 use crate::{Error, Find, Result};
 
-impl Session {
+impl View {
     /// Capture a view, query and ordered visible-column scope for cell Find.
     /// Preparation is cheap and does not scan rows. The returned session remains
     /// valid after later view changes and owns independent cancellation.
-    pub fn prepare_find(&self, version: u64, query: &str, columns: &[u32]) -> Result<Find> {
-        let view = self.views.snapshot(version)?;
+    pub fn find(&self, query: &str, columns: &[u32]) -> Result<Find> {
         let mut seen = BTreeSet::new();
         let columns = columns
             .iter()
@@ -23,6 +22,6 @@ impl Session {
                     .map(|array| (column, array))
             })
             .collect::<Result<Vec<_>>>()?;
-        Find::new(columns, view.rows.clone(), version, query.to_owned())
+        Find::new(columns, self.rows.clone(), query.to_owned())
     }
 }

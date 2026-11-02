@@ -66,7 +66,7 @@ fn all_counts_tally() {
         .unwrap();
     let code_b = dictionary.code_at(0);
     let code_a = dictionary.code_at(1);
-    let selection = Selection::Rows(Arc::new(vec![0, 3]));
+    let selection = Selection::Rows(Arc::from(vec![0, 3]));
     let tally = dictionary
         .tally(&selection, &Cancellation::default())
         .unwrap();

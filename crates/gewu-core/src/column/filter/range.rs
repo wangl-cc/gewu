@@ -25,7 +25,7 @@ pub(crate) fn supports(data_type: &DataType) -> bool {
     )
 }
 
-pub(crate) fn prepare_range<'a>(
+pub(crate) fn compile_range<'a>(
     array: &'a ArrayRef,
     min: Option<&Bound>,
     max: Option<&Bound>,
@@ -78,7 +78,7 @@ mod tests {
 
     fn matches(array: &ArrayRef, min: Option<&Bound>, max: Option<&Bound>) -> Vec<bool> {
         let mut out = vec![false; array.len()];
-        prepare_range(array, min, max)
+        compile_range(array, min, max)
             .unwrap()
             .evaluate(0..array.len(), &mut out, &Cancellation::default())
             .unwrap();
@@ -158,7 +158,7 @@ mod tests {
     fn bounds_are_tied_to_full_logical_type() {
         let array: ArrayRef = Arc::new(Int8Array::from(vec![1]));
         let wider = Bound::from_i64(&DataType::Int64, 1).unwrap();
-        assert!(prepare_range(&array, Some(&wider), None).is_err());
+        assert!(compile_range(&array, Some(&wider), None).is_err());
         let array: ArrayRef = Arc::new(
             Decimal128Array::from(vec![100])
                 .with_precision_and_scale(20, 2)
@@ -166,14 +166,14 @@ mod tests {
         );
         let other_scale =
             Bound::from_decimal(&DataType::Decimal128(20, 3), i256::from(1), 0).unwrap();
-        assert!(prepare_range(&array, Some(&other_scale), None).is_err());
+        assert!(compile_range(&array, Some(&other_scale), None).is_err());
         let array: ArrayRef = Arc::new(TimestampSecondArray::from(vec![0]).with_timezone("UTC"));
         for data_type in [
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             DataType::Timestamp(TimeUnit::Second, Some("Europe/London".into())),
         ] {
             let other = Bound::from_i64(&data_type, 0).unwrap();
-            assert!(prepare_range(&array, Some(&other), None).is_err());
+            assert!(compile_range(&array, Some(&other), None).is_err());
         }
     }
 
@@ -220,10 +220,10 @@ mod tests {
         let lo = Bound::parse(&data_type, "9007199254740993.2").unwrap();
         let hi = Bound::parse(&data_type, "9007199254740993.1").unwrap();
         assert_eq!(lo.axis_value(), hi.axis_value());
-        assert!(prepare_range(&array, Some(&lo), Some(&hi)).is_err());
+        assert!(compile_range(&array, Some(&lo), Some(&hi)).is_err());
         let array: ArrayRef = Arc::new(Float64Array::from(vec![f64::INFINITY]));
         let lo = Bound::from_f64(&DataType::Float64, f64::INFINITY).unwrap();
         let hi = Bound::parse(&DataType::Float64, "1e999").unwrap();
-        assert!(prepare_range(&array, Some(&lo), Some(&hi)).is_err());
+        assert!(compile_range(&array, Some(&lo), Some(&hi)).is_err());
     }
 }

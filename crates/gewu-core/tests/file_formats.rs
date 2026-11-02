@@ -1,6 +1,6 @@
 use std::fs;
 
-use gewu_core::{Cancellation, Error, FileType, OpenOptions, Session};
+use gewu_core::{Cancellation, Error, FileType, OpenOptions};
 
 #[test]
 fn feature_availability_matches_open_errors() {
@@ -15,7 +15,10 @@ fn feature_availability_matches_open_errors() {
         if !enabled {
             let path = directory.path().join(format!("disabled.{extension}"));
             fs::write(&path, []).unwrap();
-            assert!(matches!(Session::open(&path), Err(Error::Unsupported(_))));
+            assert!(matches!(
+                gewu_core::Dataset::open(&path).map(|dataset| std::sync::Arc::new(dataset).view()),
+                Err(Error::Unsupported(_))
+            ));
             if format == FileType::Xlsx {
                 assert!(matches!(
                     gewu_core::xlsx_sheet_names(&path),
@@ -23,10 +26,11 @@ fn feature_availability_matches_open_errors() {
                 ));
             }
             assert!(matches!(
-                Session::open_with_options(&path, &OpenOptions {
+                gewu_core::Dataset::open_with_options(&path, &OpenOptions {
                     format: Some(format),
                     ..Default::default()
-                }),
+                })
+                .map(|dataset| std::sync::Arc::new(dataset).view()),
                 Err(Error::Unsupported(_))
             ));
         }
@@ -34,7 +38,7 @@ fn feature_availability_matches_open_errors() {
 }
 
 #[cfg(any(feature = "csv", feature = "xlsx"))]
-fn assert_disabled_exports(doc: &Session) {
+fn assert_disabled_exports(doc: &std::sync::Arc<gewu_core::View>) {
     for format in [
         FileType::Parquet,
         FileType::Csv,
@@ -43,7 +47,7 @@ fn assert_disabled_exports(doc: &Session) {
     ] {
         if !format.is_enabled() {
             assert!(matches!(
-                doc.prepare_export(doc.current_view().version, &[0], format),
+                doc.export(&[0], format),
                 Err(Error::Unsupported(_))
             ));
         }
@@ -63,9 +67,11 @@ mod delimited {
         for (extension, delimiter) in [("CSV", ','), ("tsv", '\t')] {
             let path = directory.path().join(format!("source.{extension}"));
             fs::write(&path, format!("PAR1_id{delimiter}label\n1{delimiter}ok\n")).unwrap();
-            let doc = Session::open(path).unwrap();
-            assert_eq!(doc.info().row_count, 1);
-            assert_eq!(doc.column_index("PAR1_id"), Some(0));
+            let doc = gewu_core::Dataset::open(path)
+                .map(|dataset| std::sync::Arc::new(dataset).view())
+                .unwrap();
+            assert_eq!(doc.dataset().info().row_count, 1);
+            assert_eq!(doc.dataset().column_index("PAR1_id"), Some(0));
         }
     }
 
@@ -74,10 +80,15 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed.csv");
         fs::write(&path, "id,ordinary\n9007199254740993,42\n1.5,2.5\n").unwrap();
-        let doc = Session::open(path).unwrap();
-        assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
-        assert_eq!(doc.schema().field(1).data_type(), &DataType::Float64);
-        assert_eq!(doc.rows(0, 0, 2, &[0]).unwrap().cells, [
+        let doc = gewu_core::Dataset::open(path)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        assert_eq!(doc.dataset().schema().field(0).data_type(), &DataType::Utf8);
+        assert_eq!(
+            doc.dataset().schema().field(1).data_type(),
+            &DataType::Float64
+        );
+        assert_eq!(doc.rows(0, 2, &[0]).unwrap().cells, [
             Some("9007199254740993".into()),
             Some("1.5".into())
         ]);
@@ -92,20 +103,28 @@ mod delimited {
             let path = directory.path().join(format!("source.{extension}"));
             let text = format!("7{delimiter}true{delimiter}1.25{delimiter}\"雪{delimiter}\"\"quoted\"\"\nline\"\n8{delimiter}false{delimiter}{delimiter}plain\n");
             fs::write(&path, text).unwrap();
-            let doc = Session::open_with_options(&path, &OpenOptions {
+            let doc = gewu_core::Dataset::open_with_options(&path, &OpenOptions {
                 has_header: false,
                 ..Default::default()
             })
+            .map(|dataset| std::sync::Arc::new(dataset).view())
             .unwrap();
-            assert_eq!(doc.info().format, format);
-            assert_eq!(doc.info().metadata, FileMetadata::Delimited);
-            assert_eq!(doc.info().row_count, 2);
-            assert_eq!(doc.schema().field(0).data_type(), &DataType::Int64);
-            assert_eq!(doc.schema().field(1).data_type(), &DataType::Boolean);
-            assert_eq!(doc.schema().field(2).data_type(), &DataType::Float64);
-            let rows = doc
-                .rows(doc.current_view().version, 0, 2, &[0, 1, 2, 3])
-                .unwrap();
+            assert_eq!(doc.dataset().info().format, format);
+            assert_eq!(doc.dataset().info().metadata, FileMetadata::Delimited);
+            assert_eq!(doc.dataset().info().row_count, 2);
+            assert_eq!(
+                doc.dataset().schema().field(0).data_type(),
+                &DataType::Int64
+            );
+            assert_eq!(
+                doc.dataset().schema().field(1).data_type(),
+                &DataType::Boolean
+            );
+            assert_eq!(
+                doc.dataset().schema().field(2).data_type(),
+                &DataType::Float64
+            );
+            let rows = doc.rows(0, 2, &[0, 1, 2, 3]).unwrap();
             assert_eq!(rows.cell(0, 0), Some("7"));
             assert_eq!(rows.cell(0, 1), Some("true"));
             assert_eq!(rows.cell(0, 2), Some("1.25"));
@@ -128,12 +147,12 @@ mod delimited {
         }
         contents.push_str("late text\n");
         fs::write(&path, contents).unwrap();
-        let doc = Session::open(path).unwrap();
-        assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
-        assert_eq!(doc.info().row_count, 70_001);
-        let rows = doc
-            .rows(doc.current_view().version, 69_999, 2, &[0])
+        let doc = gewu_core::Dataset::open(path)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
             .unwrap();
+        assert_eq!(doc.dataset().schema().field(0).data_type(), &DataType::Utf8);
+        assert_eq!(doc.dataset().info().row_count, 70_001);
+        let rows = doc.rows(69_999, 2, &[0]).unwrap();
         assert_eq!(rows.cell(0, 0), Some("1"));
         assert_eq!(rows.cell(1, 0), Some("late text"));
     }
@@ -143,25 +162,33 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("table.custom");
         fs::write(&path, "id\tlabel\n1\t雪\n").unwrap();
-        assert!(matches!(Session::open(&path), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            gewu_core::Dataset::open(&path).map(|dataset| std::sync::Arc::new(dataset).view()),
+            Err(Error::Unsupported(_))
+        ));
         let options = OpenOptions {
             format: Some(FileType::Tsv),
             ..Default::default()
         };
-        let doc = Session::open_with_options(&path, &options).unwrap();
-        assert_eq!(doc.info().format, FileType::Tsv);
-        assert_eq!(doc.column_index("label"), Some(1));
-        assert_eq!(doc.info().row_count, 1);
+        let doc = gewu_core::Dataset::open_with_options(&path, &options)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        assert_eq!(doc.dataset().info().format, FileType::Tsv);
+        assert_eq!(doc.dataset().column_index("label"), Some(1));
+        assert_eq!(doc.dataset().info().row_count, 1);
         assert!(matches!(
-            Session::open_with_options(&path, &OpenOptions {
+            gewu_core::Dataset::open_with_options(&path, &OpenOptions {
                 sheet: Some("Sheet1".into()),
                 ..options.clone()
-            }),
+            })
+            .map(|dataset| std::sync::Arc::new(dataset).view()),
             Err(Error::InvalidArgument(_))
         ));
         for contents in ["a\tb\n1\t2\t3\n", "a\tb\n1\n"] {
             fs::write(&path, contents).unwrap();
-            assert!(Session::open_with_options(&path, &options).is_err());
+            assert!(gewu_core::Dataset::open_with_options(&path, &options)
+                .map(|dataset| std::sync::Arc::new(dataset).view())
+                .is_err());
         }
     }
 
@@ -170,49 +197,47 @@ mod delimited {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.csv");
         fs::write(&source, "id,label,enabled\n3,\"雪,\"\"quoted\"\"\nline\",true\n1,omit,false\n2,\"tab\tcell\",false\n").unwrap();
-        let doc = Session::open(source).unwrap();
-        let version = doc
-            .prepare_view(
+        let doc = gewu_core::Dataset::open(source)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        let doc = doc
+            .query(
                 &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
                     .with_sort(0, true, 0),
+                &gewu_core::Cancellation::default(),
             )
-            .and_then(|operation| operation.run())
-            .unwrap()
-            .version;
+            .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("selected.{extension}"));
-            let export = doc.prepare_export(version, &[1, 0], format).unwrap();
+            let export = doc.export(&[1, 0], format).unwrap();
             export.write(&path).unwrap();
             assert_eq!(export.progress().rows_written, 2);
-            let reloaded = Session::open(path).unwrap();
-            assert_eq!(reloaded.info().row_count, 2);
-            assert_eq!(reloaded.schema().field(0).name(), "label");
-            assert_eq!(reloaded.schema().field(1).name(), "id");
+            let reloaded = gewu_core::Dataset::open(path)
+                .map(|dataset| std::sync::Arc::new(dataset).view())
+                .unwrap();
+            assert_eq!(reloaded.dataset().info().row_count, 2);
+            assert_eq!(reloaded.dataset().schema().field(0).name(), "label");
+            assert_eq!(reloaded.dataset().schema().field(1).name(), "id");
             assert_eq!(
-                reloaded
-                    .rows(reloaded.current_view().version, 0, 2, &[0, 1])
-                    .unwrap()
-                    .cells,
-                doc.rows(version, 0, 2, &[1, 0]).unwrap().cells
+                reloaded.rows(0, 2, &[0, 1]).unwrap().cells,
+                doc.rows(0, 2, &[1, 0]).unwrap().cells
             );
         }
         let empty = doc
-            .prepare_view(&QuerySpec::single(
-                1,
-                Filter::exact(vec!["absent-value".into()], false, false),
-            ))
-            .and_then(|operation| operation.run())
+            .query(
+                &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
+                &gewu_core::Cancellation::default(),
+            )
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
-            doc.prepare_export(empty.version, &[1, 0], format)
-                .unwrap()
-                .write(&path)
+            empty.export(&[1, 0], format).unwrap().write(&path).unwrap();
+            let reloaded = gewu_core::Dataset::open(path)
+                .map(|dataset| std::sync::Arc::new(dataset).view())
                 .unwrap();
-            let reloaded = Session::open(path).unwrap();
-            assert_eq!(reloaded.info().row_count, 0);
-            assert_eq!(reloaded.schema().field(0).name(), "label");
-            assert_eq!(reloaded.schema().field(1).name(), "id");
+            assert_eq!(reloaded.dataset().info().row_count, 0);
+            assert_eq!(reloaded.dataset().schema().field(0).name(), "label");
+            assert_eq!(reloaded.dataset().schema().field(1).name(), "id");
         }
     }
 }
@@ -238,25 +263,20 @@ mod xlsx {
         sheet.write_number_with_format(1, 0, 0.5, &format).unwrap();
         sheet.write_number_with_format(2, 0, 1.0, &format).unwrap();
         workbook.save(&path).unwrap();
-        let doc = Session::open(path).unwrap();
+        let doc = gewu_core::Dataset::open(path)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
         assert_eq!(
-            doc.schema().field(0).data_type(),
+            doc.dataset().schema().field(0).data_type(),
             &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
         );
         let h = doc
-            .filter_distribution(
-                0,
-                None,
-                3,
-                gewu_core::AxisScale::Linear,
-                &Cancellation::default(),
-            )
+            .filter_distribution(0, 3, gewu_core::AxisScale::Linear, &Cancellation::default())
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
         let histogram = doc
             .analyze_distribution(
-                doc.current_view().version,
                 0,
                 3,
                 gewu_core::AxisScale::Linear,
@@ -289,52 +309,54 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("source.xlsx");
         workbook(&path);
-        let doc = Session::open(&path).unwrap();
-        assert_eq!(doc.info().format, FileType::Xlsx);
-        assert_eq!(doc.info().row_count, 2);
-        assert_eq!(doc.info().metadata, FileMetadata::Xlsx {
+        let doc = gewu_core::Dataset::open(&path)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        assert_eq!(doc.dataset().info().format, FileType::Xlsx);
+        assert_eq!(doc.dataset().info().row_count, 2);
+        assert_eq!(doc.dataset().info().metadata, FileMetadata::Xlsx {
             sheet: "数据".into(),
             sheets: vec!["数据".into(), "Raw".into()]
         });
-        assert_eq!(doc.column_index("label"), Some(1));
-        assert_eq!(doc.schema().field(2).data_type(), &DataType::Boolean);
+        assert_eq!(doc.dataset().column_index("label"), Some(1));
         assert_eq!(
-            doc.rows(doc.current_view().version, 0, 1, &[1])
-                .unwrap()
-                .cell(0, 0),
-            Some("雪\nline")
+            doc.dataset().schema().field(2).data_type(),
+            &DataType::Boolean
         );
+        assert_eq!(doc.rows(0, 1, &[1]).unwrap().cell(0, 0), Some("雪\nline"));
         assert_disabled_exports(&doc);
         let options = OpenOptions {
             sheet: Some("Raw".into()),
             has_header: false,
             ..Default::default()
         };
-        let raw = Session::open_with_options(&path, &options).unwrap();
-        assert_eq!(raw.info().row_count, 2);
-        assert_eq!(raw.schema().field(0).name(), "column_1");
+        let raw = gewu_core::Dataset::open_with_options(&path, &options)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        assert_eq!(raw.dataset().info().row_count, 2);
+        assert_eq!(raw.dataset().schema().field(0).name(), "column_1");
         assert_eq!(
-            raw.rows(raw.current_view().version, 0, 2, &[0, 1])
-                .unwrap()
-                .cells,
+            raw.rows(0, 2, &[0, 1]).unwrap().cells,
             ["10.0", "20.0", "30.0", "40.0"].map(|s| Some(s.to_owned()))
         );
-        assert_eq!(raw.info().metadata, FileMetadata::Xlsx {
+        assert_eq!(raw.dataset().info().metadata, FileMetadata::Xlsx {
             sheet: "Raw".into(),
             sheets: vec!["数据".into(), "Raw".into()]
         });
-        let header = Session::open_with_options(&path, &OpenOptions {
+        let header = gewu_core::Dataset::open_with_options(&path, &OpenOptions {
             has_header: true,
             ..options
         })
+        .map(|dataset| std::sync::Arc::new(dataset).view())
         .unwrap();
-        assert_eq!(header.info().row_count, 1);
-        assert_eq!(header.schema().field(0).name(), "10");
+        assert_eq!(header.dataset().info().row_count, 1);
+        assert_eq!(header.dataset().schema().field(0).name(), "10");
         assert!(matches!(
-            Session::open_with_options(path, &OpenOptions {
+            gewu_core::Dataset::open_with_options(path, &OpenOptions {
                 sheet: Some("missing".into()),
                 ..Default::default()
-            }),
+            })
+            .map(|dataset| std::sync::Arc::new(dataset).view()),
             Err(Error::InvalidArgument(_))
         ));
     }
@@ -344,40 +366,44 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.xlsx");
         workbook(&source);
-        let doc = Session::open(source).unwrap();
-        let version = doc
-            .prepare_view(&QuerySpec::new().with_sort(0, false, 0))
-            .and_then(|operation| operation.run())
-            .unwrap()
-            .version;
+        let doc = gewu_core::Dataset::open(source)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        let doc = doc
+            .query(
+                &QuerySpec::new().with_sort(0, false, 0),
+                &gewu_core::Cancellation::default(),
+            )
+            .unwrap();
         let destination = directory.path().join("export.xlsx");
-        doc.prepare_export(version, &[1, 2], FileType::Xlsx)
+        doc.export(&[1, 2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
-        let reloaded = Session::open(&destination).unwrap();
+        let reloaded = gewu_core::Dataset::open(&destination)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
         assert_eq!(
-            reloaded
-                .rows(reloaded.current_view().version, 0, 2, &[0, 1])
-                .unwrap()
-                .cells,
-            doc.rows(version, 0, 2, &[1, 2]).unwrap().cells
+            reloaded.rows(0, 2, &[0, 1]).unwrap().cells,
+            doc.rows(0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
-            .prepare_view(&QuerySpec::single(
-                1,
-                Filter::exact(vec!["absent-value".into()], false, false),
-            ))
-            .and_then(|operation| operation.run())
+            .query(
+                &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
+                &gewu_core::Cancellation::default(),
+            )
             .unwrap();
-        doc.prepare_export(empty.version, &[1, 2], FileType::Xlsx)
+        empty
+            .export(&[1, 2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
-        let reloaded = Session::open(destination).unwrap();
-        assert_eq!(reloaded.info().row_count, 0);
-        assert_eq!(reloaded.schema().field(0).name(), "label");
-        assert_eq!(reloaded.schema().field(1).name(), "enabled");
+        let reloaded = gewu_core::Dataset::open(destination)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
+        assert_eq!(reloaded.dataset().info().row_count, 0);
+        assert_eq!(reloaded.dataset().schema().field(0).name(), "label");
+        assert_eq!(reloaded.dataset().schema().field(1).name(), "enabled");
     }
 
     #[test]
@@ -385,21 +411,19 @@ mod xlsx {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.xlsx");
         workbook(&source);
-        let doc = Session::open(source).unwrap();
+        let doc = gewu_core::Dataset::open(source)
+            .map(|dataset| std::sync::Arc::new(dataset).view())
+            .unwrap();
         let destination = directory.path().join("existing.xlsx");
         fs::write(&destination, "keep me").unwrap();
-        let export = doc
-            .prepare_export(doc.current_view().version, &[0], FileType::Xlsx)
-            .unwrap();
+        let export = doc.export(&[0], FileType::Xlsx).unwrap();
         export.cancel();
         assert!(matches!(export.write(&destination), Err(Error::Cancelled)));
         assert_eq!(fs::read_to_string(destination).unwrap(), "keep me");
         let destination = directory.path().join("directory.xlsx");
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("keep"), "existing data").unwrap();
-        let export = doc
-            .prepare_export(doc.current_view().version, &[0], FileType::Xlsx)
-            .unwrap();
+        let export = doc.export(&[0], FileType::Xlsx).unwrap();
         assert!(matches!(export.write(&destination), Err(Error::Io(_))));
         assert_eq!(
             fs::read_to_string(destination.join("keep")).unwrap(),

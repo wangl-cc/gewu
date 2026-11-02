@@ -191,12 +191,12 @@ impl Column {
         ColumnInfo::from_column(self)
     }
 
-    pub(crate) fn prepare_filter<'a>(
+    pub(crate) fn compile_filter<'a>(
         &'a self,
         filter: &Filter,
         cancel: &Cancellation,
     ) -> Result<Predicate<'a>> {
-        filter::prepare_filter(self, filter, cancel)
+        filter::compile_filter(self, filter, cancel)
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {
@@ -216,7 +216,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{engine::ViewEngine, predicate::CHUNK, Cancellation, Error};
+    use crate::{predicate::CHUNK, Cancellation, Error};
 
     fn col(array: ArrayRef) -> Column {
         Column::new("test", array).unwrap()
@@ -285,7 +285,7 @@ mod tests {
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
-        if let Some(test) = filter::prepare_find(array, query, None).unwrap() {
+        if let Some(test) = filter::compile_find(array, query, None).unwrap() {
             test.evaluate(range, &mut hits, &Cancellation::default())
                 .unwrap();
         }
@@ -347,7 +347,7 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
         let column = col(array);
         let test = column
-            .prepare_filter(
+            .compile_filter(
                 &Filter::exact(Vec::new(), false, false),
                 &Cancellation::default(),
             )
@@ -357,7 +357,7 @@ mod tests {
             .unwrap();
         assert_eq!(hits, [false; 3]);
         assert!(matches!(
-            column.prepare_filter(
+            column.compile_filter(
                 &Filter::exact(vec!["1".into(), "invalid".into()], false, false),
                 &Cancellation::default()
             ),
@@ -373,7 +373,7 @@ mod tests {
         );
         let column = col(array);
         let test = column
-            .prepare_filter(
+            .compile_filter(
                 &Filter::exact(vec!["01".into(), "2".into()], false, false),
                 &Cancellation::default(),
             )
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(matches(&array, "%_\\z", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .prepare_filter(
+            .compile_filter(
                 &Filter::exact(vec!["A%_\\z".into()], false, false),
                 &Cancellation::default(),
             )
@@ -433,7 +433,7 @@ mod tests {
             let column = col(array.clone());
             for (include_nulls, expected) in [(false, excluded), (true, included)] {
                 let test = column
-                    .prepare_filter(
+                    .compile_filter(
                         &Filter::contains(text.into(), true, include_nulls),
                         &Cancellation::default(),
                     )
@@ -455,7 +455,7 @@ mod tests {
         ]));
         let column = col(array);
         let test = column
-            .prepare_filter(
+            .compile_filter(
                 &Filter::contains(String::new(), false, false),
                 &Cancellation::default(),
             )
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(matches(&array, "2", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .prepare_filter(
+            .compile_filter(
                 &Filter::exact(vec!["2".into()], false, false),
                 &Cancellation::default(),
             )
@@ -582,11 +582,10 @@ mod tests {
                 vec![Some(2)],
             )])),
         ];
-        let engine = ViewEngine::new(1, 1);
-        let token = engine.begin();
+        let token = crate::Cancellation::default();
         token.cancel();
         for array in arrays {
-            let test = filter::prepare_find(&array, "2", None).unwrap().unwrap();
+            let test = filter::compile_find(&array, "2", None).unwrap().unwrap();
             assert!(matches!(
                 test.evaluate(0..1, &mut [false], &token),
                 Err(Error::Cancelled)

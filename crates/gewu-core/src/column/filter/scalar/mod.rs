@@ -1,4 +1,4 @@
-//! Scalar type semantics. Preparation borrows the native array and parses
+//! Scalar type semantics. Compilation borrows the native array and parses
 //! inputs once; evaluating a predicate is the executor's responsibility.
 
 pub(crate) mod decimal;
@@ -8,7 +8,7 @@ pub(crate) mod temporal;
 
 use arrow::array::{Array, ArrayRef, AsArray};
 
-use super::range::prepare_range;
+use super::range::compile_range;
 use crate::{
     column::Bound,
     predicate::Predicate,
@@ -48,7 +48,7 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
         Some(Domain::Float) => float::equals(array, text),
         _ => {
             let bound = Bound::parse(array.data_type(), text)?;
-            prepare_range(array, Some(&bound), Some(&bound))
+            compile_range(array, Some(&bound), Some(&bound))
         }
     }
 }
@@ -139,14 +139,14 @@ mod tests {
         let upper = Bound::parse(array.data_type(), "9007199254740993.9").unwrap();
         assert_eq!(
             matches(
-                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
+                compile_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 4
             ),
             [false, true, false, false]
         );
         let lower = Bound::parse(array.data_type(), "9007199254740993.1").unwrap();
         let upper = Bound::parse(array.data_type(), "9007199254740993.0").unwrap();
-        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
+        assert!(compile_range(&array, Some(&lower), Some(&upper)).is_err());
 
         let n: i256 = "123456789012345678901234567890123456789012345678901234567890"
             .parse()
@@ -205,14 +205,14 @@ mod tests {
         );
         let lower = Bound::parse(array.data_type(), "1e1000000").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, Some(&lower), None).unwrap(), 3),
+            matches(compile_range(&array, Some(&lower), None).unwrap(), 3),
             [false; 3]
         );
         let lower = Bound::parse(array.data_type(), "-1e1000000").unwrap();
         let upper = Bound::parse(array.data_type(), "1e1000000").unwrap();
         assert_eq!(
             matches(
-                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
+                compile_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 3
             ),
             [true; 3]
@@ -235,14 +235,14 @@ mod tests {
         let upper = Bound::parse(array.data_type(), "2.9").unwrap();
         assert_eq!(
             matches(
-                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
+                compile_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 4
             ),
             [false, true, false, false]
         );
         let lower = Bound::parse(array.data_type(), "128").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, Some(&lower), None).unwrap(), 4),
+            matches(compile_range(&array, Some(&lower), None).unwrap(), 4),
             [false; 4]
         );
         assert!(search(&array, "2.0").unwrap().is_none());
@@ -252,7 +252,7 @@ mod tests {
         ]));
         let lower = Bound::parse(array.data_type(), "9007199254740992.1").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
+            matches(compile_range(&array, Some(&lower), None).unwrap(), 2),
             [false, true]
         );
         let array: ArrayRef = Arc::new(UInt64Array::from(vec![u64::MAX - 1, u64::MAX]));
@@ -282,10 +282,10 @@ mod tests {
         assert!(Bound::parse(array.data_type(), "NaN").is_err());
         let lower = Bound::parse(array.data_type(), "2").unwrap();
         let upper = Bound::parse(array.data_type(), "1").unwrap();
-        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
+        assert!(compile_range(&array, Some(&lower), Some(&upper)).is_err());
         let lower = Bound::parse(array.data_type(), "9007199254740993").unwrap();
         let upper = Bound::parse(array.data_type(), "9007199254740992").unwrap();
-        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
+        assert!(compile_range(&array, Some(&lower), Some(&upper)).is_err());
         assert_eq!(matches(equals(&array, "1e100").unwrap(), 4), [false; 4]);
         let array: ArrayRef = Arc::new(Float64Array::from(vec![f64::INFINITY, f64::NEG_INFINITY]));
         assert_eq!(matches(search(&array, "+inf").unwrap().unwrap(), 2), [
@@ -299,21 +299,21 @@ mod tests {
         ]));
         let lower = Bound::parse(array.data_type(), "9007199254740993").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
+            matches(compile_range(&array, Some(&lower), None).unwrap(), 2),
             [false, true]
         );
         let edge = u64::MAX as f64;
         let array: ArrayRef = Arc::new(Float64Array::from(vec![edge.next_down(), edge]));
         let lower = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, None, Some(&lower)).unwrap(), 2),
+            matches(compile_range(&array, None, Some(&lower)).unwrap(), 2),
             [true, false]
         );
         let lower = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
         let upper = Bound::parse(array.data_type(), "18446744073709551615").unwrap();
         assert_eq!(
             matches(
-                prepare_range(&array, Some(&lower), Some(&upper)).unwrap(),
+                compile_range(&array, Some(&lower), Some(&upper)).unwrap(),
                 2
             ),
             [false; 2]
@@ -346,7 +346,7 @@ mod tests {
         );
         let lower = Bound::parse(array.data_type(), "1e999").unwrap();
         assert_eq!(
-            matches(prepare_range(&array, Some(&lower), None).unwrap(), 2),
+            matches(compile_range(&array, Some(&lower), None).unwrap(), 2),
             [false; 2]
         );
         for text in ["NaN", "inf", "1.2.3", "cat"] {
@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(matches(equals(&array, text).unwrap(), 2), [false, true]);
         let lower = Bound::parse(array.data_type(), "1970-04-16").unwrap();
         let upper = Bound::parse(array.data_type(), "1970-04-15").unwrap();
-        assert!(prepare_range(&array, Some(&lower), Some(&upper)).is_err());
+        assert!(compile_range(&array, Some(&lower), Some(&upper)).is_err());
     }
 
     #[test]

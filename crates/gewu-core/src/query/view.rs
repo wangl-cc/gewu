@@ -85,37 +85,11 @@ impl QuerySpec {
         columns.sort_by_key(|c| c.sort.unwrap().priority);
         columns
     }
-
-    /// Display reordering can reuse the immutable row selection.
-    pub(crate) fn same_rows(&self, other: &Self) -> bool {
-        fn filters(spec: &QuerySpec) -> std::collections::BTreeMap<u32, &Filter> {
-            spec.columns
-                .iter()
-                .filter_map(|c| c.filter.as_ref().map(|f| (c.column, f)))
-                .collect()
-        }
-        filters(self) == filters(other)
-            && self
-                .sorts()
-                .iter()
-                .map(|c| (c.column, c.sort.unwrap().descending))
-                .eq(other
-                    .sorts()
-                    .iter()
-                    .map(|c| (c.column, c.sort.unwrap().descending)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ViewInfo {
-    pub version: u64,
-    pub row_count: u64,
 }
 
 /// A block of formatted cells, row-major.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowBlock {
-    pub version: u64,
     pub start: u64,
     pub n_rows: u32,
     pub n_cols: u32,

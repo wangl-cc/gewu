@@ -1,4 +1,4 @@
-//! Prepared, column-bound predicates for high-throughput query execution.
+//! Compiled, column-bound predicates for high-throughput query execution.
 //!
 //! Predicates operate on 8K chunks (`CHUNK = 8 * 1024`), ensuring working data and masks
 //! fit entirely inside the CPU's L1 data cache (<= 80 KB). Evaluators receive an optional incoming
@@ -51,7 +51,7 @@ impl<'a> Predicate<'a> {
         (self.0)(rows, incoming, output, cancel)
     }
 
-    /// Combine prepared equality alternatives without scanning the source or
+    /// Combine compiled equality alternatives without scanning the source or
     /// materializing one whole-column mask per value.
     pub(crate) fn any_of(predicates: Vec<Self>) -> Self {
         if predicates.is_empty() {

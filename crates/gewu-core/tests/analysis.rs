@@ -1,62 +1,78 @@
 #![cfg(feature = "csv")]
+use std::sync::Arc;
 
-use gewu_core::{Cancellation, Error, Filter, QuerySpec, Session};
+use gewu_core::{AxisScale, Cancellation, Dataset, Error, Filter, QuerySpec};
 
 #[test]
-fn analysis_checks_version_at_execution_and_cancels_independently_of_queries() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("analysis.csv");
-    std::fs::write(&path, "number,text\n1,a\n2,b\n3,b\n").unwrap();
-    let doc = Session::open(path).unwrap();
-    let original = doc.current_view();
-    let old = doc
-        .analyze_statistics(original.version, 0, &Cancellation::default())
+fn analysis_and_scatter_remain_bound_to_independent_views() {
+    let file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    std::fs::write(file.path(), "number,text\n1,a\n2,b\n3,b\n").unwrap();
+    let dataset = Arc::new(Dataset::open(file.path()).unwrap());
+    let original = dataset.view();
+    let current = original
+        .query(
+            &QuerySpec::all(2).with_filter(1, Filter::contains("b".into(), true, false)),
+            &Cancellation::default(),
+        )
         .unwrap();
-    assert_eq!(old.mean, Some(2.0));
-    let scatter = doc.prepare_scatter(original.version, None, 0, 8).unwrap();
-    let cancelled = Cancellation::default();
-    cancelled.cancel();
-    let current = doc
-        .prepare_view(&QuerySpec::single(
-            1,
-            Filter::contains("b".into(), true, false),
-        ))
-        .and_then(|operation| operation.run())
-        .unwrap();
-    assert_eq!(current.row_count, 2);
-    assert!(matches!(
-        doc.analyze_values(original.version, 1, &cancelled),
-        Err(Error::Cancelled)
-    ));
-    assert!(matches!(
-        doc.prepare_scatter(original.version, None, 0, 8),
-        Err(Error::StaleVersion { .. })
-    ));
-    assert_eq!(scatter.run().unwrap().total_rows, 3);
-    let plotted = doc
-        .prepare_scatter(current.version, None, 0, 8)
-        .unwrap()
-        .run()
-        .unwrap();
+    drop(dataset);
     assert_eq!(
-        plotted
+        original
+            .analyze_statistics(0, &Cancellation::default())
+            .unwrap()
+            .mean,
+        Some(2.0)
+    );
+    assert_eq!(
+        current
+            .analyze_statistics(0, &Cancellation::default())
+            .unwrap()
+            .mean,
+        Some(2.5)
+    );
+    assert_eq!(
+        current
+            .analyze_statistics(0, &Cancellation::default())
+            .unwrap()
+            .median_label
+            .as_deref(),
+        Some("2.5")
+    );
+    let scatter = |view: &gewu_core::View| {
+        view.analyze_scatter(
+            None,
+            0,
+            8,
+            AxisScale::Linear,
+            AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .unwrap()
+    };
+    assert_eq!(scatter(&original).total_rows, 3);
+    assert_eq!(
+        scatter(&current)
             .points
             .iter()
             .map(|p| p.source_row)
             .collect::<Vec<_>>(),
         [1, 2]
     );
+    let cancelled = Cancellation::default();
+    cancelled.cancel();
     assert!(matches!(
-        doc.analyze_overview(original.version, 0, &Cancellation::default()),
-        Err(Error::StaleVersion { .. })
+        original.analyze_values(1, &cancelled),
+        Err(Error::Cancelled)
     ));
-    let statistics = doc
-        .analyze_statistics(current.version, 0, &Cancellation::default())
-        .unwrap();
-    assert_eq!(statistics.mean, Some(2.5));
-    assert_eq!(statistics.median_label.as_deref(), Some("2.5"));
+    assert_eq!(
+        original
+            .analyze_overview(0, &Cancellation::default())
+            .unwrap()
+            .rows,
+        3
+    );
     assert!(matches!(
-        doc.analyze_statistics(doc.current_view().version, 1, &Cancellation::default()),
+        current.analyze_statistics(1, &Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
 }

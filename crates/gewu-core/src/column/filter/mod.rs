@@ -1,10 +1,10 @@
 //! Column-level predicate compilation for explicit filters and Find queries.
 //!
-//! This module owns filter support rules and native predicate preparation.
+//! This module owns filter support rules and native predicate compilation.
 //! Find compiles its own text queries in the private `find` module.
 
 mod find;
-pub(crate) use find::prepare as prepare_find;
+pub(crate) use find::compile as compile_find;
 
 pub mod nested;
 pub mod range;
@@ -54,7 +54,7 @@ pub(crate) fn supports_equals(data_type: &DataType) -> bool {
 
 /// One column-bound compilation entry point, including dictionary acceleration
 /// and the orthogonal null policy. No UI or cache representation enters Filter.
-pub(crate) fn prepare_filter<'a>(
+pub(crate) fn compile_filter<'a>(
     column: &'a super::Column,
     filter: &Filter,
     cancel: &Cancellation,
@@ -64,7 +64,7 @@ pub(crate) fn prepare_filter<'a>(
     if let FilterCondition::Exact { values, exclude } = &filter.condition {
         if !values.is_empty() && supports_equals(column.array.data_type()) {
             if let Some(dictionary) = column.dictionary(cancel)? {
-                let selection = prepare_condition(
+                let selection = compile_condition(
                     dictionary.values(),
                     &FilterCondition::Exact {
                         values: values.clone(),
@@ -79,7 +79,7 @@ pub(crate) fn prepare_filter<'a>(
         }
     }
     let array = &column.array;
-    let predicate = prepare_condition(array, &filter.condition, cancel)?;
+    let predicate = compile_condition(array, &filter.condition, cancel)?;
     let nulls = array.logical_nulls();
     let include_nulls = filter.include_nulls;
     Ok(Predicate::new(Box::new(
@@ -95,7 +95,7 @@ pub(crate) fn prepare_filter<'a>(
     )))
 }
 
-fn prepare_condition<'a>(
+fn compile_condition<'a>(
     array: &'a ArrayRef,
     condition: &crate::FilterCondition,
     cancel: &Cancellation,
@@ -117,7 +117,7 @@ fn prepare_condition<'a>(
     }
     if types::encoding(array.data_type()) == Encoding::Dictionary {
         return nested::dictionary(array, |values| {
-            prepare_condition(values, condition, cancel).map(Some)
+            compile_condition(values, condition, cancel).map(Some)
         })?
         .ok_or_else(|| {
             Error::InvalidArgument("filter cannot be applied to dictionary values".into())
@@ -139,7 +139,7 @@ fn prepare_condition<'a>(
                 .as_deref()
                 .map(|text| Bound::parse(array.data_type(), text))
                 .transpose()?;
-            range::prepare_range(array, min.as_ref(), max.as_ref())
+            range::compile_range(array, min.as_ref(), max.as_ref())
         }
         FilterCondition::Exact { values, exclude } if supports_equals(array.data_type()) => {
             let predicate = if types::domain(array.data_type()) == Some(Domain::Text) {

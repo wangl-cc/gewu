@@ -215,13 +215,13 @@ mod tests {
         assert_eq!(result.histogram.counts, [1, 0, 2]);
         assert_eq!(result.histogram.null_count, 1);
         for rows in [vec![], vec![3]] {
-            let sel = crate::scope::Selection::Rows(Arc::new(rows.clone()));
+            let sel = crate::scope::Selection::Rows(Arc::from(rows.clone()));
             let result = analyze(ArrayView::new(&array, &sel), 40, &context).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
             assert_eq!(result.histogram.null_count, rows.len() as u64);
         }
-        let sel2 = crate::scope::Selection::Rows(Arc::new(vec![2]));
+        let sel2 = crate::scope::Selection::Rows(Arc::from(vec![2]));
         let result = analyze(ArrayView::new(&array, &sel2), 40, &context).unwrap();
         assert_eq!(result.histogram.counts, [1]);
         assert_eq!(
@@ -240,7 +240,7 @@ mod tests {
             Some(vec![Some(5)]),
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
-        let sel = crate::scope::Selection::Rows(Arc::new(vec![0, 1, 2]));
+        let sel = crate::scope::Selection::Rows(Arc::from(vec![0, 1, 2]));
         let result = analyze(ArrayView::new(&array, &sel), 40, &Cancellation::default()).unwrap();
         assert_eq!(result.unit, LengthUnit::Elements);
         assert_eq!(

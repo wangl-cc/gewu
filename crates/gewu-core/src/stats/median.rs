@@ -432,7 +432,7 @@ mod tests {
             ));
         }
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
-        let rows = crate::scope::Selection::Rows(Arc::new(vec![3, 1]));
+        let rows = crate::scope::Selection::Rows(Arc::from(vec![3, 1]));
         assert_eq!(
             label(ArrayView::new(&array, &rows), &Cancellation::default())
                 .unwrap()

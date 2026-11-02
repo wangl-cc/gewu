@@ -1,4 +1,4 @@
-//! Text predicates prepare their pattern once and scan only execution batches.
+//! Text predicates compile their pattern once and scan only execution batches.
 
 use std::{collections::HashSet, fmt::Write, sync::Arc};
 
@@ -116,7 +116,7 @@ pub(super) fn contains<'a>(
                     .case_insensitive(true)
                     .build()
                     .map_err(|error| {
-                        Error::InvalidArgument(format!("cannot prepare text search: {error}"))
+                        Error::InvalidArgument(format!("cannot compile text search: {error}"))
                     })?,
             ),
         };
@@ -219,7 +219,7 @@ mod tests {
         for exclude in [false, true] {
             let filter = Filter::exact(vec!["a".into(), "a".into()], exclude, !exclude);
             let test = column
-                .prepare_filter(&filter, &Cancellation::default())
+                .compile_filter(&filter, &Cancellation::default())
                 .unwrap();
             let mut actual = vec![false; array.len()];
             test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
@@ -246,7 +246,7 @@ mod tests {
                 let column = Column::new("value", array.clone()).unwrap();
                 let filter = Filter::exact(vec!["a".into()], exclude, !exclude);
                 let test = column
-                    .prepare_filter(&filter, &Cancellation::default())
+                    .compile_filter(&filter, &Cancellation::default())
                     .unwrap();
                 let mut actual = vec![false; array.len()];
                 test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_matching_preserves_arrows_unicode_and_literal_semantics() {
+    fn compiled_matching_preserves_arrows_unicode_and_literal_semantics() {
         let input: ArrayRef = Arc::new(StringArray::from(vec![
             Some("A%_\\z"),
             Some("Kilo"),

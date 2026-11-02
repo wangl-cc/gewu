@@ -304,7 +304,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let sel_dict = crate::scope::Selection::Rows(Arc::new(vec![4, 2, 0, 1, 3]));
+        let sel_dict = crate::scope::Selection::Rows(Arc::from(vec![4, 2, 0, 1, 3]));
         let summary = analyze(
             ArrayView::new(&dictionary, &sel_dict),
             &Cancellation::default(),

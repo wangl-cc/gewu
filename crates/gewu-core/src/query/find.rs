@@ -13,7 +13,7 @@ use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
 use super::predicate::Predicate;
-use crate::{column::filter::prepare_find, Cancellation, Error, Result};
+use crate::{column::filter::compile_find, Cancellation, Error, Result};
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;
@@ -33,7 +33,6 @@ pub struct CellMatch {
 /// Cell match flags for a bounded block of display rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindHighlight {
-    pub version: u64,
     pub start: u64,
     pub n_rows: u32,
     pub n_cols: u32,
@@ -41,7 +40,7 @@ pub struct FindHighlight {
     pub matched: Vec<bool>,
 }
 
-/// A Find query prepared once per captured session. The parsed literal matcher
+/// A Find query compiled once per captured session. The parsed literal matcher
 /// is shared across text columns, so a page or highlight never recompiles it.
 pub(crate) struct FindQuery {
     text: String,
@@ -72,20 +71,19 @@ impl FindQuery {
         match matcher {
             Ok(matcher) => Ok(matcher.clone()),
             Err(error) => Err(Error::InvalidArgument(format!(
-                "cannot prepare text search: {error}"
+                "cannot compile text search: {error}"
             ))),
         }
     }
 }
 
-/// A prepared query over a captured view and ordered column scope.
+/// A compiled query over a captured view and ordered column scope.
 ///
 /// The snapshot shares Arrow buffers and row IDs with its document. Cancellation
 /// is terminal and independent of table queries and every other Find session.
 pub struct Find {
     columns: Vec<(u32, ArrayRef)>,
-    rows: Arc<Vec<u32>>,
-    version: u64,
+    rows: Arc<[u32]>,
     query: FindQuery,
     token: Cancellation,
 }
@@ -100,8 +98,7 @@ struct FindScratch {
 impl Find {
     pub(crate) fn new(
         columns: Vec<(u32, ArrayRef)>,
-        rows: Arc<Vec<u32>>,
-        version: u64,
+        rows: Arc<[u32]>,
         query: String,
     ) -> Result<Self> {
         let query = FindQuery::new(query.trim());
@@ -110,13 +107,12 @@ impl Find {
         }
         let matcher = query.matcher()?;
         for (_, array) in &columns {
-            drop(prepare_find(array, query.text(), Some(&matcher))?);
+            drop(compile_find(array, query.text(), Some(&matcher))?);
         }
         let token = Cancellation::default();
         Ok(Self {
             columns,
             rows,
-            version,
             query,
             token,
         })
@@ -175,7 +171,6 @@ impl Find {
             &mut scratch,
         )?;
         Ok(FindHighlight {
-            version: self.version,
             start,
             n_rows: (end - start) as u32,
             n_cols: self.columns.len() as u32,
@@ -197,12 +192,12 @@ impl Find {
             return Ok(Vec::new());
         }
         let predicates = self.predicates()?;
-        self.scan_prepared(cursor, limit, direction, operation, &predicates)
+        self.scan_compiled(cursor, limit, direction, operation, &predicates)
     }
 
-    /// Production execution for prepared predicates. Keeping cancellation
+    /// Production execution for compiled predicates. Keeping cancellation
     /// composition here ensures custom and ordinary predicates receive both scopes.
-    fn scan_prepared(
+    fn scan_compiled(
         &self,
         cursor: Option<&CellMatch>,
         limit: u32,
@@ -264,7 +259,7 @@ impl Find {
         let matcher = self.query.matcher()?;
         self.columns
             .iter()
-            .map(|(_, array)| prepare_find(array, self.query.text(), Some(&matcher)))
+            .map(|(_, array)| compile_find(array, self.query.text(), Some(&matcher)))
             .collect()
     }
 
@@ -373,7 +368,7 @@ mod tests {
     fn running_inner_scan_is_cancelled(session: bool) {
         const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
         let array: ArrayRef = Arc::new(StringArray::from(vec!["value"]));
-        let find = Find::new(vec![(0, array)], Arc::new(vec![0]), 0, "value".into()).unwrap();
+        let find = Find::new(vec![(0, array)], Arc::from([0]), "value".into()).unwrap();
         let operation = Cancellation::default();
         let (started, start) = std::sync::mpsc::channel();
         let (resume, resumed) = std::sync::mpsc::channel();
@@ -389,7 +384,7 @@ mod tests {
         })))];
         std::thread::scope(|scope| {
             let worker = scope
-                .spawn(|| find.scan_prepared(None, 1, Direction::Forward, &operation, &predicates));
+                .spawn(|| find.scan_compiled(None, 1, Direction::Forward, &operation, &predicates));
             start.recv_timeout(TIMEOUT).unwrap();
             if session {
                 find.cancel();

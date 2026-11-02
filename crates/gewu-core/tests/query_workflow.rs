@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec, Session};
+use gewu_core::{Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 #[test]
@@ -25,7 +25,9 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Session::open(file.path()).unwrap();
+    let doc = gewu_core::Dataset::open(file.path())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     let spec = QuerySpec::default()
         .with_filter(1, Filter::exact(vec!["2".into()], false, false))
         .with_filter(
@@ -34,10 +36,9 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         )
         .with_filter(2, Filter::contains("keep".into(), false, false));
     let view = doc
-        .prepare_view(&spec)
-        .and_then(|operation| operation.run())
+        .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
-    let rows = doc.rows(view.version, 0, len as u32, &[0, 1, 2]).unwrap();
+    let rows = view.rows(0, len as u32, &[0, 1, 2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
         .map(|i| i as u64)
@@ -49,14 +50,10 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         Filter::range(Some("20".into()), Some("10".into()), false),
     );
     assert!(matches!(
-        doc.prepare_view(&invalid)
-            .and_then(|operation| operation.run()),
+        doc.query(&invalid, &gewu_core::Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
-    assert_eq!(
-        doc.rows(view.version, 0, 1, &[0]).unwrap().source_rows,
-        expected[..1]
-    );
+    assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
 }
 
 #[test]
@@ -80,8 +77,8 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
     assert_eq!(dataset.n_rows(), len as usize);
 
     // Create session from shared dataset
-    let doc = Session::from_dataset(dataset.clone());
-    assert_eq!(doc.n_rows(), len as usize);
+    let doc = dataset.clone().view();
+    assert_eq!(doc.row_count() as usize, len as usize);
 
     // Pass filters in reverse cost order: expensive text search first, cheap range second, null
     // check third
@@ -93,13 +90,12 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
         );
 
     let view = doc
-        .prepare_view(&expensive_first)
-        .and_then(|operation| operation.run())
+        .query(&expensive_first, &gewu_core::Cancellation::default())
         .unwrap();
     let expected: Vec<u64> = (100..=200)
         .filter(|i| i % 5 == 0)
         .map(|i| i as u64)
         .collect();
-    let rows = doc.rows(view.version, 0, 100, &[0]).unwrap();
+    let rows = view.rows(0, 100, &[0]).unwrap();
     assert_eq!(rows.source_rows, expected);
 }

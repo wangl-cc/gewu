@@ -12,8 +12,6 @@ pub enum GewuError {
     InvalidArgument { message: String },
     #[error("cancelled")]
     Cancelled,
-    #[error("stale view version {requested}, current is {current}")]
-    StaleVersion { requested: u64, current: u64 },
     #[error("{message}")]
     Internal { message: String },
 }
@@ -27,9 +25,6 @@ impl From<core::Error> for GewuError {
             core::Error::Unsupported(message) => GewuError::Unsupported { message },
             core::Error::InvalidArgument(message) => GewuError::InvalidArgument { message },
             core::Error::Cancelled => GewuError::Cancelled,
-            core::Error::StaleVersion { requested, current } => {
-                GewuError::StaleVersion { requested, current }
-            }
             other => GewuError::Internal {
                 message: other.to_string(),
             },

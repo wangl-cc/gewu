@@ -1,7 +1,7 @@
-//! Bounded string choices over an immutable source column and captured facet.
+//! Bounded string choices over an immutable source column and captured view.
 //!
 //! Pages use value cursors, not row offsets: repeated values cannot reappear on
-//! later pages. Each page scans the source but retains at most `limit + 1`
+//! later pages. Each page scans the selected rows but retains at most `limit + 1`
 //! borrowed candidates, without building a document-wide distinct index.
 
 use arrow::array::{Array, ArrayRef};
@@ -12,7 +12,7 @@ use crate::{column::filter::text, scope::Selection, Cancellation, Error, Result}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextChoice {
     pub value: String,
-    /// Rows passing the other columns' explicit filters.
+    /// Rows passing the view's filters.
     pub count: u64,
 }
 
@@ -30,9 +30,9 @@ pub struct TextChoicePage {
     pub next: Option<TextChoiceCursor>,
 }
 
-/// Reusable candidate query for one captured facet. Run pages off the UI thread.
+/// Reusable candidate query for one captured view. Run pages off the UI thread.
 /// Cancellation is independent of table queries. `cancel` closes the session;
-/// individual pages receive their own cancellation without discarding the facet.
+/// individual pages receive their own cancellation without discarding the captured data.
 pub struct TextChoices {
     array: ArrayRef,
     rows: Selection,
@@ -40,8 +40,7 @@ pub struct TextChoices {
 }
 
 impl TextChoices {
-    /// Facet row IDs must be unique and ascending, as returned by Session's
-    /// source-order filter scan. The selection and Arrow buffers are shared.
+    /// Capture the selected rows in any display order without copying Arrow buffers.
     pub(crate) fn new(array: ArrayRef, rows: Selection) -> Result<Self> {
         let is_text = crate::types::domain(array.data_type()) == Some(crate::types::Domain::Text);
         if !is_text {
@@ -49,15 +48,6 @@ impl TextChoices {
                 "{} is not a string column",
                 array.data_type()
             )));
-        }
-        if let Selection::Rows(selected) = &rows {
-            debug_assert!(
-                selected.windows(2).all(|pair| pair[0] < pair[1])
-                    && selected
-                        .last()
-                        .is_none_or(|&row| (row as usize) < array.len()),
-                "facet rows must be unique, ascending source rows"
-            );
         }
         Ok(Self {
             array,
@@ -108,14 +98,12 @@ impl TextChoices {
             )
         };
         let read = text::accessor(&self.array)?;
-        let mut counted_rows = self.rows.iter().peekable();
         let keep = limit as usize + 1;
         let mut candidates: Vec<(&str, u64)> = Vec::with_capacity(keep);
-        for row in 0..self.array.len() {
-            if row.is_multiple_of(4096) {
+        for (index, row) in self.rows.iter().enumerate() {
+            if index.is_multiple_of(4096) {
                 check()?;
             }
-            let counted = counted_rows.next_if_eq(&row).is_some();
             let Some(value) = read(row) else { continue };
             if after.is_some_and(|cursor| value <= cursor.value.as_str())
                 || matcher
@@ -129,13 +117,13 @@ impl TextChoices {
                 continue;
             }
             match candidates.binary_search_by_key(&value, |&(key, _)| key) {
-                Ok(index) => candidates[index].1 += u64::from(counted),
+                Ok(index) => candidates[index].1 += 1,
                 Err(index) => {
                     // Evict before insertion to reuse the one bounded buffer.
                     if candidates.len() == keep {
                         candidates.pop();
                     }
-                    candidates.insert(index, (value, u64::from(counted)));
+                    candidates.insert(index, (value, 1));
                 }
             }
             // The largest retained value only decreases. An evicted value can
@@ -226,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn keyset_pages_deduplicate_and_keep_complete_facet_counts() {
+    fn keyset_pages_count_only_selected_rows_in_any_display_order() {
         let array: ArrayRef = Arc::new(StringArray::from(vec![
             Some("z"),
             Some("b"),
@@ -239,7 +227,7 @@ mod tests {
             Some(""),
         ]));
         let choices =
-            TextChoices::new(array, Selection::Rows(Arc::new(vec![0, 1, 2, 3, 5, 7]))).unwrap();
+            TextChoices::new(array, Selection::Rows(Arc::from(vec![7, 5, 3, 2, 1, 0]))).unwrap();
         let mut cursor = None;
         let mut found = Vec::new();
         loop {
@@ -258,10 +246,8 @@ mod tests {
             }
         }
         assert_eq!(found, vec![
-            ("".into(), 0),
             ("a".into(), 2),
             ("b".into(), 2),
-            ("c".into(), 0),
             ("z".into(), 2)
         ]);
     }

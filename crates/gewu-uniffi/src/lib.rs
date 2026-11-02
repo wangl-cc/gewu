@@ -1,12 +1,11 @@
 //! UniFFI bindings for gewu-core.
 //!
-//! All methods are synchronous. The app calls scans and I/O from background
-//! tasks. A newer `prepare_view` cancels an older view request inside the core;
-//! column analyses use caller-owned cancellation, and exports have independent handles. Snapshot
-//! preparation, capability metadata and visible row blocks are UI-thread APIs.
+//! All methods are synchronous. Callers schedule scans off the UI thread and
+//! own cancellation signals. Dataset and View handles share immutable data.
 
 mod analysis;
 mod cancellation;
+mod dataset;
 mod error;
 mod export;
 mod file;
@@ -14,15 +13,18 @@ mod filter;
 mod find;
 mod scale;
 mod scatter;
-mod session;
+#[cfg(test)]
+mod tests;
 mod text_choices;
 mod view;
+mod view_handle;
 
 pub use analysis::{
     AnalysisField, AnalysisSection, ColumnOverview, Histogram, LengthSummary, LengthUnit,
     NumericStatistics, ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;
+pub use dataset::GewuDataset;
 pub use error::GewuError;
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
 pub use file::{
@@ -33,9 +35,9 @@ pub use filter::{
 };
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
 pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use session::GewuSession;
+pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
 pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use view::{ColSort, ColSpec, QuerySpec, QueryState, RowBlock, ViewInfo, ViewOperation};
+pub use view::{ColSort, ColSpec, QuerySpec, RowBlock};
+pub use view_handle::GewuView;
 
 uniffi::setup_scaffolding!();

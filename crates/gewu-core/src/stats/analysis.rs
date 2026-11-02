@@ -141,11 +141,11 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AxisScale, Cancellation, Session};
+    use crate::{AxisScale, Cancellation, View};
 
-    fn session(array: &ArrayRef) -> Session {
+    fn view(array: &ArrayRef) -> Arc<View> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
-        Session::from_dataset(Arc::new(crate::Dataset {
+        Arc::new(crate::Dataset {
             source_path: Default::default(),
             schema: batch.schema(),
             columns: vec![crate::Column::new("value", array.clone()).unwrap()],
@@ -153,7 +153,8 @@ mod tests {
             file_size: 0,
             format: crate::FileType::Csv,
             metadata: crate::FileMetadata::Delimited,
-        }))
+        })
+        .view()
     }
 
     #[test]
@@ -193,23 +194,23 @@ mod tests {
         let text: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..100).map(|n| "x".repeat(n)),
         ));
-        let numbers = session(&numbers);
-        let text = session(&text);
+        let numbers = view(&numbers);
+        let text = view(&text);
         let cancel = Cancellation::default();
         assert!(matches!(
-            numbers.analyze_distribution(0, 0, 0, AxisScale::Linear, &cancel),
+            numbers.analyze_distribution(0, 0, AxisScale::Linear, &cancel),
             Err(Error::InvalidArgument(_))
         ));
         assert!(matches!(
-            text.analyze_lengths(0, 0, 0, &cancel),
+            text.analyze_lengths(0, 0, &cancel),
             Err(Error::InvalidArgument(_))
         ));
         for bins in [10, 20] {
             for histogram in [
                 numbers
-                    .analyze_distribution(0, 0, bins, AxisScale::Linear, &cancel)
+                    .analyze_distribution(0, bins, AxisScale::Linear, &cancel)
                     .unwrap(),
-                text.analyze_lengths(0, 0, bins, &cancel).unwrap().histogram,
+                text.analyze_lengths(0, bins, &cancel).unwrap().histogram,
             ] {
                 assert_eq!(histogram.counts.len(), bins as usize);
                 assert_eq!(histogram.counts.iter().sum::<u64>(), 100);
@@ -223,16 +224,16 @@ mod tests {
         let dates: ArrayRef = Arc::new(arrow::array::Date32Array::from(vec![1, 2]));
         let cancellation = Cancellation::default();
         assert!(matches!(
-            session(&text).analyze_distribution(0, 0, 2, AxisScale::Linear, &cancellation),
+            view(&text).analyze_distribution(0, 2, AxisScale::Linear, &cancellation),
             Err(Error::InvalidArgument(_))
         ));
         assert!(matches!(
-            session(&dates).analyze_distribution(0, 0, 2, AxisScale::Log10, &cancellation),
+            view(&dates).analyze_distribution(0, 2, AxisScale::Log10, &cancellation),
             Err(Error::InvalidArgument(_))
         ));
         assert_eq!(
-            session(&dates)
-                .analyze_distribution(0, 0, 2, AxisScale::Linear, &cancellation)
+            view(&dates)
+                .analyze_distribution(0, 2, AxisScale::Linear, &cancellation)
                 .unwrap()
                 .total,
             2
@@ -248,8 +249,8 @@ mod tests {
             None,
         ]] {
             let array: ArrayRef = Arc::new(Float64Array::from(values));
-            let statistics = session(&array)
-                .analyze_statistics(0, 0, &Cancellation::default())
+            let statistics = view(&array)
+                .analyze_statistics(0, &Cancellation::default())
                 .unwrap();
             assert_eq!(statistics.infinite_count, 1);
             assert_eq!(statistics.nan_count, u64::from(array.len() > 1));
@@ -268,12 +269,12 @@ mod tests {
             )
             .unwrap(),
         );
-        let ColumnOverview { rows, null_count } = session(&array)
-            .analyze_overview(0, 0, &Cancellation::default())
+        let ColumnOverview { rows, null_count } = view(&array)
+            .analyze_overview(0, &Cancellation::default())
             .unwrap();
         assert_eq!((rows, null_count), (5, 2));
-        let summary = session(&array)
-            .analyze_values(0, 0, &Cancellation::default())
+        let summary = view(&array)
+            .analyze_values(0, &Cancellation::default())
             .unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
@@ -306,7 +307,7 @@ mod tests {
                 &DataType::Struct(vec![Field::new("child", data_type.clone(), false)].into()),
                 0,
             );
-            let fields = session(&array).column_structure(0).unwrap();
+            let fields = view(&array).dataset().column_structure(0).unwrap();
             assert_eq!(fields, vec![AnalysisField {
                 name: "child".into(),
                 display_type: label.into(),
@@ -328,7 +329,7 @@ mod tests {
             assert!(!sections.contains(&AnalysisSection::Statistics));
             assert!(!sections.contains(&AnalysisSection::Values));
             let array = new_null_array(&data_type, 0);
-            let fields = session(&array).column_structure(0).unwrap();
+            let fields = view(&array).dataset().column_structure(0).unwrap();
             assert_eq!(fields.len(), 1);
             assert_eq!(
                 (

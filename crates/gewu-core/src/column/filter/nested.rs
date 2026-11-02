@@ -1,4 +1,4 @@
-//! Nested Find prepares child predicates using
+//! Nested Find compiles child predicates using
 //! borrowed parent and child selections, without decoding Arrow value payload.
 
 use std::{ops::Range, sync::OnceLock};
@@ -8,7 +8,7 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType},
 };
 
-use super::prepare_find;
+use super::compile_find;
 use crate::{
     predicate::{Predicate, CHUNK},
     Result,
@@ -21,7 +21,7 @@ pub(super) fn search<'a>(
 ) -> Result<Option<Predicate<'a>>> {
     match array.data_type() {
         DataType::Dictionary(..) => {
-            dictionary_find(array, |values| prepare_find(values, query, matcher))
+            dictionary_find(array, |values| compile_find(values, query, matcher))
         }
         DataType::List(_) => {
             let list = array.as_list::<i32>();
@@ -33,7 +33,7 @@ pub(super) fn search<'a>(
         }
         DataType::FixedSizeList(..) => {
             let list = array.as_fixed_size_list();
-            let Some(child) = prepare_find(list.values(), query, matcher)? else {
+            let Some(child) = compile_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -43,7 +43,7 @@ pub(super) fn search<'a>(
         }
         DataType::ListView(_) => {
             let list = array.as_list_view::<i32>();
-            let Some(child) = prepare_find(list.values(), query, matcher)? else {
+            let Some(child) = compile_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -53,7 +53,7 @@ pub(super) fn search<'a>(
         }
         DataType::LargeListView(_) => {
             let list = array.as_list_view::<i64>();
-            let Some(child) = prepare_find(list.values(), query, matcher)? else {
+            let Some(child) = compile_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -66,7 +66,7 @@ pub(super) fn search<'a>(
                 .as_struct()
                 .columns()
                 .iter()
-                .map(|child| prepare_find(child, query, matcher))
+                .map(|child| compile_find(child, query, matcher))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
@@ -105,11 +105,11 @@ pub(super) fn search<'a>(
 /// dictionary-sized mask or decoded values column is built.
 pub(super) fn dictionary_find<'a>(
     array: &'a ArrayRef,
-    prepare: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
+    compile: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
 ) -> Result<Option<Predicate<'a>>> {
     downcast_dictionary_array!(array => {
         let values = array.values();
-        let Some(child) = prepare(values)? else { return Ok(None) };
+        let Some(child) = compile(values)? else { return Ok(None) };
         Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
             hits.fill(false);
             let mut keys = Vec::with_capacity(rows.len());
@@ -139,11 +139,11 @@ pub(super) fn dictionary_find<'a>(
 /// avoids changing their low-cardinality execution policy as part of Find.
 pub(super) fn dictionary<'a>(
     array: &'a ArrayRef,
-    prepare: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
+    compile: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
 ) -> Result<Option<Predicate<'a>>> {
     downcast_dictionary_array!(array => {
         let values = array.values();
-        let Some(child) = prepare(values)? else { return Ok(None) };
+        let Some(child) = compile(values)? else { return Ok(None) };
         let cached = OnceLock::<Vec<bool>>::new();
         Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
             let matched = match cached.get() {
@@ -180,7 +180,7 @@ fn list_search<'a, O: OffsetSizeTrait>(
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
-    let Some(child) = prepare_find(values, query, matcher)? else {
+    let Some(child) = compile_find(values, query, matcher)? else {
         return Ok(None);
     };
     Ok(Some(elements(array, child, move |row| {

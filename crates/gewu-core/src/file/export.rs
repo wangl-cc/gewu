@@ -28,7 +28,7 @@ pub struct Export {
     source: PathBuf,
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
-    rows: Arc<Vec<u32>>,
+    rows: Arc<[u32]>,
     format: FileType,
     started: AtomicBool,
     cancellation: Cancellation,
@@ -43,7 +43,7 @@ impl Export {
         source: PathBuf,
         schema: SchemaRef,
         columns: Vec<ArrayRef>,
-        rows: Arc<Vec<u32>>,
+        rows: Arc<[u32]>,
         format: FileType,
     ) -> Self {
         Self {

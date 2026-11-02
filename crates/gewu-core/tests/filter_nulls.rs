@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
-use gewu_core::{Cancellation, Filter, QuerySpec, Session};
+use gewu_core::{Cancellation, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
-fn document() -> Session {
+fn document() -> std::sync::Arc<gewu_core::View> {
     let score: ArrayRef = Arc::new(Float64Array::from(vec![
         None,
         Some(1.0),
@@ -40,7 +40,9 @@ fn document() -> Session {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Session::open(file.path()).unwrap()
+    gewu_core::Dataset::open(file.path())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap()
 }
 
 fn range(include_nulls: bool) -> Filter {
@@ -51,12 +53,11 @@ fn contains(include_nulls: bool) -> Filter {
     Filter::contains("ALPHA".into(), false, include_nulls)
 }
 
-fn rows(doc: &Session, spec: QuerySpec) -> Vec<u64> {
+fn rows(doc: &std::sync::Arc<gewu_core::View>, spec: QuerySpec) -> Vec<u64> {
     let view = doc
-        .prepare_view(&spec)
-        .and_then(|operation| operation.run())
+        .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
-    doc.rows(view.version, 0, 20, &[0, 1]).unwrap().source_rows
+    view.rows(0, 20, &[0, 1]).unwrap().source_rows
 }
 
 #[test]
@@ -125,13 +126,15 @@ fn exact_values_combine_with_an_independent_null_policy() {
 }
 
 #[test]
-fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
+fn choices_count_included_nulls_and_respect_all_filters() {
     let doc = document();
     let spec = QuerySpec::single(0, range(true))
         .with_filter(2, Filter::exact(vec!["A".into()], false, false))
         .with_filter(3, Filter::contains("needle".into(), false, false));
     let values = doc
-        .prepare_text_choices(2, Some(&spec), &Cancellation::default())
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap()
+        .text_choices(2)
         .unwrap()
         .page("", None, 100, &Cancellation::default())
         .unwrap()
@@ -141,26 +144,20 @@ fn facets_count_included_nulls_and_still_ignore_only_their_own_filter() {
             .iter()
             .map(|value| (value.value.as_str(), value.count))
             .collect::<Vec<_>>(),
-        [("A", 2), ("B", 2)]
+        [("A", 2)]
     );
 
-    // Removing only score's own filter leaves source rows 0, 1 and 5: null,
-    // one finite value, and NaN. The UI must not conflate those last two classes.
+    // All filters leave source rows 0 and 1: null and one finite value.
     let choices = doc
-        .filter_choices(0, Some(&spec), &Cancellation::default())
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap()
+        .filter_choices(0, &Cancellation::default())
         .unwrap();
     let values = choices.values.unwrap();
     assert_eq!(
         values.iter().map(|value| value.count).sum::<u64>() + choices.null_count,
-        3
+        2
     );
     assert_eq!(choices.null_count, 1);
-    assert_eq!(
-        values
-            .iter()
-            .find(|value| value.label == "NaN")
-            .unwrap()
-            .count,
-        1
-    );
+    assert!(values.iter().all(|value| value.label != "NaN"));
 }

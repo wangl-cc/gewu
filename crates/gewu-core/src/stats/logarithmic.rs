@@ -76,6 +76,7 @@ pub(super) fn build<H: Output>(
 
 fn positive_extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
+    rows: &Selection,
     context: &Cancellation,
     positive: impl Fn(T::Native) -> bool,
 ) -> Result<Option<(T::Native, T::Native)>>
@@ -83,7 +84,8 @@ where
     T::Native: PartialOrd,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for (index, value) in array.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate() {
+        let value = array.is_valid(row).then(|| array.value(row));
         context.check_at(index)?;
         if let Some(value) = value.filter(|&v| positive(v)) {
             extrema = Some(match extrema {
@@ -135,7 +137,7 @@ fn integer<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Into<i128> + TryFrom<i128> + Ord,
 {
-    let extrema = positive_extrema(array, context, |value| value.into() > 0)?;
+    let extrema = positive_extrema(array, rows, context, |value| value.into() > 0)?;
     let Some((min, max)) = extrema else {
         return H::finish(
             count(array, rows, empty(rows), context, |_| Class::NonPositive)?,
@@ -196,7 +198,7 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Ord,
 {
-    let extrema = positive_extrema(array, context, |value| widen(value) > i256::ZERO)?;
+    let extrema = positive_extrema(array, rows, context, |value| widen(value) > i256::ZERO)?;
     let Some((min, max)) = extrema else {
         return H::finish(
             count(array, rows, empty(rows), context, |_| Class::NonPositive)?,
@@ -268,7 +270,7 @@ fn floating<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Into<f64> + PartialOrd,
 {
-    let extrema = positive_extrema(array, context, |value| {
+    let extrema = positive_extrema(array, rows, context, |value| {
         let value = value.into();
         value > 0.0 && value.is_finite()
     })?;
@@ -473,7 +475,7 @@ mod tests {
         for (range, &expected) in result.ranges.iter().zip(&histogram.counts) {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = column
-                .prepare_filter(
+                .compile_filter(
                     &Filter::range(
                         (range.min.clone()).map(|b: crate::Bound| b.filter_text()),
                         (range.max.clone()).map(|b: crate::Bound| b.filter_text()),
@@ -544,8 +546,9 @@ mod tests {
             ),
             (Some("1"), Some("1000"))
         );
-        let histogram = verify(array, Selection::Rows(Arc::new(vec![2, 5, 6, 9, 11])), 3);
-        assert_eq!(histogram.counts, [0, 1, 1]);
+        let histogram = verify(array, Selection::Rows(Arc::from(vec![2, 5, 6, 9, 11])), 3);
+        assert_eq!(histogram.counts, [1, 0, 1]);
+        assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
         assert_eq!(
             (
                 histogram.non_positive_count,
@@ -656,7 +659,7 @@ mod tests {
             ),
             (2, 1, 1, 1)
         );
-        let histogram = verify(array.clone(), Selection::Rows(Arc::new(vec![])), 5);
+        let histogram = verify(array.clone(), Selection::Rows(Arc::from(vec![])), 5);
         assert_eq!(histogram.total, 0);
         let context = Cancellation::default();
         assert!(build::<Histogram>(&array, &Selection::All(5), 0, &context).is_err());

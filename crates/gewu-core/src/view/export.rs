@@ -2,20 +2,14 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use super::Session;
+use super::View;
 use crate::{Error, Export, FileType, Result};
 
-impl Session {
+impl View {
     /// Capture a view and column order for export without copying its cells or
     /// row indices. The returned job remains valid when the current view changes.
-    pub fn prepare_export(
-        &self,
-        version: u64,
-        columns: &[u32],
-        format: FileType,
-    ) -> Result<Export> {
+    pub fn export(&self, columns: &[u32], format: FileType) -> Result<Export> {
         format.require_enabled()?;
-        let view = self.views.snapshot(version)?;
         if columns.is_empty() {
             return Err(Error::InvalidArgument(
                 "select at least one column to export".into(),
@@ -46,7 +40,7 @@ impl Session {
             self.dataset.source_path.clone(),
             schema,
             arrays,
-            view.rows.clone(),
+            self.rows.clone(),
             format,
         ))
     }

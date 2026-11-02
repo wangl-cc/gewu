@@ -1,23 +1,23 @@
 //! Distinct values of a column as a compact `u8` code space.
 //!
-//! A [`Dictionary`] gives every source row a code naming its distinct
+//! A `Dictionary` gives every source row a code naming its distinct
 //! value: codes `0..values.len()` name the non-null values, while row-level
 //! nulls are tracked via an Arrow [`NullBuffer`].
 //!
 //! # Architecture
 //!
-//! The dictionary is constructed via [`Dictionary::build`]:
+//! The dictionary is constructed via `Dictionary::build`:
 //! - Native Arrow dictionary columns reuse their referenced dictionary entries directly.
 //! - Canonical primitive and boolean columns scan native values in a single pass via
-//!   [`primitive::CanonicalizeArray`].
+//!   `primitive::PrimitiveArray`.
 //! - Text, binary and nested arrays use Arrow's row format to discover distinct byte rows.
 //!
-//! The column consumes the dictionary through [`Dictionary::filter_choices`] for
-//! projected choices and frequency counting, and [`Dictionary::matching_codes`]
+//! The column consumes the dictionary through `Dictionary::filter_choices` for
+//! projected choices and frequency counting, and `Dictionary::matching_codes`
 //! for filter generation.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
-//! and cached by [`crate::Column`]. Columns with more than [`MAX_DISTINCT_VALUES`]
+//! and cached by [`crate::Column`]. Columns with more than `MAX_DISTINCT_VALUES`
 //! non-null values are not encoded.
 
 use std::{collections::HashMap, sync::Arc};
@@ -445,6 +445,7 @@ impl Dictionary {
             .labels
             .iter()
             .enumerate()
+            .filter(|(code, _)| tally.counts[*code] > 0)
             .map(|(code, label)| {
                 Ok(ValueChoice {
                     label: label.clone(),

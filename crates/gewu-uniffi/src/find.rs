@@ -16,7 +16,6 @@ pub struct CellMatch {
 /// Row-major match flags in the Find session's captured column order.
 #[derive(uniffi::Record)]
 pub struct FindHighlight {
-    pub version: u64,
     pub start: u64,
     pub n_rows: u32,
     pub n_cols: u32,
@@ -120,7 +119,6 @@ impl From<CellMatch> for core::CellMatch {
 impl From<core::FindHighlight> for FindHighlight {
     fn from(highlight: core::FindHighlight) -> Self {
         Self {
-            version: highlight.version,
             start: highlight.start,
             n_rows: highlight.n_rows,
             n_cols: highlight.n_cols,
@@ -132,7 +130,7 @@ impl From<core::FindHighlight> for FindHighlight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GewuSession;
+    use crate::GewuDataset;
 
     #[test]
     fn find_limits_match_the_exported_core_constants() {
@@ -146,9 +144,11 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-find-{}.csv", std::process::id()));
         std::fs::write(&source, "value,other\nhit,12\nmiss,120\nhit,12\n").unwrap();
-        let doc = GewuSession::open(source.to_str().unwrap().to_owned()).unwrap();
-        let stale = doc.prepare_find(0, "miss".into(), vec![0, 1]).unwrap();
-        let find = doc.prepare_find(0, "12".into(), vec![0, 1]).unwrap();
+        let doc = GewuDataset::open(source.to_str().unwrap().to_owned())
+            .unwrap()
+            .view();
+        let stale = doc.find("miss".into(), vec![0, 1]).unwrap();
+        let find = doc.find("12".into(), vec![0, 1]).unwrap();
         stale.cancel();
         assert!(matches!(
             stale.next(None, 1, Cancellation::new()),
@@ -171,7 +171,7 @@ mod tests {
             find.previous(None, 1, Cancellation::new()).unwrap()[0].display_row,
             2
         );
-        assert!(doc.rows(0, 0, 10, vec![0]).unwrap().source_rows.len() == 3);
+        assert!(doc.rows(0, 10, vec![0]).unwrap().source_rows.len() == 3);
         std::fs::remove_file(source).unwrap();
     }
 }

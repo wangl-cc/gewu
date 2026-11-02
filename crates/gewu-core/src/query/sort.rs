@@ -148,7 +148,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{engine::ViewEngine, Error};
+    use crate::Error;
 
     fn agrees_with_arrow(rows: Vec<u32>, columns: &[(&ArrayRef, bool)]) {
         let selected = UInt32Array::from(rows.clone());
@@ -308,8 +308,7 @@ mod tests {
         // Check 1 starts sorting; check 2 precedes the first run; check 3
         // follows that run, before the second kernel can start.
         for cancel_at in [2, 3] {
-            let engine = ViewEngine::new(len, 1);
-            let token = engine.begin();
+            let token = crate::Cancellation::default();
             let mut checks = 0;
             let result = sort_rows(
                 (0..len as u32).collect(),
@@ -339,10 +338,9 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_during_merge_stops_work_and_keeps_the_published_view() {
+    fn cancellation_during_merge_stops_work() {
         let len = RUN * 3 + 17;
-        let engine = ViewEngine::new(len, 1);
-        let token = engine.begin();
+        let token = crate::Cancellation::default();
         let comparisons = Arc::new(AtomicUsize::new(0));
         let count = comparisons.clone();
         let comparators: Vec<DynComparator> = vec![Box::new(move |left, right| {
@@ -365,11 +363,5 @@ mod tests {
         });
         assert!(matches!(result, Err(Error::Cancelled)));
         assert_eq!(checkpoints, first_merge_check + 1);
-        assert_eq!(engine.current().version, 0);
-        assert!(matches!(
-            engine.commit(&token, Arc::new(Vec::new()), crate::QuerySpec::all(1)),
-            Err(Error::Cancelled)
-        ));
-        assert_eq!(engine.current().rows.len(), len);
     }
 }
