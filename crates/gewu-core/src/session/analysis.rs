@@ -11,7 +11,6 @@ use crate::{
     column::stats,
     format,
     scope::{for_rows, RowScope, Selection},
-    session::facet::format_choices,
     ColumnSummary, Histogram, Result,
 };
 
@@ -105,10 +104,7 @@ impl Session {
             Selection::All(_) => array.null_count() as u64,
             Selection::Rows(_) => rows.iter().filter(|&r| array.is_null(r)).count() as u64,
         };
-        let dictionary = self.dictionary(column)?;
-        if let Some(dictionary) = dictionary {
-            let counts = dictionary.counts(&rows);
-            let mut choices = format_choices(&dictionary, &counts, false)?;
+        if let Some(mut choices) = col.choices(&rows, false) {
             s.distinct_count = choices.len() as u64;
             let mut present = choices.iter().filter_map(|v| v.label.as_ref());
             s.min_label = present.clone().next().cloned();

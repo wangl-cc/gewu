@@ -13,12 +13,15 @@ pub mod stats;
 use std::sync::{Arc, OnceLock};
 
 use arrow::{array::ArrayRef, datatypes::DataType};
-pub(crate) use dictionary::{Dictionary, MAX_DISTINCT_VALUES};
+pub(crate) use dictionary::Dictionary;
 pub use filter::range::Bound;
 pub use stats::{AxisScale, Histogram, RangeBounds, RangeHistogram};
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
-use crate::{predicate::Predicate, types::Type, Filter, Result};
+use crate::{
+    predicate::Predicate, scope::Selection, types::Type, DistinctResult, DistinctValue, Error,
+    Filter, Result,
+};
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub struct Column {
@@ -138,8 +141,81 @@ impl Column {
         filter::prepare_find(&self.array, &self.ty, query, matcher)
     }
 
+    #[inline]
+    pub(crate) fn has_dictionary(&self) -> bool {
+        self.dictionary().is_some()
+    }
+
+    /// Precomputed choices with counts, or `None` if the column is not dictionary-encoded.
+    pub(crate) fn choices(&self, rows: &Selection, include_zero: bool) -> Option<Vec<DistinctValue>> {
+        self.dictionary().map(|d| d.distinct_values(rows, include_zero))
+    }
+
+    /// Distinct values of this column with their counts.
+    /// Fast path: uses dictionary encoding if available.
+    /// Slow path: counts values via streaming scan.
+    pub(crate) fn distinct_values(&self, rows: &Selection, limit: usize) -> Result<DistinctResult> {
+        if let Some(dictionary) = self.dictionary() {
+            let choices = dictionary.distinct_values(rows, false);
+            let total = choices.len() as u64;
+            Ok(DistinctResult {
+                total,
+                truncated: total > limit as u64,
+                values: choices.into_iter().take(limit).collect(),
+                keyed: true,
+            })
+        } else {
+            let counted = crate::analysis::count_values(&self.array, rows, limit)?;
+            Ok(DistinctResult {
+                total: counted.distinct,
+                truncated: counted.distinct > limit as u64,
+                values: counted.top.into_iter().take(limit).collect(),
+                keyed: false,
+            })
+        }
+    }
+
+    /// Keys for the given displayed labels (`None` = null). Unknown labels are ignored.
+    pub(crate) fn keys_for_labels(&self, labels: &[Option<String>]) -> Result<Vec<u64>> {
+        let dictionary = self.dictionary().ok_or_else(|| {
+            Error::InvalidArgument(format!("{} is not an indexed column", self.name))
+        })?;
+        let target: std::collections::HashSet<&Option<String>> = labels.iter().collect();
+        let mut keys = Vec::new();
+        if dictionary.has_null() && labels.iter().any(Option::is_none) {
+            keys.push(Dictionary::NULL_KEY);
+        }
+        for (code, label) in dictionary.labels().iter().enumerate() {
+            if target.contains(&Some(label.clone())) {
+                keys.push(code as u64);
+            }
+        }
+        Ok(keys)
+    }
+
     pub(crate) fn prepare_filter<'a>(&'a self, filter: &Filter) -> Result<Predicate<'a>> {
-        filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter)
+        match filter {
+            Filter::InValues { keys } => {
+                let dict = self.dictionary().ok_or_else(|| {
+                    Error::InvalidArgument(format!("{} is not an indexed column", self.name))
+                })?;
+                Ok(dict.prepare_predicate(keys))
+            }
+            Filter::TextValues { values, exclude } => {
+                if self.ty().domain() != Some(crate::types::Domain::Text) {
+                    return Err(Error::InvalidArgument(format!(
+                        "{} is not a string column",
+                        self.array.data_type()
+                    )));
+                }
+                if let Some(dict) = self.dictionary() {
+                    let keys = self.keys_for_labels(values)?;
+                    return Ok(dict.prepare_predicate_with_exclude(&keys, *exclude));
+                }
+                filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter)
+            }
+            _ => filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter),
+        }
     }
 
     pub fn parse_bound(&self, text: &str) -> Result<Bound> {

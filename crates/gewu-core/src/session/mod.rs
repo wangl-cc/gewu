@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use crate::{
-    column::{Column, ColumnCapabilities, Dictionary},
+    column::{Column, ColumnCapabilities},
     dataset::Dataset,
     engine::ViewEngine,
     FileInfo, OpenOptions, Result,
@@ -102,20 +102,5 @@ impl Session {
     #[inline]
     pub(crate) fn column_array(&self, c: u32) -> Result<&ArrayRef> {
         Ok(&self.dataset.column(c)?.array)
-    }
-
-    pub(crate) fn dictionary(&self, c: u32) -> Result<Option<Arc<Dictionary>>> {
-        Ok(self.column(c)?.dictionary().cloned())
-    }
-
-    pub(crate) fn keyed_dictionary(&self, c: u32) -> Result<Arc<Dictionary>> {
-        let col = self.column(c)?;
-        col.dictionary().cloned().ok_or_else(|| {
-            crate::Error::InvalidArgument(format!(
-                "column {} has more than {} non-null distinct values; filter it with contains or a range",
-                col.name,
-                crate::column::MAX_DISTINCT_VALUES,
-            ))
-        })
     }
 }

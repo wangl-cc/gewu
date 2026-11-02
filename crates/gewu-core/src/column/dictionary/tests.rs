@@ -46,7 +46,7 @@ fn nulls_do_not_consume_value_codes() {
 }
 
 #[test]
-fn all_counts_project_null_first_then_values() {
+fn all_counts_tally() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![
         Some("b"),
         Some("a"),
@@ -57,23 +57,15 @@ fn all_counts_project_null_first_then_values() {
     let code_b = dictionary.code_at(0);
     let code_a = dictionary.code_at(1);
     let selection = Selection::Rows(Arc::new(vec![0, 3]));
-    let counts = dictionary.counts(&selection);
-    assert_eq!(counts.null_count(), 0);
-    assert_eq!(counts.count_at(code_a as usize), 0);
-    assert_eq!(counts.count_at(code_b as usize), 2);
+    let tally = dictionary.tally(&selection);
+    assert_eq!(tally.null_count, 0);
+    assert_eq!(tally.counts[code_a as usize], 0);
+    assert_eq!(tally.counts[code_b as usize], 2);
 
-    // Projected iteration outputs null first, then each value in discovery order
-    let projected: Vec<(Option<usize>, u64)> = counts.iter().collect();
-    assert_eq!(projected, vec![
-        (None, 0),
-        (Some(code_b as usize), 2),
-        (Some(code_a as usize), 0),
-    ]);
-
-    let all = dictionary.counts(&Selection::All(a.len()));
-    assert_eq!(all.null_count(), 1);
-    assert_eq!(all.count_at(code_a as usize), 1);
-    assert_eq!(all.count_at(code_b as usize), 2);
+    let all = dictionary.tally(&Selection::All(a.len()));
+    assert_eq!(all.null_count, 1);
+    assert_eq!(all.counts[code_a as usize], 1);
+    assert_eq!(all.counts[code_b as usize], 2);
 }
 
 #[test]
@@ -89,9 +81,9 @@ fn empty_and_all_null_columns_still_encode() {
     assert!(dictionary.has_null());
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
-    let counts = dictionary.counts(&Selection::All(2));
-    assert_eq!(counts.null_count(), 2);
-    assert_eq!(counts.iter().collect::<Vec<_>>(), vec![(None, 2)]);
+    let tally = dictionary.tally(&Selection::All(2));
+    assert_eq!(tally.null_count, 2);
+    assert!(tally.counts.is_empty());
 }
 
 #[test]
@@ -131,10 +123,10 @@ fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
     assert!(dictionary.is_null(2));
     assert!(!dictionary.is_null(3));
 
-    let counts = dictionary.counts(&Selection::All(6));
-    assert_eq!(counts.null_count(), 2);
-    assert_eq!(counts.count_at(code_a as usize), 2);
-    assert_eq!(counts.count_at(code_b as usize), 2);
+    let tally = dictionary.tally(&Selection::All(6));
+    assert_eq!(tally.null_count, 2);
+    assert_eq!(tally.counts[code_a as usize], 2);
+    assert_eq!(tally.counts[code_b as usize], 2);
 }
 
 #[test]
@@ -227,10 +219,9 @@ fn plain_and_native_dictionaries_agree() {
     let native = Dictionary::from_array(&native).unwrap();
     assert_eq!(plain.n_values(), native.n_values());
     assert_eq!(plain.has_null(), native.has_null());
-    let p_counts = plain.counts(&Selection::All(5));
-    let n_counts = native.counts(&Selection::All(5));
-    assert_eq!(p_counts.null_count(), n_counts.null_count());
-    assert_eq!(p_counts.counts(), n_counts.counts());
+    let p_tally = plain.tally(&Selection::All(5));
+    let n_tally = native.tally(&Selection::All(5));
+    assert_eq!(p_tally, n_tally);
 }
 
 #[test]
@@ -242,7 +233,21 @@ fn arrow_null_type_encodes_every_row_as_null() {
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
     assert!(dictionary.is_null(2));
-    let counts = dictionary.counts(&Selection::All(3));
-    assert_eq!(counts.null_count(), 3);
-    assert_eq!(counts.iter().collect::<Vec<_>>(), vec![(None, 3)]);
+    let tally = dictionary.tally(&Selection::All(3));
+    assert_eq!(tally.null_count, 3);
+    assert!(tally.counts.is_empty());
+}
+
+#[test]
+fn dictionary_labels_and_codes_are_natively_sorted() {
+    let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(100), Some(2), Some(10), Some(2)]));
+    let dictionary = Dictionary::from_array(&array).unwrap();
+    assert_eq!(dictionary.labels(), &["2", "10", "100"]);
+    // code 0 -> 2, code 1 -> 10, code 2 -> 100
+    assert_eq!(dictionary.code_at(0), 2); // 100 is rank 2
+    assert_eq!(dictionary.code_at(1), 0); // 2 is rank 0
+    assert_eq!(dictionary.code_at(2), 1); // 10 is rank 1
+    assert_eq!(dictionary.code_at(3), 0); // 2 is rank 0
+    let tally = dictionary.tally(&Selection::All(4));
+    assert_eq!(tally.counts, vec![2, 1, 1]);
 }

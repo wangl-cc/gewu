@@ -1,14 +1,8 @@
 //! Filter inputs, editor data and facet queries.
 
-use std::collections::HashSet;
-
 use super::Session;
 use crate::{
-    column::{
-        dictionary::{Dictionary, DistinctCounts},
-        stats,
-    },
-    format,
+    column::stats,
     predicate::Predicate,
     scope::RowScope,
     types::{Domain, LogicalType},
@@ -140,8 +134,6 @@ impl Session {
                 "logarithmic binning requires a numeric column".into(),
             ));
         }
-        let dictionary = self.dictionary(column)?;
-
         // Dictionary-encoded text keeps its choices editor rather than the
         // text editor; encoding and value semantics are separate here.
         if col.ty().direct_domain() == Some(Domain::Text) {
@@ -152,7 +144,7 @@ impl Session {
                         crate::TextFilterMode::Choices,
                         crate::TextFilterMode::Contains,
                     ],
-                    recommended: if dictionary.is_some() {
+                    recommended: if col.has_dictionary() {
                         crate::TextFilterMode::Choices
                     } else {
                         crate::TextFilterMode::Contains
@@ -160,12 +152,10 @@ impl Session {
                 },
             });
         }
-        let editor = if let Some(dictionary) = &dictionary {
-            let rows = self.rows_in(RowScope::facet(spec, column))?;
-            let counts = dictionary.counts(&rows);
-            FilterEditor::Choices {
-                values: format_choices(dictionary, &counts, true)?,
-            }
+        let editor = if let Some(values) =
+            col.choices(&self.rows_in(RowScope::facet(spec, column))?, true)
+        {
+            FilterEditor::Choices { values }
         } else if col.capabilities().range {
             let rows = self.rows_in(RowScope::facet(spec, column))?;
             FilterEditor::Range {
@@ -220,31 +210,8 @@ impl Session {
         limit: u32,
     ) -> Result<DistinctResult> {
         let col = self.column(column)?;
-        let dictionary = self.dictionary(column)?;
         let rows = self.rows_in(RowScope::facet(spec, column))?;
-        let limit = limit as usize;
-        match dictionary {
-            Some(dictionary) => {
-                let counts = dictionary.counts(&rows);
-                let choices = format_choices(&dictionary, &counts, false)?;
-                let total = choices.len() as u64;
-                Ok(DistinctResult {
-                    total,
-                    truncated: total > limit as u64,
-                    values: choices.into_iter().take(limit).collect(),
-                    keyed: true,
-                })
-            }
-            None => {
-                let counted = crate::analysis::count_values(&col.array, &rows, limit)?;
-                Ok(DistinctResult {
-                    total: counted.distinct,
-                    truncated: counted.distinct > limit as u64,
-                    values: counted.top.into_iter().take(limit).collect(),
-                    keyed: false,
-                })
-            }
-        }
+        col.distinct_values(&rows, limit as usize)
     }
 
     /// Distribution of a numeric, date or time column in `bins` bins, for
@@ -280,73 +247,10 @@ impl Session {
     /// Keys for the given displayed labels (`None` = null). Unknown labels
     /// are ignored. Used when filtering by displayed value text.
     pub fn keys_for_labels(&self, column: u32, labels: &[Option<String>]) -> Result<Vec<u64>> {
-        let dictionary = self.keyed_dictionary(column)?;
-        let target: HashSet<&Option<String>> = labels.iter().collect();
-        let mut keys = Vec::new();
-        if dictionary.has_null() && labels.iter().any(Option::is_none) {
-            keys.push(Dictionary::NULL_KEY);
-        }
-        let formatter = format::formatter(dictionary.values().as_ref())?;
-        for code in 0..dictionary.len() {
-            let label = format::cell(dictionary.values().as_ref(), &formatter, code);
-            if target.contains(&label) {
-                keys.push(code as u64);
-            }
-        }
-        Ok(keys)
+        self.column(column)?.keys_for_labels(labels)
     }
 
     pub(super) fn prepare_filter(&self, column_idx: u32, filter: &Filter) -> Result<Predicate<'_>> {
-        let col = self.column(column_idx)?;
-        match filter {
-            Filter::InValues { keys } => {
-                Ok(self.keyed_dictionary(column_idx)?.prepare_predicate(keys))
-            }
-            Filter::TextValues { values, exclude } => {
-                if col.ty().direct_domain() != Some(Domain::Text) {
-                    return Err(Error::InvalidArgument(format!(
-                        "{} is not a string column",
-                        col.array.data_type()
-                    )));
-                }
-                if let Some(dictionary) = self.dictionary(column_idx)? {
-                    let keys = self.keys_for_labels(column_idx, values)?;
-                    return Ok(dictionary.prepare_predicate_with_exclude(&keys, *exclude));
-                }
-                col.prepare_filter(filter)
-            }
-            _ => col.prepare_filter(filter),
-        }
+        self.column(column_idx)?.prepare_filter(filter)
     }
-}
-
-pub(crate) fn format_choices(
-    dictionary: &Dictionary,
-    counts: &DistinctCounts,
-    include_zero: bool,
-) -> Result<Vec<DistinctValue>> {
-    let values = dictionary.values().as_ref();
-    let formatter = format::formatter(values)?;
-    let mut result = Vec::with_capacity(values.len() + 1);
-    let null_count = counts.null_count();
-    if dictionary.has_null() && (include_zero || null_count > 0) {
-        result.push(DistinctValue {
-            key: Dictionary::NULL_KEY,
-            label: None,
-            count: null_count,
-        });
-    }
-    let sort_indices = arrow::compute::sort_to_indices(values, None, None)?;
-    for &code in sort_indices.values() {
-        let code = code as usize;
-        let count = counts.count_at(code);
-        if include_zero || count > 0 {
-            result.push(DistinctValue {
-                key: code as u64,
-                label: format::cell(values, &formatter, code),
-                count,
-            });
-        }
-    }
-    Ok(result)
 }
