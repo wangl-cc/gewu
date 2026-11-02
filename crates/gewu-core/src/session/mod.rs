@@ -12,11 +12,13 @@ use crate::{
 };
 
 mod analysis;
+pub mod choices;
 mod export;
 pub(crate) mod facet;
 mod find;
 mod query;
 
+pub use choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use facet::{DistinctResult, DistinctValue, FilterEditor, FilterSpec, TextFilterMode};
 
 /// An active viewing session over an immutable dataset.

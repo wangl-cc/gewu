@@ -19,10 +19,13 @@ use crate::{ColumnInfo, Error, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
+pub mod export;
 #[cfg(feature = "parquet")]
 mod parquet;
 #[cfg(feature = "xlsx")]
 mod xlsx;
+
+pub use export::{Export, ExportProgress};
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 pub(crate) const CHUNK_ROWS: usize = 8 * 1024;

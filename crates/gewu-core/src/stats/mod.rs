@@ -18,6 +18,7 @@ mod logarithmic;
 mod median;
 pub(crate) mod numeric;
 mod scale;
+pub mod scatter;
 pub(crate) mod streaming;
 mod values;
 
@@ -26,6 +27,7 @@ pub use analysis::{
 };
 pub use extremes::extremes;
 pub use scale::AxisScale;
+pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
 pub use crate::types::LengthUnit;
 
 pub(crate) use context::AnalysisContext;

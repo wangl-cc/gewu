@@ -7,12 +7,11 @@
 pub mod column;
 pub mod dataset;
 mod error;
-mod file;
+pub mod file;
 pub(crate) mod format;
 pub(crate) mod query;
 pub mod session;
 pub mod stats;
-pub mod task;
 pub mod types;
 
 pub use arrow::datatypes::TimeUnit;
@@ -20,22 +19,22 @@ pub use column::{Bound, Column, ColumnCapabilities, ColumnInfo, LogicalType};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
-    xlsx_sheet_names, ExportOptions, FileInfo, FileMetadata, FileType, OpenOptions,
-    ParquetCompression,
+    xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileInfo, FileMetadata, FileType,
+    OpenOptions, ParquetCompression,
 };
 pub(crate) use query::{engine, predicate, scope, selection};
-pub use query::{Filter, QuerySpec, RowBlock, SortKey, ViewInfo};
+pub use query::{
+    CellMatch, Filter, Find, FindHighlight, FindOperation, QuerySpec, RowBlock, SortKey, ViewInfo,
+    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+};
 pub use session::{
-    DistinctResult, DistinctValue, FilterEditor, FilterSpec, Session, TextFilterMode,
+    DistinctResult, DistinctValue, FilterEditor, FilterSpec, Session, TextChoice,
+    TextChoiceCursor, TextChoicePage, TextChoices, TextFilterMode,
 };
 pub use stats::{
-    ArrayView, AxisScale, ColumnSummary, Histogram, LengthSummary, NumericStatistics, RangeBounds,
-    RangeHistogram, ValueSummary,
-};
-pub use task::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, CellMatch, ColumnAnalysis,
-    Export, ExportProgress, Find, FindHighlight, FindOperation, LengthUnit, ScatterAnalysis,
-    ScatterPoint, ScatterResult, TextChoice, TextChoiceCursor, TextChoicePage, TextChoices,
-    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE, MAX_SCATTER_POINTS,
+    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,
+    ColumnAnalysis, ColumnSummary, Histogram, LengthSummary, LengthUnit, NumericStatistics,
+    RangeBounds, RangeHistogram, ScatterAnalysis, ScatterPoint, ScatterResult, ValueSummary,
+    MAX_SCATTER_POINTS,
 };
 pub use types::{Encoding, Type};

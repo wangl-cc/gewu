@@ -11,10 +11,8 @@ use std::{
 
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
-use crate::{
-    file::{self, ExportData, WriteProgress},
-    Error, ExportOptions, FileType, Result,
-};
+use super::{ExportData, WriteProgress};
+use crate::{Error, ExportOptions, FileType, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -119,7 +117,7 @@ impl Export {
         let mut temporary = tempfile::Builder::new()
             .prefix(".gewu-export-")
             .tempfile_in(parent)?;
-        file::write(
+        super::write(
             temporary.as_file_mut(),
             self.format,
             options,
