@@ -19,7 +19,7 @@ mod find;
 mod query;
 
 pub use choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use facet::{DistinctResult, DistinctValue, FilterChoices, ValueChoice};
+pub use facet::{FilterChoices, ValueChoice};
 pub use query::ViewOperation;
 
 /// An active viewing session over an immutable dataset.

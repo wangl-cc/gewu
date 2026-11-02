@@ -5,9 +5,8 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    AnalysisSection, AxisScale, ColumnAnalysis, ColumnSummary, FileInfo, FileType, Filter,
-    FilterChoices, FindSession, GewuError, GewuExport, Histogram, QuerySpec, RangeHistogram,
-    RowBlock, TextChoices, ViewInfo,
+    AnalysisSection, AxisScale, ColumnAnalysis, FileInfo, FileType, Filter, FilterChoices,
+    FindSession, GewuError, GewuExport, QuerySpec, RangeHistogram, RowBlock, TextChoices, ViewInfo,
 };
 
 /// One open viewing session over a table.
@@ -187,21 +186,6 @@ impl GewuSession {
         }))
     }
 
-    /// Distribution over the current displayed rows, with all filters applied.
-    /// Call off the main thread.
-    pub fn view_histogram(
-        &self,
-        version: u64,
-        column: u32,
-        bins: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<Histogram, GewuError> {
-        Ok(self
-            .inner
-            .view_histogram(version, column, bins, &cancellation.inner)?
-            .into())
-    }
-
     /// Display text for a raw value of a date, time or timestamp column
     /// (as in histogram axes and range bounds), formatted like its cells.
     pub fn format_value(&self, column: u32, value: i64) -> Result<String, GewuError> {
@@ -268,20 +252,6 @@ impl GewuSession {
         Ok(self
             .inner
             .validate_filter(column, &filter.into(), &cancellation.inner)?)
-    }
-
-    /// Summary of a column over the current view (explicit filters apply).
-    /// Call off the main thread.
-    pub fn column_summary(
-        &self,
-        column: u32,
-        top: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<ColumnSummary, GewuError> {
-        Ok(self
-            .inner
-            .column_summary(column, top, &cancellation.inner)?
-            .into())
     }
 }
 

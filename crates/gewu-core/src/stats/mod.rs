@@ -8,17 +8,15 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{column::DistinctValue, scope::Selection, Bound, Error, Result};
+use crate::{scope::Selection, Bound, Error, Result};
 
 pub mod analysis;
-mod extremes;
 mod lengths;
 mod logarithmic;
 mod median;
 pub(crate) mod numeric;
 mod scale;
 pub mod scatter;
-pub(crate) mod streaming;
 mod values;
 
 pub use analysis::{
@@ -32,31 +30,6 @@ pub use scatter::{
 };
 
 use crate::Cancellation;
-
-/// Facts about one column over the rows of the current view (so explicit
-/// filters apply), for aggregate reporting.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ColumnSummary {
-    /// Rows in the current view.
-    pub rows: u64,
-    pub null_count: u64,
-    pub nan_count: u64,
-    /// Distinct non-null values.
-    pub distinct_count: u64,
-    /// Numbers, dates and times only (dates and times as their physical
-    /// value; see `Session::format_value`). These f64 results can approximate
-    /// large integers and decimals; distinct counts use the native values.
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    /// Smallest and largest non-null values of any comparable column, as
-    /// the table displays them.
-    pub min_label: Option<String>,
-    pub max_label: Option<String>,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    /// Other columns: the most common values, most common first.
-    pub top_values: Vec<DistinctValue>,
-}
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -72,6 +45,13 @@ pub struct NumericStatistics {
     pub infinite_count: u64,
 }
 
+/// A displayed non-null value and its frequency in the captured view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueFrequency {
+    pub label: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ValueSummary {
     /// Non-null distinct values, estimated with a fixed-capacity sketch.
@@ -79,7 +59,7 @@ pub struct ValueSummary {
     /// Applies to distinct cardinality and candidate selection. Counts recount
     /// candidates over all rows; 64-bit hash collisions may merge values.
     pub estimated: bool,
-    pub values: Vec<DistinctValue>,
+    pub values: Vec<ValueFrequency>,
 }
 
 #[derive(Debug, Clone)]
@@ -172,72 +152,6 @@ impl<'a> ArrayView<'a> {
     pub(crate) fn value_summary(&self, context: &Cancellation) -> Result<ValueSummary> {
         values::analyze(*self, context)
     }
-}
-
-pub(crate) fn summary(
-    view: ArrayView<'_>,
-    choices: Option<Vec<DistinctValue>>,
-    top: usize,
-    context: &Cancellation,
-) -> Result<ColumnSummary> {
-    context.check()?;
-    let mut s = ColumnSummary {
-        rows: view.len() as u64,
-        null_count: 0,
-        nan_count: 0,
-        distinct_count: 0,
-        min: None,
-        max: None,
-        min_label: None,
-        max_label: None,
-        mean: None,
-        std_dev: None,
-        top_values: Vec::new(),
-    };
-    let array = view.array;
-    let rows = view.rows;
-    let f = crate::format::formatter(array.as_ref())?;
-    let label = |row: Option<usize>| row.and_then(|r| crate::format::cell(array.as_ref(), &f, r));
-
-    if let Some(numeric) = numeric::Numeric::new(array) {
-        let details =
-            crate::scope::for_rows!(rows, |it| numeric.summarize(it, &mut s, true, context))?;
-        (s.min_label, s.max_label) = (label(details.min_row), label(details.max_row));
-        return Ok(s);
-    }
-
-    for (index, row) in view.rows.iter().enumerate() {
-        context.check_at(index)?;
-        s.null_count += u64::from(view.is_null(row));
-    }
-    if let Some(mut choices) = choices {
-        s.distinct_count = choices.len() as u64;
-        let mut present = choices.iter().filter_map(|v| v.label.as_ref());
-        s.min_label = present.clone().next().cloned();
-        s.max_label = present.next_back().cloned();
-        if s.null_count > 0 {
-            s.distinct_count -= 1;
-        }
-        choices.retain(|v| v.label.is_some());
-        choices.sort_by_key(|v| std::cmp::Reverse(v.count));
-        choices.truncate(top);
-        s.top_values = choices;
-    } else {
-        // One spare in case null is among the most common.
-        let counted = streaming::count_values(view, top + 1, context)?;
-        s.distinct_count = counted.distinct;
-        let (lo, hi) = extremes::extremes(view, context)?;
-        (s.min_label, s.max_label) = (label(lo), label(hi));
-        if s.null_count > 0 {
-            s.distinct_count -= 1;
-        }
-        let mut values = counted.top;
-        values.retain(|v| v.label.is_some());
-        values.sort_by_key(|v| std::cmp::Reverse(v.count));
-        values.truncate(top);
-        s.top_values = values;
-    }
-    Ok(s)
 }
 
 /// Distribution of a numeric column for statistics and filter charts.
@@ -362,10 +276,6 @@ pub(crate) fn counts_scaled(
     }
 }
 
-pub fn ranges(view: ArrayView<'_>, bins: u32, context: &Cancellation) -> Result<RangeHistogram> {
-    statistics(view.array, view.rows, bins, context)
-}
-
 /// Storage types handled by native histogram binning.
 pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
     use crate::types::{direct_domain, Domain};
@@ -383,12 +293,12 @@ pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
     )
 }
 
-fn statistics<H: Output>(
+fn statistics(
     array: &ArrayRef,
     rows: &Selection,
     bins: u32,
     context: &Cancellation,
-) -> Result<H> {
+) -> Result<Histogram> {
     context.check()?;
     let histogram = supports_histogram(array.data_type());
     if !histogram {
@@ -425,24 +335,21 @@ fn statistics<H: Output>(
         }
     };
     context.check()?;
-    H::finish(
-        Histogram {
-            scale: AxisScale::Linear,
-            lo: None,
-            hi: None,
-            min_label: None,
-            max_label: None,
-            integer: array.data_type().is_integer() || array.data_type().is_temporal(),
-            counts: Vec::new(),
-            bin_edges: Vec::new(),
-            null_count,
-            nan_count: total - null_count,
-            non_positive_count: 0,
-            infinite_count: 0,
-            total,
-        },
-        || Ok(Vec::new()),
-    )
+    Ok(Histogram {
+        scale: AxisScale::Linear,
+        lo: None,
+        hi: None,
+        min_label: None,
+        max_label: None,
+        integer: array.data_type().is_integer() || array.data_type().is_temporal(),
+        counts: Vec::new(),
+        bin_edges: Vec::new(),
+        null_count,
+        nan_count: total - null_count,
+        non_positive_count: 0,
+        infinite_count: 0,
+        total,
+    })
 }
 
 fn build_bins<H: Output>(
@@ -937,14 +844,6 @@ mod tests {
         assert_eq!(histogram.counts[1], 1);
         assert_eq!(histogram.counts[99], 1);
         assert_eq!(histogram.counts.iter().sum::<u64>(), 2);
-        let distribution = ranges(
-            ArrayView::new(&array, &selected),
-            100,
-            &Cancellation::default(),
-        )
-        .unwrap();
-        assert_eq!(distribution.histogram, histogram);
-        assert_eq!(distribution.ranges.len(), 100);
     }
 
     #[test]
@@ -1000,12 +899,6 @@ mod tests {
             assert_eq!((h.total, h.null_count, h.nan_count), (total, nulls, nans));
             assert!(h.counts.is_empty());
             assert!(h.min_label.is_none() && h.max_label.is_none());
-            assert_eq!(
-                ranges(ArrayView::new(&array, &rows), 40, &Cancellation::default())
-                    .unwrap()
-                    .histogram,
-                h
-            );
         }
         for value in [f64::INFINITY, f64::NEG_INFINITY] {
             let array: ArrayRef =
@@ -1018,12 +911,7 @@ mod tests {
                 ),
                 Err(Error::InvalidArgument(_))
             ));
-            assert!(ranges(
-                ArrayView::new(&array, &Selection::All(3)),
-                40,
-                &Cancellation::default()
-            )
-            .is_err());
+
             assert!(build_scaled(
                 ArrayView::new(&array, &Selection::All(3)),
                 40,

@@ -7,8 +7,35 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Cancellation, Error, Filter, QuerySpec, Session};
+use gewu_core::{
+    AnalysisData, AnalysisSection, Bound, Cancellation, Error, Filter, NumericStatistics,
+    QuerySpec, Session, ValueSummary,
+};
 use parquet::arrow::ArrowWriter;
+
+fn statistics(doc: &Session) -> NumericStatistics {
+    let result = doc
+        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Statistics)
+        .unwrap()
+        .run()
+        .unwrap();
+    let AnalysisData::Statistics { statistics } = result.data else {
+        panic!("statistics");
+    };
+    statistics
+}
+
+fn values(doc: &Session) -> ValueSummary {
+    let result = doc
+        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Values)
+        .unwrap()
+        .run()
+        .unwrap();
+    let AnalysisData::Values { summary } = result.data else {
+        panic!("values");
+    };
+    summary
+}
 
 fn document(array: ArrayRef) -> Session {
     let file = tempfile::NamedTempFile::new().unwrap();
@@ -199,20 +226,8 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
         .prepare_view(&QuerySpec::default())
         .and_then(|operation| operation.run())
         .unwrap();
-    assert_eq!(
-        signed
-            .column_summary(0, 0, &Cancellation::default())
-            .unwrap()
-            .distinct_count,
-        4
-    );
-    assert_eq!(
-        unsigned
-            .column_summary(0, 0, &Cancellation::default())
-            .unwrap()
-            .distinct_count,
-        4
-    );
+    assert_eq!(values(&signed).distinct_count, 4);
+    assert_eq!(values(&unsigned).distinct_count, 4);
 }
 
 #[test]
@@ -352,21 +367,27 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         Some(f32::NAN),
         None,
     ])));
-    let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
+    let summary = statistics(&doc);
+    assert_eq!(summary.nan_count, 1);
     assert_eq!(
         (
-            summary.rows,
-            summary.null_count,
-            summary.nan_count,
-            summary.distinct_count
+            summary.min_label.as_deref(),
+            summary.max_label.as_deref(),
+            summary.mean,
+            summary.std_dev
         ),
-        (5, 1, 1, 3)
+        (Some("1.0"), Some("3.0"), Some(2.0), Some(1.0))
     );
-    assert_eq!(
-        (summary.min, summary.max, summary.mean, summary.std_dev),
-        (Some(1.0), Some(3.0), Some(2.0), Some(1.0))
-    );
-    let histogram = doc.histogram(0, None, 2, &Cancellation::default()).unwrap();
+    let histogram = doc
+        .filter_distribution(
+            0,
+            None,
+            2,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
+        .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
         (histogram.null_count, histogram.nan_count, histogram.total),
@@ -374,14 +395,25 @@ fn float32_summary_and_histogram_follow_selected_rows() {
     );
 
     check_range(&doc, Some(doc.parse_bound(0, "2").unwrap()), None, &[1, 2]);
-    let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
+    let summary = statistics(&doc);
     assert_eq!(
-        (summary.rows, summary.distinct_count, summary.mean),
+        (
+            doc.current_view().row_count,
+            values(&doc).distinct_count,
+            summary.mean
+        ),
         (2, 2, Some(2.5))
     );
-    let histogram = doc
-        .view_histogram(doc.current_view().version, 0, 2, &Cancellation::default())
+    let result = doc
+        .prepare_analysis(doc.current_view().version, 0, AnalysisSection::Distribution)
+        .unwrap()
+        .with_histogram_bins(2)
+        .unwrap()
+        .run()
         .unwrap();
+    let AnalysisData::Distribution { histogram } = result.data else {
+        panic!("distribution");
+    };
     assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
     assert_eq!(histogram.counts, [0, 2]);
 }
@@ -403,13 +435,17 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
     ];
     for array in arrays {
         let doc = document(array);
-        let summary = doc.column_summary(0, 0, &Cancellation::default()).unwrap();
-        assert_eq!(
-            (summary.null_count, summary.distinct_count, summary.mean),
-            (1, 3, Some(1.0))
-        );
+        let summary = statistics(&doc);
+        assert_eq!((values(&doc).distinct_count, summary.mean), (3, Some(1.0)));
         let histogram = doc
-            .histogram(0, None, 10, &Cancellation::default())
+            .filter_distribution(
+                0,
+                None,
+                10,
+                gewu_core::AxisScale::Linear,
+                &Cancellation::default(),
+            )
+            .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
@@ -446,12 +482,7 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
     ];
     for array in arrays {
         let doc = document(array);
-        assert_eq!(
-            doc.column_summary(0, 0, &Cancellation::default())
-                .unwrap()
-                .distinct_count,
-            2
-        );
+        assert_eq!(values(&doc).distinct_count, 2);
         // Chart coordinates may round, but filter endpoints remain exact.
         assert_eq!(
             doc.parse_bound(0, &base.to_string()).unwrap().axis_value(),

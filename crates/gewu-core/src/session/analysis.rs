@@ -3,11 +3,7 @@
 use arrow::array::Array;
 
 use super::Session;
-use crate::{
-    scope::RowScope,
-    stats::{self, ArrayView, AxisScale, ColumnSummary, Histogram},
-    Cancellation, Result,
-};
+use crate::{stats, Result};
 
 impl Session {
     /// Capture an independently cancellable scatter sample. X=None uses source
@@ -29,23 +25,6 @@ impl Session {
         let y = (y_column, self.column_array(y_column)?.clone());
         let view = self.views.snapshot(version)?;
         crate::ScatterAnalysis::new(x, y, view.rows.clone(), version, limit)
-    }
-
-    pub fn view_histogram(
-        &self,
-        version: u64,
-        column: u32,
-        bins: u32,
-        cancel: &Cancellation,
-    ) -> Result<Histogram> {
-        cancel.check()?;
-        let col = self.column(column)?;
-        let view = self.views.snapshot(version)?;
-        let rows = self.rows_in(RowScope::Rows(view.rows.clone()), cancel)?;
-        let result =
-            ArrayView::new(&col.array, &rows).histogram(bins, AxisScale::Linear, cancel)?;
-        cancel.check()?;
-        Ok(result)
     }
 
     /// Available analysis sections, determined from type metadata without scanning rows.
@@ -70,25 +49,5 @@ impl Session {
             column,
             section,
         )
-    }
-
-    pub fn column_summary(
-        &self,
-        column: u32,
-        top: u32,
-        cancel: &Cancellation,
-    ) -> Result<ColumnSummary> {
-        cancel.check()?;
-        let col = self.column(column)?;
-        let rows = self.rows_in(RowScope::Rows(self.views.current().rows.clone()), cancel)?;
-        let view = ArrayView::new(&col.array, &rows);
-        let result = stats::summary(
-            view,
-            col.choices(&rows, false, cancel)?,
-            top as usize,
-            cancel,
-        )?;
-        cancel.check()?;
-        Ok(result)
     }
 }

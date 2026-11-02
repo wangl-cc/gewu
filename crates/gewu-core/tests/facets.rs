@@ -5,8 +5,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Cancellation, Error, Filter, QuerySpec, Session};
+use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+use gewu_core::{AnalysisData, AnalysisSection, Cancellation, Error, Filter, QuerySpec, Session};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -54,12 +54,22 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Session) {
 }
 
 fn labels_of(doc: &Session, column: u32, spec: Option<&QuerySpec>) -> Vec<(String, u64)> {
-    doc.distinct_values(column, spec, 100, &Cancellation::default())
-        .unwrap()
-        .values
-        .into_iter()
-        .map(|v| (v.label.unwrap_or_else(|| "<null>".into()), v.count))
-        .collect()
+    let choices = doc
+        .filter_choices(column, spec, &Cancellation::default())
+        .unwrap();
+    let mut result = Vec::new();
+    if choices.null_count > 0 {
+        result.push(("<null>".into(), choices.null_count));
+    }
+    result.extend(
+        choices
+            .values
+            .unwrap()
+            .into_iter()
+            .filter(|v| v.count > 0)
+            .map(|v| (v.label, v.count)),
+    );
+    result
 }
 
 /// label in {cat, dog}, price >= 2, and a search for "a" (names a only;
@@ -74,7 +84,7 @@ fn busy_spec() -> QuerySpec {
 }
 
 #[test]
-fn distinct_ignores_only_its_own_column() {
+fn choices_ignore_only_their_own_column() {
     let (path, doc) = sample("distinct");
     let spec = busy_spec();
 
@@ -101,7 +111,7 @@ fn distinct_ignores_only_its_own_column() {
 }
 
 #[test]
-fn distinct_and_histogram_apply_column_filters() {
+fn choices_and_distribution_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
     let spec = QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false));
@@ -112,7 +122,14 @@ fn distinct_and_histogram_apply_column_filters() {
     assert_eq!(names, ["a", "d"]);
 
     let h = doc
-        .histogram(3, Some(&spec), 6, &Cancellation::default())
+        .filter_distribution(
+            3,
+            Some(&spec),
+            6,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.total, 2);
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
@@ -125,46 +142,31 @@ fn histogram_ignores_only_its_own_column() {
     let spec = busy_spec().with_filter(3, Filter::range(Some("60".into()), None, false));
     // id: label and price filters apply -> rows a, f; its own range does not.
     let h = doc
-        .histogram(3, Some(&spec), 6, &Cancellation::default())
+        .filter_distribution(
+            3,
+            Some(&spec),
+            6,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.total, 2);
     // price: label and id filters apply -> row f only.
     let h = doc
-        .histogram(2, Some(&spec), 4, &Cancellation::default())
+        .filter_distribution(
+            2,
+            Some(&spec),
+            4,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.total, 1);
     // Axis always spans the whole column.
     assert_eq!(h.lo, Some(1.0));
     assert_eq!(h.hi, Some(9.0));
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn view_histogram_and_summary_follow_the_current_view() {
-    let (path, doc) = sample("view");
-    let spec = busy_spec();
-    let v = doc
-        .prepare_view(&spec)
-        .and_then(|operation| operation.run())
-        .unwrap();
-    assert_eq!(v.row_count, 2); // a, f
-
-    let h = doc
-        .view_histogram(v.version, 3, 6, &Cancellation::default())
-        .unwrap();
-    assert_eq!(h.total, 2);
-    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
-    assert_eq!(s.rows, 2);
-    assert_eq!(s.min, Some(3.5));
-    assert_eq!(s.max, Some(7.0));
-
-    doc.prepare_view(&QuerySpec::default())
-        .and_then(|operation| operation.run())
-        .unwrap();
-    assert!(matches!(
-        doc.view_histogram(v.version, 3, 6, &Cancellation::default()),
-        Err(Error::StaleVersion { .. })
-    ));
     std::fs::remove_file(path).ok();
 }
 
@@ -185,11 +187,18 @@ fn failed_apply_keeps_the_old_view() {
 fn unknown_column_is_an_argument_error() {
     let (path, doc) = sample("unknown");
     assert!(matches!(
-        doc.distinct_values(9, None, 10, &Cancellation::default()),
+        doc.filter_choices(9, None, &Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
     assert!(matches!(
-        doc.histogram(9, None, 10, &Cancellation::default()),
+        doc.filter_distribution(
+            9,
+            None,
+            10,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default()
+        )
+        .map(|result| result.expect("histogram domain").histogram),
         Err(Error::InvalidArgument(_))
     ));
     let v = doc.current_view();
@@ -228,7 +237,7 @@ fn cancelled_apply_never_replaces_the_view() {
 }
 
 #[test]
-fn columns_with_too_many_values_are_counted_not_indexed() {
+fn high_cardinality_choices_use_paging_and_exact_filters_without_a_dictionary() {
     // 150,000 distinct names, with "x" also on every 1000th row.
     let n = 150_000i64;
     let names: ArrayRef = Arc::new(StringArray::from_iter_values((0..n).map(|i| {
@@ -241,17 +250,18 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
     let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
     let (path, doc) = write("many", &batch);
 
-    let d = doc
-        .distinct_values(0, None, 3, &Cancellation::default())
+    let choices = doc
+        .filter_choices(0, None, &Cancellation::default())
         .unwrap();
-    assert!(!d.keyed);
-    assert!(d.truncated);
-    assert_eq!(d.total, (n - n / 1000 + 1) as u64);
-    // The most common value comes first by count, but the list is in value
-    // order: "x" sorts after every "n…".
-    assert_eq!(d.values.len(), 3);
-    assert_eq!(d.values[2].label.as_deref(), Some("x"));
-    assert_eq!(d.values[2].count, (n / 1000) as u64);
+    assert!(choices.values.is_none());
+    assert_eq!(choices.null_count, 0);
+    let page = doc
+        .prepare_text_choices(0, None, &Cancellation::default())
+        .unwrap()
+        .page("x", None, 10, &Cancellation::default())
+        .unwrap();
+    assert_eq!(page.values.len(), 1);
+    assert_eq!(page.values[0].count, (n / 1000) as u64);
 
     let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
     assert_eq!(
@@ -265,92 +275,36 @@ fn columns_with_too_many_values_are_counted_not_indexed() {
         .and_then(|operation| operation.run())
         .unwrap();
 
-    let s = doc.column_summary(0, 2, &Cancellation::default()).unwrap();
-    assert_eq!(s.rows, n as u64);
-    assert_eq!(s.null_count, 0);
-    assert_eq!(s.distinct_count, d.total);
-    assert_eq!(s.top_values[0].label.as_deref(), Some("x"));
-    assert_eq!(s.min_label.as_deref(), Some("n000001"));
-    assert_eq!(s.max_label.as_deref(), Some("x"));
     std::fs::remove_file(path).ok();
 }
 
 #[test]
-fn summary_of_text_counts_nulls_apart() {
+fn value_analysis_excludes_nulls_and_recounts_candidates() {
     let (path, doc) = sample("summary");
-    let s = doc.column_summary(1, 2, &Cancellation::default()).unwrap();
-    assert_eq!(s.null_count, 1);
-    assert_eq!(s.distinct_count, 3);
-    let top: Vec<_> = s
-        .top_values
+    let result = doc
+        .prepare_analysis(0, 1, AnalysisSection::Values)
+        .unwrap()
+        .run()
+        .unwrap();
+    let AnalysisData::Values { summary } = result.data else {
+        panic!("values");
+    };
+    assert_eq!(summary.distinct_count, 3);
+    let top: Vec<_> = summary
+        .values
         .iter()
-        .map(|v| (v.label.clone().unwrap(), v.count))
+        .map(|v| (v.label.as_str(), v.count))
         .collect();
-    // Ties stay in value order.
-    assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
-    assert_eq!(s.min_label.as_deref(), Some("bird"));
-    assert_eq!(s.max_label.as_deref(), Some("dog"));
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn summary_extrema_cover_single_values_nulls_and_filtered_views() {
-    let columns: Vec<(&str, ArrayRef)> = vec![
-        (
-            "text",
-            Arc::new(StringArray::from(vec![
-                Some("cat"),
-                Some("dog"),
-                Some("cat"),
-                None,
-            ])),
-        ),
-        (
-            "boolean",
-            Arc::new(BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                None,
-            ])),
-        ),
-        ("null", Arc::new(StringArray::from(vec![None::<&str>; 4]))),
-    ];
-    let (path, doc) = write(
-        "summary-extrema",
-        &RecordBatch::try_from_iter(columns).unwrap(),
-    );
-    // A source singleton, a filtered singleton, null-only and empty views all
-    // exercise the same summary contract, without separate files for each case.
-    for (filter, expected) in [
-        (None, [Some(("cat", "dog")), Some(("true", "true")), None]),
-        (Some(Filter::exact(vec!["cat".into()], false, false)), [
-            Some(("cat", "cat")),
-            Some(("true", "true")),
-            None,
-        ]),
-        (Some(Filter::exact(vec![], false, true)), [None; 3]),
-        (Some(Filter::exact(vec![], false, false)), [None; 3]),
-    ] {
-        let mut spec = QuerySpec::default();
-        if let Some(f) = filter {
-            spec = spec.with_filter(0, f);
-        }
-        doc.prepare_view(&spec)
-            .and_then(|operation| operation.run())
-            .unwrap();
-        for (column, extremes) in expected.into_iter().enumerate() {
-            let summary = doc
-                .column_summary(column as u32, 2, &Cancellation::default())
-                .unwrap();
-            assert_eq!(
-                (summary.min_label.as_deref(), summary.max_label.as_deref()),
-                (extremes.map(|(min, _)| min), extremes.map(|(_, max)| max)),
-                "column {column}, view {:?}",
-                doc.current_view()
-            );
-        }
-    }
+    assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
+    let result = doc
+        .prepare_analysis(0, 1, AnalysisSection::Overview)
+        .unwrap()
+        .run()
+        .unwrap();
+    assert!(matches!(result.data, AnalysisData::Overview {
+        null_count: 1,
+        ..
+    }));
     std::fs::remove_file(path).ok();
 }
 
@@ -364,7 +318,14 @@ fn min_and_max_leave_out_nan() {
     ]));
     let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
     let (path, doc) = write("nan", &batch);
-    let s = doc.column_summary(0, 5, &Cancellation::default()).unwrap();
+    let result = doc
+        .prepare_analysis(0, 0, AnalysisSection::Statistics)
+        .unwrap()
+        .run()
+        .unwrap();
+    let AnalysisData::Statistics { statistics: s } = result.data else {
+        panic!("statistics");
+    };
     assert_eq!(s.nan_count, 1);
     assert_eq!(s.min_label.as_deref(), Some("-1.5"));
     assert_eq!(s.max_label.as_deref(), Some("2.0"));

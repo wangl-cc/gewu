@@ -1,4 +1,4 @@
-//! Which rows a facet (distinct values, histogram, summary) counts.
+//! Source rows selected for filter candidates, charts and analysis.
 
 use std::sync::Arc;
 
@@ -7,9 +7,6 @@ use crate::QuerySpec;
 pub(crate) enum RowScope<'a> {
     /// Every row of the file.
     All,
-    /// Exactly these source rows, e.g. a view's, each at most once. Their
-    /// order does not matter to anything that counts them.
-    Rows(Arc<Vec<u32>>),
     /// Rows that pass `spec`'s filters, ignoring the filters on column
     /// `except` (like Excel: a column's own filter does not hide its values).
     Facet { spec: &'a QuerySpec, except: u32 },
@@ -44,8 +41,7 @@ impl Selection {
         }
     }
 
-    /// The rows in order. In a hot loop prefer [`for_rows!`], which
-    /// compiles the loop separately for each case and runs faster.
+    /// The selected source rows in order.
     pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         let (all, rows) = match self {
             Self::All(n) => (0..*n, &[][..]),
@@ -54,21 +50,3 @@ impl Selection {
         all.chain(rows.iter().map(|&r| r as usize))
     }
 }
-
-/// Run `$body` with `$rows` bound to an iterator over a [`Selection`]'s rows,
-/// with a separate, fully optimised copy of `$body` for each case.
-macro_rules! for_rows {
-    ($selection:expr, | $rows:ident | $body:expr) => {
-        match $selection {
-            $crate::scope::Selection::All(n) => {
-                let $rows = 0..*n;
-                $body
-            }
-            $crate::scope::Selection::Rows(rows) => {
-                let $rows = rows.iter().map(|&r| r as usize);
-                $body
-            }
-        }
-    };
-}
-pub(crate) use for_rows;

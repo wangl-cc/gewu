@@ -197,9 +197,9 @@ struct ColumnAnalysisView: View {
                     .help(
                         "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
                     )
-                ForEach(summary.values, id: \.key) { item in
+                ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 3) {
-                        detail(item.label ?? "(null)", countWithPercent(item.count, total: model.current.rowCount))
+                        detail(item.label, countWithPercent(item.count, total: model.current.rowCount))
                         ProgressView(value: Double(item.count), total: Double(max(model.current.rowCount, 1)))
                             .tint(.accentColor)
                     }

@@ -85,19 +85,16 @@ fn sorts_with_nulls_last() {
 }
 
 #[test]
-fn checkbox_filter_and_distinct() {
+fn checkbox_filter_and_choices() {
     let (path, doc) = sample();
     let all = doc
-        .distinct_values(1, None, 100, &Cancellation::default())
+        .filter_choices(1, None, &Cancellation::default())
         .unwrap();
-    let labels: Vec<_> = all.values.iter().map(|v| v.label.clone()).collect();
-    assert_eq!(labels, [
-        None,
-        Some("bird".into()),
-        Some("cat".into()),
-        Some("dog".into())
-    ]);
-    assert_eq!(all.values[2].count, 2);
+    assert_eq!(all.null_count, 1);
+    let values = all.values.unwrap();
+    let labels: Vec<_> = values.iter().map(|v| v.label.as_str()).collect();
+    assert_eq!(labels, ["bird", "cat", "dog"]);
+    assert_eq!(values[1].count, 2);
 
     let spec = QuerySpec::single(
         1,
@@ -113,14 +110,24 @@ fn checkbox_filter_and_distinct() {
 
     // Distinct values of another column respect this filter.
     let prices = doc
-        .distinct_values(2, Some(&spec), 100, &Cancellation::default())
+        .filter_choices(2, Some(&spec), &Cancellation::default())
         .unwrap();
-    assert_eq!(prices.total, 4);
+    assert_eq!(prices.null_count, 1);
+    assert_eq!(
+        prices
+            .values
+            .unwrap()
+            .iter()
+            .filter(|v| v.count > 0)
+            .count(),
+        3
+    );
     // ...but the filtered column itself still lists every value (like Excel).
     let labels = doc
-        .distinct_values(1, Some(&spec), 100, &Cancellation::default())
+        .filter_choices(1, Some(&spec), &Cancellation::default())
         .unwrap();
-    assert_eq!(labels.total, 4);
+    assert_eq!(labels.null_count, 1);
+    assert_eq!(labels.values.unwrap().len(), 3);
     std::fs::remove_file(path).ok();
 }
 
@@ -158,17 +165,6 @@ fn stale_version_is_rejected() {
         doc.rows(old, 0, 10, &[0]),
         Err(Error::StaleVersion { .. })
     ));
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn stats() {
-    let (path, doc) = sample();
-    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
-    assert_eq!(s.null_count, 1);
-    assert_eq!(s.distinct_count, 5);
-    assert_eq!(s.min_label.as_deref(), Some("1.0"));
-    assert_eq!(s.max_label.as_deref(), Some("9.0"));
     std::fs::remove_file(path).ok();
 }
 
@@ -240,16 +236,32 @@ fn range_filter_rejects_text_columns() {
 fn histogram_counts() {
     let (path, doc) = sample();
     // price spans 1.0..=9.0 in 4 bins of width 2: [1,3) [3,5) [5,7) [7,9].
-    let h = doc.histogram(2, None, 4, &Cancellation::default()).unwrap();
+    let h = doc
+        .filter_distribution(
+            2,
+            None,
+            4,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
+        .unwrap();
     assert_eq!((h.lo, h.hi), (Some(1.0), Some(9.0)));
     assert!(!h.integer);
     assert_eq!(h.counts, [2, 1, 0, 2]);
     assert_eq!((h.null_count, h.total), (1, 6));
 
     // Small integer span: one bin per integer would need 51 bins, so with
-    // 100 bins each integer 10..=60 gets its own.
+    // 60 bins each integer 10..=60 gets its own.
     let h = doc
-        .histogram(3, None, 100, &Cancellation::default())
+        .filter_distribution(
+            3,
+            None,
+            60,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(10.0), Some(61.0)));
@@ -259,8 +271,15 @@ fn histogram_counts() {
     assert_eq!(h.counts[50], 1);
 
     assert!(doc
-        .histogram(1, None, 10, &Cancellation::default())
-        .is_err());
+        .filter_distribution(
+            1,
+            None,
+            10,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default()
+        )
+        .unwrap()
+        .is_none());
     std::fs::remove_file(path).ok();
 }
 
@@ -447,7 +466,14 @@ fn dates_format_parse_and_filter() {
 
     // Dates are integers: the histogram ends one day past the last date.
     let h = doc
-        .histogram(1, None, 100, &Cancellation::default())
+        .filter_distribution(
+            1,
+            None,
+            60,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_798.0)));
@@ -469,39 +495,5 @@ fn find_marks_matching_cells() {
             .collect();
         assert_eq!(hits, expected, "query {query}");
     }
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn column_summary_follows_the_view() {
-    let (path, doc) = sample();
-    // price: 3.5, 1.0, 9.0, null, 2.25, 7.0
-    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
-    assert_eq!((s.rows, s.null_count, s.distinct_count), (6, 1, 5));
-    assert_eq!((s.min, s.max), (Some(1.0), Some(9.0)));
-    assert!((s.mean.unwrap() - 4.55).abs() < 1e-9);
-    // Sample standard deviation: sqrt(44.8 / 4).
-    assert!((s.std_dev.unwrap() - 3.3466).abs() < 1e-3);
-    assert!(s.top_values.is_empty());
-
-    // label: cat, dog, null, cat, bird, dog
-    let s = doc.column_summary(1, 2, &Cancellation::default()).unwrap();
-    assert_eq!((s.null_count, s.distinct_count), (1, 3));
-    let top: Vec<_> = s
-        .top_values
-        .iter()
-        .map(|v| (v.label.clone().unwrap(), v.count))
-        .collect();
-    assert_eq!(top, [("cat".to_string(), 2), ("dog".to_string(), 2)]);
-
-    // With a filter, only the view's rows count.
-    doc.prepare_view(&QuerySpec::single(
-        1,
-        Filter::exact(vec!["dog".into()], false, false),
-    ))
-    .and_then(|operation| operation.run())
-    .unwrap();
-    let s = doc.column_summary(2, 5, &Cancellation::default()).unwrap();
-    assert_eq!((s.rows, s.min, s.max), (2, Some(1.0), Some(7.0)));
     std::fs::remove_file(path).ok();
 }

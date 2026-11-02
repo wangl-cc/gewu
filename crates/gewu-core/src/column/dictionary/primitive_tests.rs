@@ -72,7 +72,7 @@ mod float {
                 .unwrap()
                 .unwrap();
             assert_eq!(dictionary.n_values(), 3, "{data_type:?}");
-            assert!(dictionary.has_null(), "{data_type:?}");
+            assert!((dictionary.null_count() > 0), "{data_type:?}");
 
             // Signed zeroes share the same code; different NaN payloads share the same code.
             assert_eq!(
@@ -143,7 +143,7 @@ mod integer {
                 .unwrap()
                 .expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
-            assert!(dictionary.has_null());
+            assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
@@ -168,7 +168,7 @@ mod integer {
                 .unwrap()
                 .expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
-            assert!(dictionary.has_null());
+            assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
@@ -237,7 +237,7 @@ mod temporal {
                 .unwrap()
                 .expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
-            assert!(dictionary.has_null());
+            assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(1), "{data_type}");
             assert_ne!(dictionary.code_at(0), dictionary.code_at(4), "{data_type}");
@@ -265,7 +265,7 @@ mod decimal {
             .unwrap()
             .expect("encoded");
         assert_eq!(dictionary.n_values(), 3);
-        assert!(dictionary.has_null());
+        assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(4));
@@ -285,7 +285,7 @@ mod decimal {
             .unwrap()
             .expect("encoded");
         assert_eq!(dictionary.n_values(), 2);
-        assert!(dictionary.has_null());
+        assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(3));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
         assert!(dictionary.is_null(2));
@@ -309,7 +309,7 @@ mod boolean {
             .unwrap()
             .expect("encoded");
         assert_eq!(dictionary.n_values(), 2);
-        assert!(dictionary.has_null());
+        assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));
         assert_ne!(dictionary.code_at(0), dictionary.code_at(1));
         assert!(dictionary.is_null(3));

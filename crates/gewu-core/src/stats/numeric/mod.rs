@@ -2,8 +2,6 @@
 //! once per operation; only individual values needed for floating-point results
 //! are converted. No widened column or numeric cache is built.
 
-use std::hash::Hash;
-
 use arrow::{
     array::{downcast_integer_array, Array, ArrayRef, AsArray, PrimitiveArray},
     compute::single_decimal_to_float_lossy,
@@ -12,9 +10,8 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use crate::{
-    stats::{Cancellation, ColumnSummary},
     types::{direct_domain, Domain},
-    Result,
+    Cancellation, Result,
 };
 
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -80,16 +77,13 @@ impl<'a> Numeric<'a> {
         supports(array.data_type()).then_some(Self(array))
     }
 
-    /// Fill in the numeric parts of `summary`; returns the rows holding
-    /// the smallest and largest values.
-    pub(crate) fn summarize(
+    /// Compute moments and retain source rows for exact extrema.
+    fn summarize(
         self,
         rows: impl Iterator<Item = usize>,
-        summary: &mut ColumnSummary,
-        collect_distinct: bool,
         context: &Cancellation,
-    ) -> Result<summary::SummaryDetails> {
-        dispatch!(self.0, summarize(rows, summary, collect_distinct, context))
+    ) -> Result<summary::NumericSummary> {
+        dispatch!(self.0, summarize(rows, context))
     }
 
     /// One scalar conversion per access; dispatch and borrowing happen once.
@@ -102,24 +96,23 @@ pub(crate) fn analyze(
     view: super::ArrayView<'_>,
     context: &Cancellation,
 ) -> Result<super::NumericStatistics> {
-    let mut summary = ColumnSummary::default();
-    let details = Numeric::new(view.array)
+    let summary = Numeric::new(view.array)
         .expect("validated statistics capability")
-        .summarize(view.rows.iter(), &mut summary, false, context)?;
+        .summarize(view.rows.iter(), context)?;
     let formatter = crate::format::formatter(view.array.as_ref())?;
     let label = |row: Option<usize>| {
         row.and_then(|row| crate::format::cell(view.array.as_ref(), &formatter, row))
     };
     Ok(super::NumericStatistics {
-        min_label: label(details.min_row),
-        max_label: label(details.max_row),
+        min_label: label(summary.min_row),
+        max_label: label(summary.max_row),
         median_label: super::median::label(view, context)?,
         mean: summary.mean.filter(|v| v.is_finite()),
         std_dev: summary
             .std_dev
-            .filter(|v| v.is_finite() && details.infinite_count == 0),
+            .filter(|v| v.is_finite() && summary.infinite_count == 0),
         nan_count: summary.nan_count,
-        infinite_count: details.infinite_count,
+        infinite_count: summary.infinite_count,
     })
 }
 
@@ -140,17 +133,13 @@ where
 
 /// Operations that differ between native floating values and decimal coefficients.
 trait RealType: ArrowPrimitiveType {
-    type Key: Eq + Hash;
     fn as_float(value: Self::Native, scale: i32) -> f64;
-    fn key(value: Self::Native) -> Self::Key;
 }
 
 macro_rules! float_type {
     ($($ty:ty),* $(,)?) => {$(
         impl RealType for $ty {
-            type Key = u64;
             fn as_float(value: Self::Native, _: i32) -> f64 { f64::from(value) }
-            fn key(value: Self::Native) -> u64 { (f64::from(value) + 0.0).to_bits() }
         }
     )*};
 }
@@ -159,14 +148,12 @@ float_type!(Float16Type, Float32Type, Float64Type);
 macro_rules! decimal_type {
     ($($ty:ty),* $(,)?) => {$(
         impl RealType for $ty {
-            type Key = Self::Native;
             fn as_float(value: Self::Native, scale: i32) -> f64 {
                 single_decimal_to_float_lossy::<Self, _>(
                     &|v| v.to_f64().expect("decimal coefficients fit in f64's exponent range"),
                     value, scale,
                 )
             }
-            fn key(value: Self::Native) -> Self::Native { value }
         }
     )*};
 }

@@ -243,13 +243,32 @@ mod xlsx {
             doc.schema().field(0).data_type(),
             &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
         );
-        let h = doc.histogram(0, None, 3, &Cancellation::default()).unwrap();
+        let h = doc
+            .filter_distribution(
+                0,
+                None,
+                3,
+                gewu_core::AxisScale::Linear,
+                &Cancellation::default(),
+            )
+            .map(|result| result.expect("histogram domain").histogram)
+            .unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
-        assert_eq!(
-            doc.view_histogram(doc.current_view().version, 0, 3, &Cancellation::default())
-                .unwrap(),
-            h
-        );
+        let result = doc
+            .prepare_analysis(
+                doc.current_view().version,
+                0,
+                gewu_core::AnalysisSection::Distribution,
+            )
+            .unwrap()
+            .with_histogram_bins(3)
+            .unwrap()
+            .run()
+            .unwrap();
+        let gewu_core::AnalysisData::Distribution { histogram } = result.data else {
+            panic!("distribution");
+        };
+        assert_eq!(histogram, h);
     }
 
     fn workbook(path: &Path) {

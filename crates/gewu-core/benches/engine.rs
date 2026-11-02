@@ -182,11 +182,11 @@ fn facets(c: &mut Criterion) {
         ("id_high_card", id),
         ("uuid_high_card", uuid),
     ] {
-        g.bench_function(format!("distinct_cold_{name}"), |b| {
+        g.bench_function(format!("choices_cold_{name}"), |b| {
             b.iter_batched(
                 || Session::open(&path).unwrap(),
                 |doc| {
-                    doc.distinct_values(column, None, 10_000, &Cancellation::default())
+                    doc.filter_choices(column, None, &Cancellation::default())
                         .unwrap()
                 },
                 BatchSize::PerIteration,
@@ -194,58 +194,54 @@ fn facets(c: &mut Criterion) {
         });
     }
     // Hot: index cached; counts only rows passing the other columns' filters.
-    doc.distinct_values(city, None, 1, &Cancellation::default())
+    doc.filter_choices(city, None, &Cancellation::default())
         .unwrap();
-    g.bench_function("distinct_hot_city_filtered", |b| {
+    g.bench_function("choices_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.distinct_values(city, Some(&other_filter), 10_000, &Cancellation::default())
+            doc.filter_choices(city, Some(&other_filter), &Cancellation::default())
                 .unwrap()
         })
     });
 
     g.bench_function("histogram_price", |b| {
         b.iter(|| {
-            doc.histogram(price, None, 60, &Cancellation::default())
-                .unwrap()
+            doc.filter_distribution(
+                price,
+                None,
+                60,
+                gewu_core::AxisScale::Linear,
+                &Cancellation::default(),
+            )
+            .map(|result| result.expect("histogram domain").histogram)
+            .unwrap()
         })
     });
     let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {
-            doc.histogram(price, Some(&label_filter), 60, &Cancellation::default())
-                .unwrap()
+            doc.filter_distribution(
+                price,
+                Some(&label_filter),
+                60,
+                gewu_core::AxisScale::Linear,
+                &Cancellation::default(),
+            )
+            .map(|result| result.expect("histogram domain").histogram)
+            .unwrap()
         })
     });
 
     doc.prepare_view(&QuerySpec::default())
         .and_then(|operation| operation.run())
         .unwrap();
-    g.bench_function("summary_price", |b| {
-        b.iter(|| {
-            doc.column_summary(price, 8, &Cancellation::default())
-                .unwrap()
-        })
-    });
-    g.bench_function("summary_label_hot", |b| {
-        doc.column_summary(label, 8, &Cancellation::default())
-            .unwrap();
-        b.iter(|| {
-            doc.column_summary(label, 8, &Cancellation::default())
-                .unwrap()
-        })
-    });
-    // Null count, distinct count, min and max of a freshly opened column
-    // (`column_stats` before it was merged into the summary).
-    g.bench_function("stats_price_cold", |b| {
-        b.iter_batched(
-            || Session::open(&path).unwrap(),
-            |doc| {
-                doc.column_summary(price, 8, &Cancellation::default())
-                    .unwrap()
-            },
-            BatchSize::PerIteration,
+    let statistics = doc
+        .prepare_analysis(
+            doc.current_view().version,
+            price,
+            AnalysisSection::Statistics,
         )
-    });
+        .unwrap();
+    g.bench_function("statistics_price", |b| b.iter(|| statistics.run().unwrap()));
     g.finish();
 }
 

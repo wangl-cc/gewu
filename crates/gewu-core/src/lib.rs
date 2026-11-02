@@ -16,9 +16,7 @@ pub mod session;
 pub mod stats;
 pub mod types;
 
-pub use column::{
-    Bound, Column, ColumnCapabilities, ColumnInfo, DistinctResult, DistinctValue, ValueCategory,
-};
+pub use column::{Bound, Column, ColumnCapabilities, ColumnInfo, ValueCategory};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
@@ -36,8 +34,8 @@ pub use session::{
 };
 pub use stats::{
     AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ArrayView, AxisScale,
-    ColumnAnalysis, ColumnSummary, Histogram, LengthSummary, LengthUnit, NumericStatistics,
-    RangeBounds, RangeHistogram, ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult,
+    ColumnAnalysis, Histogram, LengthSummary, LengthUnit, NumericStatistics, RangeBounds,
+    RangeHistogram, ScatterAnalysis, ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency,
     ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use types::Encoding;

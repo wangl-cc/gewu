@@ -19,8 +19,8 @@ mod text_choices;
 mod view;
 
 pub use analysis::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
-    DistinctValue, Histogram, LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
+    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, Histogram,
+    LengthSummary, LengthUnit, NumericStatistics, ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;
 pub use error::GewuError;

@@ -145,10 +145,6 @@ impl Session {
         let total_rows = self.dataset.n_rows;
         Ok(match scope {
             RowScope::All => Selection::All(total_rows),
-            // A view keeps each row at most once, so a full-length view is
-            // every row, and counting in file order is faster.
-            RowScope::Rows(rows) if rows.len() == total_rows => Selection::All(total_rows),
-            RowScope::Rows(rows) => Selection::Rows(rows),
             RowScope::Facet { spec, except } => {
                 self.column(except)?;
                 self.validate_query(spec)?;

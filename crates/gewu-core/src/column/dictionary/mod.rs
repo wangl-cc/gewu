@@ -12,7 +12,7 @@
 //!   [`primitive::CanonicalizeArray`].
 //! - Text, binary and nested arrays use Arrow's row format to discover distinct byte rows.
 //!
-//! The column consumes the dictionary through [`Dictionary::distinct_values`] for
+//! The column consumes the dictionary through [`Dictionary::filter_choices`] for
 //! projected choices and frequency counting, and [`Dictionary::matching_codes`]
 //! for filter generation.
 //!
@@ -31,7 +31,7 @@ use arrow::{
 };
 use rapidhash::RapidHashMap;
 
-use super::DistinctValue;
+use super::{value_text, FilterChoices, ValueChoice};
 use crate::{
     predicate::Predicate, scope::Selection, selection::RowSelection, Cancellation, Result,
 };
@@ -406,18 +406,10 @@ impl Dictionary {
 }
 
 impl Dictionary {
-    /// Null identifier in distinct-value reports.
-    pub const NULL_KEY: u64 = 255;
-
     #[cfg(test)]
     #[inline]
     pub(crate) fn labels(&self) -> &[String] {
         &self.labels
-    }
-
-    #[inline]
-    pub(crate) fn has_null(&self) -> bool {
-        self.nulls.as_ref().is_some_and(|n| n.null_count() > 0)
     }
 
     #[inline]
@@ -441,33 +433,31 @@ impl Dictionary {
         self.codes[row]
     }
 
-    pub(crate) fn distinct_values(
+    /// Project exact filter candidates directly from the dictionary's native values.
+    pub(crate) fn filter_choices(
         &self,
         rows: &Selection,
-        include_zero: bool,
         cancel: &Cancellation,
-    ) -> Result<Vec<DistinctValue>> {
+    ) -> Result<FilterChoices> {
         cancel.check()?;
-        let mut result = Vec::with_capacity(self.labels.len() + 1);
         let tally = self.tally(rows, cancel)?;
-        if self.has_null() && (include_zero || tally.null_count > 0) {
-            result.push(DistinctValue {
-                key: Self::NULL_KEY,
-                label: None,
-                count: tally.null_count,
-            });
-        }
-        for (code, label) in self.labels.iter().enumerate() {
-            let count = tally.counts[code];
-            if include_zero || count > 0 {
-                result.push(DistinctValue {
-                    key: code as u64,
-                    label: Some(label.clone()),
-                    count,
-                });
-            }
-        }
-        Ok(result)
+        let values = self
+            .labels
+            .iter()
+            .enumerate()
+            .map(|(code, label)| {
+                Ok(ValueChoice {
+                    label: label.clone(),
+                    value: value_text::encode(&self.values, code)?,
+                    count: tally.counts[code],
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        cancel.check()?;
+        Ok(FilterChoices {
+            values: Some(values),
+            null_count: tally.null_count,
+        })
     }
 
     fn tally(&self, rows: &Selection, cancel: &Cancellation) -> Result<Tally> {

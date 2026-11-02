@@ -1,5 +1,5 @@
-//! Fixed-capacity inspector estimates. Aggregate reports keep their separate
-//! full-count contract. Only representative row IDs, never owned values, are retained.
+//! Fixed-capacity inspector estimates. Only representative row IDs, never owned values,
+//! are retained.
 
 use std::{
     collections::{hash_map::DefaultHasher, BinaryHeap, HashMap},
@@ -14,8 +14,8 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{ArrayView, Cancellation, ValueSummary};
-use crate::{column::DistinctValue, format, Error, Result};
+use super::{ArrayView, Cancellation, ValueFrequency, ValueSummary};
+use crate::{format, Error, Result};
 
 /// Scalar values with comparable labels and bounded distinct estimates.
 pub(super) fn supports(data_type: &DataType) -> bool {
@@ -219,10 +219,8 @@ pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<Val
     let formatter = format::formatter(view.array.as_ref())?;
     let values = top
         .into_iter()
-        .enumerate()
-        .map(|(key, (count, row))| DistinctValue {
-            key: key as u64,
-            label: Some(formatter.value(row).to_string()),
+        .map(|(count, row)| ValueFrequency {
+            label: formatter.value(row).to_string(),
             count,
         })
         .collect();
@@ -264,8 +262,8 @@ mod tests {
         let sel = crate::scope::Selection::All(array.len());
         let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
         assert_eq!(
-            (summary.values[0].label.as_deref(), summary.values[0].count),
-            (Some("0"), 50_000)
+            (summary.values[0].label.as_str(), summary.values[0].count),
+            ("0", 50_000)
         );
         let mut unique = Sketch::default();
         for row in 0..DISTINCT_CAPACITY {
@@ -314,8 +312,8 @@ mod tests {
         .unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
-            (summary.values[0].label.as_deref(), summary.values[0].count),
-            (Some("same"), 2)
+            (summary.values[0].label.as_str(), summary.values[0].count),
+            ("same", 2)
         );
         let context = Cancellation::default();
         context.cancel();

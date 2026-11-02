@@ -62,7 +62,7 @@ pub struct NumericStatistics {
 pub struct ValueSummary {
     pub distinct_count: u64,
     pub estimated: bool,
-    pub values: Vec<DistinctValue>,
+    pub values: Vec<ValueFrequency>,
 }
 
 #[derive(uniffi::Record)]
@@ -180,29 +180,9 @@ impl ColumnAnalysis {
     }
 }
 
-/// One column over the current view's rows, for the inspector.
 #[derive(uniffi::Record)]
-pub struct ColumnSummary {
-    pub rows: u64,
-    pub null_count: u64,
-    pub nan_count: u64,
-    pub distinct_count: u64,
-    /// Numbers, dates and times (dates and times as raw integer values).
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    /// Smallest and largest values of any comparable column, as displayed.
-    pub min_label: Option<String>,
-    pub max_label: Option<String>,
-    pub mean: Option<f64>,
-    pub std_dev: Option<f64>,
-    /// Other columns: most common values first.
-    pub top_values: Vec<DistinctValue>,
-}
-
-#[derive(uniffi::Record)]
-pub struct DistinctValue {
-    pub key: u64,
-    pub label: Option<String>,
+pub struct ValueFrequency {
+    pub label: String,
     pub count: u64,
 }
 
@@ -245,30 +225,11 @@ impl From<core::Histogram> for Histogram {
     }
 }
 
-impl From<core::DistinctValue> for DistinctValue {
-    fn from(value: core::DistinctValue) -> Self {
+impl From<core::ValueFrequency> for ValueFrequency {
+    fn from(value: core::ValueFrequency) -> Self {
         Self {
-            key: value.key,
             label: value.label,
             count: value.count,
-        }
-    }
-}
-
-impl From<core::ColumnSummary> for ColumnSummary {
-    fn from(summary: core::ColumnSummary) -> Self {
-        Self {
-            rows: summary.rows,
-            null_count: summary.null_count,
-            nan_count: summary.nan_count,
-            distinct_count: summary.distinct_count,
-            min: summary.min,
-            max: summary.max,
-            min_label: summary.min_label,
-            max_label: summary.max_label,
-            mean: summary.mean,
-            std_dev: summary.std_dev,
-            top_values: summary.top_values.into_iter().map(Into::into).collect(),
         }
     }
 }

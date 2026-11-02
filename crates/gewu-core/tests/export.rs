@@ -417,7 +417,7 @@ fn source_file_and_aliases_cannot_be_overwritten() {
 }
 
 #[test]
-fn view_histogram_includes_the_columns_own_filter() {
+fn analysis_distribution_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
     let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
     let view = doc
@@ -425,11 +425,28 @@ fn view_histogram_includes_the_columns_own_filter() {
         .and_then(|operation| operation.run())
         .unwrap();
     let filter_histogram = doc
-        .histogram(0, Some(&spec), 8, &Cancellation::default())
+        .filter_distribution(
+            0,
+            Some(&spec),
+            8,
+            gewu_core::AxisScale::Linear,
+            &Cancellation::default(),
+        )
+        .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    let view_histogram = doc
-        .view_histogram(view.version, 0, 8, &Cancellation::default())
+    let result = doc
+        .prepare_analysis(view.version, 0, gewu_core::AnalysisSection::Distribution)
+        .unwrap()
+        .with_histogram_bins(8)
+        .unwrap()
+        .run()
         .unwrap();
+    let gewu_core::AnalysisData::Distribution {
+        histogram: view_histogram,
+    } = result.data
+    else {
+        panic!("distribution");
+    };
     assert_eq!(filter_histogram.total, 5);
     assert_eq!(view_histogram.total, 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
@@ -437,7 +454,7 @@ fn view_histogram_includes_the_columns_own_filter() {
         .and_then(|operation| operation.run())
         .unwrap();
     assert!(matches!(
-        doc.view_histogram(view.version, 0, 8, &Cancellation::default()),
+        doc.prepare_analysis(view.version, 0, gewu_core::AnalysisSection::Distribution),
         Err(Error::StaleVersion { .. })
     ));
 }

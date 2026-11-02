@@ -22,7 +22,7 @@ fn codes_name_distinct_values_and_null_mask() {
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), 2);
-    assert!(dictionary.has_null());
+    assert!((dictionary.null_count() > 0));
     assert_eq!(dictionary.code_at(0), dictionary.code_at(3));
     assert_ne!(dictionary.code_at(0), dictionary.code_at(2));
     assert!(dictionary.is_null(1));
@@ -50,7 +50,7 @@ fn nulls_do_not_consume_value_codes() {
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), MAX_DISTINCT_VALUES);
-    assert!(dictionary.has_null());
+    assert!((dictionary.null_count() > 0));
 }
 
 #[test]
@@ -89,14 +89,14 @@ fn empty_and_all_null_columns_still_encode() {
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), 0);
-    assert!(!dictionary.has_null());
+    assert!(!(dictionary.null_count() > 0));
 
     let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
     let dictionary = Dictionary::build(&nulls, &Cancellation::default())
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), 0);
-    assert!(dictionary.has_null());
+    assert!((dictionary.null_count() > 0));
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
     let tally = dictionary
@@ -139,7 +139,7 @@ fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), 2);
-    assert!(dictionary.has_null());
+    assert!((dictionary.null_count() > 0));
 
     let code_b = dictionary.code_at(0);
     let code_a = dictionary.code_at(3);
@@ -167,7 +167,7 @@ fn native_dictionary_drops_duplicate_and_unused_entries() {
         .unwrap()
         .unwrap();
     assert_eq!(dictionary.n_values(), 2);
-    assert!(!dictionary.has_null());
+    assert!(!(dictionary.null_count() > 0));
 
     // Rows 1 and 2 both reference value "a" through different dictionary keys
     assert_eq!(dictionary.code_at(1), dictionary.code_at(2));
@@ -262,7 +262,7 @@ fn plain_and_native_dictionaries_agree() {
         .unwrap()
         .unwrap();
     assert_eq!(plain.n_values(), native.n_values());
-    assert_eq!(plain.has_null(), native.has_null());
+    assert_eq!((plain.null_count() > 0), (native.null_count() > 0));
     let p_tally = plain
         .tally(&Selection::All(5), &Cancellation::default())
         .unwrap();
@@ -279,7 +279,7 @@ fn arrow_null_type_encodes_every_row_as_null() {
         .unwrap()
         .expect("encoded");
     assert_eq!(dictionary.n_values(), 0);
-    assert!(dictionary.has_null());
+    assert!((dictionary.null_count() > 0));
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
     assert!(dictionary.is_null(2));

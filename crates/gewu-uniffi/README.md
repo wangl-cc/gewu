@@ -10,7 +10,7 @@ This document describes the calling contract. See [data types](../../docs/data-t
 | --- | --- |
 | `GewuSession` | Owns an open Core viewing session over a dataset and its current view. Opening decodes the file into memory. |
 | `ViewOperation` | Registers one query request, then runs or cancels that single-use operation. |
-| `Cancellation` | Caller-owned terminal cancellation for one filter, candidate, summary or Find request. |
+| `Cancellation` | Caller-owned terminal cancellation for one filter, candidate or Find request. |
 | `ColumnAnalysis` | Captures one column, view and analysis section, with its own cancellation state. |
 | `ScatterAnalysis` | Captures two axes (or source-row X), a view and a bounded point budget, with independent cancellation. |
 | `FindSession` | Captures a view, typed query and ordered column scope, with independent terminal cancellation and bounded cell results. |
@@ -30,7 +30,7 @@ Records such as `FileInfo`, `ViewInfo` and `RowBlock` carry values across the bo
 
 `start` is a zero-based display-row offset. The block is clipped to the available rows. `cells` is row-major: cell `(row, column)` is at `row * n_cols + column`, and `nil` represents null. `source_rows` contains zero-based source row indexes, independent of sorting and filtering. Row blocks do not carry hidden Find state or match flags.
 
-Versions identify published views within a document. `rows`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` and `view_histogram` reject a version that is no longer current with `StaleVersion`; they do not retrieve historical views. A successfully prepared Find, analysis or export owns its snapshot and can continue after a newer view is published.
+Versions identify published views within a document. `rows`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` reject a version that is no longer current with `StaleVersion`; they do not retrieve historical views. A successfully prepared Find, analysis or export owns its snapshot and can continue after a newer view is published.
 
 `FileInfo` flattens format-specific metadata into optional fields and arrays. Parquet supplies row groups, compression and footer metadata; XLSX supplies worksheet metadata. Missing values for other formats are not errors.
 
@@ -61,7 +61,7 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 
 | Calls | Scheduling |
 | --- | --- |
-| `open`, `open_sheet`, `xlsx_sheet_names`, `filter_choices`, `filter_distribution`, `prepare_text_choices`, `view_histogram`, `column_summary` | Background: file I/O, scans, sorting or index construction. |
+| `open`, `open_sheet`, `xlsx_sheet_names`, `filter_choices`, `filter_distribution`, `prepare_text_choices` | Background: file I/O, scans, sorting or index construction. |
 | `ViewOperation::run`, `ColumnAnalysis::run`, `ScatterAnalysis::run`, `GewuExport::write` | Background: execute the captured job. |
 | `FindSession` page/highlight methods | Background: execute bounded batches; no-hit and sparse scans can cover the captured view. |
 | `info`, `current_view`, `current_query`, `prepare_view`, `analysis_capabilities`, `prepare_find`, `prepare_analysis`, `prepare_scatter`, `prepare_export` | Metadata or snapshot preparation; suitable for the UI thread. |
@@ -73,7 +73,7 @@ All exported methods are synchronous. UniFFI does not move work to a background 
 Cancellation has independent scopes:
 
 - `prepare_view` supersedes older pending view operations immediately, before background execution. `ViewOperation::cancel()` cancels only that operation. An obsolete operation queued late cannot replace a newer one. A concurrent operation past its final commit check may already have succeeded. Sorting checks cancellation between bounded runs and merge batches, but comparator preparation and individual comparisons are not interruptible.
-- Create a `Cancellation` before queueing `filter_choices`, `filter_distribution`, `validate_filter`, `prepare_text_choices`, `view_histogram` or `column_summary`, and pass it as the `cancellation` argument. Cancellation reaches preparation and scans, including other-column facet filters and lazy dictionary construction. Cancelled construction never becomes a cached negative result. Handles are terminal; create a new one for each replacement request.
+- Create a `Cancellation` before queueing `filter_choices`, `filter_distribution`, `validate_filter` or `prepare_text_choices`, and pass it as the `cancellation` argument. Cancellation reaches preparation and scans, including other-column facet filters and lazy dictionary construction. Cancelled construction never becomes a cached negative result. Handles are terminal; create a new one for each replacement request.
 - `TextChoices::page(query, after, limit, cancellation)` observes both the request's cancellation and the session's terminal `cancel()`. Cancelling one page preserves the facet and does not affect subsequent pages. No generation counter crosses the interface.
 - `ColumnAnalysis::cancel()` cancels only that analysis job. Cancellation is terminal for the handle; prepare a new job to run it again after cancellation.
 - `ScatterAnalysis::cancel()` similarly cancels only its scatter scan, not table queries or other analysis jobs.
@@ -121,7 +121,7 @@ Display `NumericStatistics.median_label` verbatim. The median excludes nulls and
 
 For scatter plots, filter candidate axes using `ColumnInfo.capabilities.scatter`, then call `prepare_scatter(version, x_column, y_column, limit, x_scale, y_scale)` followed by `ScatterAnalysis::run()` on a worker. The generated Swift method is `prepareScatter(version:xColumn:yColumn:limit:xScale:yScale:)`; `xColumn: nil` means zero-based source row IDs. The limit must be in 1...4096. `ColumnInfo.capabilities.logarithmic` enables independent `Log10` scales for numeric columns; dates and source row IDs remain linear. A `ScatterResult` contains `version`, `x_column`, `y_column`, `total_rows`, `eligible_rows`, `non_positive_rows`, `sampled` and `points`; each point has `source_row`, approximate original `x`/`y` and exact `x_label`/`y_label`. Missing/non-finite pairs are omitted first, then finite pairs with nonpositive values on logarithmic axes are counted in `non_positive_rows` and excluded before sampling. Show a sampling indicator when `sampled` is true, and use labels for tooltips rather than reformatting rounded coordinates. Temporal coordinates remain in the column's physical Arrow unit. Validate document/request identity, axis selection and scales before publication, and cancel the job when the plot disappears or its inputs change. Releasing a document does not invalidate an already captured scatter snapshot.
 
-The FFI also exposes `column_summary(column, top, cancellation)` and `view_histogram(version, column, bins, cancellation)`. The former reads the current view without returning a version; the latter checks a supplied version. Use section jobs for an inspector that needs explicit snapshot identity and independent cancellation. Display exact extrema labels rather than converting approximate numeric coordinates back into values.
+The Values section returns `ValueFrequency { label: String, count: u64 }` for non-null values. These are display results, not filter inputs or persistent value identifiers. The UI uses result positions for list identity. Selectable filter candidates instead carry their own lossless `value` text, projected directly from the dictionary.
 
 ## Export
 

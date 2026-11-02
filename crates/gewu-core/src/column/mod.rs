@@ -22,10 +22,10 @@ pub(crate) use dictionary::Dictionary;
 pub(crate) use metadata::display_type;
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{predicate::Predicate, scope::Selection, types, Cancellation, Filter, Result};
+use crate::{predicate::Predicate, types, Cancellation, Filter, Result};
 
 /// Operations supported by a column's type. Value-list availability
-/// additionally depends on cardinality and is reported by `DistinctResult`.
+/// additionally depends on cardinality and is reported by `crate::FilterChoices`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColumnCapabilities {
     pub contains: bool,
@@ -39,29 +39,19 @@ pub struct ColumnCapabilities {
     pub logarithmic: bool,
 }
 
-/// A single distinct value in a column or summary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DistinctValue {
-    /// Identifier within this distinct-value report.
-    /// Codes `0..=254` name non-null values and `255` names null.
-    pub key: u64,
-    /// Displayed text; `None` is the null value.
-    pub label: Option<String>,
-    pub count: u64,
+/// Complete bounded non-null candidates, or None when no bounded dictionary is available.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterChoices {
+    pub values: Option<Vec<ValueChoice>>,
+    pub null_count: u64,
 }
 
-/// Distinct values of a column, with total count and truncation state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DistinctResult {
-    /// Sorted by value, nulls first.
-    pub values: Vec<DistinctValue>,
-    /// Number of distinct values before `limit` was applied.
-    pub total: u64,
-    pub truncated: bool,
-    /// Whether this report comes from the bounded dictionary. False for
-    /// columns with too many distinct values to encode; `values` then holds
-    /// the most common ones.
-    pub keyed: bool,
+/// A filter candidate with separate display and lossless input text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueChoice {
+    pub label: String,
+    pub value: String,
+    pub count: u64,
 }
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
@@ -201,51 +191,6 @@ impl Column {
         ColumnInfo::from_column(self)
     }
 
-    /// Precomputed choices with counts, or `None` if the column is not dictionary-encoded.
-    pub(crate) fn choices(
-        &self,
-        rows: &Selection,
-        include_zero: bool,
-        cancel: &Cancellation,
-    ) -> Result<Option<Vec<DistinctValue>>> {
-        self.dictionary(cancel)?
-            .map(|d| d.distinct_values(rows, include_zero, cancel))
-            .transpose()
-    }
-
-    /// Distinct values of this column with their counts.
-    /// Fast path: uses dictionary encoding if available.
-    /// Slow path: counts values via streaming scan.
-    pub(crate) fn distinct_values(
-        &self,
-        rows: &Selection,
-        limit: usize,
-        cancel: &Cancellation,
-    ) -> Result<DistinctResult> {
-        if let Some(dictionary) = self.dictionary(cancel)? {
-            let choices = dictionary.distinct_values(rows, false, cancel)?;
-            let total = choices.len() as u64;
-            Ok(DistinctResult {
-                total,
-                truncated: total > limit as u64,
-                values: choices.into_iter().take(limit).collect(),
-                keyed: true,
-            })
-        } else {
-            let counted = crate::stats::streaming::count_values(
-                crate::stats::ArrayView::new(&self.array, rows),
-                limit,
-                cancel,
-            )?;
-            Ok(DistinctResult {
-                total: counted.distinct,
-                truncated: counted.distinct > limit as u64,
-                values: counted.top.into_iter().take(limit).collect(),
-                keyed: false,
-            })
-        }
-    }
-
     pub(crate) fn prepare_filter<'a>(
         &'a self,
         filter: &Filter,
@@ -336,13 +281,6 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(matches!(column.dictionary.get(), Some(None)));
-        assert_eq!(
-            column
-                .distinct_values(&Selection::All(2), 2, &Cancellation::default())
-                .unwrap()
-                .total,
-            2
-        );
     }
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {

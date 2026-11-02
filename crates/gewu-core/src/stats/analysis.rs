@@ -373,9 +373,9 @@ mod tests {
             summary
                 .values
                 .iter()
-                .map(|v| (v.label.as_deref(), v.count))
+                .map(|v| (v.label.as_str(), v.count))
                 .collect::<Vec<_>>(),
-            [(Some("a"), 2), (Some("b"), 1)]
+            [("a", 2), ("b", 1)]
         );
     }
 
