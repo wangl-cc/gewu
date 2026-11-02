@@ -39,4 +39,4 @@ pub use stats::{
     RangeBounds, RangeHistogram, ScatterAnalysis, ScatterPoint, ScatterResult, ValueSummary,
     MAX_SCATTER_POINTS,
 };
-pub use types::{Encoding, Type};
+pub use types::Encoding;

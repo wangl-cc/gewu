@@ -20,7 +20,7 @@ pub(super) fn build<H: Output>(
     if bins == 0 {
         return Err(Error::InvalidArgument("bins must be at least 1".into()));
     }
-    if !crate::types::Type::from_arrow(array.data_type()).is_some_and(|ty| ty.is_numeric()) {
+    if !crate::types::capabilities(array.data_type()).logarithmic {
         return Err(Error::InvalidArgument(format!(
             "{} does not support logarithmic histograms",
             array.data_type()

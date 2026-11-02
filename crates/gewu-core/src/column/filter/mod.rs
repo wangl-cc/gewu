@@ -1,9 +1,7 @@
 //! Column-level predicate compilation for explicit filters and Find queries.
 //!
-//! Type policy comes from the column's [`Type`] model: Find asks
-//! [`Type::find_strategy`] and explicit filters are gated by
-//! [`crate::types::ColumnCapabilities`]. The modules below own the native
-//! kernels, not the decision of which types support which operation.
+//! Type policies project directly from Arrow through [`crate::types`].
+//! The modules below own the native kernels.
 
 pub mod nested;
 pub mod range;
@@ -11,49 +9,39 @@ pub mod scalar;
 pub mod text;
 
 use arrow::array::{Array, ArrayRef};
-pub use super::bound::Bound;
 
+pub use super::bound::Bound;
 use crate::{
     predicate::Predicate,
     selection::RowSelection,
-    types::{ColumnCapabilities, Domain, FindStrategy, Type},
+    types::{self, Domain, Encoding, FindStrategy},
     Error, Filter, Result,
 };
 
 /// Type-aware search for Find operations across all columns.
 pub(crate) fn prepare_find<'a>(
     array: &'a ArrayRef,
-    ty: &Type,
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
     if query.is_empty() {
         return Ok(None);
     }
-    match ty.find_strategy() {
+    match types::find_strategy(array.data_type()) {
         FindStrategy::Unsupported => Ok(None),
         FindStrategy::Text => text::contains(array, query, false, matcher).map(Some),
         FindStrategy::Scalar => scalar::search(array, query),
         FindStrategy::List | FindStrategy::Struct => nested::search(array, query, matcher),
-        FindStrategy::Dictionary => nested::dictionary_find(array, |values| {
-            // The value type comes from the array itself so nested dictionaries
-            // keep following keys level by level.
-            let child = Type::from_arrow(values.data_type())
-                .ok_or_else(|| Error::Unsupported("dictionary value type is not modeled".into()))?;
-            prepare_find(values, &child, query, matcher)
-        }),
+        FindStrategy::Dictionary => {
+            nested::dictionary_find(array, |values| prepare_find(values, query, matcher))
+        }
     }
 }
 
 /// Type-dependent filters. InValues is prepared separately once the
 /// column or document has obtained its lazy value index.
-pub(crate) fn prepare_filter<'a>(
-    array: &'a ArrayRef,
-    ty: &Type,
-    capabilities: ColumnCapabilities,
-    filter: &Filter,
-) -> Result<Predicate<'a>> {
-    let predicate = prepare_value_filter(array, ty, capabilities, filter)?;
+pub(crate) fn prepare_filter<'a>(array: &'a ArrayRef, filter: &Filter) -> Result<Predicate<'a>> {
+    let predicate = prepare_value_filter(array, filter)?;
     let include_nulls = matches!(
         filter,
         Filter::Range {
@@ -87,29 +75,20 @@ pub(crate) fn prepare_filter<'a>(
     )))
 }
 
-fn prepare_value_filter<'a>(
-    array: &'a ArrayRef,
-    ty: &Type,
-    capabilities: ColumnCapabilities,
-    filter: &Filter,
-) -> Result<Predicate<'a>> {
+fn prepare_value_filter<'a>(array: &'a ArrayRef, filter: &Filter) -> Result<Predicate<'a>> {
     if let Filter::TextValues { values, exclude } = filter {
         return text::selected_values(array, values, *exclude);
     }
     if let Filter::IsNull { negate } = filter {
         return Ok(is_null_predicate(array, *negate));
     }
-    if ty.is_dictionary() {
-        return nested::dictionary(array, |values| {
-            let child = Type::from_arrow(values.data_type())
-                .ok_or_else(|| Error::Unsupported("dictionary value type is not modeled".into()))?;
-            let child_caps = child.capabilities();
-            prepare_filter(values, &child, child_caps, filter).map(Some)
-        })?
-        .ok_or_else(|| {
-            Error::InvalidArgument("filter cannot be applied to dictionary values".into())
-        });
+    if types::encoding(array.data_type()) == Encoding::Dictionary {
+        return nested::dictionary(array, |values| prepare_filter(values, filter).map(Some))?
+            .ok_or_else(|| {
+                Error::InvalidArgument("filter cannot be applied to dictionary values".into())
+            });
     }
+    let capabilities = types::capabilities(array.data_type());
     match filter {
         Filter::Contains {
             text: value,
@@ -120,7 +99,7 @@ fn prepare_value_filter<'a>(
             range::prepare_range(array, min.as_ref(), max.as_ref())
         }
         Filter::Equals { value } if capabilities.equals => {
-            if is_text(ty) {
+            if types::domain(array.data_type()) == Some(Domain::Text) {
                 Ok(text::equals(array, value))
             } else {
                 scalar::equals(array, value)
@@ -130,7 +109,7 @@ fn prepare_value_filter<'a>(
             let predicates = values
                 .iter()
                 .map(|value| {
-                    if is_text(ty) {
+                    if types::domain(array.data_type()) == Some(Domain::Text) {
                         Ok(text::equals(array, value))
                     } else {
                         scalar::equals(array, value)
@@ -144,11 +123,6 @@ fn prepare_value_filter<'a>(
             array.data_type()
         ))),
     }
-}
-
-/// Whether equality on this column compares strings rather than parsed values.
-fn is_text(ty: &Type) -> bool {
-    ty.domain() == Some(Domain::Text)
 }
 
 fn is_null_predicate<'a>(array: &'a ArrayRef, negate: bool) -> Predicate<'a> {

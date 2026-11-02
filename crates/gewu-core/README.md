@@ -93,11 +93,11 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 `FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
 
-## Type model
+## Type projections
 
-[types/](src/types) is the single place that answers what a column type supports. A type has four orthogonal dimensions: `Shape` (null, scalar, list, struct, map), `Scalar` (text, boolean, number, temporal, interval or binary, with its bit width, precision and scale, time unit and time zone), `Encoding` (direct or dictionary) and the parameter-free `Domain` that policy code matches on. `Type::from_arrow` builds the model and returns `None` for Arrow types without Gewu semantics; opening a document rejects such columns instead of degrading silently. `LogicalType` is derived from the model as the stable value projection used by the FFI, `ColumnInfo` and the app, while `ColumnInfo::encoding` separately reports direct or dictionary storage — a dictionary of text is still text.
+[types/](src/types) projects display metadata, operation capabilities, inspector sections and Find strategies directly from Arrow `DataType`. Arrow remains the source of truth; Core does not store a parallel type tree. `LogicalType` is the display-oriented FFI projection, while `Domain` groups scalar semantics without copying parameters. Dictionary value semantics are separate from storage capabilities: encoded integers remain integers, but ordered operations require native arrays. Loading rejects unsupported types, including nested children. Native kernels use the original Arrow type to choose their physical implementation.
 
-Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units and Find strategy. `column/filter`, `column/stats` and `task/analysis` read those derivations instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
+Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `contains`, histogram, scatter, logarithmic), inspector sections, length units and Find strategy. `column/filter`, `stats` and `session` read those projections instead of classifying Arrow types again; native kernels still match Arrow's `DataType` to pick a monomorphized path.
 
 [column/dictionary/](src/column/dictionary) owns the compact distinct-value dictionary: native dictionaries reuse their keys and values, primitive arrays scan their native values directly, floats scan a normalized key, and only text, binary and nested arrays use Arrow's row format. Its consumers call `counts`, `keys_for_labels` or `prepare_predicate`; they never see codes or encoding strategy. Shared float identity (`-0.0` groups with `0.0`, every NaN payload groups as one NaN) lives in [dictionary/primitive.rs](src/column/dictionary/primitive.rs): it is the dictionary's definition of value identity, and the values analysis imports it so both group floats the same way.
 
@@ -114,7 +114,7 @@ Derivations live only in `types/derive.rs`: capabilities (`range`, `equals`, `co
 | [view.rs](src/view.rs) | Query state, sort keys and formatted row blocks. |
 | [filter.rs](src/filter.rs) | Explicit filter inputs and filter-editor contracts. |
 | [engine.rs](src/engine.rs) | View snapshots, versions, cancellation and publication. |
-| [types/](src/types) | Four-dimension column type model and the capability, analysis and Find derivations. |
+| [types/](src/types) | Direct Arrow projections for display metadata, capabilities, inspector sections and Find strategies. |
 | [column/](src/column) | Per-type formatting, predicate preparation, distinct-value encoding and histograms. |
 | [column/bound.rs](src/column/bound.rs) | Exact typed endpoints and range preparation. |
 | [column/histogram.rs](src/column/histogram.rs) | Native bin membership, counts and exact filter bounds. |

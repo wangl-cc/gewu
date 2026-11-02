@@ -93,10 +93,8 @@ impl ScatterAnalysis {
             (y_scale, Some(&self.y.1)),
         ] {
             if scale == AxisScale::Log10
-                && !array.is_some_and(|array| {
-                    crate::types::Type::from_arrow(array.data_type())
-                        .is_some_and(|ty| ty.is_numeric())
-                })
+                && !array
+                    .is_some_and(|array| crate::types::capabilities(array.data_type()).logarithmic)
             {
                 return Err(Error::InvalidArgument(
                     "logarithmic scatter axes require a numeric column".into(),

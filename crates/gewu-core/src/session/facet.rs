@@ -1,6 +1,7 @@
 //! Filter inputs, editor data and facet queries.
 
 use super::Session;
+pub use crate::column::{DistinctResult, DistinctValue};
 use crate::{
     predicate::Predicate,
     scope::RowScope,
@@ -8,8 +9,6 @@ use crate::{
     types::{Domain, LogicalType},
     Error, Filter, Histogram, QuerySpec, RangeHistogram, Result,
 };
-
-pub use crate::column::{DistinctResult, DistinctValue};
 
 /// The editor and data a frontend needs for one column's filter popover.
 /// The editor is chosen from the whole source column and stays stable as
@@ -93,7 +92,7 @@ impl Session {
         }
         // Dictionary-encoded text keeps its choices editor rather than the
         // text editor; encoding and value semantics are separate here.
-        if col.ty().direct_domain() == Some(Domain::Text) {
+        if crate::types::direct_domain(col.array.data_type()) == Some(Domain::Text) {
             return Ok(FilterSpec {
                 nullable: col.is_nullable(),
                 editor: FilterEditor::Text {
@@ -144,7 +143,7 @@ impl Session {
         spec: Option<&QuerySpec>,
     ) -> Result<crate::TextChoices> {
         let col = self.column(column)?;
-        let is_text = col.ty().domain() == Some(Domain::Text);
+        let is_text = crate::types::domain(col.array.data_type()) == Some(Domain::Text);
         if !is_text {
             return Err(Error::InvalidArgument(
                 "text choices require a string column".into(),

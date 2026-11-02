@@ -1,14 +1,8 @@
-//! The single definition of what a column type supports.
-//!
-//! Every policy question — which filters, which inspector sections, which
-//! charts, how Find searches, how the distinct-value dictionary encodes — is
-//! answered here from the four dimensions of [`Type`]. Consumers call these
-//! methods instead of matching Arrow types or re-deriving rules.
+//! Operation policies projected directly from Arrow storage types.
 
 use arrow::datatypes::DataType;
 
-use super::{Domain, Encoding, Scalar, Shape, Type};
-use crate::types::logical::ColumnCapabilities;
+use super::{direct_domain, domain, is_supported, value_type, ColumnCapabilities, Domain};
 
 /// A section of the column inspector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,158 +40,120 @@ pub enum FindStrategy {
     Dictionary,
 }
 
-/// Scalar class of a directly stored column. Ordered operations and typing of
-/// explicit inputs currently require native arrays rather than dictionary keys.
-pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
-    Type::from_arrow(data_type)?.direct_domain()
+/// Whether the native numeric/temporal kernels support this storage type.
+/// Dictionary values retain their domain but need a different execution path.
+pub(crate) fn supports_ordered(data_type: &DataType) -> bool {
+    matches!(
+        direct_domain(data_type),
+        Some(
+            Domain::Integer
+                | Domain::Float
+                | Domain::Decimal
+                | Domain::Date
+                | Domain::Time
+                | Domain::Timestamp
+                | Domain::Duration
+        )
+    )
 }
 
-impl Type {
-    /// The scalar class when the values are stored directly. Ordered operations
-    /// and typed explicit inputs currently require native arrays, not
-    /// dictionary keys.
-    pub fn direct_domain(&self) -> Option<Domain> {
-        if self.encoding == Encoding::Direct {
-            self.domain()
-        } else {
-            None
-        }
-    }
-
-    /// Ordered single values: sorting, range filters, statistics, histograms
-    /// and charts work on these. Dictionary-encoded columns stay discrete.
-    pub fn is_ordered(&self) -> bool {
-        matches!(
-            self.domain(),
-            Some(
-                Domain::Integer
-                    | Domain::Float
-                    | Domain::Decimal
-                    | Domain::Date
-                    | Domain::Time
-                    | Domain::Timestamp
-                    | Domain::Duration
-            )
-        ) && self.encoding == Encoding::Direct
-    }
-
-    /// Numeric values: means, medians and logarithmic binning apply.
-    pub fn is_numeric(&self) -> bool {
-        matches!(
-            self.domain(),
+/// Supported operations for the actual storage type. Dictionary values can be
+/// searched and selected; ordered filters and charts require native arrays.
+pub fn capabilities(data_type: &DataType) -> ColumnCapabilities {
+    let supported = is_supported(data_type);
+    let values = value_type(data_type);
+    let ordered_values = supports_ordered(values);
+    let ordered = supports_ordered(data_type);
+    let value_domain = domain(data_type);
+    ColumnCapabilities {
+        contains: supported && !(ordered_values || value_domain == Some(Domain::Boolean)),
+        range: ordered,
+        equals: ordered_values || matches!(value_domain, Some(Domain::Boolean | Domain::Text)),
+        histogram: ordered,
+        scatter: ordered,
+        logarithmic: matches!(
+            direct_domain(data_type),
             Some(Domain::Integer | Domain::Float | Domain::Decimal)
-        ) && self.encoding == Encoding::Direct
+        ),
     }
+}
 
-    /// Whether substring or element containment applies. Ordered values and
-    /// booleans have no useful displayed text to search.
-    pub fn supports_contains(&self) -> bool {
-        let value = self.value_type();
-        !(value.is_ordered() || value.domain() == Some(Domain::Boolean))
+/// Inspector sections in presentation order, without inspecting column values.
+pub fn analysis_sections(data_type: &DataType) -> Vec<AnalysisSection> {
+    use AnalysisSection::*;
+    let mut sections = vec![Overview];
+    if !is_supported(data_type) {
+        return sections;
     }
-
-    /// Whether equality and equality-any filters apply.
-    pub fn supports_equals(&self) -> bool {
-        let value = self.value_type();
-        value.is_ordered() || matches!(value.domain(), Some(Domain::Boolean | Domain::Text))
+    if supports_ordered(data_type) {
+        sections.extend([Statistics, Distribution]);
     }
-
-    /// Every operation this type supports.
-    pub fn capabilities(&self) -> ColumnCapabilities {
-        match self.encoding {
-            // A dictionary is storage for a value type. Ordered operations need
-            // a directly stored array today, so they stay off; Find and the
-            // value-list filters follow the keys instead.
-            Encoding::Dictionary => ColumnCapabilities {
-                contains: self.supports_contains(),
-                range: false,
-                equals: self.supports_equals(),
-                histogram: false,
-                scatter: false,
-                logarithmic: false,
-            },
-            Encoding::Direct => ColumnCapabilities {
-                contains: self.supports_contains(),
-                range: self.is_ordered(),
-                equals: self.supports_equals(),
-                histogram: self.is_ordered(),
-                scatter: self.is_ordered(),
-                logarithmic: self.is_numeric(),
-            },
-        }
+    if supports_ordered(value_type(data_type))
+        || matches!(domain(data_type), Some(Domain::Text | Domain::Boolean))
+    {
+        sections.push(Values);
     }
+    if length_unit(data_type).is_some() {
+        sections.push(Lengths);
+    }
+    if matches!(
+        data_type,
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+            | DataType::Dictionary(..)
+    ) {
+        sections.push(Structure);
+    }
+    sections
+}
 
-    /// The inspector sections that apply, in presentation order.
-    pub fn analysis_sections(&self) -> Vec<AnalysisSection> {
-        use AnalysisSection::*;
-        let mut sections = vec![Overview];
-        if self.is_ordered() {
-            sections.extend([Statistics, Distribution]);
+/// Lengths measure directly stored values; dictionary columns list choices.
+pub fn length_unit(data_type: &DataType) -> Option<LengthUnit> {
+    use DataType::*;
+    match data_type {
+        Utf8 | LargeUtf8 | Utf8View => Some(LengthUnit::Characters),
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => Some(LengthUnit::Bytes),
+        List(_) | LargeList(_) | ListView(_) | LargeListView(_) | FixedSizeList(..) | Map(..) => {
+            Some(LengthUnit::Elements)
         }
-        let value = self.value_type();
-        if value.is_ordered() || matches!(value.domain(), Some(Domain::Text | Domain::Boolean)) {
-            sections.push(Values);
-        }
-        if self.length_unit().is_some() {
-            sections.push(Lengths);
-        }
-        if matches!(
-            self.shape,
-            Shape::List { .. } | Shape::Struct { .. } | Shape::Map { .. }
-        ) || self.is_dictionary()
+        _ => None,
+    }
+}
+
+/// How Find searches a loaded column. Nested types borrow their Arrow children;
+/// loading validates supported types before predicate preparation.
+pub fn find_strategy(data_type: &DataType) -> FindStrategy {
+    use DataType::*;
+    match data_type {
+        Dictionary(_, values) => match find_strategy(values) {
+            FindStrategy::Unsupported => FindStrategy::Unsupported,
+            _ => FindStrategy::Dictionary,
+        },
+        List(field)
+        | LargeList(field)
+        | ListView(field)
+        | LargeListView(field)
+        | FixedSizeList(field, _) => match find_strategy(field.data_type()) {
+            FindStrategy::Unsupported => FindStrategy::Unsupported,
+            _ => FindStrategy::List,
+        },
+        Struct(fields)
+            if fields
+                .iter()
+                .any(|field| find_strategy(field.data_type()) != FindStrategy::Unsupported) =>
         {
-            sections.push(Structure);
+            FindStrategy::Struct
         }
-        sections
-    }
-
-    /// What a length measurement counts. Only directly stored values have one;
-    /// dictionary values are enumerated by their keys instead.
-    pub fn length_unit(&self) -> Option<LengthUnit> {
-        if self.encoding != Encoding::Direct {
-            return None;
-        }
-        match &self.shape {
-            Shape::Scalar(Scalar::Text) => Some(LengthUnit::Characters),
-            Shape::Scalar(Scalar::Binary) => Some(LengthUnit::Bytes),
-            Shape::List { .. } | Shape::Map { .. } => Some(LengthUnit::Elements),
-            _ => None,
-        }
-    }
-
-    /// How Find searches this column.
-    pub fn find_strategy(&self) -> FindStrategy {
-        if self.is_dictionary() {
-            return match self.value_type().find_strategy() {
-                FindStrategy::Unsupported => FindStrategy::Unsupported,
-                _ => FindStrategy::Dictionary,
-            };
-        }
-        let findable = |ty: &Type| ty.find_strategy() != FindStrategy::Unsupported;
-        match &self.shape {
-            Shape::Scalar(Scalar::Text) => FindStrategy::Text,
-            // Binary has no typed input syntax; intervals are not ordered
-            // scalars. Both are excluded from typed Find.
-            Shape::Scalar(Scalar::Binary) | Shape::Scalar(Scalar::Interval { .. }) => {
-                FindStrategy::Unsupported
-            }
-            Shape::Scalar(_) => FindStrategy::Scalar,
-            Shape::Null | Shape::Map { .. } => FindStrategy::Unsupported,
-            Shape::List { element, .. } => {
-                if findable(element) {
-                    FindStrategy::List
-                } else {
-                    FindStrategy::Unsupported
-                }
-            }
-            Shape::Struct { fields } => {
-                if fields.iter().any(|field| findable(&field.ty)) {
-                    FindStrategy::Struct
-                } else {
-                    FindStrategy::Unsupported
-                }
-            }
-        }
+        _ => match direct_domain(data_type) {
+            Some(Domain::Text) => FindStrategy::Text,
+            Some(Domain::Binary | Domain::Interval) | None => FindStrategy::Unsupported,
+            Some(_) => FindStrategy::Scalar,
+        },
     }
 }
 
@@ -208,11 +164,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 
     use super::*;
-    use crate::types::{LogicalType, Type};
-
-    fn ty(data_type: &DataType) -> Type {
-        Type::from_arrow(data_type).unwrap()
-    }
 
     fn dictionary(value: DataType) -> DataType {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(value))
@@ -223,192 +174,105 @@ mod tests {
     }
 
     #[test]
-    fn ordered_and_numeric_follow_the_value_domain() {
-        for ordered in [
-            DataType::Int32,
-            DataType::Float64,
-            DataType::Decimal128(10, 2),
-            DataType::Date32,
-            DataType::Time32(TimeUnit::Second),
-            DataType::Timestamp(TimeUnit::Second, None),
-            DataType::Duration(TimeUnit::Second),
+    fn capabilities_distinguish_value_semantics_from_storage_support() {
+        for (data_type, contains, equals, ordered, logarithmic) in [
+            (DataType::Int32, false, true, true, true),
+            (DataType::Date32, false, true, true, false),
+            (DataType::Utf8, true, true, false, false),
+            (DataType::Boolean, false, true, false, false),
+            (DataType::Binary, true, false, false, false),
+            (dictionary(DataType::Int64), false, true, false, false),
+            (dictionary(DataType::Utf8), true, true, false, false),
         ] {
-            assert!(ty(&ordered).is_ordered(), "{ordered}");
-        }
-        for unordered in [
-            DataType::Utf8,
-            DataType::Boolean,
-            DataType::Binary,
-            DataType::List(item(DataType::Int32)),
-        ] {
-            assert!(!ty(&unordered).is_ordered(), "{unordered}");
-        }
-        assert!(ty(&DataType::Int32).is_numeric());
-        assert!(!ty(&DataType::Date32).is_numeric());
-        assert!(!ty(&DataType::Utf8).is_numeric());
-        // Storage does not change the value domain: only the direct array
-        // supports ordered operations today.
-        let encoded = ty(&dictionary(DataType::Int64));
-        assert_eq!(encoded.domain(), Some(Domain::Integer));
-        assert!(!encoded.is_ordered());
-        assert!(!encoded.is_numeric());
-    }
-
-    #[test]
-    fn capabilities_match_the_documented_operations() {
-        assert_eq!(ty(&DataType::Int32).capabilities(), ColumnCapabilities {
-            contains: false,
-            range: true,
-            equals: true,
-            histogram: true,
-            scatter: true,
-            logarithmic: true,
-        });
-        assert_eq!(ty(&DataType::Utf8).capabilities(), ColumnCapabilities {
-            contains: true,
-            range: false,
-            equals: true,
-            histogram: false,
-            scatter: false,
-            logarithmic: false,
-        });
-        assert_eq!(ty(&DataType::Boolean).capabilities(), ColumnCapabilities {
-            contains: false,
-            range: false,
-            equals: true,
-            histogram: false,
-            scatter: false,
-            logarithmic: false,
-        });
-        // A dictionary column is discrete: it offers choices, Find and value
-        // lists, but not ordered filters or charts.
-        assert_eq!(
-            ty(&dictionary(DataType::Int64)).capabilities(),
-            ColumnCapabilities {
-                contains: false,
-                range: false,
-                equals: true,
-                histogram: false,
-                scatter: false,
-                logarithmic: false,
-            }
-        );
-        let binary: Type = ty(&DataType::Binary);
-        assert!(binary.supports_contains());
-        assert!(!binary.supports_equals());
-    }
-
-    #[test]
-    fn analysis_sections_follow_shape_and_domain() {
-        use AnalysisSection::*;
-        assert_eq!(ty(&DataType::Int32).analysis_sections(), [
-            Overview,
-            Statistics,
-            Distribution,
-            Values
-        ]);
-        assert_eq!(ty(&DataType::Utf8).analysis_sections(), [
-            Overview, Values, Lengths
-        ]);
-        // Binary has length but no value-list grouping: its values have no
-        // comparable or selectable labels.
-        assert_eq!(ty(&DataType::Binary).analysis_sections(), [
-            Overview, Lengths
-        ]);
-        assert_eq!(
-            ty(&DataType::List(item(DataType::Int32))).analysis_sections(),
-            [Overview, Lengths, Structure]
-        );
-        assert_eq!(
-            ty(&DataType::Struct(Fields::from(vec![Field::new(
-                "a",
-                DataType::Int32,
-                true
-            )])))
-            .analysis_sections(),
-            [Overview, Structure]
-        );
-        assert_eq!(ty(&dictionary(DataType::Int64)).analysis_sections(), [
-            Overview, Values, Structure
-        ]);
-        assert_eq!(ty(&DataType::Null).analysis_sections(), [Overview]);
-    }
-
-    #[test]
-    fn length_units_follow_shape() {
-        assert_eq!(
-            ty(&DataType::Utf8).length_unit(),
-            Some(LengthUnit::Characters)
-        );
-        assert_eq!(ty(&DataType::Binary).length_unit(), Some(LengthUnit::Bytes));
-        assert_eq!(
-            ty(&DataType::List(item(DataType::Int32))).length_unit(),
-            Some(LengthUnit::Elements)
-        );
-        assert_eq!(ty(&DataType::Int32).length_unit(), None);
-        assert_eq!(
-            ty(&dictionary(DataType::Utf8)).length_unit(),
-            None,
-            "dictionary columns list values instead of measuring them"
-        );
-    }
-
-    #[test]
-    fn find_strategies_follow_shape_and_domain() {
-        assert_eq!(ty(&DataType::Utf8).find_strategy(), FindStrategy::Text);
-        assert_eq!(ty(&DataType::Int32).find_strategy(), FindStrategy::Scalar);
-        assert_eq!(ty(&DataType::Boolean).find_strategy(), FindStrategy::Scalar);
-        // Documented exclusions: typed Find skips these columns.
-        for excluded in [
-            DataType::Binary,
-            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
-        ] {
-            assert_eq!(ty(&excluded).find_strategy(), FindStrategy::Unsupported);
-        }
-        assert_eq!(
-            ty(&dictionary(DataType::Utf8)).find_strategy(),
-            FindStrategy::Dictionary
-        );
-        assert_eq!(
-            ty(&dictionary(DataType::Binary)).find_strategy(),
-            FindStrategy::Unsupported
-        );
-        let list = ty(&DataType::List(item(DataType::Utf8)));
-        assert_eq!(list.find_strategy(), FindStrategy::List);
-        // A list whose elements have no typed search cannot be searched.
-        let binary_list = ty(&DataType::List(item(DataType::Binary)));
-        assert_eq!(binary_list.find_strategy(), FindStrategy::Unsupported);
-        // A struct is searchable when at least one field is.
-        let fields = Fields::from(vec![
-            Field::new("a", DataType::Binary, true),
-            Field::new("b", DataType::Utf8, true),
-        ]);
-        assert_eq!(
-            ty(&DataType::Struct(fields)).find_strategy(),
-            FindStrategy::Struct
-        );
-        let binary_only = Fields::from(vec![Field::new("a", DataType::Binary, true)]);
-        assert_eq!(
-            ty(&DataType::Struct(binary_only)).find_strategy(),
-            FindStrategy::Unsupported
-        );
-    }
-
-    #[test]
-    fn logical_projection_agrees_with_the_model() {
-        for data_type in [
-            DataType::Int32,
-            DataType::Utf8,
-            DataType::Date32,
-            dictionary(DataType::Int64),
-            DataType::List(item(DataType::Utf8)),
-        ] {
-            let model = ty(&data_type);
             assert_eq!(
-                LogicalType::from_arrow(&data_type),
-                Some(model.logical()),
+                capabilities(&data_type),
+                ColumnCapabilities {
+                    contains,
+                    range: ordered,
+                    equals,
+                    histogram: ordered,
+                    scatter: ordered,
+                    logarithmic,
+                },
                 "{data_type}"
             );
+        }
+    }
+
+    #[test]
+    fn analysis_sections_preserve_presentation_order() {
+        use AnalysisSection::*;
+        for (data_type, expected) in [
+            (DataType::Int32, vec![
+                Overview,
+                Statistics,
+                Distribution,
+                Values,
+            ]),
+            (DataType::Utf8, vec![Overview, Values, Lengths]),
+            (DataType::Binary, vec![Overview, Lengths]),
+            (DataType::List(item(DataType::Int32)), vec![
+                Overview, Lengths, Structure,
+            ]),
+            (
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                vec![Overview, Structure],
+            ),
+            (dictionary(DataType::Int64), vec![
+                Overview, Values, Structure,
+            ]),
+            (DataType::Null, vec![Overview]),
+        ] {
+            assert_eq!(analysis_sections(&data_type), expected, "{data_type}");
+        }
+    }
+
+    #[test]
+    fn lengths_measure_native_values() {
+        assert_eq!(
+            length_unit(&DataType::Utf8View),
+            Some(LengthUnit::Characters)
+        );
+        assert_eq!(length_unit(&DataType::Binary), Some(LengthUnit::Bytes));
+        assert_eq!(
+            length_unit(&DataType::List(item(DataType::Int32))),
+            Some(LengthUnit::Elements)
+        );
+        assert_eq!(length_unit(&DataType::Int32), None);
+        assert_eq!(length_unit(&dictionary(DataType::Utf8)), None);
+    }
+
+    #[test]
+    fn find_follows_searchable_children_and_dictionary_values() {
+        for (data_type, expected) in [
+            (DataType::Utf8, FindStrategy::Text),
+            (DataType::Int32, FindStrategy::Scalar),
+            (DataType::Boolean, FindStrategy::Scalar),
+            (DataType::Binary, FindStrategy::Unsupported),
+            (
+                DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+                FindStrategy::Unsupported,
+            ),
+            (dictionary(DataType::Utf8), FindStrategy::Dictionary),
+            (dictionary(DataType::Binary), FindStrategy::Unsupported),
+            (DataType::List(item(DataType::Utf8)), FindStrategy::List),
+            (
+                DataType::List(item(DataType::Binary)),
+                FindStrategy::Unsupported,
+            ),
+            (
+                DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::Binary, true),
+                    Field::new("b", DataType::Utf8, true),
+                ])),
+                FindStrategy::Struct,
+            ),
+            (
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Binary, true)])),
+                FindStrategy::Unsupported,
+            ),
+        ] {
+            assert_eq!(find_strategy(&data_type), expected, "{data_type}");
         }
     }
 
@@ -473,15 +337,18 @@ mod tests {
     }
 
     #[test]
-    fn ordered_kinds_match_numeric_support() {
+    fn supported_types_have_display_projections_and_native_dispatch() {
         for data_type in every_type() {
-            let array = arrow::array::new_null_array(&data_type, 1);
-            let model = Type::from_arrow(&data_type);
-            assert_eq!(
-                model.as_ref().is_some_and(Type::is_ordered),
-                crate::stats::numeric::Numeric::new(&array).is_some(),
+            assert!(
+                super::super::LogicalType::from_arrow(&data_type).is_some(),
                 "{data_type}"
             );
+            let array = arrow::array::new_null_array(&data_type, 1);
+            if capabilities(&data_type).scatter {
+                let numeric = crate::stats::numeric::Numeric::new(&array).unwrap();
+                // Exercise the physical dispatch table, not just its type guard.
+                assert_eq!(numeric.accessor()(0), None, "{data_type}");
+            }
         }
     }
 }

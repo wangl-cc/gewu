@@ -1,4 +1,4 @@
-//! Nested Find delegates to the value/element/field's logical type using
+//! Nested Find projects strategies from child Arrow types using
 //! borrowed parent and child selections, without decoding Arrow value payload.
 
 use std::{ops::Range, sync::OnceLock};
@@ -11,16 +11,8 @@ use arrow::{
 use super::prepare_find;
 use crate::{
     predicate::{Predicate, CHUNK},
-    types::Type,
-    Error, Result,
+    Result,
 };
-
-/// The modeled type of a nested child array. Documents validate nested types
-/// when they open, so this only fails for a hand-built array.
-fn child_type(array: &ArrayRef) -> Result<Type> {
-    Type::from_arrow(array.data_type())
-        .ok_or_else(|| Error::Unsupported(format!("unsupported nested type {}", array.data_type())))
-}
 
 pub(super) fn search<'a>(
     array: &'a ArrayRef,
@@ -28,10 +20,9 @@ pub(super) fn search<'a>(
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
     match array.data_type() {
-        DataType::Dictionary(..) => dictionary_find(array, |values| {
-            let child_logical = child_type(values)?;
-            prepare_find(values, &child_logical, query, matcher)
-        }),
+        DataType::Dictionary(..) => {
+            dictionary_find(array, |values| prepare_find(values, query, matcher))
+        }
         DataType::List(_) => {
             let list = array.as_list::<i32>();
             list_search(array, list.values(), list.value_offsets(), query, matcher)
@@ -42,8 +33,7 @@ pub(super) fn search<'a>(
         }
         DataType::FixedSizeList(..) => {
             let list = array.as_fixed_size_list();
-            let child_logical = child_type(list.values())?;
-            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
+            let Some(child) = prepare_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -53,8 +43,7 @@ pub(super) fn search<'a>(
         }
         DataType::ListView(_) => {
             let list = array.as_list_view::<i32>();
-            let child_logical = child_type(list.values())?;
-            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
+            let Some(child) = prepare_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -64,8 +53,7 @@ pub(super) fn search<'a>(
         }
         DataType::LargeListView(_) => {
             let list = array.as_list_view::<i64>();
-            let child_logical = child_type(list.values())?;
-            let Some(child) = prepare_find(list.values(), &child_logical, query, matcher)? else {
+            let Some(child) = prepare_find(list.values(), query, matcher)? else {
                 return Ok(None);
             };
             Ok(Some(elements(array, child, move |row| {
@@ -78,10 +66,7 @@ pub(super) fn search<'a>(
                 .as_struct()
                 .columns()
                 .iter()
-                .map(|child| {
-                    let child_logical = child_type(child)?;
-                    prepare_find(child, &child_logical, query, matcher)
-                })
+                .map(|child| prepare_find(child, query, matcher))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
@@ -195,8 +180,7 @@ fn list_search<'a, O: OffsetSizeTrait>(
     query: &str,
     matcher: Option<&regex::Regex>,
 ) -> Result<Option<Predicate<'a>>> {
-    let child_logical = child_type(values)?;
-    let Some(child) = prepare_find(values, &child_logical, query, matcher)? else {
+    let Some(child) = prepare_find(values, query, matcher)? else {
         return Ok(None);
     };
     Ok(Some(elements(array, child, move |row| {

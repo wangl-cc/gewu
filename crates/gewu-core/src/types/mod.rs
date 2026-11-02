@@ -1,105 +1,19 @@
-//! The column type model: four orthogonal dimensions, and the single place
-//! that derives what a type supports.
+//! Purpose-specific projections of Arrow types.
 //!
-//! A type is described by independent dimensions so that every consumer can
-//! ask the question it actually has, instead of matching Arrow's flat
-//! [`DataType`] again and again:
-//!
-//! - [`Shape`]: how many values a cell holds — null, one scalar, a list, a struct or a map. Nested
-//!   shapes carry their children.
-//! - [`Scalar`]: what a scalar leaf is — text, number, temporal, binary — with the parameters (bit
-//!   width, precision and scale, time unit, time zone) that make the value domain and its display
-//!   exact.
-//! - [`Encoding`]: how Arrow stores the type — directly or as a dictionary. Encoding is storage,
-//!   not semantics: a dictionary of text is still text.
-//! - [`Domain`]: the parameter-free projection of [`Scalar`] that policy code matches on.
-//!
-//! Everything a consumer is allowed to do with a column is derived from those
-//! dimensions in [`derive`], so "which filters, analyses, charts and indexing
-//! apply" has exactly one definition. Kernels still match [`DataType`] to pick
-//! a monomorphized native path; that is a physical decision, not a policy one.
-//!
-//! [`LogicalType`] is the stable, display-oriented value projection used by the
-//! FFI and [`ColumnInfo`]; encoding stays out of it. Documents reject columns
-//! whose Arrow type has no model, so every column has a logical type.
+//! Arrow's [`DataType`] is the source of truth. Display metadata, operation
+//! capabilities and search strategies borrow it directly; kernels use the
+//! original type to select native arrays. No parallel type tree is stored.
 
-pub(crate) mod derive;
+mod derive;
 mod logical;
 
-use std::sync::Arc;
-
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-pub(crate) use derive::direct_domain;
-pub use derive::{AnalysisSection, FindStrategy, LengthUnit};
+use arrow::datatypes::DataType;
+pub(crate) use derive::supports_ordered;
+pub use derive::{
+    analysis_sections, capabilities, find_strategy, length_unit, AnalysisSection, FindStrategy,
+    LengthUnit,
+};
 pub use logical::{ColumnCapabilities, ColumnInfo, LogicalType};
-
-/// A column type: one shape in one storage encoding.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Type {
-    shape: Shape,
-    encoding: Encoding,
-}
-
-/// What a cell holds.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Shape {
-    /// The Arrow null type: every value is missing.
-    Null,
-    /// Exactly one value per cell.
-    Scalar(Scalar),
-    /// Elements addressed by offset.
-    List {
-        element: Box<Type>,
-        /// `Some` for fixed-size lists.
-        fixed: Option<usize>,
-    },
-    /// Named, typed children.
-    Struct { fields: Arc<[FieldType]> },
-    /// Key/value entries.
-    Map { key: Box<Type>, value: Box<Type> },
-}
-
-/// A struct field.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FieldType {
-    pub name: String,
-    pub ty: Type,
-    pub nullable: bool,
-}
-
-/// The semantic class of a scalar value, with the parameters that make its
-/// value domain and display exact.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Scalar {
-    Text,
-    Boolean,
-    Integer {
-        bits: u8,
-        signed: bool,
-    },
-    Float {
-        bits: u8,
-    },
-    Decimal {
-        precision: u8,
-        scale: i8,
-    },
-    Date,
-    Time {
-        unit: TimeUnit,
-    },
-    Timestamp {
-        unit: TimeUnit,
-        timezone: Option<Arc<str>>,
-    },
-    Duration {
-        unit: TimeUnit,
-    },
-    Interval {
-        unit: IntervalUnit,
-    },
-    Binary,
-}
 
 /// How Arrow stores a type. Dictionary encoding is lossless and does not
 /// change the value domain.
@@ -125,365 +39,111 @@ pub enum Domain {
     Binary,
 }
 
-/// Scalar parameters as a value, for callers that parse or format one domain
-/// without caring which class it belongs to.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Params {
-    pub bits: Option<u8>,
-    pub signed: Option<bool>,
-    pub precision: Option<u8>,
-    pub scale: Option<i8>,
-    pub time_unit: Option<TimeUnit>,
-    pub interval_unit: Option<IntervalUnit>,
-    pub fixed_size: Option<usize>,
-    pub timezone: Option<Arc<str>>,
-}
-
-impl Scalar {
-    /// The parameter-free class of this scalar.
-    pub fn domain(&self) -> Domain {
-        match self {
-            Self::Text => Domain::Text,
-            Self::Boolean => Domain::Boolean,
-            Self::Integer { .. } => Domain::Integer,
-            Self::Float { .. } => Domain::Float,
-            Self::Decimal { .. } => Domain::Decimal,
-            Self::Date => Domain::Date,
-            Self::Time { .. } => Domain::Time,
-            Self::Timestamp { .. } => Domain::Timestamp,
-            Self::Duration { .. } => Domain::Duration,
-            Self::Interval { .. } => Domain::Interval,
-            Self::Binary => Domain::Binary,
-        }
-    }
-
-    /// This scalar's parameters, with the absent ones left empty.
-    pub fn params(&self) -> Params {
-        match self {
-            Self::Text | Self::Boolean | Self::Date | Self::Binary => Params::default(),
-            Self::Integer { bits, signed } => Params {
-                bits: Some(*bits),
-                signed: Some(*signed),
-                ..Params::default()
-            },
-            Self::Float { bits } => Params {
-                bits: Some(*bits),
-                ..Params::default()
-            },
-            Self::Decimal { precision, scale } => Params {
-                precision: Some(*precision),
-                scale: Some(*scale),
-                ..Params::default()
-            },
-            Self::Time { unit } | Self::Duration { unit } => Params {
-                time_unit: Some(*unit),
-                ..Params::default()
-            },
-            Self::Timestamp { unit, timezone } => Params {
-                time_unit: Some(*unit),
-                timezone: timezone.clone(),
-                ..Params::default()
-            },
-            Self::Interval { unit } => Params {
-                interval_unit: Some(*unit),
-                ..Params::default()
-            },
-        }
+/// Storage encoding of the outermost Arrow type.
+pub fn encoding(data_type: &DataType) -> Encoding {
+    match data_type {
+        DataType::Dictionary(..) => Encoding::Dictionary,
+        _ => Encoding::Direct,
     }
 }
 
-impl Type {
-    /// Build the type model for an Arrow type, or `None` when the type has no
-    /// Gewu semantics (unions, run-end encoded, and future Arrow additions).
-    /// Opening a document rejects such columns instead of degrading silently.
-    pub fn from_arrow(data_type: &DataType) -> Option<Self> {
-        use DataType::*;
-        let shape = match data_type {
-            Null => Shape::Null,
-            Boolean => Shape::Scalar(Scalar::Boolean),
-            Int8 => integer(8, true),
-            Int16 => integer(16, true),
-            Int32 => integer(32, true),
-            Int64 => integer(64, true),
-            UInt8 => integer(8, false),
-            UInt16 => integer(16, false),
-            UInt32 => integer(32, false),
-            UInt64 => integer(64, false),
-            Float16 => Shape::Scalar(Scalar::Float { bits: 16 }),
-            Float32 => Shape::Scalar(Scalar::Float { bits: 32 }),
-            Float64 => Shape::Scalar(Scalar::Float { bits: 64 }),
-            Decimal32(precision, scale)
-            | Decimal64(precision, scale)
-            | Decimal128(precision, scale)
-            | Decimal256(precision, scale) => Shape::Scalar(Scalar::Decimal {
-                precision: *precision,
-                scale: *scale,
-            }),
-            Date32 | Date64 => Shape::Scalar(Scalar::Date),
-            Time32(unit) | Time64(unit) => Shape::Scalar(Scalar::Time { unit: *unit }),
-            Timestamp(unit, timezone) => Shape::Scalar(Scalar::Timestamp {
-                unit: *unit,
-                timezone: timezone.as_deref().map(Arc::from),
-            }),
-            Duration(unit) => Shape::Scalar(Scalar::Duration { unit: *unit }),
-            Interval(unit) => Shape::Scalar(Scalar::Interval { unit: *unit }),
-            Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => Shape::Scalar(Scalar::Binary),
-            Utf8 | LargeUtf8 | Utf8View => Shape::Scalar(Scalar::Text),
-            List(field) | LargeList(field) | ListView(field) | LargeListView(field) => {
-                Shape::List {
-                    element: Box::new(Self::from_arrow(field.data_type())?),
-                    fixed: None,
-                }
-            }
-            FixedSizeList(field, size) => Shape::List {
-                element: Box::new(Self::from_arrow(field.data_type())?),
-                fixed: Some(*size as usize),
-            },
-            Struct(fields) => Shape::Struct {
-                fields: fields
-                    .iter()
-                    .map(|field| {
-                        Some(FieldType {
-                            name: field.name().clone(),
-                            ty: Self::from_arrow(field.data_type())?,
-                            nullable: field.is_nullable(),
-                        })
-                    })
-                    .collect::<Option<Vec<_>>>()?
-                    .into(),
-            },
-            Map(field, _) => {
-                let Struct(children) = field.data_type() else {
-                    return None;
-                };
-                let [key, value] = children.iter().collect::<Vec<_>>()[..] else {
-                    return None;
-                };
-                Shape::Map {
-                    key: Box::new(Self::from_arrow(key.data_type())?),
-                    value: Box::new(Self::from_arrow(value.data_type())?),
-                }
-            }
-            Dictionary(_, values) => {
-                return Self::from_arrow(values).map(|ty| ty.in_encoding(Encoding::Dictionary));
-            }
-            _ => return None,
-        };
-        Some(Self {
-            shape,
-            encoding: Encoding::Direct,
-        })
+/// Borrow the value type beneath any dictionary wrappers.
+pub(crate) fn value_type(mut data_type: &DataType) -> &DataType {
+    while let DataType::Dictionary(_, values) = data_type {
+        data_type = values;
     }
-
-    /// The type model with the given storage encoding. Only dictionary
-    /// encoding can be applied; repeating it is a no-op.
-    fn in_encoding(self, encoding: Encoding) -> Self {
-        Self {
-            shape: self.shape,
-            encoding,
-        }
-    }
-
-    #[inline]
-    pub fn shape(&self) -> &Shape {
-        &self.shape
-    }
-
-    #[inline]
-    pub fn encoding(&self) -> Encoding {
-        self.encoding
-    }
-
-    #[inline]
-    pub fn is_dictionary(&self) -> bool {
-        self.encoding == Encoding::Dictionary
-    }
-
-    /// The parameter-free scalar class, for policy dispatch.
-    pub fn domain(&self) -> Option<Domain> {
-        match &self.shape {
-            Shape::Scalar(scalar) => Some(scalar.domain()),
-            _ => None,
-        }
-    }
-
-    /// The scalar parameters, if this type is a scalar.
-    pub fn params(&self) -> Option<Params> {
-        match &self.shape {
-            Shape::Scalar(scalar) => Some(scalar.params()),
-            _ => None,
-        }
-    }
-
-    /// This type as a value type: the same shape without dictionary encoding.
-    pub fn value_type(&self) -> Self {
-        Self {
-            shape: self.shape.clone(),
-            encoding: Encoding::Direct,
-        }
-    }
-
-    /// The list element type.
-    pub fn element(&self) -> Option<&Type> {
-        match &self.shape {
-            Shape::List { element, .. } => Some(element),
-            _ => None,
-        }
-    }
-
-    /// The struct fields.
-    pub fn fields(&self) -> &[FieldType] {
-        match &self.shape {
-            Shape::Struct { fields } => fields,
-            _ => &[],
-        }
-    }
-
-    /// The map key and value types.
-    pub fn map_key_value(&self) -> Option<(&Type, &Type)> {
-        match &self.shape {
-            Shape::Map { key, value } => Some((key, value)),
-            _ => None,
-        }
-    }
+    data_type
 }
 
-fn integer(bits: u8, signed: bool) -> Shape {
-    Shape::Scalar(Scalar::Integer { bits, signed })
+/// Scalar semantics, independent of dictionary encoding.
+pub fn domain(data_type: &DataType) -> Option<Domain> {
+    direct_domain(value_type(data_type))
+}
+
+/// Scalar class of a native array. Dictionary keys are not scalar values.
+pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
+    use DataType::*;
+    Some(match data_type {
+        Utf8 | LargeUtf8 | Utf8View => Domain::Text,
+        Boolean => Domain::Boolean,
+        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Domain::Integer,
+        Float16 | Float32 | Float64 => Domain::Float,
+        Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => Domain::Decimal,
+        Date32 | Date64 => Domain::Date,
+        Time32(_) | Time64(_) => Domain::Time,
+        Timestamp(..) => Domain::Timestamp,
+        Duration(_) => Domain::Duration,
+        Interval(_) => Domain::Interval,
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => Domain::Binary,
+        _ => return None,
+    })
+}
+
+/// Whether Gewu can describe the entire type, including nested children.
+/// Document loading rejects unsupported types rather than hiding their fields.
+pub(crate) fn is_supported(data_type: &DataType) -> bool {
+    use DataType::*;
+    match data_type {
+        Null => true,
+        Dictionary(_, values) => is_supported(values),
+        List(field)
+        | LargeList(field)
+        | ListView(field)
+        | LargeListView(field)
+        | FixedSizeList(field, _) => is_supported(field.data_type()),
+        Struct(fields) => fields.iter().all(|field| is_supported(field.data_type())),
+        Map(field, _) => match field.data_type() {
+            Struct(fields) if fields.len() == 2 => {
+                fields.iter().all(|field| is_supported(field.data_type()))
+            }
+            _ => false,
+        },
+        _ => direct_domain(data_type).is_some(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{Field, Fields, UnionFields};
+    use std::sync::Arc;
+
+    use arrow::datatypes::{Field, Fields, UnionFields, UnionMode};
 
     use super::*;
 
-    fn item() -> Arc<Field> {
-        Arc::new(Field::new("item", DataType::Int32, true))
-    }
-
     #[test]
-    fn supported_types_are_modeled() {
-        let types = [
-            DataType::Null,
-            DataType::Boolean,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::Float16,
-            DataType::Float64,
-            DataType::Decimal128(38, 2),
-            DataType::Date32,
-            DataType::Date64,
-            DataType::Time64(TimeUnit::Nanosecond),
-            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-            DataType::Duration(TimeUnit::Second),
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Utf8,
-            DataType::LargeUtf8,
-            DataType::Binary,
-            DataType::FixedSizeBinary(4),
-            DataType::List(item()),
-            DataType::LargeList(item()),
-            DataType::FixedSizeList(item(), 3),
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-        ];
-        for data_type in types {
-            assert!(Type::from_arrow(&data_type).is_some(), "{data_type}");
-        }
-    }
-
-    #[test]
-    fn unsupported_types_are_rejected() {
+    fn unsupported_children_are_rejected_at_loading() {
+        let unsupported = DataType::Union(UnionFields::empty(), UnionMode::Sparse);
+        let child = Arc::new(Field::new("child", unsupported.clone(), true));
         for data_type in [
-            DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(Field::new("values", DataType::Int32, true)),
-            ),
-            DataType::Union(UnionFields::empty(), arrow::datatypes::UnionMode::Sparse),
+            unsupported.clone(),
+            DataType::List(child.clone()),
+            DataType::Struct(Fields::from(vec![child.clone()])),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(unsupported)),
+            DataType::RunEndEncoded(Arc::new(Field::new("runs", DataType::Int32, false)), child),
         ] {
-            assert_eq!(Type::from_arrow(&data_type), None, "{data_type}");
-            assert_eq!(LogicalType::from_arrow(&data_type), None);
+            let array = arrow::array::new_empty_array(&data_type);
+            assert!(
+                matches!(
+                    crate::Column::new("unsupported", array),
+                    Err(crate::Error::Unsupported(_))
+                ),
+                "{data_type}"
+            );
         }
     }
 
     #[test]
-    fn dictionary_encoding_does_not_change_the_value_type() {
-        let plain = Type::from_arrow(&DataType::Utf8).unwrap();
-        let encoded = Type::from_arrow(&DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        ))
-        .unwrap();
-        assert_eq!(encoded.domain(), Some(Domain::Text));
-        assert_eq!(encoded.encoding(), Encoding::Dictionary);
-        assert_eq!(encoded.value_type(), plain);
-        assert!(!plain.is_dictionary());
-    }
-
-    #[test]
-    fn nested_shapes_carry_their_children() {
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
-        let list = Type::from_arrow(&DataType::List(field)).unwrap();
-        assert_eq!(list.element().unwrap().domain(), Some(Domain::Text));
-
-        let fields = Fields::from(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Boolean, true),
-        ]);
-        let structure = Type::from_arrow(&DataType::Struct(fields)).unwrap();
-        let names: Vec<_> = structure.fields().iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(names, ["a", "b"]);
-        assert!(!structure.fields()[0].nullable);
-        assert_eq!(structure.fields()[1].ty.domain(), Some(Domain::Boolean));
-
-        let map = Type::from_arrow(&DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("keys", DataType::Utf8, false),
-                    Field::new("values", DataType::Int32, true),
-                ])),
-                false,
+    fn dictionary_preserves_domain_but_not_native_dispatch() {
+        let encoded = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Int64),
             )),
-            false,
-        ))
-        .unwrap();
-        let (key, value) = map.map_key_value().unwrap();
-        assert_eq!(key.domain(), Some(Domain::Text));
-        assert_eq!(value.domain(), Some(Domain::Integer));
-    }
-
-    #[test]
-    fn scalar_parameters_are_available_without_matching_the_class() {
-        let ty = Type::from_arrow(&DataType::Timestamp(
-            TimeUnit::Millisecond,
-            Some("Europe/London".into()),
-        ))
-        .unwrap();
-        let params = ty.params().unwrap();
-        assert_eq!(params.time_unit, Some(TimeUnit::Millisecond));
-        assert_eq!(params.timezone.as_deref(), Some("Europe/London"));
-
-        let decimal = Type::from_arrow(&DataType::Decimal256(76, -4)).unwrap();
-        let params = decimal.params().unwrap();
-        assert_eq!(params.precision, Some(76));
-        assert_eq!(params.scale, Some(-4));
-
-        assert_eq!(
-            Type::from_arrow(&DataType::Int32).unwrap().params(),
-            Some(Params {
-                bits: Some(32),
-                signed: Some(true),
-                ..Params::default()
-            })
         );
-        assert_eq!(
-            Type::from_arrow(&DataType::Int32).unwrap().domain(),
-            Some(Domain::Integer)
-        );
-        assert!(Type::from_arrow(&DataType::List(item()))
-            .unwrap()
-            .params()
-            .is_none());
+        assert_eq!(domain(&encoded), Some(Domain::Integer));
+        assert_eq!(direct_domain(&encoded), None);
+        assert_eq!(encoding(&encoded), Encoding::Dictionary);
+        assert_eq!(value_type(&encoded), &DataType::Int64);
     }
 }

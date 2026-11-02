@@ -16,9 +16,7 @@ pub use bound::Bound;
 pub(crate) use dictionary::Dictionary;
 
 pub use crate::types::{ColumnCapabilities, ColumnInfo, LogicalType};
-use crate::{
-    predicate::Predicate, scope::Selection, types::Type, Error, Filter, Result,
-};
+use crate::{predicate::Predicate, scope::Selection, types, Error, Filter, Result};
 
 /// A single distinct value in a column or summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +50,6 @@ pub struct Column {
     pub nullable: bool,
     pub len: usize,
     pub array: ArrayRef,
-    /// The four-dimension type model. Every capability and policy question
-    /// derives from it.
-    ty: Type,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
     dictionary: OnceLock<Option<Arc<Dictionary>>>,
@@ -65,13 +60,12 @@ impl Column {
     /// than exposing a column no operation can describe.
     pub fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
         let name = name.into();
-        let Some(ty) = Type::from_arrow(array.data_type()) else {
+        let Some(logical_type) = LogicalType::from_arrow(array.data_type()) else {
             return Err(crate::Error::Unsupported(format!(
                 "column {name:?} has unsupported type {}",
                 array.data_type()
             )));
         };
-        let logical_type = ty.logical();
         let len = array.len();
         let nullable = array.is_nullable();
         Ok(Self {
@@ -80,7 +74,6 @@ impl Column {
             nullable,
             len,
             array,
-            ty,
             dictionary: OnceLock::new(),
         })
     }
@@ -124,23 +117,13 @@ impl Column {
         self.nullable
     }
 
-    /// The column's four-dimension type model.
-    #[inline]
-    pub(crate) fn ty(&self) -> &Type {
-        &self.ty
-    }
-
     #[inline]
     pub fn capabilities(&self) -> ColumnCapabilities {
-        self.ty.capabilities()
+        types::capabilities(self.array.data_type())
     }
 
     pub fn logical_data_type(&self) -> &DataType {
-        let mut data_type = self.array.data_type();
-        while let DataType::Dictionary(_, values) = data_type {
-            data_type = values;
-        }
-        data_type
+        types::value_type(self.array.data_type())
     }
 
     pub fn info(&self) -> ColumnInfo {
@@ -149,7 +132,7 @@ impl Column {
             display_type: self.logical_type.display_name(),
             technical_type: self.array.data_type().to_string(),
             logical_type: self.logical_type.clone(),
-            encoding: self.ty.encoding(),
+            encoding: types::encoding(self.array.data_type()),
             nullable: self.nullable,
         }
     }
@@ -160,7 +143,7 @@ impl Column {
         query: &str,
         matcher: Option<&regex::Regex>,
     ) -> Result<Option<Predicate<'a>>> {
-        filter::prepare_find(&self.array, &self.ty, query, matcher)
+        filter::prepare_find(&self.array, query, matcher)
     }
 
     #[inline]
@@ -169,8 +152,13 @@ impl Column {
     }
 
     /// Precomputed choices with counts, or `None` if the column is not dictionary-encoded.
-    pub(crate) fn choices(&self, rows: &Selection, include_zero: bool) -> Option<Vec<DistinctValue>> {
-        self.dictionary().map(|d| d.distinct_values(rows, include_zero))
+    pub(crate) fn choices(
+        &self,
+        rows: &Selection,
+        include_zero: bool,
+    ) -> Option<Vec<DistinctValue>> {
+        self.dictionary()
+            .map(|d| d.distinct_values(rows, include_zero))
     }
 
     /// Distinct values of this column with their counts.
@@ -187,8 +175,7 @@ impl Column {
                 keyed: true,
             })
         } else {
-            let counted =
-                crate::stats::ArrayView::new(&self.array, rows).count_values(limit)?;
+            let counted = crate::stats::ArrayView::new(&self.array, rows).count_values(limit)?;
             Ok(DistinctResult {
                 total: counted.distinct,
                 truncated: counted.distinct > limit as u64,
@@ -225,7 +212,7 @@ impl Column {
                 Ok(dict.prepare_predicate(keys))
             }
             Filter::TextValues { values, exclude } => {
-                if self.ty().domain() != Some(crate::types::Domain::Text) {
+                if types::domain(self.array.data_type()) != Some(crate::types::Domain::Text) {
                     return Err(Error::InvalidArgument(format!(
                         "{} is not a string column",
                         self.array.data_type()
@@ -235,9 +222,9 @@ impl Column {
                     let keys = self.keys_for_labels(values)?;
                     return Ok(dict.prepare_predicate_with_exclude(&keys, *exclude));
                 }
-                filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter)
+                filter::prepare_filter(&self.array, filter)
             }
-            _ => filter::prepare_filter(&self.array, &self.ty, self.capabilities(), filter),
+            _ => filter::prepare_filter(&self.array, filter),
         }
     }
 

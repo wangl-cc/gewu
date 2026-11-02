@@ -25,12 +25,12 @@ mod values;
 pub use analysis::{
     capabilities, AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis,
 };
+pub(crate) use context::AnalysisContext;
 pub use extremes::extremes;
 pub use scale::AxisScale;
 pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
-pub use crate::types::LengthUnit;
 
-pub(crate) use context::AnalysisContext;
+pub use crate::types::LengthUnit;
 
 pub fn median_label(view: ArrayView<'_>) -> Result<Option<String>> {
     view.median_label(&AnalysisContext::default())
@@ -157,7 +157,10 @@ impl<'a> ArrayView<'a> {
 
     /// Numeric statistics (min, max, mean, std dev, median, etc.).
     #[inline]
-    pub(crate) fn numeric_statistics(&self, context: &AnalysisContext) -> Result<NumericStatistics> {
+    pub(crate) fn numeric_statistics(
+        &self,
+        context: &AnalysisContext,
+    ) -> Result<NumericStatistics> {
         numeric::analyze(*self, context)
     }
 
@@ -174,17 +177,17 @@ impl<'a> ArrayView<'a> {
 
     /// Range-bounded histogram distribution.
     #[inline]
-    pub fn range_histogram(
-        &self,
-        bins: u32,
-        scale: AxisScale,
-    ) -> Result<Option<RangeHistogram>> {
+    pub fn range_histogram(&self, bins: u32, scale: AxisScale) -> Result<Option<RangeHistogram>> {
         build_scaled(*self, bins, scale)
     }
 
     /// Text or binary length statistics.
     #[inline]
-    pub(crate) fn length_summary(&self, bins: u32, context: &AnalysisContext) -> Result<LengthSummary> {
+    pub(crate) fn length_summary(
+        &self,
+        bins: u32,
+        context: &AnalysisContext,
+    ) -> Result<LengthSummary> {
         lengths::analyze(*self, bins, context)
     }
 
@@ -274,8 +277,6 @@ pub fn summary(
     }
     Ok(s)
 }
-
-
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -383,15 +384,13 @@ pub fn build_scaled(
 ) -> Result<Option<RangeHistogram>> {
     match scale {
         AxisScale::Linear => build(view.array, view.rows, bins),
-        AxisScale::Log10 => {
-            logarithmic::build(
-                view.array,
-                view.rows,
-                bins.min(MAX_BINS),
-                &AnalysisContext::default(),
-            )
-            .map(Some)
-        }
+        AxisScale::Log10 => logarithmic::build(
+            view.array,
+            view.rows,
+            bins.min(MAX_BINS),
+            &AnalysisContext::default(),
+        )
+        .map(Some),
     }
 }
 
@@ -433,8 +432,7 @@ fn statistics<H: Output>(
     context: &AnalysisContext,
 ) -> Result<H> {
     context.check()?;
-    let histogram = crate::types::Type::from_arrow(array.data_type())
-        .is_some_and(|ty| ty.capabilities().histogram);
+    let histogram = crate::types::capabilities(array.data_type()).histogram;
     if !histogram {
         return Err(Error::InvalidArgument(format!(
             "{} does not support histograms",

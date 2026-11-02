@@ -9,7 +9,7 @@ use super::{AnalysisContext, ArrayView, LengthSummary};
 use crate::{scope::Selection, types::LengthUnit, Error, Histogram, Result};
 
 pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
-    crate::types::Type::from_arrow(data_type).and_then(|ty| ty.length_unit())
+    crate::types::length_unit(data_type)
 }
 
 pub(crate) fn analyze(
@@ -185,12 +185,7 @@ mod tests {
         assert_eq!(result.histogram.null_count, 1);
         for rows in [vec![], vec![3]] {
             let sel = crate::scope::Selection::Rows(Arc::new(rows.clone()));
-            let result = analyze(
-                ArrayView::new(&array, &sel),
-                40,
-                &context,
-            )
-            .unwrap();
+            let result = analyze(ArrayView::new(&array, &sel), 40, &context).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
             assert_eq!(result.histogram.null_count, rows.len() as u64);

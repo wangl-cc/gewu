@@ -11,9 +11,8 @@ use arrow::{
 use super::{
     AnalysisContext, ArrayView, Histogram, LengthSummary, NumericStatistics, ValueSummary,
 };
-use crate::{scope::Selection, types::Type, Error, LogicalType, Result};
-
 pub use crate::types::{AnalysisSection, LengthUnit};
+use crate::{scope::Selection, types, Error, LogicalType, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisField {
@@ -40,8 +39,6 @@ pub struct AnalysisResult {
     pub column: u32,
     pub data: AnalysisData,
 }
-
-
 
 /// A read-only job for exactly one section. Array buffers and source row IDs
 /// are shared, not copied. Results keep the captured version even if the table
@@ -108,7 +105,7 @@ impl ColumnAnalysis {
     pub fn with_histogram_scale(mut self, scale: crate::AxisScale) -> Result<Self> {
         if scale == crate::AxisScale::Log10
             && (self.section != AnalysisSection::Distribution
-                || !Type::from_arrow(self.array.data_type()).is_some_and(|ty| ty.is_numeric()))
+                || !types::capabilities(self.array.data_type()).logarithmic)
         {
             return Err(Error::InvalidArgument(
                 "logarithmic binning requires a numeric distribution".into(),
@@ -174,17 +171,13 @@ impl ColumnAnalysis {
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
 pub fn capabilities(data_type: &DataType) -> Vec<AnalysisSection> {
-    Type::from_arrow(data_type).map_or_else(
-        || vec![AnalysisSection::Overview],
-        |ty| ty.analysis_sections(),
-    )
+    types::analysis_sections(data_type)
 }
 
 fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
     let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
-        let logical = Type::from_arrow(data_type)
-            .ok_or_else(|| Error::Unsupported(format!("unsupported nested type {data_type}")))?
-            .logical();
+        let logical = LogicalType::from_arrow(data_type)
+            .ok_or_else(|| Error::Unsupported(format!("unsupported nested type {data_type}")))?;
         Ok(AnalysisField {
             name: name.to_owned(),
             display_type: logical.display_name(),

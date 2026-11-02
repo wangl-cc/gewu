@@ -47,8 +47,7 @@ impl TextChoices {
     /// Facet row IDs must be unique and ascending, as returned by Session's
     /// source-order filter scan. The selection and Arrow buffers are shared.
     pub(crate) fn new(array: ArrayRef, rows: Selection) -> Result<Self> {
-        let is_text = crate::types::Type::from_arrow(array.data_type())
-            .is_some_and(|ty| ty.domain() == Some(crate::types::Domain::Text));
+        let is_text = crate::types::domain(array.data_type()) == Some(crate::types::Domain::Text);
         if !is_text {
             return Err(Error::InvalidArgument(format!(
                 "{} is not a string column",
