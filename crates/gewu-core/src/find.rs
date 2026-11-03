@@ -10,7 +10,7 @@ use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
 use crate::{
-    column::filter::compile_find, execution::predicate::Predicate, Cancellation, Error, Result,
+    column::predicate::compile_find, execution::predicate::Predicate, Cancellation, Error, Result,
 };
 
 /// Maximum number of cell cursors returned by one directional Find request.

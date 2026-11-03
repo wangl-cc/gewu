@@ -11,6 +11,7 @@ mod dataset;
 mod error;
 mod execution;
 mod file;
+mod find;
 pub(crate) mod format;
 pub(crate) mod query;
 mod scalar;
@@ -25,10 +26,8 @@ pub use file::{
     xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileMetadata, FileType, OpenOptions,
     ParquetCompression,
 };
-pub use query::{
-    CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, QuerySpec,
-    TextMatch, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
-};
+pub use find::{CellMatch, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE};
+pub use query::{ColSort, ColSpec, Filter, FilterCondition, QuerySpec, TextMatch};
 pub use stats::{
     AnalysisCapabilities, AnalysisField, AxisScale, Histogram, LengthSummary, LengthUnit,
     NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,

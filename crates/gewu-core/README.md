@@ -116,12 +116,13 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and distributions. |
 | [query/spec.rs](src/query/spec.rs) | QuerySpec and column settings. |
 | [query/filter.rs](src/query/filter.rs) | Explicit filter inputs. |
-| [query/find.rs](src/query/find.rs) | Captured Find context, directional pages and highlights. |
-| [query/sort.rs](src/query/sort.rs) | Cancellable native sorting and merging. |
+| [find.rs](src/find.rs) | Captured Find sessions, directional pages and highlights. |
 | [column/](src/column) | Type capabilities, native predicates and compact dictionaries. |
+| [column/predicate/](src/column/predicate) | Column-bound filter and Find predicate compilation. |
 | [types/](src/types) | Arrow structure helpers and display-type projection. |
 | [scalar/](src/scalar) | Validated bounds, exact endpoints and scalar text parsing. |
-| [execution/](src/execution) | Native row selections and bounded Predicate evaluation. |
+| [execution/](src/execution) | Native row selections, bounded Predicate evaluation and sorting. |
+| [execution/sort.rs](src/execution/sort.rs) | Cancellable native sorting and merging. |
 | [stats/](src/stats) | Analysis organization and result exports. |
 | [stats/array_view.rs](src/stats/array_view.rs) | Internal borrowed array and row selection. |
 | [stats/histogram/](src/stats/histogram) | Linear/logarithmic binning, range projections and bin tests. |

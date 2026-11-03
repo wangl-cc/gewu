@@ -6,7 +6,8 @@ use arrow::compute::SortOptions;
 
 use super::Dataset;
 use crate::{
-    execution::predicate::CHUNK, query::sort_rows, Cancellation, Filter, QuerySpec, Result, View,
+    execution::{predicate::CHUNK, sort::sort_rows},
+    Cancellation, Filter, QuerySpec, Result, View,
 };
 
 impl Dataset {

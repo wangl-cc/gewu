@@ -3,11 +3,11 @@
 //! Type semantics live in [`crate::types`]; this module owns the column's data,
 //! its lazy distinct-value dictionary, and the per-column kernels:
 //! - [`dictionary`]: compact distinct-value dictionary encoding
-//! - [`filter`]: Single-column filter and Find predicate compilation
+//! - [`predicate`]: Single-column filter and Find predicate compilation
 
 pub(crate) mod dictionary;
-pub(crate) mod filter;
 mod metadata;
+pub(crate) mod predicate;
 pub(crate) mod value_text;
 
 use std::{
@@ -146,9 +146,9 @@ impl Column {
     pub(crate) fn capabilities(&self) -> ColumnCapabilities {
         let data_type = self.array.data_type();
         ColumnCapabilities {
-            text_match: filter::supports_text_match(data_type),
-            range: filter::range::supports(data_type),
-            exact: filter::supports_equals(data_type),
+            text_match: predicate::supports_text_match(data_type),
+            range: predicate::range::supports(data_type),
+            exact: predicate::supports_equals(data_type),
             scatter: crate::stats::scatter::supports(data_type),
             logarithmic: crate::stats::supports_logarithmic(data_type),
         }
@@ -163,7 +163,7 @@ impl Column {
         filter: &Filter,
         cancel: &Cancellation,
     ) -> Result<Predicate<'a>> {
-        filter::compile_filter(self, filter, cancel)
+        predicate::compile_filter(self, filter, cancel)
     }
 }
 
@@ -248,7 +248,7 @@ mod tests {
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
-        if let Some(test) = filter::compile_find(array, query, None).unwrap() {
+        if let Some(test) = predicate::compile_find(array, query, None).unwrap() {
             test.evaluate(range, &mut hits, &Cancellation::default())
                 .unwrap();
         }
@@ -731,7 +731,7 @@ mod tests {
         let token = crate::Cancellation::default();
         token.cancel();
         for array in arrays {
-            let test = filter::compile_find(&array, "2", None).unwrap().unwrap();
+            let test = predicate::compile_find(&array, "2", None).unwrap().unwrap();
             assert!(matches!(
                 test.evaluate(0..1, &mut [false], &token),
                 Err(Error::Cancelled)
