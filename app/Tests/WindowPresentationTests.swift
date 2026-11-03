@@ -4,6 +4,41 @@ import Testing
 
 @Suite @MainActor
 struct WindowPresentationTests {
+    @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-modes-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let rows = (0..<1200).map { "\($0 % 3),group\($0 % 3),\($0),item\($0)" }
+        try (["few_numbers,few_labels,many_numbers,many_labels"] + rows).joined(separator: "\n")
+            .write(to: path, atomically: true, encoding: .utf8)
+        let dataset = try GewuDataset.open(path: path.path)
+        let view = dataset.view()
+        let expected: [FilterMode] = [.exact, .exact, .range, .contains]
+        for (index, column) in dataset.info().columns.enumerated() {
+            #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
+            let choices = try view.filterChoices(column: UInt32(index), cancellation: Cancellation())
+            #expect(
+                FilterMode.initial(capabilities: column.capabilities, current: nil, choices: choices)
+                    == expected[index])
+        }
+
+        let numeric = dataset.info().columns[0].capabilities
+        let text = dataset.info().columns[1].capabilities
+        #expect(
+            FilterMode.initial(
+                capabilities: numeric, current: Filter(condition: .range(min: "1", max: "2"), includeNulls: false))
+                == .range)
+        #expect(
+            FilterMode.initial(
+                capabilities: text,
+                current: Filter(condition: .contains(text: "group", caseSensitive: false), includeNulls: true))
+                == .contains)
+        #expect(
+            FilterMode.initial(
+                capabilities: text,
+                current: Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true))
+                == .exact)
+    }
+
     @Test func inspectorChoicesSurviveTypeChangesWithoutRequestingUnsupportedLogBins() {
         let settings = InspectorSettings()
         #expect(settings.expanded(distribution: true) == 7)

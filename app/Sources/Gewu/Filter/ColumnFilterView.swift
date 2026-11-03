@@ -1,9 +1,27 @@
 import SwiftUI
 
-private enum FilterMode: String, CaseIterable {
+enum FilterMode: String, CaseIterable {
+    case exact = "Select Values"
     case range = "Range"
     case contains = "Contains"
-    case exact = "Exact values"
+
+    /// A nil mode means the initial bounded candidate request is still needed.
+    static func initial(
+        capabilities: ColumnCapabilities, current: Filter?, choices: FilterChoices? = nil
+    ) -> FilterMode? {
+        if let current {
+            switch current.condition {
+            case .range: if capabilities.range { return .range }
+            case .contains: if capabilities.contains { return .contains }
+            case .exact: if capabilities.exact { return .exact }
+            }
+        }
+        if capabilities.exact {
+            guard let choices else { return nil }
+            if choices.values != nil { return .exact }
+        }
+        return capabilities.range ? .range : (capabilities.contains ? .contains : .exact)
+    }
 }
 
 struct ColumnFilterView: View {
@@ -11,7 +29,7 @@ struct ColumnFilterView: View {
     let column: UInt32
     let info: ColumnInfo
     let onApply: (Filter?) -> Void
-    @State private var mode: FilterMode
+    @State private var mode: FilterMode?
     @State private var exact: ExactFilterDraft
     @State private var contains: TextContainsDraft
     @State private var range: RangeDraft
@@ -23,6 +41,7 @@ struct ColumnFilterView: View {
     @State private var histogramScale: AxisScale = .linear
     @State private var literal = ""
     @State private var loading = false
+    @State private var retry = 0
 
     init(
         view: GewuView, column: UInt32, info: ColumnInfo, current: Filter?,
@@ -32,15 +51,7 @@ struct ColumnFilterView: View {
         self.column = column
         self.info = info
         self.onApply = onApply
-        var initial: FilterMode = info.capabilities.range ? .range : (info.capabilities.contains ? .contains : .exact)
-        if let current {
-            switch current.condition {
-            case .range: if info.capabilities.range { initial = .range }
-            case .contains: if info.capabilities.contains { initial = .contains }
-            case .exact: if info.capabilities.exact { initial = .exact }
-            }
-        }
-        _mode = State(initialValue: initial)
+        _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
         _exact = State(initialValue: ExactFilterDraft(current))
         _contains = State(initialValue: TextContainsDraft(current))
         _range = State(initialValue: RangeDraft(current))
@@ -63,9 +74,9 @@ struct ColumnFilterView: View {
                 Text(info.name).font(.headline)
                 Text(info.displayType).font(.caption).foregroundStyle(.secondary)
             }
-            if !modes.isEmpty {
+            if let mode, !modes.isEmpty {
                 Picker("Filter mode", selection: $mode) {
-                    ForEach(modes, id: \.self) { Text($0.rawValue).tag($0) }
+                    ForEach(modes, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
                 }.pickerStyle(.segmented)
                 Group {
                     switch mode {
@@ -78,16 +89,23 @@ struct ColumnFilterView: View {
                     }
                 }.disabled(nullMode == .only)
             }
-            if loading { ProgressView().controlSize(.small) }
+            if mode == nil && error == nil {
+                ProgressView("Loading filter…").frame(maxWidth: .infinity, minHeight: 120)
+            } else if loading {
+                ProgressView().controlSize(.small)
+            }
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if mode == nil && error != nil {
+                Button("Retry") { retry += 1 }
+            }
             HStack {
                 NullModePicker(selection: $nullMode, nullCount: choices?.nullCount)
                 Spacer()
                 Button("Reset", action: reset)
                 Button("Apply", action: apply).keyboardShortcut(.defaultAction)
-            }
+            }.disabled(mode == nil)
         }.padding(14).frame(width: 440)
-            .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale)) { await load() }
+            .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)) { await load() }
     }
 
     @ViewBuilder private var exactEditor: some View {
@@ -123,12 +141,13 @@ struct ColumnFilterView: View {
     }
 
     private struct Request: Equatable {
-        let mode: FilterMode
+        let mode: FilterMode?
         let bins: UInt32
         let scale: AxisScale
+        let retry: Int
     }
     @MainActor private func load() async {
-        guard modes.contains(mode) else { return }
+        if let mode, !modes.contains(mode) { return }
         loading = true
         error = nil
         let view = view
@@ -150,7 +169,7 @@ struct ColumnFilterView: View {
                 guard !Task.isCancelled else { return }
                 distribution = result
                 range.restoreLabels(from: result)
-            } else if mode == .exact, choices == nil {
+            } else if mode == nil || (mode == .exact && choices == nil) {
                 let result = try await withTaskCancellationHandler {
                     try await Task.detached {
                         try view.filterChoices(column: column, cancellation: cancellation)
@@ -160,6 +179,9 @@ struct ColumnFilterView: View {
                 }
                 guard !Task.isCancelled else { return }
                 choices = result
+                if mode == nil {
+                    self.mode = FilterMode.initial(capabilities: info.capabilities, current: nil, choices: result)
+                }
             }
         } catch {
             guard !Task.isCancelled else { return }
@@ -178,6 +200,7 @@ struct ColumnFilterView: View {
     }
 
     private func apply() {
+        guard let mode else { return }
         let activeCondition: FilterCondition? =
             switch mode {
             case .range: range.condition
