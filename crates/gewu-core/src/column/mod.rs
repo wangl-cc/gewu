@@ -28,7 +28,8 @@ use crate::{predicate::Predicate, types, Cancellation, Filter, Result};
 /// additionally depends on cardinality and is reported by `crate::FilterChoices`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColumnCapabilities {
-    pub contains: bool,
+    /// Text filters: contains and whole-value equality.
+    pub text_match: bool,
     pub range: bool,
     pub exact: bool,
     /// Direct numeric and temporal arrays support approximate plot coordinates.
@@ -148,7 +149,7 @@ impl Column {
     pub(crate) fn capabilities(&self) -> ColumnCapabilities {
         let data_type = self.array.data_type();
         ColumnCapabilities {
-            contains: filter::supports_contains(data_type),
+            text_match: filter::supports_text_match(data_type),
             range: filter::range::supports(data_type),
             exact: filter::supports_equals(data_type),
             scatter: crate::stats::scatter::supports(data_type),
@@ -181,7 +182,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{predicate::CHUNK, Cancellation, Error};
+    use crate::{predicate::CHUNK, Cancellation, Error, TextMatch};
 
     fn col(array: ArrayRef) -> Column {
         Column::new("test", array).unwrap()
@@ -272,7 +273,7 @@ mod tests {
             assert_eq!(
                 col(arrow::array::new_null_array(&data_type, 1)).capabilities(),
                 ColumnCapabilities {
-                    contains,
+                    text_match: contains,
                     range: ordered,
                     exact: equals,
                     scatter: ordered && !matches!(data_type, DataType::Dictionary(..)),
@@ -398,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_contains_matches_row_by_row_contains() {
+    fn dictionary_text_match_matches_row_by_row_text_match() {
         use arrow::{
             array::{LargeStringArray, StringViewArray},
             datatypes::Int16Type,
@@ -435,10 +436,13 @@ mod tests {
             let cancel = Cancellation::default();
             assert!(encoded.dictionary(&cancel).unwrap().is_some());
             assert!(plain.dictionary(&cancel).unwrap().is_none());
-            for text in ["", "élan", "ÉLAN", "a", "zz"] {
+            for (text, mode) in ["", "élan", "ÉLAN", "a", "zz", "Élan", "abc"]
+                .into_iter()
+                .flat_map(|text| [(text, TextMatch::Contains), (text, TextMatch::Equals)])
+            {
                 for case_sensitive in [false, true] {
                     for include_nulls in [false, true] {
-                        let filter = Filter::contains(text.into(), case_sensitive, include_nulls);
+                        let filter = Filter::text(text.into(), mode, case_sensitive, include_nulls);
                         let hits = |column: &Column| {
                             let mut hits = vec![false; rows.len()];
                             column
@@ -451,7 +455,7 @@ mod tests {
                         assert_eq!(
                             hits(&encoded),
                             hits(&plain),
-                            "kind {kind}: {text:?} case_sensitive={case_sensitive} include_nulls={include_nulls}"
+                            "kind {kind}: {mode:?} {text:?} case_sensitive={case_sensitive} include_nulls={include_nulls}"
                         );
                     }
                 }
@@ -460,7 +464,63 @@ mod tests {
     }
 
     #[test]
-    fn non_text_contains_is_rejected_even_for_empty_text_and_null_arrays() {
+    fn text_equals_matches_whole_values_with_unicode_case_folding() {
+        // Kelvin sign and long s fold to ASCII k and s; final sigma folds to sigma.
+        let values = [
+            Some("A1"),
+            Some("A10"),
+            Some("a1"),
+            Some("k"),
+            Some("\u{212A}"),
+            Some("ſ"),
+            Some("s"),
+            Some("ΣΑΣ"),
+            Some("σας"),
+            Some(""),
+            None,
+        ];
+        let column = col(Arc::new(StringArray::from(values.to_vec())));
+        let cancel = Cancellation::default();
+        let matching = |text: &str, case_sensitive: bool| -> Vec<usize> {
+            let mut hits = vec![false; values.len()];
+            column
+                .compile_filter(
+                    &Filter::text(text.into(), TextMatch::Equals, case_sensitive, false),
+                    &cancel,
+                )
+                .unwrap()
+                .evaluate(0..values.len(), &mut hits, &cancel)
+                .unwrap();
+            (0..values.len()).filter(|&row| hits[row]).collect()
+        };
+        // Whole-value matching: A1 never matches A10.
+        assert_eq!(matching("A1", true), [0]);
+        assert_eq!(matching("A1", false), [0, 2]);
+        // ASCII input still matches non-ASCII values that fold to it, and back.
+        assert_eq!(matching("K", false), [3, 4]);
+        assert_eq!(matching("\u{212A}", false), [3, 4]);
+        assert_eq!(matching("S", false), [5, 6]);
+        assert_eq!(matching("σας", false), [7, 8]);
+        assert_eq!(matching("σας", true), [8]);
+        // The empty string is a value distinct from null.
+        assert_eq!(matching("", false), [9]);
+        // Every case-insensitive equality is also a case-insensitive Contains match.
+        for text in ["A1", "K", "S", "σας", ""] {
+            let mut contains = vec![false; values.len()];
+            column
+                .compile_filter(&Filter::contains(text.into(), false, false), &cancel)
+                .unwrap()
+                .evaluate(0..values.len(), &mut contains, &cancel)
+                .unwrap();
+            assert!(
+                matching(text, false).iter().all(|&row| contains[row]),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_text_text_match_is_rejected_even_for_empty_text_and_null_arrays() {
         use arrow::datatypes::{Field, Fields, IntervalUnit};
 
         let item = Arc::new(Field::new("item", DataType::Utf8, true));
@@ -495,18 +555,20 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type)),
             ] {
                 let column = col(arrow::array::new_null_array(&data_type, 2));
-                assert!(!column.capabilities().contains, "{data_type}");
+                assert!(!column.capabilities().text_match, "{data_type}");
                 for text in ["", "needle"] {
-                    assert!(
-                        matches!(
-                            column.compile_filter(
-                                &Filter::contains(text.into(), false, true),
-                                &Cancellation::default(),
+                    for mode in [TextMatch::Contains, TextMatch::Equals] {
+                        assert!(
+                            matches!(
+                                column.compile_filter(
+                                    &Filter::text(text.into(), mode, false, true),
+                                    &Cancellation::default(),
+                                ),
+                                Err(Error::InvalidArgument(_))
                             ),
-                            Err(Error::InvalidArgument(_))
-                        ),
-                        "{data_type}: {text:?}"
-                    );
+                            "{data_type}: {mode:?} {text:?}"
+                        );
+                    }
                 }
             }
         }
@@ -653,7 +715,7 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(col(array).capabilities(), ColumnCapabilities {
-            contains: false,
+            text_match: false,
             range: true,
             exact: true,
             scatter: false,

@@ -128,6 +128,51 @@ pub(super) fn contains<'a>(
     Ok(strings(array, move |value| matcher.is_match(value)))
 }
 
+/// Explicit text filter. Case-insensitive equality agrees with case-insensitive
+/// Contains: both use Unicode simple case folding.
+pub(super) fn text_match<'a>(
+    array: &'a ArrayRef,
+    text: &str,
+    mode: crate::TextMatch,
+    case_sensitive: bool,
+) -> Result<Predicate<'a>> {
+    use crate::TextMatch;
+    match mode {
+        TextMatch::Contains => contains(array, text, case_sensitive, None),
+        TextMatch::Equals => {
+            if !matches!(
+                array.data_type(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) {
+                return Err(Error::InvalidArgument(format!(
+                    "text matching requires text values, got {}",
+                    array.data_type()
+                )));
+            }
+            let text = text.to_owned();
+            if case_sensitive {
+                return Ok(strings(array, move |value| value == text));
+            }
+            let folded = RegexBuilder::new(&format!(r"\A(?:{})\z", regex::escape(&text)))
+                .case_insensitive(true)
+                .build()
+                .map_err(|error| {
+                    Error::InvalidArgument(format!("cannot compile text match: {error}"))
+                })?;
+            let ascii = text.is_ascii();
+            // ASCII folding only applies when both sides are ASCII: under Unicode
+            // folding an ASCII input still matches characters such as the Kelvin sign.
+            Ok(strings(array, move |value| {
+                if ascii && value.is_ascii() {
+                    value.eq_ignore_ascii_case(&text)
+                } else {
+                    folded.is_match(value)
+                }
+            }))
+        }
+    }
+}
+
 fn strings<'a>(
     array: &'a ArrayRef,
     test: impl Fn(&str) -> bool + Send + Sync + 'a,

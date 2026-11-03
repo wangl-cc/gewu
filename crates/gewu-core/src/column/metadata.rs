@@ -138,7 +138,7 @@ mod tests {
             assert_eq!(info.technical_type, data_type.to_string());
             assert!(info.nullable);
             assert_eq!(
-                info.capabilities.contains,
+                info.capabilities.text_match,
                 matches!(data_type, DataType::Utf8)
             );
         }

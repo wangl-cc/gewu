@@ -31,7 +31,8 @@ pub use file::{
     xlsx_sheet_names, ColumnCapabilities, ColumnInfo, FileInfo, FileType, KeyValue, ValueCategory,
 };
 pub use filter::{
-    Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, ValueChoice,
+    Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, TextMatch,
+    ValueChoice,
 };
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
 pub use scale::AxisScale;

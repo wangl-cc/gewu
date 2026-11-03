@@ -49,7 +49,7 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         .is_none());
     assert!(doc.dataset().info().columns[1].capabilities.range);
     assert!(doc.dataset().info().columns[1].capabilities.exact);
-    assert!(doc.dataset().info().columns[2].capabilities.contains);
+    assert!(doc.dataset().info().columns[2].capabilities.text_match);
     assert!(doc.dataset().info().columns[2].capabilities.exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc

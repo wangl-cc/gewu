@@ -13,14 +13,26 @@ pub enum FilterCondition {
         min: Option<String>,
         max: Option<String>,
     },
-    Contains {
+    /// Match text values against `text`. Case-insensitive matching uses Unicode
+    /// simple case folding for every mode.
+    Text {
         text: String,
+        mode: TextMatch,
         case_sensitive: bool,
     },
     Exact {
         values: Vec<String>,
         exclude: bool,
     },
+}
+
+/// How a text filter compares each value with its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextMatch {
+    /// The value contains the input as a substring.
+    Contains,
+    /// The whole value equals the input.
+    Equals,
 }
 
 impl Filter {
@@ -38,14 +50,19 @@ impl Filter {
         }
     }
 
-    pub fn contains(text: String, case_sensitive: bool, include_nulls: bool) -> Self {
+    pub fn text(text: String, mode: TextMatch, case_sensitive: bool, include_nulls: bool) -> Self {
         Self {
-            condition: FilterCondition::Contains {
+            condition: FilterCondition::Text {
                 text,
+                mode,
                 case_sensitive,
             },
             include_nulls,
         }
+    }
+
+    pub fn contains(text: String, case_sensitive: bool, include_nulls: bool) -> Self {
+        Self::text(text, TextMatch::Contains, case_sensitive, include_nulls)
     }
 
     pub(crate) fn estimated_cost(&self) -> u8 {
@@ -53,7 +70,7 @@ impl Filter {
             FilterCondition::Exact { values, .. } if values.is_empty() => 0,
             FilterCondition::Exact { .. } => 1,
             FilterCondition::Range { .. } => 2,
-            FilterCondition::Contains { .. } => 3,
+            FilterCondition::Text { .. } => 3,
         }
     }
 }

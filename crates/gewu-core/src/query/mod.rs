@@ -8,7 +8,7 @@ pub(crate) mod selection;
 pub(crate) mod sort;
 pub(crate) mod view;
 
-pub use filter::{Filter, FilterCondition};
+pub use filter::{Filter, FilterCondition, TextMatch};
 pub use find::{CellMatch, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE};
 pub(crate) use sort::sort_rows;
 pub use view::{ColSort, ColSpec, QuerySpec, RowBlock};

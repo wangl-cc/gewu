@@ -84,7 +84,7 @@ Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or ro
 
 ## Filter candidates
 
-`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; text candidate paging is selected by `capabilities.contains`. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
+`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; text candidate paging is selected by `capabilities.text_match`. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
 
 `view.filter_choices(column, cancellation)` returns `ValueChoice { label, value, count }` and a separate null count, all from the View's visible rows, including the edited column's filter. Zero-count values are absent. `Some([])` is an empty complete list; `None` means no complete bounded dictionary list is available. Exact filters remain valid without that list; no unbounded distinct calculation is introduced.
 

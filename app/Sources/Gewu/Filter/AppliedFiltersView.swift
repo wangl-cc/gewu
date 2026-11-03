@@ -52,8 +52,8 @@ extension Filter {
             case (nil, .some(let hi)): content = "≤ \(hi)"
             case (nil, nil): content = "All values"
             }
-        case .contains(let text, let caseSensitive):
-            content = "Contains “\(text)”" + (caseSensitive ? " (match case)" : "")
+        case .text(let text, let mode, let caseSensitive):
+            content = (mode == .equals ? "Equals" : "Contains") + " “\(text)”" + (caseSensitive ? " (match case)" : "")
         case .exact(let values, let exclude):
             if values.isEmpty {
                 if !exclude { return includeNulls ? "Only nulls" : "No values" }

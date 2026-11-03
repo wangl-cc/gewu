@@ -3,7 +3,7 @@ import SwiftUI
 enum FilterMode: String, CaseIterable {
     case exact = "Select Values"
     case range = "Range"
-    case contains = "Contains"
+    case text = "Text"
 
     /// A nil mode means the initial bounded candidate request is still needed.
     static func initial(
@@ -12,7 +12,7 @@ enum FilterMode: String, CaseIterable {
         if let current {
             switch current.condition {
             case .range: if capabilities.range { return .range }
-            case .contains: if capabilities.contains { return .contains }
+            case .text: if capabilities.textMatch { return .text }
             case .exact: if capabilities.exact { return .exact }
             }
         }
@@ -20,7 +20,7 @@ enum FilterMode: String, CaseIterable {
             guard let choices else { return nil }
             if choices.values != nil { return .exact }
         }
-        return capabilities.range ? .range : (capabilities.contains ? .contains : .exact)
+        return capabilities.range ? .range : (capabilities.textMatch ? .text : .exact)
     }
 }
 
@@ -31,7 +31,7 @@ struct ColumnFilterView: View {
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode?
     @State private var exact: ExactFilterDraft
-    @State private var contains: TextContainsDraft
+    @State private var textMatch: TextMatchDraft
     @State private var range: RangeDraft
     @State private var nullMode: NullMode
     @State private var choices: FilterChoices?
@@ -53,7 +53,7 @@ struct ColumnFilterView: View {
         self.onApply = onApply
         _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
         _exact = State(initialValue: ExactFilterDraft(current))
-        _contains = State(initialValue: TextContainsDraft(current))
+        _textMatch = State(initialValue: TextMatchDraft(current))
         _range = State(initialValue: RangeDraft(current))
         _nullMode = State(initialValue: NullMode(current))
     }
@@ -62,7 +62,7 @@ struct ColumnFilterView: View {
         FilterMode.allCases.filter {
             switch $0 {
             case .range: info.capabilities.range
-            case .contains: info.capabilities.contains
+            case .text: info.capabilities.textMatch
             case .exact: info.capabilities.exact
             }
         }
@@ -84,7 +84,7 @@ struct ColumnFilterView: View {
                         RangeFilterView(
                             distribution: distribution, bins: $histogramBins,
                             scale: $histogramScale, supportsLog: info.capabilities.logarithmic, draft: $range)
-                    case .contains: ContainsEditor(draft: $contains)
+                    case .text: TextMatchEditor(draft: $textMatch)
                     case .exact: exactEditor
                     }
                 }.disabled(nullMode == .only)
@@ -111,7 +111,7 @@ struct ColumnFilterView: View {
     @ViewBuilder private var exactEditor: some View {
         if let values = choices?.values {
             ChoiceFilterView(values: values, draft: $exact)
-        } else if info.capabilities.contains {
+        } else if info.capabilities.textMatch {
             TextFilterView(view: view, column: column, draft: $exact)
         } else {
             HStack {
@@ -192,7 +192,7 @@ struct ColumnFilterView: View {
 
     private func reset() {
         exact = ExactFilterDraft(nil)
-        contains = TextContainsDraft(nil)
+        textMatch = TextMatchDraft(nil)
         range = RangeDraft(nil)
         nullMode = .include
         literal = ""
@@ -204,7 +204,7 @@ struct ColumnFilterView: View {
         let activeCondition: FilterCondition? =
             switch mode {
             case .range: range.condition
-            case .contains: contains.condition
+            case .text: textMatch.condition
             case .exact: exact.condition
             }
         let filter = nullMode.applying(to: modes.isEmpty ? nil : activeCondition)

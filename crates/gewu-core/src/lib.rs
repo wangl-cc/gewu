@@ -27,7 +27,7 @@ pub use file::{
 pub(crate) use query::{predicate, scope, selection};
 pub use query::{
     CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, QuerySpec, RowBlock,
-    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    TextMatch, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use stats::{
     AnalysisCapabilities, AnalysisField, AxisScale, Histogram, LengthSummary, LengthUnit,

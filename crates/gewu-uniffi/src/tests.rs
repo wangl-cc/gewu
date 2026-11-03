@@ -48,7 +48,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
         statistics.median_label.as_deref(),
         Some("9007199254740992.5")
     );
-    assert!(!doc.info().columns[0].capabilities.contains);
+    assert!(!doc.info().columns[0].capabilities.text_match);
     // Chart coordinates may round a large ID; typed filters below must not.
     let before = doc.view();
     assert!(matches!(
@@ -118,8 +118,26 @@ fn text_filter_modes_and_paged_choices_cross_ffi() {
     ));
     assert_eq!(info.columns[0].display_type, "string");
     assert_eq!(info.columns[1].display_type, "int64");
-    assert!(info.columns[0].capabilities.contains);
+    assert!(info.columns[0].capabilities.text_match);
     assert!(info.columns[0].capabilities.exact);
+    let equals = |case_sensitive| {
+        doc.view()
+            .query(
+                query(0, Filter {
+                    condition: FilterCondition::Text {
+                        text: "CAT".into(),
+                        mode: crate::TextMatch::Equals,
+                        case_sensitive,
+                    },
+                    include_nulls: false,
+                }),
+                Cancellation::new(),
+            )
+            .unwrap()
+            .row_count()
+    };
+    assert_eq!(equals(false), 1);
+    assert_eq!(equals(true), 0);
     let state = query(1, Filter {
         condition: FilterCondition::Exact {
             values: vec!["10".into()],

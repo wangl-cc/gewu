@@ -31,7 +31,8 @@ impl From<core::ValueCategory> for ValueCategory {
 
 #[derive(uniffi::Record)]
 pub struct ColumnCapabilities {
-    pub contains: bool,
+    /// Text filters: contains and whole-value equality.
+    pub text_match: bool,
     pub range: bool,
     pub exact: bool,
     pub scatter: bool,
@@ -41,7 +42,7 @@ pub struct ColumnCapabilities {
 impl From<core::ColumnCapabilities> for ColumnCapabilities {
     fn from(capabilities: core::ColumnCapabilities) -> Self {
         Self {
-            contains: capabilities.contains,
+            text_match: capabilities.text_match,
             range: capabilities.range,
             exact: capabilities.exact,
             scatter: capabilities.scatter,

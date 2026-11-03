@@ -23,8 +23,8 @@ use crate::{
     Cancellation, Error, Filter, Result,
 };
 
-/// Substring matching is defined only for text values, including dictionaries.
-pub(crate) fn supports_contains(data_type: &DataType) -> bool {
+/// Text matching is defined only for text values, including dictionaries.
+pub(crate) fn supports_text_match(data_type: &DataType) -> bool {
     types::domain(data_type) == Some(Domain::Text)
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn compile_filter<'a>(
             };
             Some((condition, *exclude))
         }
-        FilterCondition::Contains { .. } if supports_contains(data_type) => {
+        FilterCondition::Text { .. } if supports_text_match(data_type) => {
             Some((filter.condition.clone(), false))
         }
         _ => None,
@@ -119,11 +119,12 @@ fn compile_condition<'a>(
         });
     }
     match condition {
-        FilterCondition::Contains {
+        FilterCondition::Text {
             text: value,
+            mode,
             case_sensitive,
-        } if supports_contains(array.data_type()) => {
-            text::contains(array, value, *case_sensitive, None)
+        } if supports_text_match(array.data_type()) => {
+            text::text_match(array, value, *mode, *case_sensitive)
         }
         FilterCondition::Range { min, max } if range::supports(array.data_type()) => {
             let min = min

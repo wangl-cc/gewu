@@ -12,7 +12,7 @@ struct WindowPresentationTests {
             .write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
         let view = dataset.view()
-        let expected: [FilterMode] = [.exact, .exact, .range, .contains]
+        let expected: [FilterMode] = [.exact, .exact, .range, .text]
         for (index, column) in dataset.info().columns.enumerated() {
             #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
             let choices = try view.filterChoices(column: UInt32(index), cancellation: Cancellation())
@@ -30,8 +30,8 @@ struct WindowPresentationTests {
         #expect(
             FilterMode.initial(
                 capabilities: text,
-                current: Filter(condition: .contains(text: "group", caseSensitive: false), includeNulls: true))
-                == .contains)
+                current: Filter(condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
+                == .text)
         #expect(
             FilterMode.initial(
                 capabilities: text,

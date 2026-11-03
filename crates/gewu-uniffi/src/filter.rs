@@ -14,8 +14,10 @@ pub enum FilterCondition {
         min: Option<String>,
         max: Option<String>,
     },
-    Contains {
+    /// Match text values. Case-insensitive matching uses Unicode simple case folding.
+    Text {
         text: String,
+        mode: TextMatch,
         case_sensitive: bool,
     },
     Exact {
@@ -23,17 +25,32 @@ pub enum FilterCondition {
         exclude: bool,
     },
 }
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum TextMatch {
+    Contains,
+    Equals,
+}
+impl From<TextMatch> for core::TextMatch {
+    fn from(value: TextMatch) -> Self {
+        match value {
+            TextMatch::Contains => Self::Contains,
+            TextMatch::Equals => Self::Equals,
+        }
+    }
+}
 impl From<Filter> for core::Filter {
     fn from(value: Filter) -> Self {
         Self {
             include_nulls: value.include_nulls,
             condition: match value.condition {
                 FilterCondition::Range { min, max } => core::FilterCondition::Range { min, max },
-                FilterCondition::Contains {
+                FilterCondition::Text {
                     text,
+                    mode,
                     case_sensitive,
-                } => core::FilterCondition::Contains {
+                } => core::FilterCondition::Text {
                     text,
+                    mode: mode.into(),
                     case_sensitive,
                 },
                 FilterCondition::Exact { values, exclude } => {

@@ -30,15 +30,15 @@ enum ViewSmoke {
             check(!message.isEmpty)
         }
         check(original.rowCount() == 3)
-        check(!dataset!.info().columns[0].capabilities.contains)
-        check(dataset!.info().columns[1].capabilities.contains)
-        spec.columns[0].filter = Filter(condition: .contains(text: "", caseSensitive: false), includeNulls: true)
+        check(!dataset!.info().columns[0].capabilities.textMatch)
+        check(dataset!.info().columns[1].capabilities.textMatch)
+        spec.columns[0].filter = Filter(condition: .text(text: "", mode: .contains, caseSensitive: false), includeNulls: true)
         do {
             _ = try original.query(spec: spec, cancellation: Cancellation())
-            preconditionFailure("non-text Contains returned a View")
+            preconditionFailure("non-text text match returned a View")
         } catch GewuError.InvalidArgument {}
         var textSpec = full
-        textSpec.columns[1].filter = Filter(condition: .contains(text: "T", caseSensitive: false), includeNulls: false)
+        textSpec.columns[1].filter = Filter(condition: .text(text: "T", mode: .contains, caseSensitive: false), includeNulls: false)
         check(try original.query(spec: textSpec, cancellation: Cancellation()).rowCount() == 2)
         spec.columns[0].filter = Filter(
             condition: .range(min: "2", max: nil), includeNulls: false)
