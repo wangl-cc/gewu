@@ -1,9 +1,24 @@
-//! Column analysis metadata and logical-null counts.
+//! Column analysis metadata.
 
 use arrow::{array::Array, datatypes::DataType};
 
-use super::ArrayView;
-use crate::{execution::scope::Selection, types, types::display_type, Cancellation, Error, Result};
+use crate::{col_view::ColView, types, types::display_type, Cancellation, Error, Result};
+
+pub(crate) fn count_nulls(view: ColView<'_>, cancellation: &Cancellation) -> Result<u64> {
+    let null_count = match view.array().logical_nulls() {
+        None => 0,
+        Some(nulls) if view.is_complete() => nulls.null_count() as u64,
+        Some(nulls) => {
+            let mut count = 0;
+            for (i, row) in view.iter().enumerate() {
+                cancellation.check_at(i)?;
+                count += u64::from(nulls.is_null(row));
+            }
+            count
+        }
+    };
+    Ok(null_count)
+}
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.
 /// Overview is available for every loaded column.
@@ -22,24 +37,6 @@ pub struct AnalysisField {
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
-}
-
-impl ArrayView<'_> {
-    pub(crate) fn count_nulls(&self, cancellation: &Cancellation) -> Result<u64> {
-        let null_count = match self.array.logical_nulls() {
-            None => 0,
-            Some(nulls) if matches!(self.rows, Selection::All(_)) => nulls.null_count() as u64,
-            Some(nulls) => {
-                let mut count = 0;
-                for (i, row) in self.rows.iter().enumerate() {
-                    cancellation.check_at(i)?;
-                    count += u64::from(nulls.is_null(row));
-                }
-                count
-            }
-        };
-        Ok(null_count)
-    }
 }
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.

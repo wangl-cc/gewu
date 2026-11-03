@@ -119,21 +119,21 @@ impl<'a> Numeric<'a> {
 }
 
 pub(crate) fn analyze(
-    view: super::ArrayView<'_>,
+    view: crate::col_view::ColView<'_>,
     context: &Cancellation,
 ) -> Result<NumericStatistics> {
     context.check()?;
-    let summary = Numeric::new(view.array)
+    let summary = Numeric::new(view.array())
         .ok_or_else(|| {
             crate::Error::InvalidArgument(format!(
                 "{} does not support numeric statistics",
                 view.data_type()
             ))
         })?
-        .summarize(view.rows.iter(), context)?;
-    let formatter = crate::format::formatter(view.array.as_ref())?;
+        .summarize(view.iter(), context)?;
+    let formatter = crate::format::formatter(view.array().as_ref())?;
     let label = |row: Option<usize>| {
-        row.and_then(|row| crate::format::cell(view.array.as_ref(), &formatter, row))
+        row.and_then(|row| crate::format::cell(view.array().as_ref(), &formatter, row))
     };
     Ok(NumericStatistics {
         min_label: label(summary.min_row),

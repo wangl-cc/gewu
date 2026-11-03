@@ -14,8 +14,7 @@ use arrow::{
     datatypes::*,
 };
 
-use super::ArrayView;
-use crate::{format, Cancellation, Error, Result};
+use crate::{col_view::ColView, format, Cancellation, Error, Result};
 
 /// A displayed non-null value and its frequency in the captured view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,7 +224,7 @@ impl Sketch {
     }
 }
 
-pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<ValueSummary> {
+pub(crate) fn analyze(view: ColView<'_>, context: &Cancellation) -> Result<ValueSummary> {
     context.check()?;
     if !supports(view.data_type()) {
         return Err(Error::InvalidArgument(format!(
@@ -233,16 +232,16 @@ pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<Val
             view.data_type()
         )));
     }
-    let value = hasher(view.array.as_ref())?;
+    let value = hasher(view.array().as_ref())?;
     let mut sketch = Sketch::default();
-    for (index, row) in view.rows.iter().enumerate() {
+    for (index, row) in view.iter().enumerate() {
         context.check_at(index)?;
         if let Some(key) = value(row) {
             sketch.add(key, row);
         }
     }
     let mut counts = sketch.nominees();
-    for (index, row) in view.rows.iter().enumerate() {
+    for (index, row) in view.iter().enumerate() {
         context.check_at(index)?;
         if let Some(count) = value(row).and_then(|key| counts.get_mut(&key)) {
             count.0 += 1;
@@ -251,7 +250,7 @@ pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<Val
     let mut top: Vec<_> = counts.into_values().collect();
     top.sort_unstable_by_key(|&(count, row)| (std::cmp::Reverse(count), row));
     top.truncate(OUTPUT_LIMIT);
-    let formatter = format::formatter(view.array.as_ref())?;
+    let formatter = format::formatter(view.array().as_ref())?;
     let values = top
         .into_iter()
         .map(|(count, row)| ValueFrequency {
@@ -293,8 +292,8 @@ mod tests {
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(
             (0..50_000).map(|_| 0).chain(1..100_001),
         ));
-        let sel = crate::execution::scope::Selection::All(array.len());
-        let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
+        let selected = crate::col_view::test::Fixture::all(&array);
+        let summary = analyze(selected.view(), &Cancellation::default()).unwrap();
         assert_eq!(
             (summary.values[0].label.as_str(), summary.values[0].count),
             ("0", 50_000)
@@ -307,8 +306,8 @@ mod tests {
         assert_eq!(unique.distinct(), DISTINCT_CAPACITY as u64);
         // Complete MG eviction cycles still have representative fallback values.
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
-        let sel = crate::execution::scope::Selection::All(array.len());
-        let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
+        let selected = crate::col_view::test::Fixture::all(&array);
+        let summary = analyze(selected.view(), &Cancellation::default()).unwrap();
         assert_eq!(summary.values.len(), OUTPUT_LIMIT);
         assert!(summary.values.iter().all(|value| value.count == 1));
     }
@@ -322,8 +321,8 @@ mod tests {
             Some(f64::from_bits(0x7ff8000000000001)),
             None,
         ]));
-        let all5 = crate::execution::scope::Selection::All(5);
-        let summary = analyze(ArrayView::new(&array, &all5), &Cancellation::default()).unwrap();
+        let all = crate::col_view::test::Fixture::all(&array);
+        let summary = analyze(all.view(), &Cancellation::default()).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert!(summary.values.iter().all(|value| value.count == 2));
         let dictionary: ArrayRef = Arc::new(
@@ -338,12 +337,8 @@ mod tests {
             )
             .unwrap(),
         );
-        let sel_dict = crate::execution::scope::Selection::Rows(Arc::from(vec![4, 2, 0, 1, 3]));
-        let summary = analyze(
-            ArrayView::new(&dictionary, &sel_dict),
-            &Cancellation::default(),
-        )
-        .unwrap();
+        let selected = crate::col_view::test::Fixture::new(&dictionary, vec![4, 2, 0, 1, 3]);
+        let summary = analyze(selected.view(), &Cancellation::default()).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
             (summary.values[0].label.as_str(), summary.values[0].count),
@@ -351,9 +346,9 @@ mod tests {
         );
         let context = Cancellation::default();
         context.cancel();
-        let all_dict = crate::execution::scope::Selection::All(5);
+        let all = crate::col_view::test::Fixture::all(&dictionary);
         assert!(matches!(
-            analyze(ArrayView::new(&dictionary, &all_dict), &context),
+            analyze(all.view(), &context),
             Err(Error::Cancelled)
         ));
     }

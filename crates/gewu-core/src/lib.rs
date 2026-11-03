@@ -6,6 +6,7 @@
 
 mod cancellation;
 pub use cancellation::Cancellation;
+mod col_view;
 mod column;
 mod dataset;
 mod error;

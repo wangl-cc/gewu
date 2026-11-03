@@ -98,7 +98,7 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 [types/](src/types) contains shared Arrow structure helpers and display-type projection. Arrow `DataType` remains the source of truth; `Column` does not store a second logical type. [Column metadata](src/column/metadata.rs) uses that projection plus a coarse `ValueCategory` directly from Arrow. Scatter results carry their own axis presentation kinds. Nested-analysis fields use the same direct display-type projection and retain the full Arrow type as technical text; no intermediate logical-type enum is transmitted. Schema-description validation preserves rejection of unsupported nested types when a column is loaded; it does not decide which operations are available.
 
-Each operation owns its type support and execution rules by matching Arrow `DataType` directly. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `Column::capabilities` aggregates these queries for the frontend without scanning data. Analysis capabilities and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
+Each operation owns its type support and execution rules by matching Arrow `DataType` directly. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `column/metadata` aggregates these queries for the frontend without scanning data. Analysis capabilities and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
 
 [scalar/](src/scalar) owns validated scalar bounds, exact decimal endpoints and shared text-to-native parsing. It is independent of Column and Predicate execution, so both filter compilation and histogram range projection can use it without reversing their dependency direction. [execution/](src/execution) owns native row selections and bounded Predicate evaluation shared by query, Column and stats.
 
@@ -111,6 +111,7 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [dataset/](src/dataset) | Decoded data, metadata, query execution and shared column cache ownership. |
 | [dataset/query.rs](src/dataset/query.rs) | Complete query validation and execution over the full Dataset. |
 | [view/](src/view) | Immutable row/column mappings and operations over a bound View. |
+| [col_view.rs](src/col_view.rs) | Borrowed Column and View-row projections used by analysis and filter candidates. |
 | [view/rows.rs](src/view/rows.rs) | RowBlock and formatted reads from a bound View. |
 | [view/analysis.rs](src/view/analysis.rs) | Typed analyses and direct scatter calculation. |
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and distributions. |
@@ -124,7 +125,6 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [execution/](src/execution) | Native row selections, bounded Predicate evaluation and sorting. |
 | [execution/sort.rs](src/execution/sort.rs) | Cancellable native sorting and merging. |
 | [stats/](src/stats) | Analysis organization and result exports. |
-| [stats/array_view.rs](src/stats/array_view.rs) | Internal borrowed array and row selection. |
 | [stats/histogram/](src/stats/histogram) | Linear/logarithmic binning, range projections and bin tests. |
 | [stats/numeric/](src/stats/numeric), [stats/lengths.rs](src/stats/lengths.rs), [stats/values.rs](src/stats/values.rs) | Analysis kernels and their result records. |
 | [file/](src/file) | Codecs, export progress and destination commit. |

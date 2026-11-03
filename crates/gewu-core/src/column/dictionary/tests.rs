@@ -8,7 +8,7 @@ use arrow::{
 };
 
 use super::*;
-use crate::{execution::scope::Selection, Cancellation};
+use crate::Cancellation;
 
 #[test]
 fn codes_name_distinct_values_and_null_mask() {
@@ -54,35 +54,6 @@ fn nulls_do_not_consume_value_codes() {
 }
 
 #[test]
-fn all_counts_tally() {
-    let a: ArrayRef = Arc::new(StringArray::from(vec![
-        Some("b"),
-        Some("a"),
-        None,
-        Some("b"),
-    ]));
-    let dictionary = Dictionary::build(&a, &Cancellation::default())
-        .unwrap()
-        .unwrap();
-    let code_b = dictionary.code_at(0);
-    let code_a = dictionary.code_at(1);
-    let selection = Selection::Rows(Arc::from(vec![0, 3]));
-    let tally = dictionary
-        .tally(&selection, &Cancellation::default())
-        .unwrap();
-    assert_eq!(tally.null_count, 0);
-    assert_eq!(tally.counts[code_a as usize], 0);
-    assert_eq!(tally.counts[code_b as usize], 2);
-
-    let all = dictionary
-        .tally(&Selection::All(a.len()), &Cancellation::default())
-        .unwrap();
-    assert_eq!(all.null_count, 1);
-    assert_eq!(all.counts[code_a as usize], 1);
-    assert_eq!(all.counts[code_b as usize], 2);
-}
-
-#[test]
 fn empty_and_all_null_columns_still_encode() {
     let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
     let dictionary = Dictionary::build(&empty, &Cancellation::default())
@@ -99,11 +70,6 @@ fn empty_and_all_null_columns_still_encode() {
     assert!((dictionary.null_count() > 0));
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
-    let tally = dictionary
-        .tally(&Selection::All(2), &Cancellation::default())
-        .unwrap();
-    assert_eq!(tally.null_count, 2);
-    assert!(tally.counts.is_empty());
 }
 
 #[test]
@@ -148,13 +114,6 @@ fn native_dictionary_reuses_keys_and_unifies_both_nulls() {
     assert!(dictionary.is_null(1));
     assert!(dictionary.is_null(2));
     assert!(!dictionary.is_null(3));
-
-    let tally = dictionary
-        .tally(&Selection::All(6), &Cancellation::default())
-        .unwrap();
-    assert_eq!(tally.null_count, 2);
-    assert_eq!(tally.counts[code_a as usize], 2);
-    assert_eq!(tally.counts[code_b as usize], 2);
 }
 
 #[test]
@@ -263,13 +222,6 @@ fn plain_and_native_dictionaries_agree() {
         .unwrap();
     assert_eq!(plain.n_values(), native.n_values());
     assert_eq!((plain.null_count() > 0), (native.null_count() > 0));
-    let p_tally = plain
-        .tally(&Selection::All(5), &Cancellation::default())
-        .unwrap();
-    let n_tally = native
-        .tally(&Selection::All(5), &Cancellation::default())
-        .unwrap();
-    assert_eq!(p_tally, n_tally);
 }
 
 #[test]
@@ -283,11 +235,6 @@ fn arrow_null_type_encodes_every_row_as_null() {
     assert!(dictionary.is_null(0));
     assert!(dictionary.is_null(1));
     assert!(dictionary.is_null(2));
-    let tally = dictionary
-        .tally(&Selection::All(3), &Cancellation::default())
-        .unwrap();
-    assert_eq!(tally.null_count, 3);
-    assert!(tally.counts.is_empty());
 }
 
 #[test]
@@ -307,8 +254,4 @@ fn dictionary_labels_and_codes_are_natively_sorted() {
     assert_eq!(dictionary.code_at(1), 0); // 2 is rank 0
     assert_eq!(dictionary.code_at(2), 1); // 10 is rank 1
     assert_eq!(dictionary.code_at(3), 0); // 2 is rank 0
-    let tally = dictionary
-        .tally(&Selection::All(4), &Cancellation::default())
-        .unwrap();
-    assert_eq!(tally.counts, vec![2, 1, 1]);
 }

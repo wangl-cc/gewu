@@ -10,8 +10,8 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{ArrayView, AxisScale};
-use crate::{execution::scope::Selection, scalar::Bound, Cancellation, Error, Result};
+use super::AxisScale;
+use crate::{col_view::ColView, scalar::Bound, Cancellation, Error, Result};
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,7 +113,7 @@ impl Output for RangeHistogram {
 }
 
 pub(crate) fn build_scaled(
-    view: ArrayView<'_>,
+    view: ColView<'_>,
     bins: u32,
     scale: AxisScale,
     context: &Cancellation,
@@ -121,30 +121,28 @@ pub(crate) fn build_scaled(
     context.check()?;
     match scale {
         AxisScale::Linear => Ok(
-            match build_bins(view.array, view.rows, bins.min(MAX_BINS), context)? {
+            match build_bins(view.array(), view.rows(), bins.min(MAX_BINS), context)? {
                 Domain::Bins(histogram) => Some(histogram),
                 Domain::Empty | Domain::InfiniteOnly | Domain::Unsupported => None,
             },
         ),
-        AxisScale::Log10 => {
-            logarithmic::build(view.array, view.rows, bins.min(MAX_BINS), context).map(Some)
-        }
+        AxisScale::Log10 => logarithmic::build(view, bins.min(MAX_BINS), context).map(Some),
     }
 }
 
-pub(crate) fn counts(view: ArrayView<'_>, bins: u32, context: &Cancellation) -> Result<Histogram> {
-    statistics(view.array, view.rows, bins, context)
+pub(crate) fn counts(view: ColView<'_>, bins: u32, context: &Cancellation) -> Result<Histogram> {
+    statistics(view.array(), view.rows(), bins, context)
 }
 
 pub(crate) fn counts_scaled(
-    view: ArrayView<'_>,
+    view: ColView<'_>,
     bins: u32,
     scale: AxisScale,
     context: &Cancellation,
 ) -> Result<Histogram> {
     match scale {
         AxisScale::Linear => counts(view, bins, context),
-        AxisScale::Log10 => logarithmic::build(view.array, view.rows, bins, context),
+        AxisScale::Log10 => logarithmic::build(view, bins, context),
     }
 }
 
@@ -178,7 +176,7 @@ pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
 
 fn statistics(
     array: &ArrayRef,
-    rows: &Selection,
+    rows: &[u32],
     bins: u32,
     context: &Cancellation,
 ) -> Result<Histogram> {
@@ -221,7 +219,7 @@ fn statistics(
 
 fn build_bins<H: Output>(
     array: &ArrayRef,
-    rows: &Selection,
+    rows: &[u32],
     bins: u32,
     context: &Cancellation,
 ) -> Result<Domain<H>> {
@@ -312,14 +310,14 @@ fn build_bins<H: Output>(
 
 fn extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &Selection,
+    rows: &[u32],
     context: &Cancellation,
 ) -> Result<Option<(T::Native, T::Native)>>
 where
     T::Native: Ord,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
         let value = array.is_valid(row).then(|| array.value(row));
         context.check_at(index)?;
         if let Some(value) = value {
@@ -335,7 +333,7 @@ where
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &Selection,
+    rows: &[u32],
     bins: usize,
     context: &Cancellation,
 ) -> Result<Domain<H>>
@@ -384,7 +382,7 @@ where
 
 fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &Selection,
+    rows: &[u32],
     bins: usize,
     context: &Cancellation,
     scale: i8,
@@ -448,7 +446,7 @@ where
 
 fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &Selection,
+    rows: &[u32],
     bins: usize,
     context: &Cancellation,
 ) -> Result<Domain<H>>
@@ -458,7 +456,7 @@ where
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut has_infinite = false;
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
         let value = array.is_valid(row).then(|| array.value(row));
         context.check_at(index)?;
         let Some(value) = value else { continue };
@@ -555,7 +553,7 @@ fn axis(lo: f64, hi: f64, bins: usize) -> (f64, f64) {
 
 fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &Selection,
+    rows: &[u32],
     bins: usize,
     integer: bool,
     axis: (f64, f64),
@@ -575,7 +573,7 @@ fn count<T: ArrowPrimitiveType>(
         non_positive_count: 0,
         infinite_count: 0,
     };
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
         context.check_at(index)?;
         if array.is_valid(row) {
             if let Some(bin) = classify(array.value(row)) {
@@ -597,12 +595,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, Cancellation, Filter};
+    use crate::{col_view::test::Fixture, Cancellation, Filter};
 
     #[test]
     fn cancellation_interrupts_histogram_counting() {
         let array = Int64Array::from_iter_values(0..8193);
-        let rows = Selection::All(array.len());
+        let rows = (0..array.len() as u32).collect::<Vec<_>>();
         let context = Cancellation::default();
         let visited = Cell::new(0);
         let result = count(&array, &rows, 1, true, (0.0, 8193.0), &context, |_| {
@@ -617,41 +615,33 @@ mod tests {
         );
 
         let array: ArrayRef = Arc::new(array);
+        let all = Fixture::all(&array);
         assert!(matches!(
-            counts(ArrayView::new(&array, &rows), 1, &context),
+            counts(all.view(), 1, &context),
             Err(Error::Cancelled)
         ));
         assert_eq!(
-            counts(ArrayView::new(&array, &rows), 1, &Cancellation::default())
+            counts(all.view(), 1, &Cancellation::default())
                 .unwrap()
                 .counts,
             [8193]
         );
     }
 
-    fn verify_bins(array: ArrayRef, rows: Selection, bins: u32) -> RangeHistogram {
-        let result = build_scaled(
-            ArrayView::new(&array, &rows),
-            bins,
-            AxisScale::Linear,
-            &Cancellation::default(),
-        )
-        .unwrap()
-        .unwrap();
-        let statistics = counts(
-            ArrayView::new(&array, &rows),
-            bins.min(MAX_BINS),
-            &Cancellation::default(),
-        )
-        .unwrap();
+    fn verify_bins(fixture: Fixture, bins: u32) -> RangeHistogram {
+        let view = fixture.view();
+        let result = build_scaled(view, bins, AxisScale::Linear, &Cancellation::default())
+            .unwrap()
+            .unwrap();
+        let statistics = counts(view, bins.min(MAX_BINS), &Cancellation::default()).unwrap();
         assert_eq!(statistics, result.histogram);
         assert_eq!(result.ranges.len(), result.histogram.counts.len());
         assert!(result.ranges.first().unwrap().min.is_none());
         assert!(result.ranges.last().unwrap().max.is_none());
-        let mut selected = vec![0_u32; array.len()];
-        let column = Column::new("test", array.clone()).unwrap();
+        let mut selected = vec![0_u32; view.array().len()];
         for (bounds, &expected) in result.ranges.iter().zip(&result.histogram.counts) {
-            let predicate = column
+            let predicate = view
+                .column()
                 .compile_filter(
                     &Filter::range(
                         (bounds.min.clone()).map(|b| b.value),
@@ -661,12 +651,19 @@ mod tests {
                     &Cancellation::default(),
                 )
                 .unwrap();
-            let mut matched = vec![false; array.len()];
+            let mut matched = vec![false; view.array().len()];
             predicate
-                .evaluate(0..array.len(), &mut matched, &Cancellation::default())
+                .evaluate(
+                    0..view.array().len(),
+                    &mut matched,
+                    &Cancellation::default(),
+                )
                 .unwrap();
             assert_eq!(
-                rows.iter().filter(|&row| matched[row]).count() as u64,
+                view.rows()
+                    .iter()
+                    .filter(|&&row| matched[row as usize])
+                    .count() as u64,
                 expected
             );
             for (selected, matched) in selected.iter_mut().zip(matched) {
@@ -679,14 +676,11 @@ mod tests {
         );
         assert_eq!(
             result.histogram.counts.iter().sum::<u64>()
-                + ArrayView::new(&array, &rows)
-                    .count_nulls(&Cancellation::default())
-                    .unwrap()
-                + ArrayView::new(&array, &rows)
-                    .numeric_statistics(&Cancellation::default())
+                + crate::stats::count_nulls(view, &Cancellation::default()).unwrap()
+                + crate::stats::analyze_statistics(view, &Cancellation::default())
                     .unwrap()
                     .nan_count,
-            rows.len() as u64
+            view.len() as u64
         );
         result
     }
@@ -699,20 +693,11 @@ mod tests {
                 .with_precision_and_scale(38, 2)
                 .unwrap(),
         );
-        let histogram = counts(
-            ArrayView::new(&array, &Selection::All(100)),
-            100,
-            &Cancellation::default(),
-        )
-        .unwrap();
+        let fixture = crate::col_view::test::Fixture::all(&array);
+        let histogram = counts(fixture.view(), 100, &Cancellation::default()).unwrap();
         assert_eq!(histogram.counts, vec![1; 100]);
-        let selected = Selection::Rows(Arc::from(vec![1, 99]));
-        let histogram = counts(
-            ArrayView::new(&array, &selected),
-            100,
-            &Cancellation::default(),
-        )
-        .unwrap();
+        let selected = Fixture::new(&array, vec![1, 99]);
+        let histogram = counts(selected.view(), 100, &Cancellation::default()).unwrap();
         assert_eq!(histogram.counts.len(), 99);
         assert_eq!(histogram.counts[0], 1);
         assert_eq!(histogram.counts[98], 1);
@@ -732,7 +717,7 @@ mod tests {
                 &DataType::Duration(unit),
             )
             .unwrap();
-            let result = verify_bins(array, Selection::All(4), 3);
+            let result = verify_bins(Fixture::all(&array), 3);
             assert_eq!(result.histogram.counts, [1, 1, 1]);
         }
     }
@@ -741,51 +726,43 @@ mod tests {
     fn missing_finite_domain_preserves_nan_null_and_infinity_semantics() {
         for values in [vec![], vec![None], vec![Some(f64::NAN), None]] {
             let array: ArrayRef = Arc::new(Float64Array::from(values));
-            let rows = Selection::All(array.len());
-            let h = counts(ArrayView::new(&array, &rows), 3, &Cancellation::default()).unwrap();
+            let all = Fixture::all(&array);
+            let h = counts(all.view(), 3, &Cancellation::default()).unwrap();
             assert!(h.counts.is_empty());
             assert_eq!((h.lo, h.hi), (None, None));
-            let view = ArrayView::new(&array, &rows);
             assert_eq!(
-                view.count_nulls(&Cancellation::default()).unwrap(),
+                crate::stats::count_nulls(all.view(), &Cancellation::default()).unwrap(),
                 array.null_count() as u64
             );
             assert_eq!(
-                view.count_nulls(&Cancellation::default()).unwrap()
-                    + view
-                        .numeric_statistics(&Cancellation::default())
+                crate::stats::count_nulls(all.view(), &Cancellation::default()).unwrap()
+                    + crate::stats::analyze_statistics(all.view(), &Cancellation::default())
                         .unwrap()
                         .nan_count,
-                rows.len() as u64
+                all.view().len() as u64
             );
-            assert!(build_scaled(
-                ArrayView::new(&array, &rows),
-                3,
-                AxisScale::Linear,
-                &Cancellation::default()
-            )
-            .unwrap()
-            .is_none());
+            assert!(
+                build_scaled(all.view(), 3, AxisScale::Linear, &Cancellation::default())
+                    .unwrap()
+                    .is_none()
+            );
         }
         let array: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(f64::NAN),
             None,
             Some(f64::NAN),
         ]));
-        for (rows, total, nulls, nans) in [
-            (Selection::All(3), 3, 1, 2),
-            (Selection::Rows(Arc::from(vec![1, 2])), 2, 1, 1),
-            (Selection::Rows(Arc::from(vec![])), 0, 0, 0),
+        for (selected, total, nulls, nans) in [
+            (Fixture::all(&array), 3, 1, 2),
+            (Fixture::new(&array, vec![1, 2]), 2, 1, 1),
+            (Fixture::new(&array, vec![]), 0, 0, 0),
         ] {
-            let h = counts(ArrayView::new(&array, &rows), 40, &Cancellation::default()).unwrap();
+            let h = counts(selected.view(), 40, &Cancellation::default()).unwrap();
             assert_eq!(
                 (
-                    rows.len(),
-                    ArrayView::new(&array, &rows)
-                        .count_nulls(&Cancellation::default())
-                        .unwrap(),
-                    ArrayView::new(&array, &rows)
-                        .numeric_statistics(&Cancellation::default())
+                    selected.view().len(),
+                    crate::stats::count_nulls(selected.view(), &Cancellation::default()).unwrap(),
+                    crate::stats::analyze_statistics(selected.view(), &Cancellation::default())
                         .unwrap()
                         .nan_count
                 ),
@@ -797,23 +774,17 @@ mod tests {
         for value in [f64::INFINITY, f64::NEG_INFINITY] {
             let array: ArrayRef =
                 Arc::new(Float64Array::from(vec![Some(f64::NAN), None, Some(value)]));
+            let all = Fixture::all(&array);
             assert!(matches!(
-                counts(
-                    ArrayView::new(&array, &Selection::All(3)),
-                    40,
-                    &Cancellation::default()
-                ),
+                counts(all.view(), 40, &Cancellation::default()),
                 Err(Error::InvalidArgument(_))
             ));
 
-            assert!(build_scaled(
-                ArrayView::new(&array, &Selection::All(3)),
-                40,
-                AxisScale::Linear,
-                &Cancellation::default()
-            )
-            .unwrap()
-            .is_none());
+            assert!(
+                build_scaled(all.view(), 40, AxisScale::Linear, &Cancellation::default())
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
@@ -852,18 +823,14 @@ mod tests {
         ];
         for array in arrays {
             let len = array.len();
-            verify_bins(array.clone(), Selection::All(len), 60);
-            verify_bins(
-                array,
-                Selection::Rows(Arc::from(vec![1, (len - 1) as u32])),
-                3,
-            );
+            verify_bins(Fixture::all(&array), 60);
+            verify_bins(Fixture::new(&array, vec![1, (len - 1) as u32]), 3);
         }
         let adjacent: ArrayRef = Arc::new(Int64Array::from(vec![
             9_007_199_254_740_992,
             9_007_199_254_740_993,
         ]));
-        let result = verify_bins(adjacent, Selection::All(2), 60);
+        let result = verify_bins(Fixture::all(&adjacent), 60);
         assert_eq!(result.histogram.counts, [1, 1]);
         assert!(result.histogram.lo.unwrap() < result.histogram.hi.unwrap());
         assert_eq!(
@@ -883,7 +850,7 @@ mod tests {
                 .with_precision_and_scale(10, 1)
                 .unwrap(),
         );
-        let result = verify_bins(tenths, Selection::All(10), 3);
+        let result = verify_bins(Fixture::all(&tenths), 3);
         assert_eq!(result.histogram.counts, [4, 3, 3]);
         let large: i256 = "123456789012345678901234567890123456789012345678901234567890"
             .parse()
@@ -910,7 +877,7 @@ mod tests {
             ),
         ];
         for array in arrays {
-            let result = verify_bins(array, Selection::All(3), 60);
+            let result = verify_bins(Fixture::all(&array), 60);
             assert_eq!(result.histogram.counts, [1, 1, 1]);
         }
         let limit: i256 =
@@ -922,7 +889,7 @@ mod tests {
                 .with_precision_and_scale(76, 0)
                 .unwrap(),
         );
-        verify_bins(extremes, Selection::All(3), 60);
+        verify_bins(Fixture::all(&extremes), 60);
     }
 
     #[test]
@@ -937,8 +904,8 @@ mod tests {
             None,
         ]));
         let float16 = arrow::compute::cast(&float32, &DataType::Float16).unwrap();
-        verify_bins(float16, Selection::All(7), 3);
-        let result = verify_bins(float32, Selection::All(7), 3);
+        verify_bins(Fixture::all(&float16), 3);
+        let result = verify_bins(Fixture::all(&float32), 3);
         assert_eq!(result.histogram.counts.iter().sum::<u64>(), 5);
         let infinities: ArrayRef = Arc::new(Float64Array::from(vec![
             f64::NEG_INFINITY,
@@ -947,7 +914,7 @@ mod tests {
             2.0,
             f64::INFINITY,
         ]));
-        let result = verify_bins(infinities, Selection::All(5), 2);
+        let result = verify_bins(Fixture::all(&infinities), 2);
         assert_eq!(
             (result.histogram.lo, result.histogram.hi),
             (Some(0.0), Some(2.0))
@@ -961,11 +928,8 @@ mod tests {
         ] {
             let len = values.len();
             let single = values.len() == 1;
-            let result = verify_bins(
-                Arc::new(Float64Array::from(values)),
-                Selection::All(len),
-                bins,
-            );
+            let array: ArrayRef = Arc::new(Float64Array::from(values));
+            let result = verify_bins(Fixture::all(&array), bins);
             assert_eq!(result.histogram.counts, vec![1; len]);
             assert!((result.histogram.hi.unwrap() - result.histogram.lo.unwrap()).is_finite());
             if single {
@@ -988,34 +952,26 @@ mod tests {
             ),
         ];
         for array in arrays {
-            assert!(build_scaled(
-                ArrayView::new(&array, &Selection::All(1)),
-                60,
-                AxisScale::Linear,
-                &Cancellation::default()
-            )
-            .unwrap()
-            .is_none());
+            let all = Fixture::all(&array);
+            assert!(
+                build_scaled(all.view(), 60, AxisScale::Linear, &Cancellation::default())
+                    .unwrap()
+                    .is_none()
+            );
         }
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..100));
+        let all = Fixture::all(&array);
+        assert!(build_scaled(all.view(), 0, AxisScale::Linear, &Cancellation::default()).is_err());
+        let empty = Fixture::new(&array, vec![]);
         assert!(build_scaled(
-            ArrayView::new(&array, &Selection::All(100)),
-            0,
-            AxisScale::Linear,
-            &Cancellation::default()
-        )
-        .is_err());
-        let rows = Selection::Rows(Arc::from([]));
-        assert!(build_scaled(
-            ArrayView::new(&array, &rows),
+            empty.view(),
             1000,
             AxisScale::Linear,
             &Cancellation::default()
         )
         .unwrap()
         .is_none());
-        let histogram =
-            counts(ArrayView::new(&array, &rows), 60, &Cancellation::default()).unwrap();
+        let histogram = counts(empty.view(), 60, &Cancellation::default()).unwrap();
         assert!(histogram.counts.is_empty());
     }
 }

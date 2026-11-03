@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 
-use crate::{column::Column, execution::scope::Selection, Dataset, Error, Result};
+use crate::{col_view::ColView, column::Column, Dataset, Error, Result};
 
 mod analysis;
 mod export;
@@ -76,13 +76,8 @@ impl View {
         Ok(self.column(column)?.array())
     }
 
-    // Order-independent scans can use contiguous buffers for an unfiltered view.
-    fn selection(&self) -> Selection {
-        if self.rows.len() == self.dataset.n_rows() {
-            Selection::All(self.rows.len())
-        } else {
-            Selection::Rows(self.rows.clone())
-        }
+    pub(crate) fn col(&self, column: u32) -> Result<ColView<'_>> {
+        Ok(ColView::new(self.column(column)?, &self.rows))
     }
 }
 

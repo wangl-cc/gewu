@@ -2,8 +2,23 @@
 
 use arrow::datatypes::DataType;
 
-use super::{Column, ColumnCapabilities};
-use crate::types::{display_type, value_type};
+use super::{predicate, Column, ColumnCapabilities};
+use crate::{
+    stats,
+    types::{display_type, value_type},
+};
+
+impl ColumnCapabilities {
+    pub(super) fn from_arrow(data_type: &DataType) -> Self {
+        Self {
+            text_match: predicate::supports_text_match(data_type),
+            range: predicate::range::supports(data_type),
+            exact: predicate::supports_equals(data_type),
+            scatter: stats::scatter::supports(data_type),
+            logarithmic: stats::supports_logarithmic(data_type),
+        }
+    }
+}
 
 /// Coarse value semantics for choosing cell presentation, not operation support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +64,7 @@ impl ColumnInfo {
             display_type: display_type(data_type),
             technical_type: data_type.to_string(),
             nullable: column.nullable,
-            capabilities: column.capabilities(),
+            capabilities: ColumnCapabilities::from_arrow(data_type),
         }
     }
 }

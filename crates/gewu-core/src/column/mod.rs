@@ -142,18 +142,6 @@ impl Column {
         &self.array
     }
 
-    #[inline]
-    pub(crate) fn capabilities(&self) -> ColumnCapabilities {
-        let data_type = self.array.data_type();
-        ColumnCapabilities {
-            text_match: predicate::supports_text_match(data_type),
-            range: predicate::range::supports(data_type),
-            exact: predicate::supports_equals(data_type),
-            scatter: crate::stats::scatter::supports(data_type),
-            logarithmic: crate::stats::supports_logarithmic(data_type),
-        }
-    }
-
     pub(crate) fn info(&self) -> ColumnInfo {
         ColumnInfo::from_column(self)
     }
@@ -268,7 +256,9 @@ mod tests {
             (dictionary(DataType::Utf8), true, true, false, false),
         ] {
             assert_eq!(
-                col(arrow::array::new_null_array(&data_type, 1)).capabilities(),
+                col(arrow::array::new_null_array(&data_type, 1))
+                    .info()
+                    .capabilities,
                 ColumnCapabilities {
                     text_match: contains,
                     range: ordered,
@@ -552,7 +542,7 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type)),
             ] {
                 let column = col(arrow::array::new_null_array(&data_type, 2));
-                assert!(!column.capabilities().text_match, "{data_type}");
+                assert!(!column.info().capabilities.text_match, "{data_type}");
                 for text in ["", "needle"] {
                     for mode in [TextMatch::Contains, TextMatch::Equals] {
                         assert!(
@@ -711,7 +701,7 @@ mod tests {
             )
             .unwrap(),
         );
-        assert_eq!(col(array).capabilities(), ColumnCapabilities {
+        assert_eq!(col(array).info().capabilities, ColumnCapabilities {
             text_match: false,
             range: true,
             exact: true,

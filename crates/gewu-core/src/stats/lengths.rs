@@ -5,8 +5,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use super::ArrayView;
-use crate::{execution::scope::Selection, Cancellation, Error, Histogram, Result};
+use crate::{col_view::ColView, Cancellation, Error, Histogram, Result};
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
@@ -39,13 +38,13 @@ pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
 }
 
 pub(crate) fn analyze(
-    view: ArrayView<'_>,
+    view: ColView<'_>,
     bins: u32,
     context: &Cancellation,
 ) -> Result<LengthSummary> {
     context.check()?;
-    let array = view.array;
-    let rows = view.rows;
+    let array = view.array();
+    let rows = view.rows();
     let unit = unit(array.data_type()).ok_or_else(|| {
         Error::InvalidArgument(format!("{} has no length analysis", array.data_type()))
     })?;
@@ -94,7 +93,7 @@ pub(crate) fn analyze(
 
 fn summarize(
     array: &dyn Array,
-    rows: &Selection,
+    rows: &[u32],
     unit: LengthUnit,
     bins: u32,
     context: &Cancellation,
@@ -105,7 +104,7 @@ fn summarize(
     let mut sum = 0_u128;
     let mut empty_count = 0;
     let mut null_count = 0;
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
         context.check_at(index)?;
         if array.is_null(row) {
             null_count += 1;
@@ -157,7 +156,7 @@ fn summarize(
     histogram.hi = Some(hi);
     histogram.min_label = Some(min.to_string());
     histogram.max_label = Some(max.to_string());
-    for (index, row) in rows.iter().enumerate() {
+    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
         context.check_at(index)?;
         if !array.is_null(row) {
             // Equivalent to the shared integer histogram's ceil-based cuts.
@@ -211,8 +210,8 @@ mod tests {
             None,
         ]));
         let context = Cancellation::default();
-        let all = crate::execution::scope::Selection::All(4);
-        let result = analyze(ArrayView::new(&array, &all), 40, &context).unwrap();
+        let all = crate::col_view::test::Fixture::all(&array);
+        let result = analyze(all.view(), 40, &context).unwrap();
         assert_eq!(result.unit, LengthUnit::Characters);
         assert_eq!(
             (result.min, result.max, result.empty_count),
@@ -220,22 +219,19 @@ mod tests {
         );
         assert_eq!(result.mean, Some(4.0 / 3.0));
         assert_eq!(result.histogram.counts, [1, 0, 2]);
-        assert_eq!(
-            ArrayView::new(&array, &all).count_nulls(&context).unwrap(),
-            1
-        );
+        assert_eq!(crate::stats::count_nulls(all.view(), &context).unwrap(), 1);
         for rows in [vec![], vec![3]] {
-            let sel = crate::execution::scope::Selection::Rows(Arc::from(rows.clone()));
-            let result = analyze(ArrayView::new(&array, &sel), 40, &context).unwrap();
+            let selected = crate::col_view::test::Fixture::new(&array, rows.clone());
+            let result = analyze(selected.view(), 40, &context).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
             assert_eq!(
-                ArrayView::new(&array, &sel).count_nulls(&context).unwrap(),
+                crate::stats::count_nulls(selected.view(), &context).unwrap(),
                 rows.len() as u64
             );
         }
-        let sel2 = crate::execution::scope::Selection::Rows(Arc::from(vec![2]));
-        let result = analyze(ArrayView::new(&array, &sel2), 40, &context).unwrap();
+        let selected = crate::col_view::test::Fixture::new(&array, vec![2]);
+        let result = analyze(selected.view(), 40, &context).unwrap();
         assert_eq!(result.histogram.counts, [1]);
         assert_eq!(
             (result.histogram.lo, result.histogram.hi),
@@ -253,8 +249,8 @@ mod tests {
             Some(vec![Some(5)]),
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
-        let sel = crate::execution::scope::Selection::Rows(Arc::from(vec![0, 1, 2]));
-        let result = analyze(ArrayView::new(&array, &sel), 40, &Cancellation::default()).unwrap();
+        let selected = crate::col_view::test::Fixture::new(&array, vec![0, 1, 2]);
+        let result = analyze(selected.view(), 40, &Cancellation::default()).unwrap();
         assert_eq!(result.unit, LengthUnit::Elements);
         assert_eq!(
             (result.min, result.max, result.mean),
@@ -264,10 +260,8 @@ mod tests {
         assert_eq!(
             (
                 result.empty_count,
-                ArrayView::new(&array, &sel)
-                    .count_nulls(&Cancellation::default())
-                    .unwrap(),
-                sel.len()
+                crate::stats::count_nulls(selected.view(), &Cancellation::default()).unwrap(),
+                selected.view().len()
             ),
             (1, 1, 3)
         );

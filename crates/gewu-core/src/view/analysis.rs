@@ -2,9 +2,8 @@
 
 use super::View;
 use crate::{
-    stats::{self, ArrayView},
-    AxisScale, Cancellation, Error, Histogram, LengthSummary, NumericStatistics, Result,
-    ValueSummary,
+    col_view::ColView, stats, AxisScale, Cancellation, Error, Histogram, LengthSummary,
+    NumericStatistics, Result, ValueSummary,
 };
 
 impl View {
@@ -28,7 +27,10 @@ impl View {
 
     /// Logical missing-value count in the requested view.
     pub fn count_nulls(&self, column: u32, cancellation: &Cancellation) -> Result<u64> {
-        self.with_analysis_view(column, cancellation, |view| view.count_nulls(cancellation))
+        cancellation.check()?;
+        let result = stats::count_nulls(self.col(column)?, cancellation)?;
+        cancellation.check()?;
+        Ok(result)
     }
 
     /// Native numeric statistics over the requested view. Execute off the UI thread.
@@ -38,7 +40,7 @@ impl View {
         cancellation: &Cancellation,
     ) -> Result<NumericStatistics> {
         self.with_analysis_view(column, cancellation, |view| {
-            view.numeric_statistics(cancellation)
+            stats::analyze_statistics(view, cancellation)
         })
     }
 
@@ -57,14 +59,14 @@ impl View {
                     "logarithmic binning requires a numeric distribution".into(),
                 ));
             }
-            view.histogram(bins, scale, cancellation)
+            stats::counts_scaled(view, bins, scale, cancellation)
         })
     }
 
     /// Estimated non-null cardinality and recounted candidate frequencies.
     pub fn analyze_values(&self, column: u32, cancellation: &Cancellation) -> Result<ValueSummary> {
         self.with_analysis_view(column, cancellation, |view| {
-            view.value_summary(cancellation)
+            stats::analyze_values(view, cancellation)
         })
     }
 
@@ -77,7 +79,7 @@ impl View {
     ) -> Result<LengthSummary> {
         self.with_analysis_view(column, cancellation, |view| {
             validate_bins(bins)?;
-            view.length_summary(bins, cancellation)
+            stats::analyze_lengths(view, bins, cancellation)
         })
     }
 
@@ -85,12 +87,10 @@ impl View {
         &self,
         column: u32,
         cancellation: &Cancellation,
-        compute: impl FnOnce(ArrayView<'_>) -> Result<T>,
+        compute: impl FnOnce(ColView<'_>) -> Result<T>,
     ) -> Result<T> {
         cancellation.check()?;
-        let col = self.column(column)?;
-        let rows = self.selection();
-        let result = compute(ArrayView::new(col.array(), &rows))?;
+        let result = compute(self.col(column)?)?;
         cancellation.check()?;
         Ok(result)
     }

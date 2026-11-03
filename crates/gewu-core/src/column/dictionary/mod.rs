@@ -12,9 +12,8 @@
 //!   `primitive::PrimitiveArray`.
 //! - Text, binary and nested arrays use Arrow's row format to discover distinct byte rows.
 //!
-//! The column consumes the dictionary through `Dictionary::filter_choices` for
-//! projected choices and frequency counting, and `Dictionary::matching_codes`
-//! for filter generation.
+//! Filter candidates are computed by the View layer. `Dictionary::matching_codes`
+//! supports filter generation without exposing the code space in the protocol.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
 //! and cached by [`crate::column::Column`]. Columns with more than `MAX_DISTINCT_VALUES`
@@ -31,9 +30,8 @@ use arrow::{
 };
 use rapidhash::RapidHashMap;
 
-use super::{value_text, FilterChoices, ValueChoice};
 use crate::{
-    execution::{predicate::Predicate, scope::Selection, selection::RowSelection},
+    execution::{predicate::Predicate, selection::RowSelection},
     Cancellation, Result,
 };
 
@@ -42,13 +40,6 @@ mod primitive;
 /// Most non-null values a column may have and still be encoded. Non-null
 /// values use codes `0..=254`. Columns with more values are not encoded.
 pub(crate) const MAX_DISTINCT_VALUES: usize = 255;
-
-/// Occurrences of each distinct value over a row selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Tally {
-    pub counts: Vec<u64>,
-    pub null_count: u64,
-}
 
 pub(crate) struct Dictionary {
     /// Non-null value codes for each source row, naming sorted value ranks `0..values.len()`.
@@ -407,7 +398,6 @@ impl Dictionary {
 }
 
 impl Dictionary {
-    #[cfg(test)]
     #[inline]
     pub(crate) fn labels(&self) -> &[String] {
         &self.labels
@@ -418,7 +408,6 @@ impl Dictionary {
         self.nulls.as_ref().map_or(0, |n| n.null_count() as u64)
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn is_null(&self, row: usize) -> bool {
         self.nulls.as_ref().is_some_and(|n| n.is_null(row))
@@ -429,70 +418,13 @@ impl Dictionary {
         self.values.len()
     }
 
-    #[cfg(test)]
+    #[inline]
     pub(crate) fn code_at(&self, row: usize) -> u8 {
         self.codes[row]
     }
 
-    /// Project exact filter candidates directly from the dictionary's native values.
-    pub(crate) fn filter_choices(
-        &self,
-        rows: &Selection,
-        cancel: &Cancellation,
-    ) -> Result<FilterChoices> {
-        cancel.check()?;
-        let tally = self.tally(rows, cancel)?;
-        let values = self
-            .labels
-            .iter()
-            .enumerate()
-            .filter(|(code, _)| tally.counts[*code] > 0)
-            .map(|(code, label)| {
-                Ok(ValueChoice {
-                    label: label.clone(),
-                    value: value_text::encode(&self.values, code)?,
-                    count: tally.counts[code],
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        cancel.check()?;
-        Ok(FilterChoices {
-            values: Some(values),
-            null_count: tally.null_count,
-        })
-    }
-
-    fn tally(&self, rows: &Selection, cancel: &Cancellation) -> Result<Tally> {
-        Ok(match rows {
-            Selection::All(_) => Tally {
-                counts: self.all_counts.clone(),
-                null_count: self.null_count(),
-            },
-            Selection::Rows(rows) => {
-                let mut buf = [0u64; 256];
-                let mut null_count = 0u64;
-                if let Some(nulls) = &self.nulls {
-                    for (index, &row) in rows.iter().enumerate() {
-                        cancel.check_at(index)?;
-                        let r = row as usize;
-                        if nulls.is_null(r) {
-                            null_count += 1;
-                        } else {
-                            buf[self.codes[r] as usize] += 1;
-                        }
-                    }
-                } else {
-                    for (index, &row) in rows.iter().enumerate() {
-                        cancel.check_at(index)?;
-                        buf[self.codes[row as usize] as usize] += 1;
-                    }
-                }
-                Tally {
-                    counts: buf[..self.values.len()].to_vec(),
-                    null_count,
-                }
-            }
-        })
+    pub(crate) fn all_counts(&self) -> &[u64] {
+        &self.all_counts
     }
 
     fn fill_matches(
