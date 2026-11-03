@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Owns only the current column's analysis. Its Rust cancellation handle never
-/// cancels document filtering or export.
+/// Presents the current column's analysis. Results come from the window's Viewer,
+/// which shares and caches them per applied View and cancels them when it changes.
 @MainActor
 final class InspectorModel: ObservableObject {
     @Published private(set) var sections: [InspectorSection] = []
@@ -25,7 +25,6 @@ final class InspectorModel: ObservableObject {
     }
     private var context: Context?
     private var request: UInt64 = 0
-    private var cancellation: Cancellation?
     private var histogramBins: UInt32 = 40
     private var histogramScale: AxisScale = .linear
 
@@ -33,25 +32,22 @@ final class InspectorModel: ObservableObject {
         context == Context(view: view, column: column)
     }
 
+    /// Stop presenting pending results. Shared computations continue for other panels.
     func cancel() {
         request &+= 1
-        cancellation?.cancel()
-        cancellation = nil
         loading = nil
     }
 
     func load(
-        dataset: GewuDataset, view: GewuView, column: UInt32, expanded: Int, bins: UInt32 = 40,
-        scale: AxisScale = .linear
+        dataset: GewuDataset, viewer: Viewer, column: UInt32, expanded: Int,
+        bins: UInt32 = 40, scale: AxisScale = .linear
     ) async {
         guard !Task.isCancelled else { return }
+        let view = viewer.applied.view
         cancel()
         let ticket = request
         defer {
-            if request == ticket {
-                cancellation = nil
-                loading = nil
-            }
+            if request == ticket { loading = nil }
         }
         let next = Context(view: view, column: column)
         if context != next {
@@ -93,26 +89,24 @@ final class InspectorModel: ObservableObject {
             do {
                 switch section {
                 case .overview:
-                    try await load(\.nullCount, ticket: ticket, context: next) { cancellation in
-                        try view.countNulls(column: column, cancellation: cancellation)
+                    try await load(\.nullCount, ticket: ticket, context: next) {
+                        try await viewer.countNulls(column)
                     }
                 case .statistics:
-                    try await load(\.statistics, ticket: ticket, context: next) { cancellation in
-                        try view.analyzeStatistics(column: column, cancellation: cancellation)
+                    try await load(\.statistics, ticket: ticket, context: next) {
+                        try await viewer.statistics(column)
                     }
                 case .distribution:
-                    try await load(\.distribution, ticket: ticket, context: next) { cancellation in
-                        try view.analyzeDistribution(
-                            column: column, bins: bins, scale: scale, cancellation: cancellation)
+                    try await load(\.distribution, ticket: ticket, context: next) {
+                        try await viewer.distribution(column, bins: bins, scale: scale)
                     }
                 case .values:
-                    try await load(\.values, ticket: ticket, context: next) { cancellation in
-                        try view.analyzeValues(column: column, cancellation: cancellation)
+                    try await load(\.values, ticket: ticket, context: next) {
+                        try await viewer.values(column)
                     }
                 case .lengths:
-                    try await load(\.lengths, ticket: ticket, context: next) { cancellation in
-                        try view.analyzeLengths(
-                            column: column, bins: bins, cancellation: cancellation)
+                    try await load(\.lengths, ticket: ticket, context: next) {
+                        try await viewer.lengths(column, bins: bins)
                     }
                 case .structure:
                     structure = try dataset.columnStructure(column: column)
@@ -137,20 +131,15 @@ final class InspectorModel: ObservableObject {
         }
     }
 
-    private func load<T: Sendable>(
+    private func load<T>(
         _ destination: ReferenceWritableKeyPath<InspectorModel, T?>,
         ticket: UInt64,
         context expected: Context,
-        operation: @escaping @Sendable (Cancellation) throws -> T
+        operation: () async throws -> T
     ) async throws {
         try Task.checkCancellation()
         guard request == ticket, context == expected else { throw CancellationError() }
-        let signal = Cancellation()
-        cancellation = signal
-        defer {
-            if request == ticket { cancellation = nil }
-        }
-        let result = try await runCancellable(cancellation: signal) { try operation(signal) }
+        let result = try await operation()
         try Task.checkCancellation()
         guard request == ticket, context == expected else { throw CancellationError() }
         self[keyPath: destination] = result

@@ -62,7 +62,8 @@ struct WindowPresentationTests {
         #expect(
             FilterMode.initial(
                 capabilities: text,
-                current: Filter(condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
+                current: Filter(
+                    condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
                 == .text)
         // Value selection waits for choices and needs a complete list of values.
         let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)

@@ -10,6 +10,11 @@ struct InspectorModelTests {
         return try GewuDataset.open(path: url.path)
     }
 
+    @MainActor
+    private static func viewer(_ view: GewuView) -> Viewer {
+        Viewer(view: view, spec: QuerySpec(columns: []))
+    }
+
     @Test
     @MainActor
     static func typedCachesInvalidateOnlyForRelevantInputs() async throws {
@@ -20,42 +25,42 @@ struct InspectorModelTests {
             InspectorSection.overview.mask | InspectorSection.statistics.mask
             | InspectorSection.distribution.mask | InspectorSection.values.mask | InspectorSection.lengths.mask
         await model.load(
-            dataset: doc, view: view, column: 0, expanded: all, bins: 2)
+            dataset: doc, viewer: viewer(view), column: 0, expanded: all, bins: 2)
         #expect(model.nullCount == 0 && model.rowCount == 4)
         #expect(model.statistics?.mean == 2.5)
         #expect(model.values?.distinctCount == 4)
         #expect(model.distribution?.counts.count == 2)
 
         await model.load(
-            dataset: doc, view: view, column: 0, expanded: 0, bins: 3)
+            dataset: doc, viewer: viewer(view), column: 0, expanded: 0, bins: 3)
         #expect(model.distribution == nil)
         #expect(model.nullCount != nil && model.statistics != nil && model.values != nil)
         await model.load(
-            dataset: doc, view: view, column: 0, expanded: all, bins: 3)
+            dataset: doc, viewer: viewer(view), column: 0, expanded: all, bins: 3)
         #expect(model.distribution?.counts.count == 3)
         await model.load(
-            dataset: doc, view: view, column: 0, expanded: 0, bins: 3,
+            dataset: doc, viewer: viewer(view), column: 0, expanded: 0, bins: 3,
             scale: .log10)
         #expect(model.distribution == nil)
         #expect(model.nullCount != nil && model.statistics != nil && model.values != nil)
 
         await model.load(
-            dataset: doc, view: view, column: 1, expanded: all, bins: 2)
+            dataset: doc, viewer: viewer(view), column: 1, expanded: all, bins: 2)
         #expect(model.statistics == nil && model.distribution == nil)
         #expect(model.lengths?.histogram.counts.count == 2)
         await model.load(
-            dataset: doc, view: view, column: 1, expanded: 0, bins: 2,
+            dataset: doc, viewer: viewer(view), column: 1, expanded: 0, bins: 2,
             scale: .log10)
         #expect(model.lengths != nil, "Numeric scale does not invalidate length statistics")
         await model.load(
-            dataset: doc, view: view, column: 1, expanded: 0, bins: 3,
+            dataset: doc, viewer: viewer(view), column: 1, expanded: 0, bins: 3,
             scale: .log10)
         #expect(model.lengths == nil)
         #expect(model.nullCount != nil && model.values != nil)
 
         let replacement = try document("number\n100\n")
         await model.load(
-            dataset: replacement, view: replacement.view(), column: 0,
+            dataset: replacement, viewer: viewer(replacement.view()), column: 0,
             expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 100)
         #expect(model.nullCount == nil && model.values == nil && model.lengths == nil)
@@ -73,14 +78,14 @@ struct InspectorModelTests {
         }
         task = Task {
             await model.load(
-                dataset: doc, view: view, column: 0,
+                dataset: doc, viewer: viewer(view), column: 0,
                 expanded: InspectorSection.statistics.mask)
         }
         await task?.value
         observation.cancel()
         #expect(model.statistics == nil && model.loading == nil && model.errors.isEmpty)
         await model.load(
-            dataset: doc, view: view, column: 1,
+            dataset: doc, viewer: viewer(view), column: 1,
             expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 150)
         #expect(model.matches(view: view, column: 1))
@@ -92,7 +97,7 @@ struct InspectorModelTests {
         let doc = try document("number\n1\n2\n")
         let view = doc.view()
         let model = InspectorModel()
-        await model.load(dataset: doc, view: view, column: 0, expanded: InspectorSection.statistics.mask)
+        await model.load(dataset: doc, viewer: viewer(view), column: 0, expanded: InspectorSection.statistics.mask)
         let filtered = try view.query(
             spec: QuerySpec(columns: [
                 ColSpec(
@@ -100,9 +105,9 @@ struct InspectorModelTests {
                     filter: Filter(condition: .range(min: "2", max: nil), includeNulls: false))
             ]),
             cancellation: Cancellation())
-        await model.load(dataset: doc, view: filtered, column: 0, expanded: InspectorSection.overview.mask)
+        await model.load(dataset: doc, viewer: viewer(filtered), column: 0, expanded: InspectorSection.overview.mask)
         #expect(model.statistics == nil && model.nullCount == 0 && model.rowCount == 1)
-        await model.load(dataset: doc, view: view, column: 0, expanded: InspectorSection.statistics.mask)
+        await model.load(dataset: doc, viewer: viewer(view), column: 0, expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 1.5 && model.nullCount == nil && model.rowCount == 2)
         #expect(model.loading == nil && model.errors.isEmpty && model.error == nil)
     }

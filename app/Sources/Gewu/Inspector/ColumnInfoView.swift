@@ -152,7 +152,7 @@ struct ColumnAnalysisView: View {
         }
         .task(id: request) {
             await analysis.load(
-                dataset: model.dataset, view: model.view,
+                dataset: model.dataset, viewer: model.viewer,
                 column: UInt32(column), expanded: expanded, bins: settings.histogramBins,
                 scale: histogramScale)
         }

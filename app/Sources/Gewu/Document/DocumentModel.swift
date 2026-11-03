@@ -16,11 +16,9 @@ final class DocumentModel: ObservableObject {
     let info: FileInfo
     let kinds: [ValueCategory]
     let find: FindModel
-    struct AppliedQuery {
-        let view: GewuView
-        let spec: QuerySpec
-    }
-    @Published private(set) var applied: AppliedQuery
+    /// The applied View, its spec and the results computed for it.
+    let viewer: Viewer
+    var applied: Viewer.Applied { viewer.applied }
     var view: GewuView { applied.view }
     var appliedSpec: QuerySpec { applied.spec }
     @Published private(set) var isBusy = false
@@ -51,10 +49,6 @@ final class DocumentModel: ObservableObject {
 
     weak var table: DataTableController?
     private var viewTask: Task<Void, Never>?
-    private var queryCancellation: Cancellation?
-    private var request: UInt64 = 0
-    // Bound concurrent queries; Swift owns which completed request may be published.
-    private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
     init(url: URL, dataset: GewuDataset) {
         self.url = url
@@ -67,12 +61,13 @@ final class DocumentModel: ObservableObject {
             columns: metadata.columns.indices.map {
                 ColSpec(column: UInt32($0), sort: nil, filter: nil)
             })
-        applied = AppliedQuery(view: dataset.view(), spec: initial)
+        viewer = Viewer(view: dataset.view(), spec: initial)
         spec = initial
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
         find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
+        viewer.willChange = { [weak self] in self?.objectWillChange.send() }
     }
 
     var canExport: Bool { !isBusy && export.isIdle && !appliedSpec.columns.isEmpty }
@@ -176,9 +171,8 @@ final class DocumentModel: ObservableObject {
         spec.columns = columns.compactMap { column in spec.columns.first { $0.column == column } }
         if reorderOnly {
             do {
-                let reordered = try view.reorderColumns(order: columns)
+                try viewer.reorder(columns, spec: spec)
                 copying.cancel()
-                applied = AppliedQuery(view: reordered, spec: spec)
                 selectedDisplayRow = nil
                 selectedSourceRow = nil
                 updateFind(preservingMatch: true)
@@ -240,51 +234,30 @@ final class DocumentModel: ObservableObject {
     }
 
     func refresh(debounce: Bool = false) {
-        let source = view
         find.invalidate()
         viewTask?.cancel()
-        queryCancellation?.cancel()
-        request &+= 1
-        let mine = request
         let spec = spec
-        let worker = worker
-        let cancellation = Cancellation()
-        queryCancellation = cancellation
+        let viewer = viewer
         isBusy = true
         viewTask = Task { [weak self] in
-            do {
-                if debounce { try await Task.sleep(for: .milliseconds(150)) }
-                try Task.checkCancellation()
-                let view: GewuView = try await withTaskCancellationHandler {
-                    try await withCheckedThrowingContinuation { continuation in
-                        worker.async {
-                            do {
-                                continuation.resume(returning: try source.query(spec: spec, cancellation: cancellation))
-                            } catch {
-                                continuation.resume(throwing: error)
-                            }
-                        }
-                    }
-                } onCancel: {
-                    cancellation.cancel()
-                }
-                guard !Task.isCancelled, let self, self.request == mine else { return }
+            let outcome = await viewer.apply(spec, debounce: debounce)
+            guard let self else { return }
+            switch outcome {
+            case .superseded:
+                return
+            case .applied:
                 self.copying.cancel()
-                self.applied = AppliedQuery(view: view, spec: spec)
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil
                 self.isBusy = false
-                self.queryCancellation = nil
                 self.updateFind()
-            } catch {
-                guard !Task.isCancelled, let self, self.request == mine else { return }
+            case .cancelled:
                 self.isBusy = false
-                self.queryCancellation = nil
                 self.spec = self.appliedSpec
-                if case GewuError.Cancelled = error {
-                    self.updateFind()
-                    return
-                }
+                self.updateFind()
+            case .failed(let error):
+                self.isBusy = false
+                self.spec = self.appliedSpec
                 self.reportError(error)
                 self.updateFind()
             }
@@ -303,11 +276,9 @@ final class DocumentModel: ObservableObject {
     }
 
     func stop() {
-        request &+= 1
         viewTask?.cancel()
-        queryCancellation?.cancel()
-        queryCancellation = nil
         viewTask = nil
+        viewer.close()
         isBusy = false
         spec = appliedSpec
         find.stop()

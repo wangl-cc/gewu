@@ -132,7 +132,7 @@ struct ScatterPanel: View {
             hovered = nil
             guard let y = model.chartY else { return }
             await chart.load(
-                view: model.view, x: model.chartX,
+                viewer: model.viewer, x: model.chartX,
                 y: y,
                 limit: pointLimit, rowNumberBase: rowNumberBase,
                 xScale: request.xScale, yScale: request.yScale)
@@ -164,17 +164,15 @@ final class ScatterModel: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var request: UInt64 = 0
-    private var cancellation: Cancellation?
 
+    /// Stop presenting a pending sample. The shared computation belongs to the Viewer.
     func cancel() {
         request &+= 1
-        cancellation?.cancel()
-        cancellation = nil
         loading = false
     }
 
     func load(
-        view: GewuView, x: Int?, y: Int,
+        viewer: Viewer, x: Int?, y: Int,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,
@@ -184,24 +182,20 @@ final class ScatterModel: ObservableObject {
         cancel()
         let ticket = request
         defer {
-            if ticket == request {
-                loading = false
-                cancellation = nil
-            }
+            if ticket == request { loading = false }
         }
         result = nil
         error = nil
         loading = true
         do {
             try Task.checkCancellation()
-            let signal = Cancellation()
-            cancellation = signal
-            let rowCount = view.rowCount()
-            let loaded = try await runCancellable(cancellation: signal) {
-                var result = try view.analyzeScatter(
-                    xColumn: x.map(UInt32.init), yColumn: UInt32(y), limit: limit,
-                    xScale: xScale, yScale: yScale, cancellation: signal)
-                try Task.checkCancellation()
+            let rowCount = viewer.applied.view.rowCount()
+            let sample = try await viewer.scatter(
+                x: x.map(UInt32.init), y: UInt32(y), limit: limit, xScale: xScale, yScale: yScale)
+            try Task.checkCancellation()
+            // Row numbering depends on display settings, so only the raw sample is cached.
+            let loaded = try await runCancellable(cancellation: Cancellation()) {
+                var result = sample
                 if x == nil {
                     for index in result.points.indices {
                         let sourceRow = result.points[index].sourceRow

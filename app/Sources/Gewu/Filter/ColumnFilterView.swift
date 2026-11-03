@@ -26,31 +26,8 @@ enum FilterMode: String, CaseIterable {
     }
 }
 
-/// The rows a column's filter editor describes: the applied filters on the other
-/// columns, without sorting. The column's own filter never hides its alternatives.
-struct FilterFacet {
-    let view: GewuView
-    let spec: QuerySpec
-    let column: UInt32
-
-    /// Without its own filter, the column's facet is the applied view itself.
-    var usesAppliedView: Bool {
-        !spec.columns.contains { $0.column == column && $0.filter != nil }
-    }
-
-    /// May run a query over the whole dataset; call off the main actor.
-    func resolve(cancellation: Cancellation) throws -> GewuView {
-        if usesAppliedView { return view }
-        let others = spec.columns.compactMap { entry -> ColSpec? in
-            guard entry.column != column, let filter = entry.filter else { return nil }
-            return ColSpec(column: entry.column, sort: nil, filter: filter)
-        }
-        return try view.query(spec: QuerySpec(columns: others), cancellation: cancellation)
-    }
-}
-
 struct ColumnFilterView: View {
-    let facet: FilterFacet
+    let viewer: Viewer
     let column: UInt32
     let info: ColumnInfo
     let current: Filter?
@@ -67,15 +44,13 @@ struct ColumnFilterView: View {
     @State private var histogramScale: AxisScale = .linear
     @State private var loading = false
     @State private var retry = 0
-    /// Resolved once per editor; candidates and distributions all describe it.
-    @State private var facetView: GewuView?
 
     init(
-        facet: FilterFacet, info: ColumnInfo, current: Filter?,
+        viewer: Viewer, column: UInt32, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
-        self.facet = facet
-        self.column = facet.column
+        self.viewer = viewer
+        self.column = column
         self.info = info
         self.current = current
         self.onApply = onApply
@@ -156,32 +131,13 @@ struct ColumnFilterView: View {
         let retry: Int
     }
     @MainActor private func load() async {
-        if let mode, !modes.contains(mode) { return }
         loading = true
         error = nil
-        let facet = facet
-        let column = column
-        let current = current
         let mode = mode
-        let bins = histogramBins
-        let scale = histogramScale
-        let cancellation = Cancellation()
         do {
-            let view: GewuView
-            if let facetView {
-                view = facetView
-            } else {
-                view = try await runCancellable(cancellation: cancellation) {
-                    try facet.resolve(cancellation: cancellation)
-                }
-                guard !Task.isCancelled else { return }
-                facetView = view
-            }
             // Choices decide whether value selection is offered and supply the null count.
             if info.capabilities.exact && choices == nil {
-                let result = try await runCancellable(cancellation: cancellation) {
-                    try view.filterChoices(column: column, cancellation: cancellation)
-                }
+                let result = try await viewer.filterChoices(column)
                 guard !Task.isCancelled else { return }
                 choices = result
                 if mode == nil {
@@ -190,16 +146,19 @@ struct ColumnFilterView: View {
                 }
             }
             if mode == .range {
-                let result = try await runCancellable(cancellation: cancellation) {
-                    try view.filterDistribution(
-                        column: column, bins: bins, scale: scale, cancellation: cancellation)
-                }
+                let result = try await viewer.filterDistribution(column, bins: histogramBins, scale: histogramScale)
                 guard !Task.isCancelled else { return }
                 distribution = result
                 range.restoreLabels(from: result)
             }
         } catch {
             guard !Task.isCancelled else { return }
+            if error.isCancellation {
+                // The applied View changed while this editor was open; describe the new one.
+                choices = nil
+                retry &+= 1
+                return
+            }
             self.error = error.userMessage
         }
         if !Task.isCancelled { loading = false }

@@ -180,7 +180,7 @@ struct WorkbookLifecycleTests {
         document.selectedSourceRow = 0
         for base in [0, 1] {
             await chart.load(
-                view: document.view,
+                viewer: document.viewer,
                 x: nil, y: 0, rowNumberBase: base)
             let point = try #require(chart.result).points[0]
             #expect(point.sourceRow == 0, "Presentation must not change source row identity")
