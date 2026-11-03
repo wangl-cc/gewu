@@ -2,9 +2,9 @@
 
 本文档整理 Gewu 的 UI、交互、数据探查能力和产品展示改进。沿用原版的“问题 → 解决办法”写法，保留具体设计方向；技术方案按当前 Dataset／View 架构更新。编号沿用此前清单，便于追踪。
 
-当前后端已完成不可变 Dataset／View 重构，窗口持有自己的 View 和 QuerySpec；查询、Find、分析、候选、复制和导出绑定具体 View，取消由调用方管理。下列任务在这个基础上继续，不恢复旧 Session／version、Facet prepare 或 ValueIndex 体系。最近的构建、测试与实机检查范围见[验证记录](docs/core-api-cleanup-validation.md#completed-swift-migration)。
+当前后端已完成不可变 Dataset／View 重构，窗口持有自己的 View 和 QuerySpec；查询、Find、分析、候选、复制和导出绑定具体 View，取消由调用方管理。下列任务在这个基础上继续，不恢复旧 Session／version、Facet prepare 或 ValueIndex 体系。
 
-三批 UI 改动已实现并分别提交；构建与测试、尚未完成的实机交互检查见 [UI 验证记录](docs/ui-three-step-validation.md)。涉及实机验收的条目暂不勾选，具体实现进度逐项记录；未列入本轮的功能保持原计划。
+三批 UI 改动已实现并分别提交。涉及实机验收的条目暂不勾选，具体实现进度逐项记录；未列入本轮的功能保持原计划。
 
 ## 1. UI 与交互改进
 
