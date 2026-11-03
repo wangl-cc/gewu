@@ -15,7 +15,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::{Cancellation, ColumnInfo, Error, Result};
+use crate::{Cancellation, Error, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
@@ -29,16 +29,6 @@ pub use export::{Export, ExportProgress};
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 pub(crate) const CHUNK_ROWS: usize = 8 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileInfo {
-    pub path: String,
-    pub row_count: u64,
-    pub columns: Vec<ColumnInfo>,
-    pub file_size: u64,
-    pub format: crate::FileType,
-    pub metadata: crate::FileMetadata,
-}
 
 /// A recognized file format. Variants remain available when a codec feature
 /// is disabled; attempting to use that codec returns an Unsupported error.

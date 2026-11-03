@@ -19,12 +19,12 @@ mod types;
 mod view;
 
 pub use column::{ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice};
-pub use dataset::Dataset;
+pub use dataset::{Dataset, DatasetInfo};
 pub use error::{Error, Result};
 pub(crate) use execution::{predicate, scope, selection};
 pub use file::{
-    xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileInfo, FileMetadata, FileType,
-    OpenOptions, ParquetCompression,
+    xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileMetadata, FileType, OpenOptions,
+    ParquetCompression,
 };
 pub use query::{
     CellMatch, ColSort, ColSpec, Filter, FilterCondition, Find, FindHighlight, QuerySpec,

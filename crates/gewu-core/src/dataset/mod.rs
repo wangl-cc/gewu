@@ -7,9 +7,12 @@ use std::{
 
 use arrow::datatypes::SchemaRef;
 
-use crate::{column::Column, file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result};
+use crate::{column::Column, file, Error, FileMetadata, FileType, OpenOptions, Result};
 
+mod info;
 mod query;
+
+pub use info::DatasetInfo;
 
 /// An immutable tabular dataset loaded into memory.
 pub struct Dataset {
@@ -87,8 +90,8 @@ impl Dataset {
         self.n_rows
     }
 
-    pub fn info(&self) -> FileInfo {
-        FileInfo {
+    pub fn info(&self) -> DatasetInfo {
+        DatasetInfo {
             path: self.source_path.display().to_string(),
             row_count: self.n_rows as u64,
             columns: self.columns.iter().map(Column::info).collect(),

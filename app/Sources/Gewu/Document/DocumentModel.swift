@@ -13,7 +13,7 @@ enum InspectorPage: String, CaseIterable {
 final class DocumentModel: ObservableObject {
     let url: URL
     let dataset: GewuDataset
-    let info: FileInfo
+    let info: DatasetInfo
     let kinds: [ValueCategory]
     let find: FindModel
     /// The applied View, its spec and the results computed for it.

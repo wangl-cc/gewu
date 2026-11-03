@@ -3,7 +3,30 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{AnalysisCapabilities, FileInfo, GewuError};
+use crate::{AnalysisCapabilities, ColumnInfo, FileMetadata, FileType, GewuError};
+
+#[derive(uniffi::Record)]
+pub struct DatasetInfo {
+    pub path: String,
+    pub row_count: u64,
+    pub columns: Vec<ColumnInfo>,
+    pub format: FileType,
+    pub file_size: u64,
+    pub metadata: FileMetadata,
+}
+
+impl From<core::DatasetInfo> for DatasetInfo {
+    fn from(info: core::DatasetInfo) -> Self {
+        Self {
+            path: info.path,
+            row_count: info.row_count,
+            columns: info.columns.into_iter().map(Into::into).collect(),
+            format: info.format.into(),
+            file_size: info.file_size,
+            metadata: info.metadata.into(),
+        }
+    }
+}
 
 #[derive(uniffi::Object)]
 pub struct GewuDataset {
@@ -56,7 +79,7 @@ impl GewuDataset {
         }))
     }
 
-    pub fn info(&self) -> FileInfo {
+    pub fn info(&self) -> DatasetInfo {
         self.inner.info().into()
     }
 

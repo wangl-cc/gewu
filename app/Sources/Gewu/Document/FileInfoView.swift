@@ -11,7 +11,7 @@ struct FileDetails: Codable, Hashable {
     let items: [Detail]
     let metadata: [Detail]
 
-    init(info: FileInfo) {
+    init(info: DatasetInfo) {
         path = info.path
         var details = [
             Detail(title: "Kind", value: "\(info.format.displayName) table"),

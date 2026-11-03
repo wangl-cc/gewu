@@ -237,7 +237,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         model.find.requestHighlight(start: UInt64(rows.location), count: UInt32(rows.length))
     }
 
-    private func buildColumns(_ info: FileInfo) {
+    private func buildColumns(_ info: DatasetInfo) {
         gutter.label = { [weak self] row in
             guard let self, let block = self.block(for: row, column: nil) else { return nil }
             let r = row - Int(block.start)
@@ -266,7 +266,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    private func fitGutter(_ info: FileInfo) {
+    private func fitGutter(_ info: DatasetInfo) {
         gutter.fit(largest: rowNumber(max(info.rowCount, 1) - 1, base: rowNumberBase))
         gutter.toolTip = "Row in file (\(formatRowNumber(0, base: rowNumberBase))-based)"
         if let column = table.tableColumn(withIdentifier: rowHeaderID) {

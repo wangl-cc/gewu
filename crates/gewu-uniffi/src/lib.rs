@@ -5,6 +5,7 @@
 
 mod analysis;
 mod cancellation;
+mod column;
 mod dataset;
 mod error;
 mod export;
@@ -24,13 +25,11 @@ pub use analysis::{
     ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;
-pub use dataset::GewuDataset;
+pub use column::{ColumnCapabilities, ColumnInfo, ValueCategory};
+pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::GewuError;
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
-pub use file::{
-    xlsx_sheet_names, ColumnCapabilities, ColumnInfo, FileInfo, FileMetadata, FileType, KeyValue,
-    ValueCategory,
-};
+pub use file::{xlsx_sheet_names, FileMetadata, FileType, KeyValue};
 pub use filter::{
     Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, TextMatch,
     ValueChoice,
