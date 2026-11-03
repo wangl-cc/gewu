@@ -1,8 +1,75 @@
+import AppKit
 import Foundation
 import Testing
 
 @Suite @MainActor
 struct WindowPresentationTests {
+    @Test func inspectorChoicesSurviveTypeChangesWithoutRequestingUnsupportedLogBins() {
+        let settings = InspectorSettings()
+        #expect(settings.expanded(distribution: true) == 7)
+        #expect(settings.expanded(distribution: false) == 9)
+        settings.histogramBins = 100
+        settings.histogramScale = .log10
+        settings.frequencyScale = .log10
+        settings.setExpanded(.distribution, false)
+        settings.setExpanded(.values, true)
+        #expect(settings.binningScale(logarithmic: false) == .linear)
+        #expect(settings.expanded(distribution: false) & InspectorSection.values.mask != 0)
+        #expect(settings.binningScale(logarithmic: true) == .log10)
+        #expect(settings.expanded(distribution: true) & InspectorSection.distribution.mask == 0)
+        #expect(settings.expanded(distribution: true) & InspectorSection.values.mask != 0)
+        #expect(settings.histogramBins == 100 && settings.frequencyScale == .log10)
+    }
+
+    @Test func reusedFindCellsKeepSelectedTextLegibleAndClearOldHighlight() throws {
+        let cell = MatchCellView()
+        let field = NSTextField(labelWithString: "")
+        cell.addSubview(field)
+        cell.textField = field
+        cell.configure(text: "x hit", font: .systemFont(ofSize: 12), alignment: .left, query: "hit", current: true)
+        cell.backgroundStyle = .emphasized
+        #expect(cell.currentMatch)
+        let text = field.attributedStringValue
+        #expect(
+            text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .alternateSelectedControlTextColor)
+        #expect(text.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor == .black)
+        #expect(text.attribute(.backgroundColor, at: 2, effectiveRange: nil) as? NSColor == .findHighlightColor)
+        cell.backgroundStyle = .normal
+        #expect(
+            field.attributedStringValue.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .labelColor)
+        cell.configure(text: "null", font: .systemFont(ofSize: 12), alignment: .right, muted: true)
+        #expect(!cell.currentMatch && !cell.wholeCellMatch)
+        #expect(field.attributedStringValue.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+        #expect(
+            field.attributedStringValue.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+                == .tertiaryLabelColor)
+    }
+
+    @Test func emptyHistogramGeometryAndReadOnlyChartsIgnoreMouseGestures() throws {
+        let chart = HistogramView(frame: .zero)
+        chart.setData(counts: [1, 2], lo: 0, hi: 2, integer: true)
+        chart.setSelection(0, 1, snapped: true)
+        let down = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 1, clickCount: 2, pressure: 1))
+        let up = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseUp, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 2, clickCount: 2, pressure: 0))
+        chart.mouseDown(with: down)
+        chart.mouseDragged(with: down)
+        chart.mouseUp(with: up)
+        #expect(chart.selection.0 == 0 && chart.selection.1 == 1)
+        chart.frame.size = NSSize(width: 400, height: 150)
+        chart.isInteractive = false
+        chart.mouseDown(with: down)
+        chart.mouseUp(with: up)
+        #expect(chart.selection.0 == 0 && chart.selection.1 == 1)
+    }
+
     @Test func inspectorDefaultsOpenAndRemembersExplicitClose() throws {
         let name = "gewu-inspector-\(UUID())"
         let preferences = try #require(UserDefaults(suiteName: name))

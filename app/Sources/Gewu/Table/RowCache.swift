@@ -70,8 +70,8 @@ final class RowCache {
     }
 }
 
-/// Serializes table reads off the main actor, including width sampling and match
-/// navigation. Cancelled requests stop before entering the synchronous FFI call.
+/// Serializes table row reads off the main actor. Cancelled requests stop before
+/// entering the synchronous FFI call; width measurement has its own serial worker.
 actor TableRowReader {
     func read(_ view: GewuView, start: UInt64, count: UInt32, columns: [UInt32]) throws
         -> RowBlock

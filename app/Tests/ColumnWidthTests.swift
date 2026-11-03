@@ -49,4 +49,17 @@ struct ColumnWidthTests {
                 view: view, columns: [input], start: 0, fontSize: 12, maximum: 420, cancellation: request)
         }
     }
+
+    @Test func fitUsesAnAvailableSampleInsteadOfRereadingTheView() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-fit-cache-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "value\nx\n".write(to: url, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: url.path).view()
+        // An invalid source index would fail if the measurement ignored its sample.
+        let cached = ColumnWidthMeasurement.Input(
+            column: 99, name: "value", type: "Text", text: true, sample: ["cached value"])
+        let widths = try ColumnWidthMeasurement.measure(
+            view: view, columns: [cached], start: 0, fontSize: 12, maximum: 600, cancellation: .init())
+        #expect(widths[99] != nil)
+    }
 }

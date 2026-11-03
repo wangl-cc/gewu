@@ -197,4 +197,29 @@ struct QuerySpecTests {
         #expect(choices.page?.values.map(\.value) == ["y"])
         #expect(!choices.loading && choices.error == nil)
     }
+
+    @Test func candidatePagesRemainVisibleUntilReplacementAndSearchResetsCursor() async throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-pages-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try ("value\n" + (0..<201).map { "item\($0)\n" }.joined()).write(to: url, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: url.path).view()
+        let choices = TextChoicesModel()
+        defer { choices.cancel() }
+        await choices.load(view: view, column: 0, query: "", after: nil)
+        let first = try #require(choices.page)
+        let next = try #require(first.next)
+        choices.pause()
+        #expect(choices.page == first && choices.loading)
+        await choices.load(view: view, column: 0, query: "", after: next)
+        #expect(choices.pageAfter == next && choices.page != first)
+        let second = choices.page
+        choices.pause()
+        #expect(choices.page == second)
+        await choices.load(view: view, column: 0, query: "item200", after: nil, debounce: true)
+        #expect(choices.pageAfter == nil)
+        #expect(choices.page?.values.map(\.value) == ["item200"])
+        #expect(!choices.loading && choices.error == nil)
+        choices.cancel()
+        #expect(choices.page == nil && choices.pageAfter == nil)
+    }
 }

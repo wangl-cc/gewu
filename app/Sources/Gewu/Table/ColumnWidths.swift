@@ -73,6 +73,7 @@ enum ColumnWidthMeasurement {
         let name: String
         let type: String
         let text: Bool
+        var sample: [String?]? = nil
     }
 
     /// Runs on a serial worker. Limit UTF-16 input before grapheme processing so
@@ -88,7 +89,7 @@ enum ColumnWidthMeasurement {
         }
         for column in columns {
             try cancellation.check()
-            let block = try view.rows(start: start, count: 32, columns: [column.column])
+            let cells = try column.sample ?? view.rows(start: start, count: 32, columns: [column.column]).cells
             var size =
                 max(
                     width(column.name, font: .systemFont(ofSize: fontSize, weight: .semibold)),
@@ -96,7 +97,7 @@ enum ColumnWidthMeasurement {
             let font =
                 column.text
                 ? NSFont.systemFont(ofSize: fontSize) : .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
-            for cell in block.cells { size = max(size, width(cell ?? "null", font: font) + 20) }
+            for cell in cells.prefix(32) { size = max(size, width(cell ?? "null", font: font) + 20) }
             result[column.column] = min(max(size, 80), maximum)
         }
         try cancellation.check()

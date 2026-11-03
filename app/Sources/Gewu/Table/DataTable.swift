@@ -50,6 +50,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var fitTask: Task<Void, Never>?
     private var findRevision: UInt64?
     private var highlightRevision: UInt64?
+    private var currentFindMatch: CellMatch?
     private var failedView: ObjectIdentifier?
     private var widths = ColumnWidths()
     private var automaticFitTask: Task<Void, Never>?
@@ -106,6 +107,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         NotificationCenter.default.addObserver(
             self, selector: #selector(visibleRectChanged), name: NSView.boundsDidChangeNotification,
             object: scroll.contentView)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowActivityChanged), name: name, object: nil)
+        }
         // SwiftUI positions this view below its toolbar; no second titlebar inset.
         scroll.automaticallyAdjustsContentInsets = false
         for child in [scroll, gutter] {
@@ -127,9 +132,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: Int = 0) {
         loadViewIfNeeded()
         let info = model.info
-        let findChanged = findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
+        let findChanged =
+            findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
+            || currentFindMatch != model.find.currentMatch
         findRevision = model.find.revision
         highlightRevision = model.find.highlightRevision
+        currentFindMatch = model.find.currentMatch
         let effectiveHeight = max(rowHeight, fontSize + 8)
         let presentationChanged =
             textSize != fontSize || table.rowHeight != effectiveHeight || self.rowNumberBase != rowNumberBase
@@ -200,6 +208,18 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func windowActivityChanged(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === view.window else { return }
+        table.enumerateAvailableRowViews { row, _ in
+            for cell in row.subviews.compactMap({ $0 as? MatchCellView }) { cell.refreshAppearance() }
+        }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        fitVisibleColumns()
+    }
 
     override func viewDidLayout() {
         super.viewDidLayout()
@@ -357,41 +377,27 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let cell =
             (table.makeView(withIdentifier: tableColumn.identifier, owner: self) as? MatchCellView)
             ?? makeCell(identifier: tableColumn.identifier)
-        guard let field = cell.textField else { return cell }
         let kind = model.kinds[col]
-        cell.wholeCellMatch = false
         cell.isLoading = true
-        field.stringValue = "…"
-        field.font = fonts.font(for: kind)
-        field.alignment = kind.alignment
-        field.textColor = .tertiaryLabelColor
+        cell.configure(text: "…", font: fonts.font(for: kind), alignment: kind.alignment, muted: true)
         if let block = block(for: row, column: UInt32(col)) { render(cell, column: col, row: row, block: block) }
         return cell
     }
 
     private func render(_ cell: MatchCellView, column: Int, row: Int, block: RowBlock) {
-        guard let field = cell.textField, row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
+        guard row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
             return
         }
         let kind = model.kinds[column]
         let index = row - Int(block.start)
         let hit = model.find.isMatch(row: row, column: column)
+        let current = model.find.currentMatch
         cell.isLoading = false
-        cell.wholeCellMatch = hit && kind != .text
-        if let text = block.cells[index] {
-            if hit, kind == .text, let query = model.find.activeQuery {
-                field.attributedStringValue = highlighted(text, query: query, font: fonts.font(for: kind))
-            } else {
-                field.stringValue = text
-                field.textColor = hit ? .black : .labelColor
-            }
-            field.font = fonts.font(for: kind)
-        } else {
-            field.stringValue = "null"
-            field.font = fonts.null
-            field.textColor = .tertiaryLabelColor
-        }
-        field.alignment = kind.alignment
+        let text = block.cells[index]
+        cell.configure(
+            text: text ?? "null", font: text == nil ? fonts.null : fonts.font(for: kind), alignment: kind.alignment,
+            query: hit && kind == .text ? model.find.activeQuery : nil, wholeMatch: hit && kind != .text,
+            current: current?.displayRow == UInt64(row) && current?.column == UInt32(column), muted: text == nil)
     }
 
     private func makeCell(identifier: NSUserInterfaceItemIdentifier) -> MatchCellView {
@@ -463,14 +469,16 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard let view = displayedView, !columns.isEmpty else { return }
         if automatic { fittingAutomatically = true } else { fitTask?.cancel() }
         let tickets = columns.map { widths.begin($0) }
-        let inputs = columns.map { column in
-            let info = model.info.columns[Int(column)]
-            return ColumnWidthMeasurement.Input(
-                column: column, name: info.name,
-                type: info.displayType, text: info.valueCategory == .text)
-        }
         let rows = table.rows(in: table.visibleRect)
         let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
+        let inputs = columns.map { column in
+            let info = model.info.columns[Int(column)]
+            let key = RowCache.Key(start: Int(start) / RowCache.blockSize * RowCache.blockSize, column: column)
+            let sample = cache.block(for: key).map { Array($0.cells.prefix(32)) }
+            return ColumnWidthMeasurement.Input(
+                column: column, name: info.name,
+                type: info.displayType, text: info.valueCategory == .text, sample: sample)
+        }
         let fontSize = textSize
         let worker = widthWorker
         let cancellation = ColumnWidthMeasurement.Request()

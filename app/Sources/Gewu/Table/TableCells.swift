@@ -278,15 +278,63 @@ final class StripedRowView: NSTableRowView {
 /// whole value (numbers, dates) or behind matched text (via attributes).
 final class MatchCellView: NSTableCellView {
     var isLoading = false
-    var wholeCellMatch = false {
-        didSet { if wholeCellMatch != oldValue { needsDisplay = true } }
+    private(set) var wholeCellMatch = false
+    private(set) var currentMatch = false
+    private var value = ""
+    private var query: String?
+    private var muted = false
+
+    func configure(
+        text: String, font: NSFont, alignment: NSTextAlignment,
+        query: String? = nil, wholeMatch: Bool = false, current: Bool = false, muted: Bool = false
+    ) {
+        value = text
+        self.query = query
+        wholeCellMatch = wholeMatch
+        currentMatch = current
+        self.muted = muted
+        textField?.font = font
+        textField?.alignment = alignment
+        refreshAppearance()
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { refreshAppearance() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    func refreshAppearance() {
+        guard let field = textField else { return }
+        let selected = backgroundStyle == .emphasized && window?.isKeyWindow != false
+        let foreground: NSColor =
+            selected ? .alternateSelectedControlTextColor : (muted ? .tertiaryLabelColor : .labelColor)
+        let text = highlighted(
+            value, query: query ?? "", font: field.font ?? .systemFont(ofSize: 12),
+            foreground: wholeCellMatch ? .black : foreground)
+        let styled = NSMutableAttributedString(attributedString: text)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = field.alignment
+        paragraph.lineBreakMode = .byTruncatingTail
+        styled.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: styled.length))
+        field.attributedStringValue = styled
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if currentMatch {
+            NSColor.controlAccentColor.setStroke()
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3)
+            outline.lineWidth = 2
+            outline.stroke()
+        }
         guard wholeCellMatch, let field = textField else { return }
         // Hug the text, like Finder and Xcode find results.
         let text = field.attributedStringValue.size()
-        let width = min(text.width + 8, bounds.width - 4)
+        let width = max(0, min(text.width + 8, bounds.width - 4))
         let x = field.alignment == .right ? bounds.maxX - 6 - width : bounds.minX + 6
         let rect = NSRect(x: x, y: bounds.midY - text.height / 2 - 1, width: width, height: text.height + 2)
         NSColor.findHighlightColor.setFill()
@@ -295,11 +343,11 @@ final class MatchCellView: NSTableCellView {
 }
 
 /// Text with every case-insensitive occurrence of `query` highlighted.
-func highlighted(_ text: String, query: String, font: NSFont) -> NSAttributedString {
+func highlighted(_ text: String, query: String, font: NSFont, foreground: NSColor = .labelColor) -> NSAttributedString {
     let result = NSMutableAttributedString(
         string: text,
         attributes: [
-            .font: font, .foregroundColor: NSColor.labelColor,
+            .font: font, .foregroundColor: foreground,
         ])
     guard !query.isEmpty else { return result }
     var range = text.startIndex..<text.endIndex

@@ -83,7 +83,7 @@ struct ColumnFilterView: View {
             HStack {
                 NullModePicker(selection: $nullMode, nullCount: choices?.nullCount)
                 Spacer()
-                Button("Clear") { onApply(nil) }
+                Button("Reset", action: reset)
                 Button("Apply", action: apply).keyboardShortcut(.defaultAction)
             }
         }.padding(14).frame(width: 440)
@@ -166,6 +166,15 @@ struct ColumnFilterView: View {
             self.error = error.userMessage
         }
         if !Task.isCancelled { loading = false }
+    }
+
+    private func reset() {
+        exact = ExactFilterDraft(nil)
+        contains = TextContainsDraft(nil)
+        range = RangeDraft(nil)
+        nullMode = .include
+        literal = ""
+        error = nil
     }
 
     private func apply() {

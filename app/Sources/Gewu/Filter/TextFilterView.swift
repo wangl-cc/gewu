@@ -37,11 +37,12 @@ struct TextFilterView: View {
     @State private var query = ""
     @State private var after: TextChoiceCursor?
     @State private var revision = 0
+    @State private var debounce = false
     @StateObject private var choices = TextChoicesModel()
     var body: some View {
         candidateEditor
             .task(id: revision) {
-                await choices.load(view: view, column: column, query: query, after: after)
+                await choices.load(view: view, column: column, query: query, after: after, debounce: debounce)
             }
             .onDisappear { choices.cancel() }
     }
@@ -57,7 +58,7 @@ struct TextFilterView: View {
                     get: { query },
                     set: {
                         query = $0
-                        requestPage(after: nil)
+                        requestPage(after: nil, debounce: true)
                     })
             ).textFieldStyle(.roundedBorder)
             List {
@@ -78,32 +79,34 @@ struct TextFilterView: View {
                     }
                 }
             }.listStyle(.bordered).frame(height: 230)
+                .disabled(choices.loading || choices.error != nil)
             if choices.loading { ProgressView("Loading values…").controlSize(.small) }
             if let error = choices.error {
                 HStack {
                     Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                    Button("Retry") { revision += 1 }
+                    Button("Retry") { requestPage(after: after) }
                 }
             }
             HStack {
-                Button("First Page") { requestPage(after: nil) }.disabled(after == nil || choices.loading)
+                Button("First Page") { requestPage(after: nil) }.disabled(choices.pageAfter == nil || choices.loading)
                 Button("Next Page") {
                     requestPage(after: choices.page?.next)
-                }.disabled(choices.page?.next == nil || choices.loading)
+                }.disabled(choices.page?.next == nil || choices.loading || choices.error != nil)
                 Spacer()
                 Text("\(choices.page?.values.count ?? 0) values on this page")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()
-                Button("Select Page") { selectPage(true) }.disabled(choices.page == nil)
-                Button("Clear Page") { selectPage(false) }.disabled(choices.page == nil)
-            }.controlSize(.small)
+                Button("Select Page") { selectPage(true) }
+                Button("Clear Page") { selectPage(false) }
+            }.controlSize(.small).disabled(choices.page == nil || choices.loading || choices.error != nil)
         }
     }
 
-    private func requestPage(after cursor: TextChoiceCursor?) {
+    private func requestPage(after cursor: TextChoiceCursor?, debounce: Bool = false) {
         after = cursor
+        self.debounce = debounce
         choices.pause()
         revision += 1
     }

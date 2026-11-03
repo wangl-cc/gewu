@@ -18,3 +18,25 @@ The three steps retain the product goals in [TODO](../TODO.md). This record dist
 - Width sampling runs on a serial background worker, covers columns as they enter the viewport, and bounds rows and measured text length. Initial widths apply before revealing the table; automatic widths cap at 420pt. Manual resizing and newer Fit requests invalidate older samples.
 - Normal App build and generated-binding tests passed: 40 Swift tests, including width races, bounded Unicode measurement, cancellation and Show All after reordering/hiding.
 - Swift format lint and diff checks passed. Native Shift-click, drag/reorder, divider double-click and initial layout remain pending running-App verification.
+
+## Step 3: Inspector settings and interaction lifecycle
+
+- Inspector presentation settings now belong to the window and survive column/page changes. Existing type-specific expansion defaults remain, explicit expansion choices persist, and unsupported types use linear binning without erasing the user's logarithmic preference. Result caching and selective bins/scale invalidation remain in InspectorModel.
+- Candidate searches alone debounce. Initial loads and pagination run immediately; the previous page remains visible but disabled until replacement. Accepted pages retain their own cursor; errors preserve the page and offer retry, and closing clears the candidate context.
+- All filter modes share one draft Reset, including null selection. Reset changes drafts only; Apply commits them. Range chart selection follows draft resets.
+- Find has a separate current-match outline, selection-aware text colors, window-activity refresh and full style reset on cell reuse. Histogram cursor rectangles belong to AppKit; dragging ends on mouse up, Escape, disabling or removal. Empty plotting geometry ignores mouse gestures.
+- Follow-up checks also ensured fitting starts when the table enters its window and reuses available row samples before reading again.
+- Final normal App build and generated-binding tests passed: 45 Swift tests. New tests cover Inspector choices across types, candidate page/cursor replacement, selected/reused Find cells, zero-size/read-only histograms and cached Fit samples. Existing Inspector selective-invalidation and stale-request tests also passed.
+- Swift format lint, Markdown lint and diff checks passed. No Rust interface or calculation algorithm changed.
+
+## Pending running-App verification
+
+The user requested implementation first and UI automation later after the computer-use tool reported a locked Mac. Hostless Swift tests do not establish the following visual/native behaviors:
+
+- Right Inspector and toolbar ordering, narrow-window access, resize and reopen behavior; worksheet menu and filter chip layout.
+- Header click/Shift-click sorting, drag/reorder, manual resizing, divider Fit and menu targeting; column-manager hide warnings and wide-table initial widths.
+- Inspector settings while switching columns/pages; Reset/Apply/dismiss behavior; candidate typing, rapid paging, retry and visual continuity.
+- Find focus outline and text contrast in light/dark appearances, selected rows and inactive windows; keyboard navigation and offscreen matches.
+- Histogram cursor entry/exit, cross-window movement, Escape, dragging and closing the filter popover.
+
+The corresponding TODO items keep their acceptance checkboxes open and record implementation progress without dropping these requirements.

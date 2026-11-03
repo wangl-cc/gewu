@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class TextChoicesModel: ObservableObject {
     @Published private(set) var page: TextChoicePage?
+    @Published private(set) var pageAfter: TextChoiceCursor?
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var choices: TextChoices?
@@ -19,7 +20,7 @@ final class TextChoicesModel: ObservableObject {
 
     func load(
         view: GewuView, column: UInt32,
-        query: String, after: TextChoiceCursor?
+        query: String, after: TextChoiceCursor?, debounce: Bool = false
     ) async {
         guard !Task.isCancelled else { return }
         current?.cancel()
@@ -27,23 +28,25 @@ final class TextChoicesModel: ObservableObject {
         current = cancellation
         loading = true
         error = nil
-        page = nil
         defer { if current === cancellation { loading = false } }
         do {
-            try await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled, current === cancellation else { return }
             let next = Context(view: view, column: column)
             if context != next {
+                page = nil
+                pageAfter = nil
                 choices?.cancel()
                 choices = try view.textChoices(column: column)
                 context = next
             }
+            if debounce { try await Task.sleep(for: .milliseconds(200)) }
+            guard !Task.isCancelled, current === cancellation else { return }
             guard let choices else { return }
             let result = try await runCancellable(cancellation: cancellation) {
                 try choices.page(query: query, after: after, limit: 100, cancellation: cancellation)
             }
             guard !Task.isCancelled, current === cancellation else { return }
             page = result
+            pageAfter = after
         } catch {
             guard !Task.isCancelled, current === cancellation else { return }
             if case GewuError.Cancelled = error { return }
@@ -54,8 +57,7 @@ final class TextChoicesModel: ObservableObject {
     func pause() {
         current?.cancel()
         current = nil
-        loading = false
-        page = nil
+        loading = true
         error = nil
     }
 
@@ -66,5 +68,8 @@ final class TextChoicesModel: ObservableObject {
         choices = nil
         context = nil
         loading = false
+        page = nil
+        pageAfter = nil
+        error = nil
     }
 }

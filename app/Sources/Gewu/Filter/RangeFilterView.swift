@@ -128,12 +128,12 @@ struct RangeFilterView: View {
             if let chart, !draft.lowerEdited, !draft.upperEdited {
                 Text(selectionSummary(chart.histogram)).font(.caption).foregroundStyle(.secondary)
             }
-            Button("Reset", action: reset)
         }
         .onAppear { projectSelection() }
         .onChange(of: distribution?.histogram) { _, _ in
             projectSelection()
         }
+        .onChange(of: draft.condition) { _, _ in projectSelection() }
     }
 
     // Rebinning changes only the chart geometry, never the exact drafted bounds.
@@ -214,17 +214,6 @@ struct RangeFilterView: View {
         draft.upperEdited = false
         selectedBins = first..<end
         selection = HistogramSelection(lower: Double(first), upper: Double(end))
-    }
-
-    private func reset() {
-        draft.lowerBound = nil
-        draft.upperBound = nil
-        draft.minimum = ""
-        draft.maximum = ""
-        draft.lowerEdited = false
-        draft.upperEdited = false
-        selection = HistogramSelection(lower: 0, upper: Double(chart?.ranges.count ?? 1))
-        selectedBins = chart.map { 0..<$0.ranges.count }
     }
 
     private func selectionSummary(_ histogram: Histogram) -> String {

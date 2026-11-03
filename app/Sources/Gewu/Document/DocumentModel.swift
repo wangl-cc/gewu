@@ -32,6 +32,7 @@ final class DocumentModel: ObservableObject {
     @Published var inspectorRequest = 0
     @Published var showsColumns = false
     @Published var inspectorVisible = true
+    let inspectorSettings = InspectorSettings()
     @Published var chartX: Int?
     @Published var chartY: Int?
     @Published var selectedSourceRow: UInt64?

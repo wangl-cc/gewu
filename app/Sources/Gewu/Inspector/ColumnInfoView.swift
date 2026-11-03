@@ -41,7 +41,6 @@ struct InspectorSidebar: View {
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                     if let column = model.inspectedColumn, info.columns.indices.contains(column) {
                         ColumnAnalysisView(model: model, column: column)
-                            .id(column)
                     }
                 } else {
                     ContentUnavailableView("No Columns", systemImage: "tablecells")
@@ -65,18 +64,23 @@ struct ColumnAnalysisView: View {
     @ObservedObject var model: DocumentModel
     let column: Int
     @StateObject private var analysis = InspectorModel()
-    @State private var expanded: Int
+    @ObservedObject private var settings: InspectorSettings
     @State private var retry = 0
-    @State private var histogramBins: UInt32 = 40
-    @State private var histogramScale: AxisScale = .linear
-    @State private var frequencyScale: AxisScale = .linear
     @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
 
     init(model: DocumentModel, column: Int) {
         self.model = model
         self.column = column
-        let numeric = (try? model.dataset.analysisCapabilities(column: UInt32(column)).distribution) ?? false
-        _expanded = State(initialValue: numeric ? 7 : 9)
+        _settings = ObservedObject(wrappedValue: model.inspectorSettings)
+    }
+
+    private var expanded: Int {
+        let distribution = (try? model.dataset.analysisCapabilities(column: UInt32(column)).distribution) ?? false
+        return settings.expanded(distribution: distribution)
+    }
+
+    private var histogramScale: AxisScale {
+        settings.binningScale(logarithmic: model.info.columns[column].capabilities.logarithmic)
     }
 
     private struct Request: Equatable {
@@ -91,7 +95,7 @@ struct ColumnAnalysisView: View {
     private var request: Request {
         Request(
             view: ObjectIdentifier(model.view),
-            column: column, expanded: expanded, retry: retry, histogramBins: histogramBins,
+            column: column, expanded: expanded, retry: retry, histogramBins: settings.histogramBins,
             histogramScale: histogramScale)
     }
 
@@ -113,13 +117,13 @@ struct ColumnAnalysisView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 if section == .distribution || section == .lengths {
                                     if section == .distribution, model.info.columns[column].capabilities.logarithmic {
-                                        ScalePicker(title: "Binning", selection: $histogramScale)
+                                        ScalePicker(title: "Binning", selection: $settings.histogramScale)
                                             .help(
                                                 "Log10 bins include only finite positive values. Source values remain unchanged."
                                             )
                                     }
-                                    ScalePicker(title: "Frequency", selection: $frequencyScale)
-                                    Picker("Maximum bins", selection: $histogramBins) {
+                                    ScalePicker(title: "Frequency", selection: $settings.frequencyScale)
+                                    Picker("Maximum bins", selection: $settings.histogramBins) {
                                         ForEach([10, 20, 40, 60, 100] as [UInt32], id: \.self) { bins in
                                             Text(bins.formatted()).tag(bins)
                                         }
@@ -149,7 +153,7 @@ struct ColumnAnalysisView: View {
         .task(id: request) {
             await analysis.load(
                 dataset: model.dataset, view: model.view,
-                column: UInt32(column), expanded: expanded, bins: histogramBins,
+                column: UInt32(column), expanded: expanded, bins: settings.histogramBins,
                 scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
@@ -159,7 +163,7 @@ struct ColumnAnalysisView: View {
         Binding(
             get: { expanded & section.mask != 0 },
             set: { open in
-                if open { expanded |= section.mask } else { expanded &= ~section.mask }
+                settings.setExpanded(section, open)
             })
     }
 
@@ -242,7 +246,7 @@ struct ColumnAnalysisView: View {
             HistogramChart(
                 histogram: histogram,
                 selection: .constant(.init(lower: lo, upper: hi)), interactive: false,
-                frequencyScale: frequencyScale
+                frequencyScale: settings.frequencyScale
             )
             .frame(height: 110).accessibilityLabel("Distribution")
             if let min = histogram.minLabel, let max = histogram.maxLabel,
