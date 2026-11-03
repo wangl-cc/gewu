@@ -45,12 +45,14 @@ Candidate values and range distributions are requested on demand. Exact selectio
 
 ## Candidate values and counts
 
-Candidates and counts describe only the bound View, including **all** filters. Zero-count source values are absent. Selecting a candidate updates the window's complete QuerySpec and computes a new View from the full Dataset. Clearing or changing conditions can recover previously excluded rows; the backend does not implicitly remove the edited column's filter.
+A column's filter editor describes its **facet**: the rows that pass the applied filters on **other** columns, ignoring the column's own filter and all sorting. Its own condition therefore never hides its alternatives: after selecting `bj` for a city column, the city editor still lists every city that the other filters allow. When the column has no filter of its own, the facet is the applied View.
+
+Only values present in the facet are listed; values excluded by other columns' filters are absent, as in a spreadsheet AutoFilter. A selected value that is absent from the facet stays in the filter without being listed. The backend APIs describe whichever View they are given; the app computes the facet View, and Core does not implicitly remove the edited column's filter. Selecting a candidate updates the window's complete QuerySpec and computes a new View from the full Dataset.
 
 Searching within a text candidate list only narrows the candidates shown. It uses case-insensitive substring matching and does not change the current view. Selecting a candidate uses its exact, case-sensitive value. Candidate pages contain non-null values in UTF-8 lexical order. `FilterChoices.null_count` reports missing values separately. Complete bounded candidates are returned as `Some(values)`; `None` means no complete bounded list is available, while `Some([])` is an empty list.
 
 ## Filter charts and analysis
 
-Range filter charts derive both their domain and counts from the bound View, for linear and logarithmic scales. Filtering can change the axis; an empty View does not fall back to the source domain. Selecting bins submits their exact inclusive bounds, not values reconstructed from approximate plot coordinates.
+Range filter charts derive both their domain and counts from the column's facet, for linear and logarithmic scales. Filters on other columns can change the axis, while the column's own range does not narrow it; an empty facet does not fall back to the source domain. Selecting bins submits their exact inclusive bounds, not values reconstructed from approximate plot coordinates.
 
-Inspector statistics describe the current displayed results, including **all** explicit filters but not Find. Filter editor counts use the same row selection. The inspector's Values section marks estimated results; candidate selection can omit globally top-ranked values.
+Inspector statistics describe the current displayed results, including **all** explicit filters but not Find. Filter editor counts use the column's facet instead, so they can differ from the Inspector when the column has its own filter. The inspector's Values section marks estimated results; candidate selection can omit globally top-ranked values.

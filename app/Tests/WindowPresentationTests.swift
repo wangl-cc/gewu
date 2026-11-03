@@ -4,6 +4,38 @@ import Testing
 
 @Suite @MainActor
 struct WindowPresentationTests {
+    @Test func filterFacetIgnoresOnlyTheEditedColumnsFilter() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-facet-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try "city,district\nbj,haidian\nbj,chaoyang\nsh,pudong\nsh,xuhui\n"
+            .write(to: path, atomically: true, encoding: .utf8)
+        let dataset = try GewuDataset.open(path: path.path)
+        func exact(_ value: String) -> Filter {
+            Filter(condition: .exact(values: [value], exclude: false), includeNulls: false)
+        }
+        let spec = QuerySpec(columns: [
+            ColSpec(column: 0, sort: nil, filter: exact("bj")),
+            ColSpec(column: 1, sort: ColSort(priority: 0, descending: true), filter: exact("haidian")),
+        ])
+        let applied = try dataset.view().query(spec: spec, cancellation: Cancellation())
+        #expect(applied.rowCount() == 1)
+
+        // The district editor keeps city = bj but not its own district = haidian.
+        let district = try FilterFacet(view: applied, spec: spec, column: 1).resolve(cancellation: Cancellation())
+        let choices = try district.filterChoices(column: 1, cancellation: Cancellation())
+        #expect(choices.values?.map(\.label) == ["chaoyang", "haidian"])
+
+        // A column without its own filter reuses the applied view.
+        let cityOnly = QuerySpec(columns: [
+            ColSpec(column: 0, sort: nil, filter: exact("bj")),
+            ColSpec(column: 1, sort: nil, filter: nil),
+        ])
+        let view = try dataset.view().query(spec: cityOnly, cancellation: Cancellation())
+        let facet = FilterFacet(view: view, spec: cityOnly, column: 1)
+        #expect(facet.usesAppliedView)
+        #expect(try facet.resolve(cancellation: Cancellation()) === view)
+    }
+
     @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-modes-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }

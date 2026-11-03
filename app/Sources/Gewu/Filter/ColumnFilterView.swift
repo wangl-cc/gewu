@@ -24,8 +24,31 @@ enum FilterMode: String, CaseIterable {
     }
 }
 
-struct ColumnFilterView: View {
+/// The rows a column's filter editor describes: the applied filters on the other
+/// columns, without sorting. The column's own filter never hides its alternatives.
+struct FilterFacet {
     let view: GewuView
+    let spec: QuerySpec
+    let column: UInt32
+
+    /// Without its own filter, the column's facet is the applied view itself.
+    var usesAppliedView: Bool {
+        !spec.columns.contains { $0.column == column && $0.filter != nil }
+    }
+
+    /// May run a query over the whole dataset; call off the main actor.
+    func resolve(cancellation: Cancellation) throws -> GewuView {
+        if usesAppliedView { return view }
+        let others = spec.columns.compactMap { entry -> ColSpec? in
+            guard entry.column != column, let filter = entry.filter else { return nil }
+            return ColSpec(column: entry.column, sort: nil, filter: filter)
+        }
+        return try view.query(spec: QuerySpec(columns: others), cancellation: cancellation)
+    }
+}
+
+struct ColumnFilterView: View {
+    let facet: FilterFacet
     let column: UInt32
     let info: ColumnInfo
     let onApply: (Filter?) -> Void
@@ -42,13 +65,15 @@ struct ColumnFilterView: View {
     @State private var literal = ""
     @State private var loading = false
     @State private var retry = 0
+    /// Resolved once per editor; candidates and distributions all describe it.
+    @State private var facetView: GewuView?
 
     init(
-        view: GewuView, column: UInt32, info: ColumnInfo, current: Filter?,
+        facet: FilterFacet, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
-        self.view = view
-        self.column = column
+        self.facet = facet
+        self.column = facet.column
         self.info = info
         self.onApply = onApply
         _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
@@ -112,7 +137,7 @@ struct ColumnFilterView: View {
         if let values = choices?.values {
             ChoiceFilterView(values: values, draft: $exact)
         } else if info.capabilities.textMatch {
-            TextFilterView(view: view, column: column, draft: $exact)
+            if let facetView { TextFilterView(view: facetView, column: column, draft: $exact) }
         } else {
             HStack {
                 TextField("Exact value", text: $literal).textFieldStyle(.roundedBorder)
@@ -150,13 +175,23 @@ struct ColumnFilterView: View {
         if let mode, !modes.contains(mode) { return }
         loading = true
         error = nil
-        let view = view
+        let facet = facet
         let column = column
         let mode = mode
         let bins = histogramBins
         let scale = histogramScale
         let cancellation = Cancellation()
         do {
+            let view: GewuView
+            if let facetView {
+                view = facetView
+            } else {
+                view = try await runCancellable(cancellation: cancellation) {
+                    try facet.resolve(cancellation: cancellation)
+                }
+                guard !Task.isCancelled else { return }
+                facetView = view
+            }
             if mode == .range {
                 let result = try await withTaskCancellationHandler {
                     try await Task.detached {

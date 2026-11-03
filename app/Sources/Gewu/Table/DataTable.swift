@@ -659,7 +659,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         closePopover()
         let column = UInt32(col)
         let content = ColumnFilterView(
-            view: model.view, column: column, info: model.info.columns[col],
+            facet: FilterFacet(view: model.view, spec: model.appliedSpec, column: column),
+            info: model.info.columns[col],
             current: model.spec.columns.first { $0.column == column }?.filter
         ) { [weak self] filters in
             self?.closePopover()
