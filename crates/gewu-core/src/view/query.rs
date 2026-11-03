@@ -62,11 +62,11 @@ impl View {
 
         let arrays: Vec<&ArrayRef> = columns
             .iter()
-            .map(|&c| &self.dataset.columns[c as usize].array)
+            .map(|&c| self.dataset.columns[c as usize].array())
             .collect();
         let formatters = columns
             .iter()
-            .map(|&c| format::formatter(self.dataset.columns[c as usize].array.as_ref()))
+            .map(|&c| format::formatter(self.dataset.columns[c as usize].array().as_ref()))
             .collect::<Result<Vec<_>>>()?;
 
         let mut cells = Vec::with_capacity(source_rows.len() * columns.len());

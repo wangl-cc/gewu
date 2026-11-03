@@ -5,9 +5,9 @@
 //! - [`dictionary`]: compact distinct-value dictionary encoding
 //! - [`filter`]: Single-column filter and Find predicate compilation
 
-pub mod bound;
-pub mod dictionary;
-pub mod filter;
+pub(crate) mod bound;
+pub(crate) mod dictionary;
+pub(crate) mod filter;
 mod metadata;
 pub(crate) mod value_text;
 
@@ -55,11 +55,10 @@ pub struct ValueChoice {
 }
 
 /// An immutable, first-class column owned by a [`crate::Dataset`].
-pub struct Column {
-    pub name: String,
-    pub nullable: bool,
-    pub len: usize,
-    pub array: ArrayRef,
+pub(crate) struct Column {
+    name: String,
+    nullable: bool,
+    array: ArrayRef,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
     dictionary: OnceLock<Option<Arc<Dictionary>>>,
@@ -84,7 +83,7 @@ impl Drop for DictionaryBuild<'_> {
 impl Column {
     /// Build a column. Fails for Arrow types without Gewu semantics rather
     /// than exposing a column no operation can describe.
-    pub fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
+    pub(crate) fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
         let name = name.into();
         if !types::is_describable(array.data_type()) {
             return Err(crate::Error::Unsupported(format!(
@@ -92,12 +91,10 @@ impl Column {
                 array.data_type()
             )));
         }
-        let len = array.len();
         let nullable = array.is_nullable();
         Ok(Self {
             name,
             nullable,
-            len,
             array,
             dictionary: OnceLock::new(),
             dictionary_building: Mutex::new(false),
@@ -145,33 +142,12 @@ impl Column {
             .as_ref())
     }
 
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
+    pub(crate) fn array(&self) -> &ArrayRef {
+        &self.array
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[inline]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[inline]
-    pub fn array(&self) -> ArrayRef {
-        self.array.clone()
-    }
-
-    #[inline]
-    pub fn is_nullable(&self) -> bool {
-        self.nullable
-    }
-
-    #[inline]
-    pub fn capabilities(&self) -> ColumnCapabilities {
+    pub(crate) fn capabilities(&self) -> ColumnCapabilities {
         let data_type = self.array.data_type();
         ColumnCapabilities {
             contains: filter::supports_contains(data_type),
@@ -183,11 +159,11 @@ impl Column {
         }
     }
 
-    pub fn logical_data_type(&self) -> &DataType {
+    pub(crate) fn logical_data_type(&self) -> &DataType {
         types::value_type(self.array.data_type())
     }
 
-    pub fn info(&self) -> ColumnInfo {
+    pub(crate) fn info(&self) -> ColumnInfo {
         ColumnInfo::from_column(self)
     }
 
@@ -199,7 +175,7 @@ impl Column {
         filter::compile_filter(self, filter, cancel)
     }
 
-    pub fn parse_bound(&self, text: &str) -> Result<Bound> {
+    pub(crate) fn parse_bound(&self, text: &str) -> Result<Bound> {
         Bound::parse(self.logical_data_type(), text)
     }
 }
@@ -334,7 +310,7 @@ mod tests {
             let array = arrow::array::new_empty_array(&data_type);
             assert!(
                 matches!(
-                    crate::Column::new("unsupported", array),
+                    Column::new("unsupported", array),
                     Err(crate::Error::Unsupported(_))
                 ),
                 "{data_type}"
@@ -684,8 +660,8 @@ mod tests {
     #[test]
     fn column_len_and_empty() {
         let empty_col = col(Arc::new(Int32Array::from(Vec::<i32>::new())));
-        assert_eq!(empty_col.len(), 0);
-        assert!(empty_col.is_empty());
+        assert_eq!(empty_col.array().len(), 0);
+        assert!(empty_col.array().is_empty());
 
         let array: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
@@ -694,7 +670,7 @@ mod tests {
             None,
         ]));
         let column = col(array);
-        assert_eq!(column.len(), 4);
-        assert!(!column.is_empty());
+        assert_eq!(column.array().len(), 4);
+        assert!(!column.array().is_empty());
     }
 }

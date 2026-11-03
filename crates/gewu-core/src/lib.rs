@@ -6,18 +6,18 @@
 
 mod cancellation;
 pub use cancellation::Cancellation;
-pub mod column;
-pub mod dataset;
+mod column;
+mod dataset;
 mod error;
-pub mod file;
+mod file;
 pub(crate) mod format;
 pub(crate) mod query;
-pub mod stats;
-pub mod types;
-pub mod view;
+mod stats;
+mod types;
+mod view;
 
 pub use column::{
-    Bound, Column, ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice,
+    Bound, ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice,
 };
 pub use dataset::Dataset;
 pub use error::{Error, Result};
@@ -31,9 +31,8 @@ pub use query::{
     MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use stats::{
-    AnalysisCapabilities, AnalysisField, ArrayView, AxisScale, ColumnOverview, Histogram,
-    LengthSummary, LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAxisKind,
-    ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    AnalysisCapabilities, AnalysisField, AxisScale, ColumnOverview, Histogram, LengthSummary,
+    LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
+    ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
-pub use types::Encoding;
 pub use view::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, View};

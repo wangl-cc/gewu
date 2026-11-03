@@ -53,7 +53,7 @@ impl ArrayView<'_> {
 }
 
 /// Type metadata only: capabilities never scan the column or compute cardinality.
-pub fn capabilities(data_type: &DataType) -> AnalysisCapabilities {
+pub(crate) fn capabilities(data_type: &DataType) -> AnalysisCapabilities {
     if !types::is_describable(data_type) {
         return AnalysisCapabilities::default();
     }
@@ -133,7 +133,7 @@ mod tests {
         Arc::new(crate::Dataset {
             source_path: Default::default(),
             schema: batch.schema(),
-            columns: vec![crate::Column::new("value", array.clone()).unwrap()],
+            columns: vec![crate::column::Column::new("value", array.clone()).unwrap()],
             n_rows: array.len(),
             file_size: 0,
             format: crate::FileType::Csv,

@@ -223,13 +223,6 @@ impl Bound {
         self.inner.axis
     }
 
-    /// Whether two endpoints denote the same value of the same logical type.
-    /// Display spelling and approximate chart coordinates do not participate.
-    pub fn same_value(&self, other: &Self) -> bool {
-        self.inner.data_type == other.inner.data_type
-            && compare(&self.inner.value, &other.inner.value).is_eq()
-    }
-
     /// Complete logical type, including width, scale, unit and time zone.
     pub fn data_type(&self) -> &DataType {
         &self.inner.data_type

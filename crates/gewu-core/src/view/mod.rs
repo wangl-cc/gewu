@@ -66,7 +66,7 @@ impl View {
     }
 
     pub(crate) fn column_array(&self, column: u32) -> Result<&ArrayRef> {
-        Ok(&self.column(column)?.array)
+        Ok(self.column(column)?.array())
     }
 
     // Order-independent scans can use contiguous buffers for an unfiltered view.

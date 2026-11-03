@@ -44,27 +44,6 @@ impl From<Filter> for core::Filter {
     }
 }
 
-impl From<core::Filter> for Filter {
-    fn from(value: core::Filter) -> Self {
-        Self {
-            include_nulls: value.include_nulls,
-            condition: match value.condition {
-                core::FilterCondition::Range { min, max } => FilterCondition::Range { min, max },
-                core::FilterCondition::Contains {
-                    text,
-                    case_sensitive,
-                } => FilterCondition::Contains {
-                    text,
-                    case_sensitive,
-                },
-                core::FilterCondition::Exact { values, exclude } => {
-                    FilterCondition::Exact { values, exclude }
-                }
-            },
-        }
-    }
-}
-
 /// Display and lossless wire text are separate; coordinates are only geometry.
 #[derive(uniffi::Record)]
 pub struct RangeBound {

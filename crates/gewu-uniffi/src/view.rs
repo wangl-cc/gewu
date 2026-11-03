@@ -48,25 +48,6 @@ impl From<QuerySpec> for core::QuerySpec {
     }
 }
 
-impl From<core::QuerySpec> for QuerySpec {
-    fn from(spec: core::QuerySpec) -> Self {
-        Self {
-            columns: spec
-                .columns
-                .into_iter()
-                .map(|c| ColSpec {
-                    column: c.column,
-                    filter: c.filter.map(Into::into),
-                    sort: c.sort.map(|s| ColSort {
-                        priority: s.priority,
-                        descending: s.descending,
-                    }),
-                })
-                .collect(),
-        }
-    }
-}
-
 impl From<core::RowBlock> for RowBlock {
     fn from(block: core::RowBlock) -> Self {
         Self {

@@ -17,7 +17,7 @@
 //! for filter generation.
 //!
 //! The dictionary is a pure function of the column data and is lazily computed
-//! and cached by [`crate::Column`]. Columns with more than `MAX_DISTINCT_VALUES`
+//! and cached by [`crate::column::Column`]. Columns with more than `MAX_DISTINCT_VALUES`
 //! non-null values are not encoded.
 
 use std::{collections::HashMap, sync::Arc};

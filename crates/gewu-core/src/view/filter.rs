@@ -13,7 +13,7 @@ impl View {
                 return dictionary.filter_choices(&rows, cancel);
             }
         }
-        let nulls = col.array.logical_nulls();
+        let nulls = col.array().logical_nulls();
         let mut null_count = 0;
         for (index, row) in rows.iter().enumerate() {
             cancel.check_at(index)?;
@@ -42,7 +42,7 @@ impl View {
         let col = self.column(column)?;
         let rows = self.selection();
         let result = stats::build_scaled(
-            stats::ArrayView::new(&col.array, &rows),
+            stats::ArrayView::new(col.array(), &rows),
             bins,
             scale,
             cancel,

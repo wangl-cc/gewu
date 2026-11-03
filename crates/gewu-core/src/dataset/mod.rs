@@ -35,12 +35,12 @@ impl Dataset {
 
     pub fn analysis_capabilities(&self, column: u32) -> Result<crate::AnalysisCapabilities> {
         Ok(crate::stats::capabilities(
-            self.column(column)?.array.data_type(),
+            self.column(column)?.array().data_type(),
         ))
     }
 
     pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>> {
-        crate::stats::analysis::structure(self.column(column)?.array.data_type())
+        crate::stats::analysis::structure(self.column(column)?.array().data_type())
     }
 
     pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
@@ -88,28 +88,12 @@ impl Dataset {
         })
     }
 
-    pub fn source_path(&self) -> &Path {
-        &self.source_path
-    }
-
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
     pub fn n_rows(&self) -> usize {
         self.n_rows
-    }
-
-    pub fn file_size(&self) -> u64 {
-        self.file_size
-    }
-
-    pub fn format(&self) -> FileType {
-        self.format
-    }
-
-    pub fn metadata(&self) -> &FileMetadata {
-        &self.metadata
     }
 
     pub fn info(&self) -> FileInfo {
@@ -123,7 +107,7 @@ impl Dataset {
         }
     }
 
-    pub fn columns(&self) -> &[Column] {
+    pub(crate) fn columns(&self) -> &[Column] {
         &self.columns
     }
 
@@ -136,7 +120,7 @@ impl Dataset {
             .map(|i| i as u32)
     }
 
-    pub fn column(&self, c: u32) -> Result<&Column> {
+    pub(crate) fn column(&self, c: u32) -> Result<&Column> {
         self.columns
             .get(c as usize)
             .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
@@ -148,7 +132,7 @@ impl Dataset {
 
     pub fn format_value(&self, column: u32, value: i64) -> Result<String> {
         let col = self.column(column)?;
-        let data_type = col.array.data_type().clone();
+        let data_type = col.array().data_type().clone();
         let raw: ArrayRef = Arc::new(Int64Array::from(vec![value]));
         let typed = match data_type {
             DataType::Date32 | DataType::Time32(_) => {

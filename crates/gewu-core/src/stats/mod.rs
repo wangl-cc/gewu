@@ -10,16 +10,17 @@ use arrow::{
 
 use crate::{scope::Selection, Bound, Error, Result};
 
-pub mod analysis;
+pub(crate) mod analysis;
 mod lengths;
 mod logarithmic;
 mod median;
 pub(crate) mod numeric;
 mod scale;
-pub mod scatter;
+pub(crate) mod scatter;
 mod values;
 
-pub use analysis::{capabilities, AnalysisCapabilities, AnalysisField, ColumnOverview};
+pub(crate) use analysis::capabilities;
+pub use analysis::{AnalysisCapabilities, AnalysisField, ColumnOverview};
 pub use lengths::LengthUnit;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
@@ -70,8 +71,8 @@ pub struct LengthSummary {
 
 /// A borrowed view of an Arrow array over a row selection.
 #[derive(Debug, Clone, Copy)]
-pub struct ArrayView<'a> {
-    pub array: &'a ArrayRef,
+pub(crate) struct ArrayView<'a> {
+    pub(crate) array: &'a ArrayRef,
     pub(crate) rows: &'a Selection,
 }
 
@@ -82,38 +83,13 @@ impl<'a> ArrayView<'a> {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.rows.len()
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.rows.len() == 0
-    }
-
-    #[inline]
-    pub fn data_type(&self) -> &DataType {
+    pub(crate) fn data_type(&self) -> &DataType {
         self.array.data_type()
-    }
-
-    #[inline]
-    pub fn is_null(&self, row: usize) -> bool {
-        self.array.is_null(row)
-    }
-
-    #[inline]
-    pub fn is_valid(&self, row: usize) -> bool {
-        self.array.is_valid(row)
-    }
-
-    #[inline]
-    pub fn null_count(&self) -> u64 {
-        match self.rows {
-            Selection::All(_) => self.array.null_count() as u64,
-            Selection::Rows(_) => {
-                self.rows.iter().filter(|&r| self.array.is_null(r)).count() as u64
-            }
-        }
     }
 
     /// Numeric statistics (min, max, mean, std dev, median, etc.).

@@ -50,7 +50,7 @@ impl View {
     pub fn nested_export_columns(&self, columns: &[u32]) -> Result<Vec<String>> {
         let mut nested = Vec::new();
         for &column in columns {
-            if self.column(column)?.array.data_type().is_nested() {
+            if self.column(column)?.array().data_type().is_nested() {
                 nested.push(self.dataset.schema.field(column as usize).name().clone());
             }
         }

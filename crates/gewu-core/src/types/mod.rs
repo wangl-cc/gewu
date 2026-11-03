@@ -8,14 +8,14 @@ use arrow::datatypes::DataType;
 /// How Arrow stores a type. Dictionary encoding is lossless and does not
 /// change the value domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Encoding {
+pub(crate) enum Encoding {
     Direct,
     Dictionary,
 }
 
 /// The parameter-free scalar class that policy code matches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Domain {
+pub(crate) enum Domain {
     Text,
     Boolean,
     Integer,
@@ -30,7 +30,7 @@ pub enum Domain {
 }
 
 /// Storage encoding of the outermost Arrow type.
-pub fn encoding(data_type: &DataType) -> Encoding {
+pub(crate) fn encoding(data_type: &DataType) -> Encoding {
     match data_type {
         DataType::Dictionary(..) => Encoding::Dictionary,
         _ => Encoding::Direct,
@@ -46,7 +46,7 @@ pub(crate) fn value_type(mut data_type: &DataType) -> &DataType {
 }
 
 /// Scalar semantics, independent of dictionary encoding.
-pub fn domain(data_type: &DataType) -> Option<Domain> {
+pub(crate) fn domain(data_type: &DataType) -> Option<Domain> {
     direct_domain(value_type(data_type))
 }
 

@@ -94,7 +94,7 @@ impl View {
         cancellation.check()?;
         let col = self.column(column)?;
         let rows = self.selection();
-        let result = compute(ArrayView::new(&col.array, &rows))?;
+        let result = compute(ArrayView::new(col.array(), &rows))?;
         cancellation.check()?;
         Ok(result)
     }
