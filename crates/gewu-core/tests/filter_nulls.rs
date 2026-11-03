@@ -6,7 +6,7 @@ use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
 use gewu_core::{Cancellation, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
-fn document() -> std::sync::Arc<gewu_core::View> {
+fn document() -> Arc<gewu_core::Dataset> {
     let score: ArrayRef = Arc::new(Float64Array::from(vec![
         None,
         Some(1.0),
@@ -40,9 +40,7 @@ fn document() -> std::sync::Arc<gewu_core::View> {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap()
+    Arc::new(gewu_core::Dataset::open(file.path()).unwrap())
 }
 
 fn range(include_nulls: bool) -> Filter {
@@ -53,9 +51,8 @@ fn contains(include_nulls: bool) -> Filter {
     Filter::contains("ALPHA".into(), false, include_nulls)
 }
 
-fn rows(doc: &std::sync::Arc<gewu_core::View>, spec: QuerySpec) -> Vec<u64> {
+fn rows(doc: &Arc<gewu_core::Dataset>, spec: QuerySpec) -> Vec<u64> {
     let view = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     view.rows(0, 20, &[0, 1]).unwrap().source_rows
@@ -133,7 +130,6 @@ fn choices_count_included_nulls_and_respect_all_filters() {
         .with_filter(2, Filter::exact(vec!["A".into()], false, false))
         .with_filter(3, Filter::contains("needle".into(), false, false));
     let values = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(2, &Cancellation::default())
@@ -150,7 +146,6 @@ fn choices_count_included_nulls_and_respect_all_filters() {
 
     // All filters leave source rows 0 and 1: null and one finite value.
     let choices = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())

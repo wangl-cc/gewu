@@ -16,7 +16,7 @@ use gewu_core::{
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
-fn sample() -> (TempDir, std::sync::Arc<gewu_core::View>) {
+fn sample() -> (TempDir, Arc<gewu_core::Dataset>) {
     let directory = tempfile::tempdir().unwrap();
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -56,7 +56,7 @@ fn sample() -> (TempDir, std::sync::Arc<gewu_core::View>) {
     writer.close().unwrap();
     (
         directory,
-        Arc::new(gewu_core::Dataset::open(&path).unwrap()).view(),
+        Arc::new(gewu_core::Dataset::open(&path).unwrap()),
     )
 }
 
@@ -162,14 +162,12 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     assert_eq!(result, batch);
 }
 
-fn filtered(doc: &std::sync::Arc<gewu_core::View>) -> Arc<gewu_core::View> {
-    doc.dataset()
-        .query(
-            &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
-                .with_sort(0, true, 0),
-            &gewu_core::Cancellation::default(),
-        )
-        .unwrap()
+fn filtered(doc: &Arc<gewu_core::Dataset>) -> Arc<gewu_core::View> {
+    doc.query(
+        &QuerySpec::single(0, Filter::range(Some("2".into()), None, false)).with_sort(0, true, 0),
+        &gewu_core::Cancellation::default(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -209,17 +207,17 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
 
 #[test]
 fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
-    let (directory, doc) = sample();
-    let doc = filtered(&doc);
+    let (directory, dataset) = sample();
+    let doc = filtered(&dataset);
     let export = doc.export(&[1, 0, 2, 3], FileType::Parquet).unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
-    doc.dataset()
+    dataset
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     let cancellation = Cancellation::default();
     cancellation.cancel();
     assert!(matches!(
-        doc.dataset().query(&QuerySpec::default(), &cancellation),
+        dataset.query(&QuerySpec::default(), &cancellation),
         Err(Error::Cancelled)
     ));
     let path = directory.path().join("result.parquet");
@@ -236,7 +234,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
     assert_eq!(batch.num_rows(), 4);
     assert_eq!(
         batch.schema().as_ref(),
-        &doc.dataset().schema().project(&[1, 0, 2, 3]).unwrap()
+        &dataset.schema().project(&[1, 0, 2, 3]).unwrap()
     );
     let ids = batch
         .column(1)
@@ -273,6 +271,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
 #[test]
 fn parquet_export_honors_explicit_compression() {
     let (directory, doc) = sample();
+    let doc = doc.view();
     let path = directory.path().join("snappy.parquet");
     doc.export(&[0, 1], FileType::Parquet)
         .unwrap()
@@ -281,15 +280,15 @@ fn parquet_export_honors_explicit_compression() {
         })
         .unwrap();
     let reopened = gewu_core::Dataset::open(path)
-        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .map(std::sync::Arc::new)
         .unwrap();
-    let info = reopened.dataset().info();
+    let info = reopened.info();
     let gewu_core::FileMetadata::Parquet { compression, .. } = &info.metadata else {
         panic!("expected Parquet metadata");
     };
     assert_eq!(compression, &["SNAPPY"]);
     assert_eq!(
-        reopened.rows(0, 5, &[0, 1]).unwrap().cells,
+        reopened.view().rows(0, 5, &[0, 1]).unwrap().cells,
         doc.rows(0, 5, &[0, 1]).unwrap().cells
     );
 }
@@ -298,7 +297,6 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let doc = doc
-        .dataset()
         .query(
             &QuerySpec::single(0, Filter::exact(vec!["-1".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -321,7 +319,7 @@ fn empty_results_keep_headers_and_parquet_schema() {
 #[test]
 fn old_views_remain_exportable_and_invalid_columns_are_rejected() {
     let (_directory, doc) = sample();
-    let old = doc.clone();
+    let old = doc.view();
     let doc = filtered(&doc);
     assert_eq!(
         old.export(&[0], FileType::Csv)
@@ -348,6 +346,7 @@ fn old_views_remain_exportable_and_invalid_columns_are_rejected() {
 #[test]
 fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_files() {
     let (directory, doc) = sample();
+    let doc = doc.view();
     let path = directory.path().join("existing.csv");
     fs::write(&path, "keep me").unwrap();
     let export = doc.export(&[0], FileType::Csv).unwrap();
@@ -408,6 +407,7 @@ fn formatting_failure_does_not_publish_a_partial_file() {
 #[test]
 fn source_file_and_aliases_cannot_be_overwritten() {
     let (directory, doc) = sample();
+    let doc = doc.view();
     let source = directory.path().join("source.parquet");
     let original = fs::read(&source).unwrap();
     let mut paths = vec![
@@ -435,11 +435,9 @@ fn analysis_distribution_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
     let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
     let view = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     let filter_histogram = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())
@@ -456,8 +454,7 @@ fn analysis_distribution_includes_the_columns_own_filter() {
     assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
-    doc.dataset()
-        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         view.analyze_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())

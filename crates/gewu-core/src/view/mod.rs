@@ -42,10 +42,6 @@ impl View {
         })
     }
 
-    pub fn dataset(&self) -> &Arc<Dataset> {
-        &self.dataset
-    }
-
     pub fn columns(&self) -> &[u32] {
         &self.columns
     }
@@ -127,8 +123,7 @@ mod tests {
     fn reorder_shares_rows_and_dataset_and_requires_an_exact_permutation() {
         let dataset = dataset();
         let initial = dataset.view();
-        let sorted = initial
-            .dataset()
+        let sorted = dataset
             .query(
                 &QuerySpec::all(2).with_sort(0, true, 0),
                 &Cancellation::default(),
@@ -159,13 +154,9 @@ mod tests {
         let spec = QuerySpec::all(2)
             .with_filter(0, Filter::range(Some("11998".into()), None, false))
             .with_sort(0, true, 0);
-        let filtered = initial
-            .dataset()
-            .query(&spec, &Cancellation::default())
-            .unwrap();
+        let filtered = dataset.query(&spec, &Cancellation::default()).unwrap();
         let find = filtered.find("odd", &[1]).unwrap();
-        let hidden = filtered
-            .dataset()
+        let hidden = dataset
             .query(
                 &QuerySpec {
                     columns: vec![ColSpec {
@@ -179,9 +170,7 @@ mod tests {
             .unwrap();
         assert_eq!(hidden.columns(), &[1]);
         assert_eq!(hidden.row_count(), 12_000);
-        assert!(Arc::ptr_eq(filtered.dataset(), hidden.dataset()));
-        let restored = hidden
-            .dataset()
+        let restored = dataset
             .query(&QuerySpec::all(2), &Cancellation::default())
             .unwrap();
         assert_eq!(restored.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
@@ -203,24 +192,22 @@ mod tests {
 
     #[test]
     fn cancelled_and_invalid_queries_leave_existing_views_usable() {
-        let initial = dataset().view();
+        let dataset = dataset();
+        let initial = dataset.view();
         let spec = QuerySpec::all(2).with_sort(0, true, 0);
         let token = Cancellation::default();
         token.cancel();
         assert!(matches!(
-            initial.dataset().query(&spec, &token),
+            dataset.query(&spec, &token),
             Err(Error::Cancelled)
         ));
         // Enter the real row scan, then stop at its next checkpoint.
         let interrupted = Cancellation::after_checks(4);
         assert!(matches!(
-            initial.dataset().query(&spec, &interrupted),
+            dataset.query(&spec, &interrupted),
             Err(Error::Cancelled)
         ));
-        let sorted = initial
-            .dataset()
-            .query(&spec, &Cancellation::default())
-            .unwrap();
+        let sorted = dataset.query(&spec, &Cancellation::default()).unwrap();
         assert_eq!(sorted.rows(0, 1, &[0]).unwrap().source_rows, [11999]);
         for bad in [
             QuerySpec::single(5, Filter::exact(vec![], false, false)),
@@ -240,7 +227,7 @@ mod tests {
             QuerySpec::single(0, Filter::exact(vec!["invalid".into()], false, false)),
         ] {
             assert!(matches!(
-                initial.dataset().query(&bad, &Cancellation::default()),
+                dataset.query(&bad, &Cancellation::default()),
                 Err(Error::InvalidArgument(_))
             ));
         }

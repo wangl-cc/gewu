@@ -8,18 +8,19 @@ use gewu_core::{
 };
 use parquet::arrow::ArrowWriter;
 
-fn document(
-    columns: Vec<(&str, ArrayRef)>,
-) -> (tempfile::NamedTempFile, std::sync::Arc<gewu_core::View>) {
+fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap();
-    (file, doc)
+    let dataset = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
+    (file, dataset)
+}
+
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::View>) {
+    let (file, dataset) = dataset(columns);
+    (file, dataset.view())
 }
 
 #[test]
@@ -96,9 +97,8 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let numbers: ArrayRef = Arc::new(Int32Array::from(vec![120, 12, 12, 12]));
     let labels: ArrayRef = Arc::new(StringArray::from(vec!["12", "other", "needle", "needle"]));
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
-    let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
+    let (_file, doc) = dataset(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
-        .dataset()
         .query(
             &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
                 .with_sort(0, true, 0),
@@ -126,12 +126,11 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let highlight = find.highlight(0, 3, &Cancellation::default()).unwrap();
     assert_eq!(highlight.n_cols, 2);
     assert_eq!(highlight.matched, [false, true, true, false, true, false]);
-    assert_eq!(doc.row_count(), 4);
+    assert_eq!(doc.n_rows(), 4);
     assert_eq!(view.rows(0, 3, &[0]).unwrap().source_rows, [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.dataset()
-        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         find.highlight(0, 3, &Cancellation::default())

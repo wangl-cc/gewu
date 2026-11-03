@@ -8,15 +8,13 @@ use arrow::array::{
 use gewu_core::{AxisScale, Cancellation, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> std::sync::Arc<gewu_core::View> {
+fn document(columns: Vec<(&str, ArrayRef)>) -> Arc<gewu_core::Dataset> {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap()
+    Arc::new(gewu_core::Dataset::open(file.path()).unwrap())
 }
 
 #[test]
@@ -35,6 +33,7 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         ),
     ]);
     let original = doc
+        .view()
         .filter_choices(0, &Cancellation::default())
         .unwrap()
         .values
@@ -43,17 +42,17 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         200, 200, 200
     ]);
     assert!(doc
+        .view()
         .filter_choices(1, &Cancellation::default())
         .unwrap()
         .values
         .is_none());
-    assert!(doc.dataset().info().columns[1].capabilities.range);
-    assert!(doc.dataset().info().columns[1].capabilities.exact);
-    assert!(doc.dataset().info().columns[2].capabilities.text_match);
-    assert!(doc.dataset().info().columns[2].capabilities.exact);
+    assert!(doc.info().columns[1].capabilities.range);
+    assert!(doc.info().columns[1].capabilities.exact);
+    assert!(doc.info().columns[2].capabilities.text_match);
+    assert!(doc.info().columns[2].capabilities.exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())
@@ -69,15 +68,13 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         Filter::exact(vec![values[0].value.clone()], false, false),
     );
     assert_eq!(
-        doc.dataset()
-            .query(&chosen, &gewu_core::Cancellation::default())
+        doc.query(&chosen, &gewu_core::Cancellation::default())
             .unwrap()
             .row_count(),
         200
     );
     assert_eq!(
-        doc.dataset()
-            .query(&chosen, &gewu_core::Cancellation::default())
+        doc.query(&chosen, &gewu_core::Cancellation::default())
             .unwrap()
             .filter_choices(0, &Cancellation::default())
             .unwrap()
@@ -95,12 +92,12 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
         Arc::new(UInt64Array::from_iter_values(base..=u64::MAX)),
     )]);
     let distribution = doc
+        .view()
         .filter_distribution(0, 60, AxisScale::Linear, &Cancellation::default())
         .unwrap()
         .unwrap();
     for (bin, bounds) in distribution.ranges.iter().enumerate() {
         let view = doc
-            .dataset()
             .query(
                 &QuerySpec::single(
                     0,
@@ -120,16 +117,16 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
 #[test]
 fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
-    let before = doc.clone();
+    let before = doc.view();
     assert!(matches!(
-        doc.dataset().query(
+        doc.query(
             &QuerySpec::single(0, Filter::range(Some("invalid".into()), None, false)),
             &gewu_core::Cancellation::default()
         ),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(
-        doc.rows(0, 10, &[0]).unwrap().cells,
+        doc.view().rows(0, 10, &[0]).unwrap().cells,
         before.rows(0, 10, &[0]).unwrap().cells
     );
 }
@@ -147,7 +144,10 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
             None,
         ])),
     )]);
-    let choices = doc.filter_choices(0, &Cancellation::default()).unwrap();
+    let choices = doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap();
     assert_eq!(choices.null_count, 1);
     let values = choices.values.unwrap();
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
@@ -155,13 +155,12 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
     ]);
     for value in values {
         assert_eq!(
-            doc.dataset()
-                .query(
-                    &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
-                    &gewu_core::Cancellation::default()
-                )
-                .unwrap()
-                .row_count(),
+            doc.query(
+                &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
+                &gewu_core::Cancellation::default()
+            )
+            .unwrap()
+            .row_count(),
             value.count
         );
     }
@@ -174,7 +173,10 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
             "value",
             Arc::new(Int32Array::from_iter((0..count).map(Some).chain([None]))),
         )]);
-        let choices = doc.filter_choices(0, &Cancellation::default()).unwrap();
+        let choices = doc
+            .view()
+            .filter_choices(0, &Cancellation::default())
+            .unwrap();
         assert_eq!(choices.null_count, 1);
         assert_eq!(choices.values.is_some(), bounded);
     }
@@ -183,6 +185,7 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
         Arc::new(Int32Array::from(Vec::<i32>::new())),
     )]);
     assert!(doc
+        .view()
         .filter_choices(0, &Cancellation::default())
         .unwrap()
         .values
@@ -199,12 +202,12 @@ fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
         )),
     )]);
     assert!(doc
+        .view()
         .filter_choices(0, &Cancellation::default())
         .unwrap()
         .values
         .is_none());
     let view = doc
-        .dataset()
         .query(
             &QuerySpec::single(0, Filter::exact(vec!["value-100000".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -232,7 +235,6 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
         .with_filter(1, Filter::exact(vec!["1".into()], false, false));
     let choices = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())
@@ -247,8 +249,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         [("Cat", 1)]
     );
     assert_eq!(
-        doc.dataset()
-            .query(&spec, &gewu_core::Cancellation::default())
+        doc.query(&spec, &gewu_core::Cancellation::default())
             .unwrap()
             .filter_choices(0, &Cancellation::default())
             .unwrap()
@@ -264,7 +265,6 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .dataset()
             .query(
                 &QuerySpec::single(0, Filter::exact(values, exclude, include_nulls)),
                 &gewu_core::Cancellation::default(),
@@ -299,6 +299,7 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
     ]);
     for column in 0..3 {
         for (row, value) in doc
+            .view()
             .filter_choices(column, &Cancellation::default())
             .unwrap()
             .values
@@ -307,7 +308,6 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             .enumerate()
         {
             let view = doc
-                .dataset()
                 .query(
                     &QuerySpec::single(
                         column,
@@ -330,6 +330,7 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         Arc::new(Int32Array::from_iter((0..300).map(Some).chain([None]))),
     )]);
     assert!(doc
+        .view()
         .filter_choices(0, &Cancellation::default())
         .unwrap()
         .values
@@ -341,7 +342,6 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         (true, true, 299),
     ] {
         let view = doc
-            .dataset()
             .query(
                 &QuerySpec::single(
                     0,

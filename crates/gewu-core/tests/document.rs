@@ -7,7 +7,7 @@ use gewu_core::{Cancellation, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
-fn sample() -> (PathBuf, std::sync::Arc<gewu_core::View>) {
+fn sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
     let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
     let labels: ArrayRef = Arc::new(StringArray::from(vec![
         Some("cat"),
@@ -43,9 +43,7 @@ fn sample() -> (PathBuf, std::sync::Arc<gewu_core::View>) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = gewu_core::Dataset::open(&path)
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap();
+    let doc = Arc::new(gewu_core::Dataset::open(&path).unwrap());
     (path, doc)
 }
 
@@ -60,28 +58,26 @@ fn names(doc: &std::sync::Arc<gewu_core::View>) -> Vec<String> {
 #[test]
 fn opens_file() {
     let (path, doc) = sample();
-    let info = doc.dataset().info();
+    let info = doc.info();
     assert_eq!(info.row_count, 6);
     assert_eq!(info.columns.len(), 4);
     assert_eq!(info.columns[1].name, "label");
-    assert_eq!(doc.row_count(), 6);
-    assert_eq!(names(&doc), ["a", "b", "c", "d", "e", "f"]);
+    assert_eq!(doc.view().row_count(), 6);
+    assert_eq!(names(&doc.view()), ["a", "b", "c", "d", "e", "f"]);
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn sorts_with_nulls_last() {
-    let (path, doc) = sample();
+    let (path, dataset) = sample();
     let spec = QuerySpec::new().with_sort(2, false, 0);
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
     let spec = QuerySpec::new().with_sort(2, true, 0);
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
@@ -91,7 +87,10 @@ fn sorts_with_nulls_last() {
 #[test]
 fn checkbox_filter_and_choices() {
     let (path, doc) = sample();
-    let all = doc.filter_choices(1, &Cancellation::default()).unwrap();
+    let all = doc
+        .view()
+        .filter_choices(1, &Cancellation::default())
+        .unwrap();
     assert_eq!(all.null_count, 1);
     let values = all.values.unwrap();
     let labels: Vec<_> = values.iter().map(|v| v.label.as_str()).collect();
@@ -104,7 +103,6 @@ fn checkbox_filter_and_choices() {
     )
     .with_sort(3, true, 0);
     let v = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(v.row_count(), 4);
@@ -112,7 +110,6 @@ fn checkbox_filter_and_choices() {
 
     // Distinct values of another column respect this filter.
     let prices = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(2, &Cancellation::default())
@@ -129,7 +126,6 @@ fn checkbox_filter_and_choices() {
     );
     // The filtered column also lists only values present in this view.
     let labels = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(1, &Cancellation::default())
@@ -141,24 +137,21 @@ fn checkbox_filter_and_choices() {
 
 #[test]
 fn null_contains_and_typed_equality() {
-    let (path, doc) = sample();
+    let (path, dataset) = sample();
     let spec = QuerySpec::single(2, Filter::exact(vec![], false, true));
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["d"]);
 
     let spec = QuerySpec::single(1, Filter::contains("D".into(), false, false));
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
     let spec = QuerySpec::single(2, Filter::exact(vec!["2.25".into()], false, false));
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["e"]);
@@ -167,22 +160,20 @@ fn null_contains_and_typed_equality() {
 
 #[test]
 fn dataset_queries_recompute_from_the_full_source() {
-    let (path, original) = sample();
-    let filtered = original
-        .dataset()
+    let (path, dataset) = sample();
+    let filtered = dataset
         .query(
             &QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false)),
             &Cancellation::default(),
         )
         .unwrap();
     assert_eq!(names(&filtered), ["a", "d"]);
-    let restored = filtered
-        .dataset()
+    let restored = dataset
         .query(&QuerySpec::all(4), &Cancellation::default())
         .unwrap();
-    assert_eq!(names(&restored), names(&original));
+    assert_eq!(names(&restored), names(&dataset.view()));
     assert_eq!(names(&filtered), ["a", "d"]);
-    drop(original);
+    drop(dataset);
     assert_eq!(filtered.row_count(), 2);
     std::fs::remove_file(path).ok();
 }
@@ -201,7 +192,6 @@ fn range_filter_on_floats_skips_nulls() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
-            .dataset()
             .query(
                 &QuerySpec::single(2, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
@@ -224,7 +214,6 @@ fn range_filter_on_integers() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
-            .dataset()
             .query(
                 &QuerySpec::single(3, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
@@ -239,7 +228,7 @@ fn range_filter_on_integers() {
 fn range_filter_rejects_text_columns() {
     let (path, doc) = sample();
     assert!(matches!(
-        doc.dataset().query(
+        doc.query(
             &QuerySpec::single(1, Filter::range(Some(("0").to_owned()), None, false)),
             &Cancellation::default()
         ),
@@ -251,8 +240,9 @@ fn range_filter_rejects_text_columns() {
 #[test]
 fn histogram_counts() {
     let (path, doc) = sample();
+    let view = doc.view();
     // price spans 1.0..=9.0 in 4 bins of width 2: [1,3) [3,5) [5,7) [7,9].
-    let h = doc
+    let h = view
         .filter_distribution(2, 4, gewu_core::AxisScale::Linear, &Cancellation::default())
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
@@ -261,15 +251,15 @@ fn histogram_counts() {
     assert_eq!(h.counts, [2, 1, 0, 2]);
     assert_eq!(
         (
-            doc.count_nulls(2, &Cancellation::default()).unwrap(),
-            doc.row_count()
+            view.count_nulls(2, &Cancellation::default()).unwrap(),
+            view.row_count()
         ),
         (1, 6)
     );
 
     // Small integer span: one bin per integer would need 51 bins, so with
     // 60 bins each integer 10..=60 gets its own.
-    let h = doc
+    let h = view
         .filter_distribution(
             3,
             60,
@@ -285,7 +275,7 @@ fn histogram_counts() {
     assert_eq!(h.counts[0], 1);
     assert_eq!(h.counts[50], 1);
 
-    assert!(doc
+    assert!(view
         .filter_distribution(
             1,
             10,
@@ -298,7 +288,7 @@ fn histogram_counts() {
 }
 
 /// name | day (date32) | at (timestamp µs, UTC) | n (int64) | x (float64)
-fn temporal_sample() -> (PathBuf, Arc<gewu_core::View>) {
+fn temporal_sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
     use arrow::array::{Date32Array, TimestampMicrosecondArray};
     let names: ArrayRef = Arc::new(StringArray::from(vec!["Alpha", "beta", "Gamma", "delta"]));
     // 2024-01-01, 2024-01-02, null, 2024-03-15
@@ -338,9 +328,7 @@ fn temporal_sample() -> (PathBuf, Arc<gewu_core::View>) {
     let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(&batch).unwrap();
     w.close().unwrap();
-    let doc = gewu_core::Dataset::open(&path)
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap();
+    let doc = Arc::new(gewu_core::Dataset::open(&path).unwrap());
     (path, doc)
 }
 
@@ -362,11 +350,11 @@ fn find_names(doc: &Arc<gewu_core::View>, text: &str) -> Vec<String> {
 #[test]
 fn search_text_is_case_insensitive_substring() {
     let (path, doc) = temporal_sample();
-    assert_eq!(find_names(&doc, "ALPHA"), ["Alpha"]);
-    assert_eq!(find_names(&doc, "gam"), ["Gamma"]);
+    assert_eq!(find_names(&doc.view(), "ALPHA"), ["Alpha"]);
+    assert_eq!(find_names(&doc.view(), "gam"), ["Gamma"]);
     // Characters that are special in LIKE patterns match literally.
-    assert_eq!(find_names(&doc, "%"), Vec::<String>::new());
-    assert_eq!(find_names(&doc, "_"), Vec::<String>::new());
+    assert_eq!(find_names(&doc.view(), "%"), Vec::<String>::new());
+    assert_eq!(find_names(&doc.view(), "_"), Vec::<String>::new());
     std::fs::remove_file(path).ok();
 }
 
@@ -374,23 +362,23 @@ fn search_text_is_case_insensitive_substring() {
 fn search_integers_by_value() {
     let (path, doc) = temporal_sample();
     // Exact value, not a substring: 170 does not match 1700.
-    assert_eq!(find_names(&doc, "170"), ["beta"]);
-    assert_eq!(find_names(&doc, "-7"), ["delta"]);
-    assert_eq!(find_names(&doc, "+7"), ["Alpha"]);
+    assert_eq!(find_names(&doc.view(), "170"), ["beta"]);
+    assert_eq!(find_names(&doc.view(), "-7"), ["delta"]);
+    assert_eq!(find_names(&doc.view(), "+7"), ["Alpha"]);
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn search_floats_by_typed_precision() {
     let (path, doc) = temporal_sample();
-    assert_eq!(find_names(&doc, "2.25"), ["beta"]);
+    assert_eq!(find_names(&doc.view(), "2.25"), ["beta"]);
     // "2.3" means [2.25, 2.35): includes 2.25.
-    assert_eq!(find_names(&doc, "2.3"), ["beta"]);
-    assert_eq!(find_names(&doc, "2.2"), Vec::<String>::new());
+    assert_eq!(find_names(&doc.view(), "2.3"), ["beta"]);
+    assert_eq!(find_names(&doc.view(), "2.2"), Vec::<String>::new());
     // "17" means [16.5, 17.5) for floats; ints need exactly 17.
-    assert_eq!(find_names(&doc, "17"), ["Gamma"]);
-    assert_eq!(find_names(&doc, "5e-1"), ["Alpha"]);
-    assert_eq!(find_names(&doc, "NaN"), ["delta"]);
+    assert_eq!(find_names(&doc.view(), "17"), ["Gamma"]);
+    assert_eq!(find_names(&doc.view(), "5e-1"), ["Alpha"]);
+    assert_eq!(find_names(&doc.view(), "NaN"), ["delta"]);
     std::fs::remove_file(path).ok();
 }
 
@@ -398,30 +386,32 @@ fn search_floats_by_typed_precision() {
 fn search_dates_by_period() {
     let (path, doc) = temporal_sample();
     // A month or day matches the whole period; null dates never match.
-    assert_eq!(find_names(&doc, "2024-03"), ["delta"]);
-    assert_eq!(find_names(&doc, "2024-01-02"), ["beta"]);
+    assert_eq!(find_names(&doc.view(), "2024-03"), ["delta"]);
+    assert_eq!(find_names(&doc.view(), "2024-01-02"), ["beta"]);
     // Every timestamp is in 2024, so the year matches all rows.
-    assert_eq!(find_names(&doc, "2024"), [
+    assert_eq!(find_names(&doc.view(), "2024"), [
         "Alpha", "beta", "Gamma", "delta"
     ]);
     // Hours and minutes apply to timestamps only.
-    assert_eq!(find_names(&doc, "2024-01-01 10"), ["beta"]);
-    assert_eq!(find_names(&doc, "2024-01-01T11:00"), ["Gamma"]);
-    assert_eq!(find_names(&doc, "2024-01-01 11:01"), Vec::<String>::new());
+    assert_eq!(find_names(&doc.view(), "2024-01-01 10"), ["beta"]);
+    assert_eq!(find_names(&doc.view(), "2024-01-01T11:00"), ["Gamma"]);
+    assert_eq!(
+        find_names(&doc.view(), "2024-01-01 11:01"),
+        Vec::<String>::new()
+    );
     // Not a date: skipped, not an error.
-    assert_eq!(find_names(&doc, "2024-13"), Vec::<String>::new());
+    assert_eq!(find_names(&doc.view(), "2024-13"), Vec::<String>::new());
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn contains_filter_is_for_text_only() {
     let (path, doc) = temporal_sample();
-    let before = doc.clone();
+    let before = doc.view();
     // Numbers and dates are filtered by range; "contains" would mean
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
-            .dataset()
             .query(
                 &QuerySpec::single(column, Filter::contains("1700".into(), false, false)),
                 &gewu_core::Cancellation::default(),
@@ -430,20 +420,21 @@ fn contains_filter_is_for_text_only() {
             .unwrap();
         assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
     }
-    assert_eq!(names(&doc), names(&before));
+    assert_eq!(names(&doc.view()), names(&before));
     std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn dates_format_parse_and_filter() {
-    let (path, doc) = temporal_sample();
+    let (path, dataset) = temporal_sample();
     assert_eq!(
-        doc.rows(1, 1, &[1]).unwrap().cells[0].as_deref().unwrap(),
+        dataset.view().rows(1, 1, &[1]).unwrap().cells[0]
+            .as_deref()
+            .unwrap(),
         "2024-01-02"
     );
 
-    assert!(doc
-        .dataset()
+    assert!(dataset
         .query(
             &QuerySpec::single(
                 1,
@@ -454,14 +445,15 @@ fn dates_format_parse_and_filter() {
         .is_err());
 
     assert_eq!(
-        doc.rows(0, 1, &[2]).unwrap().cells[0].as_deref().unwrap(),
+        dataset.view().rows(0, 1, &[2]).unwrap().cells[0]
+            .as_deref()
+            .unwrap(),
         "2024-01-01T09:00:00Z"
     );
 
     // Range on dates: nulls excluded, bounds inclusive.
     let min = ("2024-01-02").to_owned();
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(
             &QuerySpec::single(1, Filter::range(Some(min), None, false)),
             &gewu_core::Cancellation::default(),
@@ -471,8 +463,7 @@ fn dates_format_parse_and_filter() {
 
     // Range on timestamps.
     let max = ("2024-01-01T10:00:00Z").to_owned();
-    let doc = doc
-        .dataset()
+    let doc = dataset
         .query(
             &QuerySpec::single(2, Filter::range(None, Some(max), false)),
             &gewu_core::Cancellation::default(),
@@ -501,7 +492,7 @@ fn find_marks_matching_cells() {
     let (path, doc) = temporal_sample();
     // "170" matches n = 170 only; "2024-01-02" matches the day column.
     for (query, expected) in [("170", vec![(1, 3)]), ("2024-01-02", vec![(1, 1)])] {
-        let find = doc.find(query, &[0, 1, 2, 3, 4]).unwrap();
+        let find = doc.view().find(query, &[0, 1, 2, 3, 4]).unwrap();
         let hits: Vec<(u64, u32)> = find
             .next(None, 10, &Cancellation::default())
             .unwrap()

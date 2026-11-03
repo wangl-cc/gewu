@@ -9,8 +9,7 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
     std::fs::write(file.path(), "number,text\n1,a\n2,b\n3,b\n").unwrap();
     let dataset = Arc::new(Dataset::open(file.path()).unwrap());
     let original = dataset.view();
-    let current = original
-        .dataset()
+    let current = dataset
         .query(
             &QuerySpec::all(2).with_filter(1, Filter::contains("b".into(), true, false)),
             &Cancellation::default(),

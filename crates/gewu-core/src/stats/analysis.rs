@@ -116,11 +116,11 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AxisScale, Cancellation, View};
+    use crate::{AxisScale, Cancellation, Dataset, View};
 
-    fn view(array: &ArrayRef) -> Arc<View> {
+    fn dataset(array: &ArrayRef) -> Arc<Dataset> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
-        Arc::new(crate::Dataset {
+        Arc::new(Dataset {
             source_path: Default::default(),
             schema: batch.schema(),
             columns: vec![crate::column::Column::new("value", array.clone()).unwrap()],
@@ -129,7 +129,10 @@ mod tests {
             format: crate::FileType::Csv,
             metadata: crate::FileMetadata::Delimited,
         })
-        .view()
+    }
+
+    fn view(array: &ArrayRef) -> Arc<View> {
+        dataset(array).view()
     }
 
     #[test]
@@ -199,7 +202,7 @@ mod tests {
             Err(Error::InvalidArgument(_))
         ));
         assert!(matches!(
-            text.dataset().column_structure(0),
+            dataset(&array).column_structure(0),
             Err(Error::InvalidArgument(_))
         ));
         assert_eq!(text.count_nulls(0, &cancel).unwrap(), 0);
@@ -330,7 +333,7 @@ mod tests {
                 &DataType::Struct(vec![Field::new("child", data_type.clone(), false)].into()),
                 0,
             );
-            let fields = view(&array).dataset().column_structure(0).unwrap();
+            let fields = dataset(&array).column_structure(0).unwrap();
             assert_eq!(fields, vec![AnalysisField {
                 name: "child".into(),
                 display_type: label.into(),
@@ -352,7 +355,7 @@ mod tests {
             assert!(!support.statistics);
             assert!(!support.values);
             let array = new_null_array(&data_type, 0);
-            let fields = view(&array).dataset().column_structure(0).unwrap();
+            let fields = dataset(&array).column_structure(0).unwrap();
             assert_eq!(fields.len(), 1);
             assert_eq!(
                 (

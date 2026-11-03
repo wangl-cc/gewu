@@ -20,33 +20,30 @@ fn values(doc: &std::sync::Arc<gewu_core::View>) -> ValueSummary {
         .unwrap()
 }
 
-fn document(array: ArrayRef) -> std::sync::Arc<gewu_core::View> {
+fn document(array: ArrayRef) -> Arc<gewu_core::Dataset> {
     let file = tempfile::NamedTempFile::new().unwrap();
     let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap()
+    Arc::new(gewu_core::Dataset::open(file.path()).unwrap())
 }
 
 fn check_range(
-    doc: &std::sync::Arc<gewu_core::View>,
+    doc: &Arc<gewu_core::Dataset>,
     min: Option<String>,
     max: Option<String>,
     expected: &[u64],
 ) -> Arc<gewu_core::View> {
     let spec = QuerySpec::single(0, Filter::range(min, max, false));
     let view = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         view.rows(0, 100, &[0]).unwrap().source_rows,
         expected,
         "type {:?}, spec {spec:?}",
-        doc.dataset().schema().field(0).data_type()
+        doc.schema().field(0).data_type()
     );
     view
 }
@@ -84,7 +81,7 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.dataset().query(
+                    doc.query(
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
@@ -126,7 +123,7 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.dataset().query(
+                    doc.query(
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
@@ -193,15 +190,13 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     );
 
     signed
-        .dataset()
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     unsigned
-        .dataset()
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
-    assert_eq!(values(&signed).distinct_count, 4);
-    assert_eq!(values(&unsigned).distinct_count, 4);
+    assert_eq!(values(&signed.view()).distinct_count, 4);
+    assert_eq!(values(&unsigned.view()).distinct_count, 4);
 }
 
 #[test]
@@ -223,7 +218,7 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
     check_range(&doc, Some(("inf").to_owned()), None, &[4]);
     check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.dataset().query(
+        doc.query(
             &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
             &Cancellation::default()
         ),
@@ -245,7 +240,7 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
 
     check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.dataset().query(
+        integers.query(
             &QuerySpec::single(
                 0,
                 Filter::range(Some(("not a number").to_owned()), None, false)
@@ -255,7 +250,6 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
         Err(Error::InvalidArgument(_))
     ));
     assert!(integers
-        .dataset()
         .query(
             &QuerySpec::single(
                 0,
@@ -326,7 +320,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         Some(f32::NAN),
         None,
     ])));
-    let summary = statistics(&doc);
+    let summary = statistics(&doc.view());
     assert_eq!(summary.nan_count, 1);
     assert_eq!(
         (
@@ -338,15 +332,16 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         (Some("1.0"), Some("3.0"), Some(2.0), Some(1.0))
     );
     let histogram = doc
+        .view()
         .filter_distribution(0, 2, gewu_core::AxisScale::Linear, &Cancellation::default())
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
         (
-            doc.count_nulls(0, &Cancellation::default()).unwrap(),
+            doc.view().count_nulls(0, &Cancellation::default()).unwrap(),
             summary.nan_count,
-            doc.row_count()
+            doc.view().row_count()
         ),
         (1, 1, 5)
     );
@@ -386,9 +381,13 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
     ];
     for array in arrays {
         let doc = document(array);
-        let summary = statistics(&doc);
-        assert_eq!((values(&doc).distinct_count, summary.mean), (3, Some(1.0)));
+        let summary = statistics(&doc.view());
+        assert_eq!(
+            (values(&doc.view()).distinct_count, summary.mean),
+            (3, Some(1.0))
+        );
         let histogram = doc
+            .view()
             .filter_distribution(
                 0,
                 10,
@@ -400,14 +399,14 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let cells = doc.rows(1, 2, &[0]).unwrap().cells;
+        let cells = doc.view().rows(1, 2, &[0]).unwrap().cells;
         let min = cells[0].clone().unwrap();
         let max = cells[1].clone().unwrap();
         assert_eq!(
             summary.mean_label.as_deref(),
             Some(min.as_str()),
             "{:?}: {summary:?}",
-            doc.dataset().schema().field(0).data_type()
+            doc.schema().field(0).data_type()
         );
         check_range(&doc, Some(min), Some(max), &[1, 2]);
     }
@@ -434,7 +433,7 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
     ];
     for array in arrays {
         let doc = document(array);
-        assert_eq!(values(&doc).distinct_count, 2);
+        assert_eq!(values(&doc.view()).distinct_count, 2);
         // Chart coordinates may round, but filter endpoints remain exact.
 
         check_range(&doc, Some((base + 1).to_string()), None, &[1]);

@@ -25,9 +25,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap();
+    let doc = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
     let spec = QuerySpec::default()
         .with_filter(1, Filter::exact(vec!["2".into()], false, false))
         .with_filter(
@@ -36,7 +34,6 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         )
         .with_filter(2, Filter::contains("keep".into(), false, false));
     let view = doc
-        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     let rows = view.rows(0, len as u32, &[0, 1, 2]).unwrap();
@@ -51,8 +48,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         Filter::range(Some("20".into()), Some("10".into()), false),
     );
     assert!(matches!(
-        doc.dataset()
-            .query(&invalid, &gewu_core::Cancellation::default()),
+        doc.query(&invalid, &gewu_core::Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
@@ -78,9 +74,7 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
     let dataset = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
     assert_eq!(dataset.n_rows(), len as usize);
 
-    // Create session from shared dataset
-    let doc = dataset.clone().view();
-    assert_eq!(doc.row_count() as usize, len as usize);
+    assert_eq!(dataset.view().row_count() as usize, len as usize);
 
     // Pass filters in reverse cost order: expensive text search first, cheap range second, null
     // check third
@@ -91,8 +85,7 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
             Filter::range(Some("100".into()), Some("200".into()), false),
         );
 
-    let view = doc
-        .dataset()
+    let view = dataset
         .query(&expensive_first, &gewu_core::Cancellation::default())
         .unwrap();
     let expected: Vec<u64> = (100..=200)

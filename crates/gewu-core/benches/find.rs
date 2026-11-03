@@ -14,18 +14,19 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use gewu_core::{Cancellation, Filter, QuerySpec};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
-fn document(
-    columns: Vec<(&str, ArrayRef)>,
-) -> (tempfile::NamedTempFile, std::sync::Arc<gewu_core::View>) {
+fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let document = gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
-        .unwrap();
-    (file, document)
+    let dataset = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
+    (file, dataset)
+}
+
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::View>) {
+    let (file, dataset) = dataset(columns);
+    (file, dataset.view())
 }
 
 fn find_scans(c: &mut Criterion) {
@@ -80,7 +81,7 @@ fn find_scans(c: &mut Criterion) {
         std::iter::repeat_n(false, 100_000).chain(std::iter::repeat_n(true, 20_000)),
     ));
     let (dictionary_file, dictionary_doc) =
-        document(vec![("value", dictionary), ("selected", selected)]);
+        dataset(vec![("value", dictionary), ("selected", selected)]);
     // Validate the reopened Parquet representation, not just the input fixture.
     let mut reader = ParquetRecordBatchReaderBuilder::try_new(dictionary_file.reopen().unwrap())
         .unwrap()
@@ -95,7 +96,6 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
-        .dataset()
         .query(
             &QuerySpec::single(1, Filter::exact(vec!["true".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -142,9 +142,8 @@ fn find_scans(c: &mut Criterion) {
             text.clone(),
         )
     }));
-    let (_wide_file, wide_doc) = document(columns);
+    let (_wide_file, wide_doc) = dataset(columns);
     let sorted = wide_doc
-        .dataset()
         .query(
             &QuerySpec::new().with_sort(0, true, 0),
             &gewu_core::Cancellation::default(),
