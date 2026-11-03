@@ -75,13 +75,12 @@ struct ColumnAnalysisView: View {
     init(model: DocumentModel, column: Int) {
         self.model = model
         self.column = column
-        let numeric = (try? model.doc.analysisCapabilities(column: UInt32(column)).distribution) ?? false
+        let numeric = (try? model.dataset.analysisCapabilities(column: UInt32(column)).distribution) ?? false
         _expanded = State(initialValue: numeric ? 7 : 9)
     }
 
     private struct Request: Equatable {
-        let document: ObjectIdentifier
-        let version: UInt64
+        let view: ObjectIdentifier
         let column: Int
         let expanded: Int
         let retry: Int
@@ -91,7 +90,7 @@ struct ColumnAnalysisView: View {
 
     private var request: Request {
         Request(
-            document: ObjectIdentifier(model.doc), version: model.current.version,
+            view: ObjectIdentifier(model.view),
             column: column, expanded: expanded, retry: retry, histogramBins: histogramBins,
             histogramScale: histogramScale)
     }
@@ -99,7 +98,7 @@ struct ColumnAnalysisView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if analysis.matches(document: model.doc, version: model.current.version, column: UInt32(column)) {
+                if analysis.matches(view: model.view, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
                     if let nullCount = analysis.nullCount {
                         Text("Missing \(countWithPercent(nullCount, total: analysis.rowCount))")
@@ -149,8 +148,8 @@ struct ColumnAnalysisView: View {
         }
         .task(id: request) {
             await analysis.load(
-                document: model.doc, version: model.current.version,
-                column: UInt32(column), rowCount: model.current.rowCount, expanded: expanded, bins: histogramBins,
+                dataset: model.dataset, view: model.view,
+                column: UInt32(column), expanded: expanded, bins: histogramBins,
                 scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
@@ -180,7 +179,11 @@ struct ColumnAnalysisView: View {
                 if let min = statistics.minLabel { detail("Min", min) }
                 if let max = statistics.maxLabel { detail("Max", max) }
                 if let median = statistics.medianLabel { detail("Median", median) }
-                if let mean = statistics.mean { detail("Mean", value(mean)) }
+                if let label = statistics.meanLabel {
+                    detail("Mean", "≈ " + label)
+                } else if let mean = statistics.mean {
+                    detail("Mean", decimal(mean))
+                }
                 if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
                     detail("Std dev", decimal(sd))
                 }
@@ -260,16 +263,6 @@ struct ColumnAnalysisView: View {
 
     private func countWithPercent(_ count: UInt64, total: UInt64) -> String {
         formatCount(count) + (total == 0 ? "" : String(format: " (%.1f%%)", Double(count) / Double(total) * 100))
-    }
-
-    private func value(_ value: Double) -> String {
-        if model.kinds.indices.contains(column), model.kinds[column] == .temporal,
-            let integer = Int64(exactly: value.rounded()),
-            let text = try? model.doc.formatValue(column: UInt32(column), value: integer)
-        {
-            return "≈ " + text
-        }
-        return decimal(value)
     }
 
     private func decimal(_ value: Double) -> String {

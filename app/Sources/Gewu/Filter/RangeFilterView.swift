@@ -43,8 +43,6 @@ extension String {
 }
 
 struct RangeFilterView: View {
-    let doc: GewuSession
-    let column: UInt32
     let distribution: RangeHistogram?
     @Binding var bins: UInt32
     @Binding var scale: AxisScale

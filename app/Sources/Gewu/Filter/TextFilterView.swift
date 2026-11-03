@@ -31,9 +31,8 @@ struct ExactFilterDraft {
 }
 
 struct TextFilterView: View {
-    let document: GewuSession
+    let view: GewuView
     let column: UInt32
-    let querySpec: QuerySpec
     @Binding var draft: ExactFilterDraft
     @State private var query = ""
     @State private var after: TextChoiceCursor?
@@ -42,7 +41,7 @@ struct TextFilterView: View {
     var body: some View {
         candidateEditor
             .task(id: revision) {
-                await choices.load(document: document, column: column, querySpec: querySpec, query: query, after: after)
+                await choices.load(view: view, column: column, query: query, after: after)
             }
             .onDisappear { choices.cancel() }
     }

@@ -6,7 +6,7 @@ See [data types](../../docs/data-types.md), [Find and filtering](../../docs/sear
 
 ## Migration status
 
-Core and FFI now expose immutable Dataset/View handles. The App still uses the previous session/version interface and requires a separate migration; it cannot build against these bindings yet. This backend stage validates generated bindings and the local inspector-section projection with a standalone Swift client. Full App builds, UI lifecycle tests and GUI interaction checks belong to the frontend migration.
+Core, FFI and the App use immutable Dataset/View handles. Each window owns its applied View/spec pair and pending query draft. Background tasks capture a View and their own cancellation signal; only the window decides whether to publish a result. The App test target validates these consumers against generated bindings.
 
 ## Objects and ownership
 
@@ -110,7 +110,7 @@ Results contain concrete data, without duplicated request context. Keep View/col
 
 Analysis bins must be positive. Numeric distributions support linear and Log10 scales; temporal distributions and lengths remain linear. Both domain and counts use the selected rows. Histogram results contain plotting data and log-domain omission counts only; get missing values through `count_nulls` and NaN counts through `analyze_statistics`. Log10 excludes nonpositive and infinite values with separate omission counts. Its coordinates and `bin_edges` are logarithms, while exact bounds/labels remain original values. Nonempty log histograms provide one more edge than counts; linear spacing uses an empty edge array. Empty positive domains retain omission counts without bins.
 
-Display `median_label` verbatim. Native medians preserve large integer/decimal precision and fractional temporal units; null/NaN values are excluded. Exact median uses temporary source-row IDs. Values results contain display-only `ValueFrequency { label, count }` records, without persistent IDs or filter values; use positions as list identities. Candidate selection remains estimated and can omit global top values; see [Core statistics](../gewu-core/README.md#statistics-and-histograms).
+Display `median_label` verbatim. `mean_label` provides the approximate temporal mean rounded to its physical unit; prefix it with an approximation marker. Ordinary numeric means remain numbers so the frontend can choose significant digits. There is no scalar formatting round-trip. Native medians preserve large integer/decimal precision and fractional temporal units; null/NaN values are excluded. Exact median uses temporary source-row IDs. Values results contain display-only `ValueFrequency { label, count }` records, without persistent IDs or filter values; use positions as list identities. Candidate selection remains estimated and can omit global top values; see [Core statistics](../gewu-core/README.md#statistics-and-histograms).
 
 ### Scatter
 
@@ -155,4 +155,4 @@ xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
 build/view-bindings/view-smoke
 ```
 
-The public handles are [dataset.rs](src/dataset.rs) and [view_handle.rs](src/view_handle.rs). Feature modules own records and Core conversions; [lib.rs](src/lib.rs) declares exports. Full App validation resumes after its separate Dataset/View migration.
+The public handles are [dataset.rs](src/dataset.rs) and [view_handle.rs](src/view_handle.rs). Feature modules own records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.

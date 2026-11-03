@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// SwiftUI updates this bridge frequently. The controller reloads rows only
-/// when Rust publishes a new view version, preserving the live NSTableView.
+/// when the window publishes a new immutable View, preserving the live NSTableView.
 struct DataTable: NSViewControllerRepresentable {
     @ObservedObject var model: DocumentModel
     // Observed only so SwiftUI calls `update` when Find state or highlights change.
@@ -50,13 +50,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var fitTask: Task<Void, Never>?
     private var findRevision: UInt64?
     private var highlightRevision: UInt64?
-    private var failedVersion: UInt64?
+    private var failedView: ObjectIdentifier?
     private var initialFitsRemaining = 32
     private var initiallyFitted: Set<Int> = []
     private var popover: NSPopover?
     private var builtColumns = false
     private var applyingColumns = false
-    private var version: UInt64?
+    private var displayedView: GewuView?
     private var showsNumbers: Bool?
     private var reloading = false
     private var textSize: CGFloat = 12
@@ -152,11 +152,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             gutter.setShown(showsRowNumbers)
             table.tableColumn(withIdentifier: rowHeaderID)?.isHidden = !showsRowNumbers
         }
-        if version != model.current.version {
-            version = model.current.version
+        if displayedView !== model.view {
+            displayedView = model.view
+            closePopover()
             stopLoading()
             cache.clear()
-            failedVersion = nil
+            failedView = nil
             reloading = true
             table.deselectAll(nil)
             table.reloadData()
@@ -270,7 +271,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private func block(for row: Int, column: UInt32?) -> RowBlock? {
         let key = RowCache.Key(start: row / RowCache.blockSize * RowCache.blockSize, column: column)
         if let block = cache.block(for: key) { return block }
-        guard failedVersion != version, loading != key, !pending.contains(key) else { return nil }
+        guard failedView != displayedView.map(ObjectIdentifier.init), loading != key, !pending.contains(key) else {
+            return nil
+        }
         // Bound queued work as well as cached data. Completion revisits visible
         // placeholders, so a full queue never permanently drops a visible cell.
         if pending.count < 128 { pending.append(key) }
@@ -279,28 +282,26 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func loadNext() {
-        guard loading == nil, !pending.isEmpty, let version else { return }
-        let doc = model.doc
+        guard loading == nil, !pending.isEmpty, let view = displayedView else { return }
         let key = pending.removeFirst()
         loading = key
         let reader = reader
         loadTask = Task { [weak self] in
             do {
                 let block = try await reader.read(
-                    doc, version: version, start: UInt64(key.start),
+                    view, start: UInt64(key.start),
                     count: UInt32(RowCache.blockSize), columns: key.column.map { [$0] } ?? [])
-                guard !Task.isCancelled, let self, self.version == version else { return }
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
                 self.cache.insert(block, for: key)
                 self.display(block, column: key.column)
                 self.loading = nil
                 self.fillVisiblePlaceholders()
                 self.loadNext()
             } catch {
-                guard !Task.isCancelled, let self, self.version == version else { return }
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
                 self.loading = nil
                 self.pending.removeAll()
-                self.failedVersion = version
-                if case GewuError.StaleVersion = error { return }
+                self.failedView = ObjectIdentifier(view)
                 self.model.reportError(error, prefix: "Could not load rows: ")
             }
         }
@@ -353,7 +354,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         loading = nil
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { Int(model.current.rowCount) }
+    func numberOfRows(in tableView: NSTableView) -> Int { Int(model.view.rowCount()) }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let result = (table.makeView(withIdentifier: rowViewID, owner: self) as? StripedRowView) ?? StripedRowView()
@@ -439,8 +440,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard let i = columnIndex(table.tableColumns[column]) else { return table.tableColumns[column].width }
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return table.tableColumns[column].width }
-        let doc = model.doc
-        let version = model.current.version
+        let view = model.view
         let start = visible.location
         let count = min(200, visible.length)
         fitTask?.cancel()
@@ -448,15 +448,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         fitTask = Task { [weak self] in
             do {
                 let block = try await reader.read(
-                    doc, version: version, start: UInt64(start),
+                    view, start: UInt64(start),
                     count: UInt32(count), columns: [UInt32(i)])
-                guard !Task.isCancelled, let self, self.version == version,
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view,
                     let target = self.table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("c\(i)"))
                 else { return }
                 self.initiallyFitted.insert(i)
                 target.width = self.fittedWidth(column: i, texts: block.cells, maxWidth: 600)
             } catch {
-                guard !Task.isCancelled, let self, self.version == version else { return }
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
                 self.model.reportError(error, prefix: "Could not fit column: ")
             }
         }
@@ -552,8 +552,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         closePopover()
         let column = UInt32(col)
         let content = ColumnFilterView(
-            doc: model.doc, column: column, info: model.info.columns[col],
-            querySpec: model.spec, current: model.spec.columns.first { $0.column == column }?.filter
+            view: model.view, column: column, info: model.info.columns[col],
+            current: model.spec.columns.first { $0.column == column }?.filter
         ) { [weak self] filters in
             self?.closePopover()
             self?.model.setFilter(filters, column: column)
@@ -574,7 +574,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard !table.selectedRowIndexes.isEmpty else { return }
         let columns = displayedColumns
         model.copying.copy(
-            document: model.doc, version: model.current.version,
+            view: model.view,
             rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
             names: columns.map { model.info.columns[Int($0)].name })
     }

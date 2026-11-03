@@ -6,7 +6,7 @@ import Testing
 struct TableExecutionTests {
     static func block(_ values: [String?], start: Int = 0, columns: Int = 1) -> RowBlock {
         RowBlock(
-            version: 1, start: UInt64(start), nRows: UInt32(values.count / columns), nCols: UInt32(columns),
+            start: UInt64(start), nRows: UInt32(values.count / columns), nCols: UInt32(columns),
             cells: values, sourceRows: (0..<(values.count / columns)).map(UInt64.init))
     }
 
@@ -26,7 +26,7 @@ struct TableExecutionTests {
             !cache.insert(block([String(repeating: "界", count: 100)]), for: b), "Use UTF-8 bytes, not character count")
         #expect(cache.byteCount <= 256 && cache.cellCount <= 3)
         let metadata = RowBlock(
-            version: 1, start: 0, nRows: 4, nCols: 0, cells: [], sourceRows: [0, 1, 2, 3])
+            start: 0, nRows: 4, nCols: 0, cells: [], sourceRows: [0, 1, 2, 3])
         #expect(!cache.insert(metadata, for: .init(start: 0, column: nil)), "Source-only blocks consume cell budget")
         cache.clear()
         #expect(cache.byteCount == 0 && cache.cellCount == 0 && cache.block(for: a) == nil)
@@ -77,40 +77,35 @@ struct TableExecutionTests {
     }
 
     @Test
-    static func liveVersionChecks() async throws {
+    static func readsAndCopyRetainTheirCapturedView() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-table-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let csv = "value,label\n" + (0..<130).map { "\($0),row\($0)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
-        let doc = try GewuSession.open(path: path.path)
-        let version = doc.currentView().version
+        let view = try GewuDataset.open(path: path.path).view()
         let reader = TableRowReader()
-        let source = try await reader.read(doc, version: version, start: 2, count: 4, columns: [])
+        let source = try await reader.read(view, start: 2, count: 4, columns: [])
         #expect(source.cells.isEmpty && source.sourceRows == [2, 3, 4, 5])
         var calls = 0
-        do {
-            _ = try CopyText.format(rows: [0..<130], columns: [1, 0], names: ["label", "value"]) {
-                start, count, columns in
-                calls += 1
-                if calls == 2 {
-                    _ = try doc.prepareView(
-                        spec: QuerySpec(columns: [
-                            ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)
-                        ])
-                    ).run()
-                }
-                return try doc.rows(version: version, start: UInt64(start), count: UInt32(count), columns: columns)
+        let copied = try CopyText.format(rows: [0..<130], columns: [1, 0], names: ["label", "value"]) {
+            start, count, columns in
+            calls += 1
+            if calls == 2 {
+                let other = try view.query(
+                    spec: QuerySpec(columns: [
+                        ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)
+                    ]),
+                    cancellation: Cancellation())
+                #expect(try other.rows(start: 0, count: 1, columns: [0]).sourceRows == [129])
             }
-            Issue.record("Copy must fail when a later batch sees a different version")
-        } catch GewuError.StaleVersion {}
-        #expect(calls == 2)
-        do {
-            _ = try await reader.read(doc, version: version, start: 0, count: 64, columns: [0])
-            Issue.record("Old table requests must not return rows from the new version")
-        } catch GewuError.StaleVersion {}
+            return try view.rows(start: UInt64(start), count: UInt32(count), columns: columns)
+        }
+        #expect(calls == 3)
+        #expect(copied.hasSuffix("row129\t129"))
+        #expect(try await reader.read(view, start: 0, count: 1, columns: [0]).sourceRows == [0])
         let work = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await reader.read(doc, version: doc.currentView().version, start: 0, count: 64, columns: [0])
+            return try await reader.read(view, start: 0, count: 64, columns: [0])
         }
         do {
             _ = try await work.value

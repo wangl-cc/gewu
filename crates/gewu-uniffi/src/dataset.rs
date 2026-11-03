@@ -63,10 +63,6 @@ impl GewuDataset {
             .collect())
     }
 
-    pub fn format_value(&self, column: u32, value: i64) -> Result<String, GewuError> {
-        Ok(self.inner.format_value(column, value)?)
-    }
-
     pub fn view(&self) -> Arc<crate::GewuView> {
         Arc::new(crate::GewuView {
             inner: self.inner.view(),

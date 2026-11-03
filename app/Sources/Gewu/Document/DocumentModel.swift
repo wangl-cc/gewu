@@ -8,16 +8,21 @@ enum InspectorPage: String, CaseIterable {
 }
 
 /// One loaded table's presentation state. Rust owns the data; SwiftUI observes only
-/// metadata and view revisions, never an array containing the whole table.
+/// metadata and immutable views, never an array containing the whole table.
 @MainActor
 final class DocumentModel: ObservableObject {
     let url: URL
-    let doc: GewuSession
+    let dataset: GewuDataset
     let info: FileInfo
     let kinds: [ValueCategory]
     let find: FindModel
-    @Published private(set) var current = ViewInfo(version: 0, rowCount: 0)
-    @Published private(set) var appliedSpec = QuerySpec(columns: [])
+    struct AppliedQuery {
+        let view: GewuView
+        let spec: QuerySpec
+    }
+    @Published private(set) var applied: AppliedQuery
+    var view: GewuView { applied.view }
+    var appliedSpec: QuerySpec { applied.spec }
     @Published private(set) var isBusy = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
@@ -42,22 +47,24 @@ final class DocumentModel: ObservableObject {
 
     weak var table: DataTableController?
     private var viewTask: Task<Void, Never>?
-    private var viewOperation: ViewOperation?
+    private var queryCancellation: Cancellation?
     private var request: UInt64 = 0
-    // Bound concurrent work; Rust registers request order before queueing.
+    // Bound concurrent queries; Swift owns which completed request may be published.
     private let worker = DispatchQueue(label: "gewu.document.views", qos: .userInitiated)
 
-    init(url: URL, document: GewuSession) {
+    init(url: URL, dataset: GewuDataset) {
         self.url = url
-        doc = document
-        let metadata = document.info()
+        self.dataset = dataset
+        let metadata = dataset.info()
         info = metadata
         kinds = metadata.columns.map(\.valueCategory)
         find = FindModel()
-        let committed = document.currentQuery()
-        current = committed.view
-        spec = committed.spec
-        appliedSpec = spec
+        let initial = QuerySpec(
+            columns: metadata.columns.indices.map {
+                ColSpec(column: UInt32($0), sort: nil, filter: nil)
+            })
+        applied = AppliedQuery(view: dataset.view(), spec: initial)
+        spec = initial
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
@@ -69,7 +76,7 @@ final class DocumentModel: ObservableObject {
     func chooseExport() {
         guard canExport, let table, let window = table.view.window else { return }
         export.choose(
-            document: doc, view: current, columns: appliedSpec.columns.map(\.column), source: url, window: window)
+            view: view, columns: appliedSpec.columns.map(\.column), source: url, window: window)
     }
 
     var subtitle: String {
@@ -80,9 +87,9 @@ final class DocumentModel: ObservableObject {
 
     func status(rowNumberBase: Int) -> String {
         var text =
-            current.rowCount == info.rowCount
-            ? "\(formatCount(current.rowCount)) rows"
-            : "\(formatCount(current.rowCount)) of \(formatCount(info.rowCount)) rows"
+            view.rowCount() == info.rowCount
+            ? "\(formatCount(view.rowCount())) rows"
+            : "\(formatCount(view.rowCount())) of \(formatCount(info.rowCount)) rows"
         text += " · \(appliedSpec.columns.count) columns"
         if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
         if let row = selectedSourceRow { text += " · row \(formatRowNumber(row, base: rowNumberBase)) in file" }
@@ -162,8 +169,23 @@ final class DocumentModel: ObservableObject {
         guard columns != spec.columns.map(\.column), Set(columns) == Set(spec.columns.map(\.column)),
             columns.count == spec.columns.count
         else { return }
+        let reorderOnly = !isBusy && spec == appliedSpec
         spec.columns = columns.compactMap { column in spec.columns.first { $0.column == column } }
-        refresh()
+        if reorderOnly {
+            do {
+                let reordered = try view.reorderColumns(order: columns)
+                copying.cancel()
+                applied = AppliedQuery(view: reordered, spec: spec)
+                selectedDisplayRow = nil
+                selectedSourceRow = nil
+                updateFind(preservingMatch: true)
+            } catch {
+                spec = appliedSpec
+                reportError(error)
+            }
+        } else {
+            refresh()
+        }
     }
 
     func hideColumn(_ column: UInt32) {
@@ -200,56 +222,47 @@ final class DocumentModel: ObservableObject {
     }
 
     func refresh(debounce: Bool = false) {
-        let doc = doc
+        let source = view
         find.invalidate()
         viewTask?.cancel()
-        viewOperation?.cancel()
+        queryCancellation?.cancel()
         request &+= 1
         let mine = request
         let spec = spec
         let worker = worker
-        let operation: ViewOperation
-        do {
-            operation = try doc.prepareView(spec: spec)
-        } catch {
-            isBusy = false
-            viewOperation = nil
-            restoreCommittedQuery()
-            reportError(error)
-            updateFind()
-            return
-        }
-        viewOperation = operation
+        let cancellation = Cancellation()
+        queryCancellation = cancellation
         isBusy = true
         viewTask = Task { [weak self] in
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(150)) }
                 try Task.checkCancellation()
-                let view: ViewInfo = try await withTaskCancellationHandler {
+                let view: GewuView = try await withTaskCancellationHandler {
                     try await withCheckedThrowingContinuation { continuation in
                         worker.async {
-                            do { continuation.resume(returning: try operation.run()) } catch {
+                            do {
+                                continuation.resume(returning: try source.query(spec: spec, cancellation: cancellation))
+                            } catch {
                                 continuation.resume(throwing: error)
                             }
                         }
                     }
                 } onCancel: {
-                    operation.cancel()
+                    cancellation.cancel()
                 }
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.copying.cancel()
-                self.appliedSpec = spec
-                self.current = view
+                self.applied = AppliedQuery(view: view, spec: spec)
                 self.selectedDisplayRow = nil
                 self.selectedSourceRow = nil
                 self.isBusy = false
-                self.viewOperation = nil
+                self.queryCancellation = nil
                 self.updateFind()
             } catch {
                 guard !Task.isCancelled, let self, self.request == mine else { return }
                 self.isBusy = false
-                self.viewOperation = nil
-                self.restoreCommittedQuery()
+                self.queryCancellation = nil
+                self.spec = self.appliedSpec
                 if case GewuError.Cancelled = error {
                     self.updateFind()
                     return
@@ -267,33 +280,18 @@ final class DocumentModel: ObservableObject {
         }
         let columns = appliedSpec.columns.map(\.column)
         find.update(
-            document: doc, version: current.version, columns: columns,
+            view: view, columns: columns,
             cursor: preservingMatch ? find.currentMatch : nil, debounce: debounce)
-    }
-
-    private func restoreCommittedQuery() {
-        let committed = doc.currentQuery()
-        if current.version != committed.view.version {
-            copying.cancel()
-            selectedDisplayRow = nil
-            selectedSourceRow = nil
-        }
-        current = committed.view
-        appliedSpec = committed.spec
-        spec = committed.spec
-    }
-
-    /// Reordering columns keeps the current match instead of jumping to the first one.
-    func findColumnsChanged() {
-        guard find.activeQuery != nil else { return }
-        updateFind(preservingMatch: true)
     }
 
     func stop() {
         request &+= 1
         viewTask?.cancel()
-        viewOperation?.cancel()
-        viewOperation = nil
+        queryCancellation?.cancel()
+        queryCancellation = nil
+        viewTask = nil
+        isBusy = false
+        spec = appliedSpec
         find.stop()
         export.stop()
         copying.cancel()

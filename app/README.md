@@ -22,6 +22,14 @@ Views and state are grouped by feature under `app/Sources/Gewu`:
 
 [WorkbookModel](Sources/Gewu/Document/WorkbookModel.swift) owns the window and sheet-loading lifecycle. Each successfully opened table has a [DocumentModel](Sources/Gewu/Document/DocumentModel.swift) for its query, selection and analysis state, with a [FindModel](Sources/Gewu/Document/FindModel.swift) for bounded cell navigation and visible highlights. For table reads and copying, start with [RowCache](Sources/Gewu/Table/RowCache.swift) and [CopyModel](Sources/Gewu/Table/CopyModel.swift); for analysis requests, start with [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift). Consult the [FFI contract](../crates/gewu-uniffi/README.md) when changing snapshot identity, cancellation or data transfer.
 
+## View ownership and background work
+
+Each DocumentModel holds a shared `GewuDataset`, an atomically published `AppliedQuery { view, spec }`, and the editable pending `spec`. Queries compile and run on a serial worker with a fresh cancellation signal. Only the latest successful request replaces the applied pair; failure restores the draft without changing the displayed View. Reordering columns alone uses `reorderColumns` and preserves the current Find match.
+
+Row reads, copying, Find, filter choices, inspector analysis, scatter and export capture immutable Views. Row caches reset on View identity changes. Inspector caches retain the captured View/column context and row count; bins invalidate distributions and lengths, while scale invalidates only distributions. Filter candidates describe the captured visible rows, including the current column's filter. Metadata comes from Dataset.
+
+Swift owns request replacement and cancellation. The shared [background helper](Sources/Gewu/App/BackgroundWork.swift) forwards Task cancellation to Rust and suppresses completed output from cancelled Tasks. Owners also check request identity before publishing. A View never becomes stale in Rust, and stopping one window cannot cancel another window's work. Separate DocumentModels can share a Dataset; opening a path twice does not itself deduplicate decoded buffers.
+
 ## App icon
 
 Edit [app/Icons/Gewu.icon](Icons/Gewu.icon) in Icon Composer. Its light and dark artwork is in `Assets/light.png` and `Assets/dark.png`; replacements should be opaque, full-bleed 1024 × 1024 sRGB images. Leave the outer mask to macOS and check both appearances at small sizes.

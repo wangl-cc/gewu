@@ -9,8 +9,6 @@ extension Error {
             return message
         case .Cancelled:
             return "The operation was cancelled."
-        case .StaleVersion:
-            return "The results changed. Please try again."
         }
     }
 }

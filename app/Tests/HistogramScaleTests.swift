@@ -8,11 +8,12 @@ struct HistogramScaleTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
         try "value\n-1\n0\n1\n10\n100\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuSession.open(path: url.path) }.value
+        let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
+        let view = document.view()
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                document: document, version: 0, column: 0, rowCount: document.currentView().rowCount,
+                dataset: document, view: view, column: 0,
                 expanded: InspectorSection.distribution.mask,
                 bins: 2, scale: scale)
             guard let histogram = model.distribution else {
@@ -23,7 +24,7 @@ struct HistogramScaleTests {
             #expect(histogram.nonPositiveCount == (scale == .log10 ? 2 : 0))
             #expect(histogram.counts.reduce(0, +) == (scale == .log10 ? 3 : 5))
         }
-        #expect(document.currentView().rowCount == 5 && document.currentView().version == 0)
+        #expect(view.rowCount() == 5)
     }
 
     @Test

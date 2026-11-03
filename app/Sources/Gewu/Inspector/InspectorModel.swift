@@ -17,9 +17,11 @@ final class InspectorModel: ObservableObject {
     @Published private(set) var error: String?
 
     private struct Context: Equatable {
-        let document: ObjectIdentifier
-        let version: UInt64
+        let view: GewuView
         let column: UInt32
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.view === rhs.view && lhs.column == rhs.column
+        }
     }
     private var context: Context?
     private var request: UInt64 = 0
@@ -27,8 +29,8 @@ final class InspectorModel: ObservableObject {
     private var histogramBins: UInt32 = 40
     private var histogramScale: AxisScale = .linear
 
-    func matches(document: GewuSession, version: UInt64, column: UInt32) -> Bool {
-        context == Context(document: ObjectIdentifier(document), version: version, column: column)
+    func matches(view: GewuView, column: UInt32) -> Bool {
+        context == Context(view: view, column: column)
     }
 
     func cancel() {
@@ -39,7 +41,7 @@ final class InspectorModel: ObservableObject {
     }
 
     func load(
-        document: GewuSession, version: UInt64, column: UInt32, rowCount: UInt64, expanded: Int, bins: UInt32 = 40,
+        dataset: GewuDataset, view: GewuView, column: UInt32, expanded: Int, bins: UInt32 = 40,
         scale: AxisScale = .linear
     ) async {
         guard !Task.isCancelled else { return }
@@ -51,10 +53,10 @@ final class InspectorModel: ObservableObject {
                 loading = nil
             }
         }
-        let next = Context(document: ObjectIdentifier(document), version: version, column: column)
+        let next = Context(view: view, column: column)
         if context != next {
             context = next
-            self.rowCount = rowCount
+            self.rowCount = view.rowCount()
             sections = []
             nullCount = nil
             statistics = nil
@@ -78,7 +80,7 @@ final class InspectorModel: ObservableObject {
             errors[.distribution] = nil
         }
         do {
-            sections = InspectorSection.available(for: try document.analysisCapabilities(column: column))
+            sections = InspectorSection.available(for: try dataset.analysisCapabilities(column: column))
             error = nil
         } catch {
             self.error = error.userMessage
@@ -92,32 +94,31 @@ final class InspectorModel: ObservableObject {
                 switch section {
                 case .overview:
                     try await load(\.nullCount, ticket: ticket, context: next) { cancellation in
-                        try document.countNulls(version: version, column: column, cancellation: cancellation)
+                        try view.countNulls(column: column, cancellation: cancellation)
                     }
                 case .statistics:
                     try await load(\.statistics, ticket: ticket, context: next) { cancellation in
-                        try document.analyzeStatistics(version: version, column: column, cancellation: cancellation)
+                        try view.analyzeStatistics(column: column, cancellation: cancellation)
                     }
                 case .distribution:
                     try await load(\.distribution, ticket: ticket, context: next) { cancellation in
-                        try document.analyzeDistribution(
-                            version: version, column: column, bins: bins, scale: scale, cancellation: cancellation)
+                        try view.analyzeDistribution(
+                            column: column, bins: bins, scale: scale, cancellation: cancellation)
                     }
                 case .values:
                     try await load(\.values, ticket: ticket, context: next) { cancellation in
-                        try document.analyzeValues(version: version, column: column, cancellation: cancellation)
+                        try view.analyzeValues(column: column, cancellation: cancellation)
                     }
                 case .lengths:
                     try await load(\.lengths, ticket: ticket, context: next) { cancellation in
-                        try document.analyzeLengths(
-                            version: version, column: column, bins: bins, cancellation: cancellation)
+                        try view.analyzeLengths(
+                            column: column, bins: bins, cancellation: cancellation)
                     }
                 case .structure:
-                    structure = try document.columnStructure(column: column)
+                    structure = try dataset.columnStructure(column: column)
                 }
             } catch {
                 guard !Task.isCancelled, request == ticket else { return }
-                if case GewuError.StaleVersion = error { break }
                 if case GewuError.Cancelled = error { break }
                 if error is CancellationError { break }
                 errors[section] = error.userMessage
@@ -149,26 +150,9 @@ final class InspectorModel: ObservableObject {
         defer {
             if request == ticket { cancellation = nil }
         }
-        let result = try await runAnalysis(cancellation: signal) { try operation(signal) }
+        let result = try await runCancellable(cancellation: signal) { try operation(signal) }
         try Task.checkCancellation()
         guard request == ticket, context == expected else { throw CancellationError() }
         self[keyPath: destination] = result
-    }
-}
-
-/// Run a synchronous scan off the UI thread and forward the owning Task's cancellation.
-func runAnalysis<T: Sendable>(
-    cancellation: Cancellation,
-    operation: @escaping @Sendable () throws -> T
-) async throws -> T {
-    try await withTaskCancellationHandler {
-        try Task.checkCancellation()
-        let result = try await Task.detached(priority: .userInitiated) {
-            try operation()
-        }.value
-        try Task.checkCancellation()
-        return result
-    } onCancel: {
-        cancellation.cancel()
     }
 }

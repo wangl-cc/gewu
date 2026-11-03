@@ -424,7 +424,10 @@ fn contains_filter_is_for_text_only() {
 #[test]
 fn dates_format_parse_and_filter() {
     let (path, doc) = temporal_sample();
-    assert_eq!(doc.dataset().format_value(1, 19_724).unwrap(), "2024-01-02");
+    assert_eq!(
+        doc.rows(1, 1, &[1]).unwrap().cells[0].as_deref().unwrap(),
+        "2024-01-02"
+    );
 
     assert!(doc
         .query(
@@ -436,9 +439,8 @@ fn dates_format_parse_and_filter() {
         )
         .is_err());
 
-    let base = 1_704_099_600_000_000i64;
     assert_eq!(
-        doc.dataset().format_value(2, base).unwrap(),
+        doc.rows(0, 1, &[2]).unwrap().cells[0].as_deref().unwrap(),
         "2024-01-01T09:00:00Z"
     );
 

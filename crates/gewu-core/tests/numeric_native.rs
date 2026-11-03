@@ -396,8 +396,15 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let min = doc.dataset().format_value(0, 1).unwrap();
-        let max = doc.dataset().format_value(0, 2).unwrap();
+        let cells = doc.rows(1, 2, &[0]).unwrap().cells;
+        let min = cells[0].clone().unwrap();
+        let max = cells[1].clone().unwrap();
+        assert_eq!(
+            summary.mean_label.as_deref(),
+            Some(min.as_str()),
+            "{:?}: {summary:?}",
+            doc.dataset().schema().field(0).data_type()
+        );
         check_range(&doc, Some(min), Some(max), &[1, 2]);
     }
 }

@@ -15,8 +15,7 @@ struct ScatterPanel: View {
     }
 
     private struct Request: Equatable {
-        let document: ObjectIdentifier
-        let version: UInt64
+        let view: ObjectIdentifier
         let x: Int?
         let y: Int?
         let retry: Int
@@ -28,7 +27,7 @@ struct ScatterPanel: View {
 
     private var request: Request {
         Request(
-            document: ObjectIdentifier(model.doc), version: model.current.version,
+            view: ObjectIdentifier(model.view),
             x: model.chartX, y: model.chartY, retry: retry, pointLimit: pointLimit, rowNumberBase: rowNumberBase,
             xScale: supportsLog(model.chartX) ? xScale : .linear,
             yScale: supportsLog(model.chartY) ? yScale : .linear)
@@ -133,7 +132,7 @@ struct ScatterPanel: View {
             hovered = nil
             guard let y = model.chartY else { return }
             await chart.load(
-                document: model.doc, version: model.current.version, rowCount: model.current.rowCount, x: model.chartX,
+                view: model.view, x: model.chartX,
                 y: y,
                 limit: pointLimit, rowNumberBase: rowNumberBase,
                 xScale: request.xScale, yScale: request.yScale)
@@ -165,52 +164,56 @@ final class ScatterModel: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var request: UInt64 = 0
-    private var job: ScatterAnalysis?
+    private var cancellation: Cancellation?
 
     func cancel() {
         request &+= 1
-        job?.cancel()
-        job = nil
+        cancellation?.cancel()
+        cancellation = nil
         loading = false
     }
 
     func load(
-        document: GewuSession, version: UInt64, rowCount: UInt64, x: Int?, y: Int,
+        view: GewuView, x: Int?, y: Int,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,
         yScale: AxisScale = .linear
     ) async {
+        guard !Task.isCancelled else { return }
         cancel()
         let ticket = request
+        defer {
+            if ticket == request {
+                loading = false
+                cancellation = nil
+            }
+        }
         result = nil
         error = nil
         loading = true
         do {
             try Task.checkCancellation()
-            let work = try document.prepareScatter(
-                version: version, xColumn: x.map(UInt32.init), yColumn: UInt32(y), limit: limit,
-                xScale: xScale, yScale: yScale)
-            job = work
-            let loaded = try await withTaskCancellationHandler {
-                try await Task.detached(priority: .userInitiated) {
-                    var result = try work.run()
-                    try Task.checkCancellation()
-                    if x == nil {
-                        for index in result.points.indices {
-                            let sourceRow = result.points[index].sourceRow
-                            result.points[index].x = Double(rowNumber(sourceRow, base: rowNumberBase))
-                            result.points[index].xLabel = formatRowNumber(sourceRow, base: rowNumberBase)
-                        }
+            let signal = Cancellation()
+            cancellation = signal
+            let rowCount = view.rowCount()
+            let loaded = try await runCancellable(cancellation: signal) {
+                var result = try view.analyzeScatter(
+                    xColumn: x.map(UInt32.init), yColumn: UInt32(y), limit: limit,
+                    xScale: xScale, yScale: yScale, cancellation: signal)
+                try Task.checkCancellation()
+                if x == nil {
+                    for index in result.points.indices {
+                        let sourceRow = result.points[index].sourceRow
+                        result.points[index].x = Double(rowNumber(sourceRow, base: rowNumberBase))
+                        result.points[index].xLabel = formatRowNumber(sourceRow, base: rowNumberBase)
                     }
-                    return (
-                        result,
-                        ScatterDates.make(points: result.points, x: true, kind: result.xAxisKind),
-                        ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
-                    )
-                }.value
-            } onCancel: {
-                work.cancel()
+                }
+                return (
+                    result,
+                    ScatterDates.make(points: result.points, x: true, kind: result.xAxisKind),
+                    ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
+                )
             }
             guard !Task.isCancelled, ticket == request else { return }
             xDates = loaded.1
@@ -222,12 +225,9 @@ final class ScatterModel: ObservableObject {
         } catch {
             guard !Task.isCancelled, ticket == request else { return }
             switch error {
-            case GewuError.Cancelled, GewuError.StaleVersion: break
+            case GewuError.Cancelled, is CancellationError: break
             default: self.error = error.userMessage
             }
         }
-        guard ticket == request else { return }
-        loading = false
-        job = nil
     }
 }

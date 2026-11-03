@@ -5,15 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use arrow::{
-    array::{ArrayRef, Int64Array},
-    compute::cast,
-    datatypes::{DataType, SchemaRef},
-};
+use arrow::datatypes::SchemaRef;
 
-use crate::{
-    column::Column, file, format, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
-};
+use crate::{column::Column, file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result};
 
 /// An immutable tabular dataset loaded into memory.
 pub struct Dataset {
@@ -119,19 +113,5 @@ impl Dataset {
         self.columns
             .get(c as usize)
             .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
-    }
-
-    pub fn format_value(&self, column: u32, value: i64) -> Result<String> {
-        let col = self.column(column)?;
-        let data_type = col.array().data_type().clone();
-        let raw: ArrayRef = Arc::new(Int64Array::from(vec![value]));
-        let typed = match data_type {
-            DataType::Date32 | DataType::Time32(_) => {
-                cast(&cast(&raw, &DataType::Int32)?, &data_type)?
-            }
-            _ => cast(&raw, &data_type)?,
-        };
-        let f = format::formatter(typed.as_ref())?;
-        Ok(f.value(0).to_string())
     }
 }

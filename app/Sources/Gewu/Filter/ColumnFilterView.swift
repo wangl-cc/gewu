@@ -7,10 +7,9 @@ private enum FilterMode: String, CaseIterable {
 }
 
 struct ColumnFilterView: View {
-    let doc: GewuSession
+    let view: GewuView
     let column: UInt32
     let info: ColumnInfo
-    let querySpec: QuerySpec
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode
     @State private var exact: ExactFilterDraft
@@ -26,13 +25,12 @@ struct ColumnFilterView: View {
     @State private var loading = false
 
     init(
-        doc: GewuSession, column: UInt32, info: ColumnInfo, querySpec: QuerySpec, current: Filter?,
+        view: GewuView, column: UInt32, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
-        self.doc = doc
+        self.view = view
         self.column = column
         self.info = info
-        self.querySpec = querySpec
         self.onApply = onApply
         var initial: FilterMode = info.capabilities.range ? .range : (info.capabilities.contains ? .contains : .exact)
         if let current {
@@ -73,7 +71,7 @@ struct ColumnFilterView: View {
                     switch mode {
                     case .range:
                         RangeFilterView(
-                            doc: doc, column: column, distribution: distribution, bins: $histogramBins,
+                            distribution: distribution, bins: $histogramBins,
                             scale: $histogramScale, supportsLog: info.capabilities.logarithmic, draft: $range)
                     case .contains: ContainsEditor(draft: $contains)
                     case .exact: exactEditor
@@ -96,7 +94,7 @@ struct ColumnFilterView: View {
         if let values = choices?.values {
             ChoiceFilterView(values: values, draft: $exact)
         } else if info.capabilities.contains {
-            TextFilterView(document: doc, column: column, querySpec: querySpec, draft: $exact)
+            TextFilterView(view: view, column: column, draft: $exact)
         } else {
             HStack {
                 TextField("Exact value", text: $literal).textFieldStyle(.roundedBorder)
@@ -133,9 +131,8 @@ struct ColumnFilterView: View {
         guard modes.contains(mode) else { return }
         loading = true
         error = nil
-        let doc = doc
+        let view = view
         let column = column
-        let spec = querySpec
         let mode = mode
         let bins = histogramBins
         let scale = histogramScale
@@ -144,8 +141,8 @@ struct ColumnFilterView: View {
             if mode == .range {
                 let result = try await withTaskCancellationHandler {
                     try await Task.detached {
-                        try doc.filterDistribution(
-                            column: column, spec: spec, bins: bins, scale: scale, cancellation: cancellation)
+                        try view.filterDistribution(
+                            column: column, bins: bins, scale: scale, cancellation: cancellation)
                     }.value
                 } onCancel: {
                     cancellation.cancel()
@@ -156,7 +153,7 @@ struct ColumnFilterView: View {
             } else if mode == .exact, choices == nil {
                 let result = try await withTaskCancellationHandler {
                     try await Task.detached {
-                        try doc.filterChoices(column: column, spec: spec, cancellation: cancellation)
+                        try view.filterChoices(column: column, cancellation: cancellation)
                     }.value
                 } onCancel: {
                     cancellation.cancel()

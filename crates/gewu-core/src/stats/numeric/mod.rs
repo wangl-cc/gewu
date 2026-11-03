@@ -23,6 +23,9 @@ pub struct NumericStatistics {
     /// fractional native units rather than rounding back to the column's unit.
     pub median_label: Option<String>,
     pub mean: Option<f64>,
+    /// Approximate temporal mean rounded to the physical unit and formatted by Core.
+    /// None for non-temporal values or means outside the representable i64 domain.
+    pub mean_label: Option<String>,
     pub std_dev: Option<f64>,
     pub nan_count: u64,
     pub infinite_count: u64,
@@ -128,12 +131,31 @@ pub(crate) fn analyze(
         max_label: label(summary.max_row),
         median_label: super::median::label(view, context)?,
         mean: summary.mean.filter(|v| v.is_finite()),
+        mean_label: temporal_mean_label(view.data_type(), summary.mean)?,
         std_dev: summary
             .std_dev
             .filter(|v| v.is_finite() && summary.infinite_count == 0),
         nan_count: summary.nan_count,
         infinite_count: summary.infinite_count,
     })
+}
+
+fn temporal_mean_label(data_type: &DataType, mean: Option<f64>) -> Result<Option<String>> {
+    if !data_type.is_temporal() {
+        return Ok(None);
+    }
+    let Some(value) = mean.and_then(|mean| ToPrimitive::to_i64(&mean.round())) else {
+        return Ok(None);
+    };
+    let raw: ArrayRef = std::sync::Arc::new(arrow::array::Int64Array::from(vec![value]));
+    let typed = match data_type {
+        DataType::Date32 | DataType::Time32(_) => {
+            arrow::compute::cast(&arrow::compute::cast(&raw, &DataType::Int32)?, data_type)?
+        }
+        _ => arrow::compute::cast(&raw, data_type)?,
+    };
+    let formatter = crate::format::formatter(typed.as_ref())?;
+    Ok(crate::format::cell(typed.as_ref(), &formatter, 0))
 }
 
 struct IntegerColumn<'a, T: ArrowPrimitiveType>(&'a PrimitiveArray<T>);
@@ -335,6 +357,38 @@ mod tests {
         types.push(Time64(TimeUnit::Microsecond));
         types.push(Time64(TimeUnit::Nanosecond));
         types
+    }
+
+    #[test]
+    fn temporal_mean_labels_round_physical_units_and_exclude_invalid_means() {
+        assert_eq!(
+            temporal_mean_label(&DataType::Date32, Some(1.4))
+                .unwrap()
+                .as_deref(),
+            Some("1970-01-02")
+        );
+        assert_eq!(
+            temporal_mean_label(&DataType::Time32(TimeUnit::Millisecond), Some(1.5))
+                .unwrap()
+                .as_deref(),
+            Some("00:00:00.002")
+        );
+        for mean in [
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(i64::MAX as f64),
+        ] {
+            assert_eq!(
+                temporal_mean_label(&DataType::Timestamp(TimeUnit::Nanosecond, None), mean)
+                    .unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            temporal_mean_label(&DataType::Int64, Some(1.0)).unwrap(),
+            None
+        );
     }
 
     #[test]

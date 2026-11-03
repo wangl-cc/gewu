@@ -65,7 +65,7 @@ final class FindModel: ObservableObject {
     /// old session; an obsolete delayed task never calls cancel on the new one.
     /// `cursor` keeps the current cell when only the captured column order changed.
     func update(
-        document: GewuSession, version: UInt64, columns: [UInt32], cursor: CellMatch? = nil,
+        view: GewuView, columns: [UInt32], cursor: CellMatch? = nil,
         debounce: Bool = false
     ) {
         invalidate()
@@ -73,7 +73,7 @@ final class FindModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let session: FindSession
         do {
-            session = try document.prepareFind(version: version, query: trimmed, columns: columns)
+            session = try view.find(query: trimmed, columns: columns)
         } catch {
             onError?(error, "Find error: ")
             return
