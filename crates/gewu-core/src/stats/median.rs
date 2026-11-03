@@ -12,8 +12,8 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{numeric::Numeric, ArrayView, Cancellation};
-use crate::{format, Error, Result};
+use super::{numeric::Numeric, ArrayView};
+use crate::{format, Cancellation, Error, Result};
 
 pub(crate) fn label(view: ArrayView<'_>, context: &Cancellation) -> Result<Option<String>> {
     let value = Numeric::new(view.array)

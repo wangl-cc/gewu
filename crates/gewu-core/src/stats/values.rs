@@ -14,8 +14,24 @@ use arrow::{
     datatypes::*,
 };
 
-use super::{ArrayView, Cancellation, ValueFrequency, ValueSummary};
-use crate::{format, Error, Result};
+use super::ArrayView;
+use crate::{format, Cancellation, Error, Result};
+
+/// A displayed non-null value and its frequency in the captured view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueFrequency {
+    pub label: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValueSummary {
+    /// Non-null distinct values, estimated with a fixed-capacity sketch.
+    pub distinct_count: u64,
+    /// Approximate candidate selection, recounted over all selected rows.
+    /// 64-bit hash collisions may merge values.
+    pub values: Vec<ValueFrequency>,
+}
 
 /// Scalar values with comparable labels and bounded distinct estimates.
 pub(super) fn supports(data_type: &DataType) -> bool {

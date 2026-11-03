@@ -98,7 +98,7 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 [types/](src/types) contains shared Arrow type descriptions and scalar classifications. Arrow `DataType` remains the source of truth; `Column` does not store a second logical type. [Column metadata](src/column/metadata.rs) projects display and technical type labels plus a coarse `ValueCategory` directly from Arrow. Scatter results carry their own axis presentation kinds. Nested-analysis fields use the same direct display-type projection and retain the full Arrow type as technical text; no intermediate logical-type enum is transmitted. Schema-description validation preserves rejection of unsupported nested types when a column is loaded; it does not decide which operations are available.
 
-Each operation owns its type support and execution rules. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `Column::capabilities` aggregates these queries for the frontend without scanning data. Analysis sections and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
+Each operation owns its type support and execution rules. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `Column::capabilities` aggregates these queries for the frontend without scanning data. Analysis capabilities and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
 
 [column/dictionary/](src/column/dictionary) owns the compact distinct-value dictionary: native dictionaries reuse their keys and values, primitive arrays scan their native values directly, floats scan a normalized key, and only text, binary and nested arrays use Arrow's row format. Filter candidates are projected by `filter_choices` directly from native values and selected-row counts. Predicate compilation uses `values` and `matching_codes`; the code space remains internal to the engine. Float identity groups signed zeros and NaN payloads consistently in dictionary encoding and Values analysis.
 
@@ -119,7 +119,10 @@ Each operation owns its type support and execution rules. Find privately dispatc
 | [query/sort.rs](src/query/sort.rs) | Cancellable native sorting and merging. |
 | [column/](src/column) | Type capabilities, native predicates and compact dictionaries. |
 | [types/](src/types) | Arrow type descriptions and classifications. |
-| [stats/](src/stats) | Numeric/length statistics, distributions, values and scatter. |
+| [stats/](src/stats) | Analysis organization and result exports. |
+| [stats/array_view.rs](src/stats/array_view.rs) | Internal borrowed array and row selection. |
+| [stats/histogram/](src/stats/histogram) | Linear/logarithmic binning, range projections and bin tests. |
+| [stats/numeric/](src/stats/numeric), [stats/lengths.rs](src/stats/lengths.rs), [stats/values.rs](src/stats/values.rs) | Analysis kernels and their result records. |
 | [file/](src/file) | Codecs, export progress and destination commit. |
 | [cancellation.rs](src/cancellation.rs) | Terminal cancellation signals and composed request scopes. |
 

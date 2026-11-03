@@ -2,8 +2,8 @@
 
 use arrow::{array::Array, datatypes::DataType};
 
-use super::{ArrayView, Cancellation};
-use crate::{column::display_type, scope::Selection, types, Error, Result};
+use super::ArrayView;
+use crate::{column::display_type, scope::Selection, types, Cancellation, Error, Result};
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.
 /// Overview is available for every loaded column.

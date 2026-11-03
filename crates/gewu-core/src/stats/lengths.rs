@@ -5,8 +5,18 @@ use arrow::{
     datatypes::DataType,
 };
 
-use super::{ArrayView, Cancellation, LengthSummary};
-use crate::{scope::Selection, Error, Histogram, Result};
+use super::ArrayView;
+use crate::{scope::Selection, Cancellation, Error, Histogram, Result};
+
+#[derive(Debug, Clone)]
+pub struct LengthSummary {
+    pub unit: LengthUnit,
+    pub empty_count: u64,
+    pub min: Option<u64>,
+    pub max: Option<u64>,
+    pub mean: Option<f64>,
+    pub histogram: Histogram,
+}
 
 /// What a length measurement counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

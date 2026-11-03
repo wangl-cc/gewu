@@ -6,8 +6,8 @@ use std::collections::BinaryHeap;
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
-use super::{numeric::Numeric, AxisScale, Cancellation};
-use crate::{format, Error, Result};
+use super::{numeric::Numeric, AxisScale};
+use crate::{format, Cancellation, Error, Result};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
 pub(crate) fn supports(data_type: &DataType) -> bool {

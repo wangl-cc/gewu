@@ -14,6 +14,20 @@ use crate::{
     Cancellation, Result,
 };
 
+#[derive(Debug, Clone)]
+pub struct NumericStatistics {
+    pub min_label: Option<String>,
+    pub max_label: Option<String>,
+    /// Exact native median text. Nulls and NaNs are excluded. Opposite infinities
+    /// as the two central values have no median. Even temporal medians retain
+    /// fractional native units rather than rounding back to the column's unit.
+    pub median_label: Option<String>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    pub nan_count: u64,
+    pub infinite_count: u64,
+}
+
 pub(crate) fn supports(data_type: &DataType) -> bool {
     matches!(
         direct_domain(data_type),
@@ -95,7 +109,7 @@ impl<'a> Numeric<'a> {
 pub(crate) fn analyze(
     view: super::ArrayView<'_>,
     context: &Cancellation,
-) -> Result<super::NumericStatistics> {
+) -> Result<NumericStatistics> {
     context.check()?;
     let summary = Numeric::new(view.array)
         .ok_or_else(|| {
@@ -109,7 +123,7 @@ pub(crate) fn analyze(
     let label = |row: Option<usize>| {
         row.and_then(|row| crate::format::cell(view.array.as_ref(), &formatter, row))
     };
-    Ok(super::NumericStatistics {
+    Ok(NumericStatistics {
         min_label: label(summary.min_row),
         max_label: label(summary.max_row),
         median_label: super::median::label(view, context)?,
