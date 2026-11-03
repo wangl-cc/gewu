@@ -8,7 +8,7 @@ use arrow::{
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
 use super::decimal::{native_range, Endpoint, Literal};
-use crate::{predicate::Predicate, scalar::temporal::parse_physical, Result};
+use crate::{execution::predicate::Predicate, scalar::temporal::parse_physical, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let data_type = array.data_type();

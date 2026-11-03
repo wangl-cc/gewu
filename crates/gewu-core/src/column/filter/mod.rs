@@ -16,7 +16,9 @@ use arrow::{
     datatypes::DataType,
 };
 
-use crate::{predicate::Predicate, scalar::Bound, types, Cancellation, Error, Filter, Result};
+use crate::{
+    execution::predicate::Predicate, scalar::Bound, types, Cancellation, Error, Filter, Result,
+};
 
 /// Text matching is defined only for text values, including dictionaries.
 pub(crate) fn supports_text_match(data_type: &DataType) -> bool {

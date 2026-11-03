@@ -11,7 +11,7 @@ use arrow::{
 };
 
 use super::{ArrayView, AxisScale};
-use crate::{scope::Selection, Bound, Cancellation, Error, Result};
+use crate::{execution::scope::Selection, scalar::Bound, Cancellation, Error, Result};
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]

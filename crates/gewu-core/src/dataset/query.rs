@@ -5,7 +5,9 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 
 use super::Dataset;
-use crate::{predicate::CHUNK, query::sort_rows, Cancellation, Filter, QuerySpec, Result, View};
+use crate::{
+    execution::predicate::CHUNK, query::sort_rows, Cancellation, Filter, QuerySpec, Result, View,
+};
 
 impl Dataset {
     fn validate_query(&self, spec: &QuerySpec) -> Result<()> {

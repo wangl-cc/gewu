@@ -3,7 +3,7 @@
 use arrow::array::{downcast_integer_array, ArrayRef};
 
 use super::decimal::{native_range, Endpoint, Literal};
-use crate::predicate::Predicate;
+use crate::execution::predicate::Predicate;
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
     let value = Literal::parse_integer(text)?.coefficient(0, true);

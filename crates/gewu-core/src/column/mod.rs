@@ -19,7 +19,7 @@ use arrow::array::ArrayRef;
 pub(crate) use dictionary::Dictionary;
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{predicate::Predicate, types, Cancellation, Filter, Result};
+use crate::{execution::predicate::Predicate, types, Cancellation, Filter, Result};
 
 /// Operations supported by a column's type. Value-list availability
 /// additionally depends on cardinality and is reported by `crate::FilterChoices`.
@@ -179,7 +179,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{predicate::CHUNK, Cancellation, Error, TextMatch};
+    use crate::{execution::predicate::CHUNK, Cancellation, Error, TextMatch};
 
     fn col(array: ArrayRef) -> Column {
         Column::new("test", array).unwrap()

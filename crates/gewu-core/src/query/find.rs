@@ -9,7 +9,9 @@ use std::{ops::Range, sync::Arc};
 use arrow::array::ArrayRef;
 use regex::RegexBuilder;
 
-use crate::{column::filter::compile_find, predicate::Predicate, Cancellation, Error, Result};
+use crate::{
+    column::filter::compile_find, execution::predicate::Predicate, Cancellation, Error, Result,
+};
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;

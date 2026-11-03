@@ -8,7 +8,7 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use super::{Cancellation, Histogram, Output, RangeBounds};
-use crate::{scope::Selection, AxisScale, Bound, Error, Result};
+use crate::{execution::scope::Selection, scalar::Bound, AxisScale, Error, Result};
 
 pub(super) fn build<H: Output>(
     array: &ArrayRef,

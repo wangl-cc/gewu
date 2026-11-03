@@ -33,7 +33,8 @@ use rapidhash::RapidHashMap;
 
 use super::{value_text, FilterChoices, ValueChoice};
 use crate::{
-    predicate::Predicate, scope::Selection, selection::RowSelection, Cancellation, Result,
+    execution::{predicate::Predicate, scope::Selection, selection::RowSelection},
+    Cancellation, Result,
 };
 
 mod primitive;

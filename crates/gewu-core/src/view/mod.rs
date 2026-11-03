@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 
-use crate::{column::Column, scope::Selection, Dataset, Error, Result};
+use crate::{column::Column, execution::scope::Selection, Dataset, Error, Result};
 
 mod analysis;
 mod export;

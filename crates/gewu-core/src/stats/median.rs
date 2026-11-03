@@ -289,7 +289,7 @@ mod tests {
     use super::*;
 
     fn median(array: ArrayRef) -> Option<String> {
-        let all = crate::scope::Selection::All(array.len());
+        let all = crate::execution::scope::Selection::All(array.len());
         label(ArrayView::new(&array, &all), &Cancellation::default()).unwrap()
     }
 
@@ -432,7 +432,7 @@ mod tests {
             ));
         }
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
-        let rows = crate::scope::Selection::Rows(Arc::from(vec![3, 1]));
+        let rows = crate::execution::scope::Selection::Rows(Arc::from(vec![3, 1]));
         assert_eq!(
             label(ArrayView::new(&array, &rows), &Cancellation::default())
                 .unwrap()
@@ -441,7 +441,7 @@ mod tests {
         );
         let context = Cancellation::default();
         context.cancel();
-        let all = crate::scope::Selection::All(4);
+        let all = crate::execution::scope::Selection::All(4);
         assert!(matches!(
             label(ArrayView::new(&array, &all), &context),
             Err(Error::Cancelled)

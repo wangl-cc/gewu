@@ -293,7 +293,7 @@ mod tests {
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(
             (0..50_000).map(|_| 0).chain(1..100_001),
         ));
-        let sel = crate::scope::Selection::All(array.len());
+        let sel = crate::execution::scope::Selection::All(array.len());
         let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
         assert_eq!(
             (summary.values[0].label.as_str(), summary.values[0].count),
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(unique.distinct(), DISTINCT_CAPACITY as u64);
         // Complete MG eviction cycles still have representative fallback values.
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
-        let sel = crate::scope::Selection::All(array.len());
+        let sel = crate::execution::scope::Selection::All(array.len());
         let summary = analyze(ArrayView::new(&array, &sel), &Cancellation::default()).unwrap();
         assert_eq!(summary.values.len(), OUTPUT_LIMIT);
         assert!(summary.values.iter().all(|value| value.count == 1));
@@ -322,7 +322,7 @@ mod tests {
             Some(f64::from_bits(0x7ff8000000000001)),
             None,
         ]));
-        let all5 = crate::scope::Selection::All(5);
+        let all5 = crate::execution::scope::Selection::All(5);
         let summary = analyze(ArrayView::new(&array, &all5), &Cancellation::default()).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert!(summary.values.iter().all(|value| value.count == 2));
@@ -338,7 +338,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let sel_dict = crate::scope::Selection::Rows(Arc::from(vec![4, 2, 0, 1, 3]));
+        let sel_dict = crate::execution::scope::Selection::Rows(Arc::from(vec![4, 2, 0, 1, 3]));
         let summary = analyze(
             ArrayView::new(&dictionary, &sel_dict),
             &Cancellation::default(),
@@ -351,7 +351,7 @@ mod tests {
         );
         let context = Cancellation::default();
         context.cancel();
-        let all_dict = crate::scope::Selection::All(5);
+        let all_dict = crate::execution::scope::Selection::All(5);
         assert!(matches!(
             analyze(ArrayView::new(&dictionary, &all_dict), &context),
             Err(Error::Cancelled)

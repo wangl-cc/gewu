@@ -4,7 +4,7 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::scalar::{decimal::Endpoint, float, integer, temporal};
 use crate::{
-    predicate::Predicate,
+    execution::predicate::Predicate,
     scalar::{bound::invalid_type, Bound},
     Error, Result,
 };

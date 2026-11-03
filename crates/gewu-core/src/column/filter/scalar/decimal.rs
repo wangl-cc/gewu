@@ -5,8 +5,8 @@ use arrow::{
     datatypes::*,
 };
 
+use crate::execution::{predicate::Predicate, selection::RowSelection};
 pub(in crate::column) use crate::scalar::decimal::{Endpoint, Literal};
-use crate::{predicate::Predicate, selection::RowSelection};
 
 pub(in crate::column) trait Coefficient:
     Copy + PartialOrd + Send + Sync + 'static

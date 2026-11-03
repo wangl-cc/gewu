@@ -8,7 +8,7 @@ use arrow::{
 };
 
 use super::*;
-use crate::{scope::Selection, Cancellation};
+use crate::{execution::scope::Selection, Cancellation};
 
 #[test]
 fn codes_name_distinct_values_and_null_mask() {

@@ -6,7 +6,7 @@ use super::{
     histogram, lengths, numeric, values, AxisScale, Histogram, LengthSummary, NumericStatistics,
     ValueSummary,
 };
-use crate::{scope::Selection, Cancellation, Result};
+use crate::{execution::scope::Selection, Cancellation, Result};
 
 /// A borrowed view of an Arrow array over a row selection.
 #[derive(Debug, Clone, Copy)]

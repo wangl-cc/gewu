@@ -6,7 +6,7 @@ use arrow::{
 };
 
 use super::ArrayView;
-use crate::{scope::Selection, Cancellation, Error, Histogram, Result};
+use crate::{execution::scope::Selection, Cancellation, Error, Histogram, Result};
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
@@ -211,7 +211,7 @@ mod tests {
             None,
         ]));
         let context = Cancellation::default();
-        let all = crate::scope::Selection::All(4);
+        let all = crate::execution::scope::Selection::All(4);
         let result = analyze(ArrayView::new(&array, &all), 40, &context).unwrap();
         assert_eq!(result.unit, LengthUnit::Characters);
         assert_eq!(
@@ -225,7 +225,7 @@ mod tests {
             1
         );
         for rows in [vec![], vec![3]] {
-            let sel = crate::scope::Selection::Rows(Arc::from(rows.clone()));
+            let sel = crate::execution::scope::Selection::Rows(Arc::from(rows.clone()));
             let result = analyze(ArrayView::new(&array, &sel), 40, &context).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
@@ -234,7 +234,7 @@ mod tests {
                 rows.len() as u64
             );
         }
-        let sel2 = crate::scope::Selection::Rows(Arc::from(vec![2]));
+        let sel2 = crate::execution::scope::Selection::Rows(Arc::from(vec![2]));
         let result = analyze(ArrayView::new(&array, &sel2), 40, &context).unwrap();
         assert_eq!(result.histogram.counts, [1]);
         assert_eq!(
@@ -253,7 +253,7 @@ mod tests {
             Some(vec![Some(5)]),
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
-        let sel = crate::scope::Selection::Rows(Arc::from(vec![0, 1, 2]));
+        let sel = crate::execution::scope::Selection::Rows(Arc::from(vec![0, 1, 2]));
         let result = analyze(ArrayView::new(&array, &sel), 40, &Cancellation::default()).unwrap();
         assert_eq!(result.unit, LengthUnit::Elements);
         assert_eq!(

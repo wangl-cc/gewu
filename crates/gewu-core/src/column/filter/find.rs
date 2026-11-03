@@ -4,7 +4,7 @@
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{nested, scalar, text};
-use crate::{predicate::Predicate, Result};
+use crate::{execution::predicate::Predicate, Result};
 
 pub(crate) fn compile<'a>(
     array: &'a ArrayRef,

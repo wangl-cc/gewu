@@ -8,7 +8,10 @@ use arrow::{
 };
 use regex::RegexBuilder;
 
-use crate::{predicate::Predicate, selection::RowSelection, Error, Result};
+use crate::{
+    execution::{predicate::Predicate, selection::RowSelection},
+    Error, Result,
+};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.

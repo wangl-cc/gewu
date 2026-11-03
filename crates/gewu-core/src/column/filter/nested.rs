@@ -10,7 +10,7 @@ use arrow::{
 
 use super::compile_find;
 use crate::{
-    predicate::{Predicate, CHUNK},
+    execution::predicate::{Predicate, CHUNK},
     Result,
 };
 
