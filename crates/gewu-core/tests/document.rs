@@ -188,18 +188,11 @@ fn range_filter_on_floats_skips_nulls() {
         (None, Some("1.0"), &["b"]),
         (None, None, &["a", "b", "c", "e", "f"]),
     ] {
-        let min = min.map(|text| doc.dataset().parse_bound(2, text).unwrap());
-        let max = max.map(|text| doc.dataset().parse_bound(2, text).unwrap());
+        let min = min.map(|text| (text).to_owned());
+        let max = max.map(|text| (text).to_owned());
         let doc = doc
             .query(
-                &QuerySpec::single(
-                    2,
-                    Filter::range(
-                        min.map(|b: gewu_core::Bound| b.filter_text()),
-                        max.map(|b: gewu_core::Bound| b.filter_text()),
-                        false,
-                    ),
-                ),
+                &QuerySpec::single(2, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
             )
             .unwrap();
@@ -217,18 +210,11 @@ fn range_filter_on_integers() {
         (Some("18446744073709551615"), None, &[]),
         (Some("60"), Some("60"), &["f"]),
     ] {
-        let min = min.map(|text| doc.dataset().parse_bound(3, text).unwrap());
-        let max = max.map(|text| doc.dataset().parse_bound(3, text).unwrap());
+        let min = min.map(|text| (text).to_owned());
+        let max = max.map(|text| (text).to_owned());
         let doc = doc
             .query(
-                &QuerySpec::single(
-                    3,
-                    Filter::range(
-                        min.map(|b: gewu_core::Bound| b.filter_text()),
-                        max.map(|b: gewu_core::Bound| b.filter_text()),
-                        false,
-                    ),
-                ),
+                &QuerySpec::single(3, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
             )
             .unwrap();
@@ -241,7 +227,10 @@ fn range_filter_on_integers() {
 fn range_filter_rejects_text_columns() {
     let (path, doc) = sample();
     assert!(matches!(
-        doc.dataset().parse_bound(1, "0"),
+        doc.query(
+            &QuerySpec::single(1, Filter::range(Some(("0").to_owned()), None, false)),
+            &Cancellation::default()
+        ),
         Err(Error::InvalidArgument(_))
     ));
     std::fs::remove_file(path).ok();
@@ -430,60 +419,38 @@ fn contains_filter_is_for_text_only() {
 fn dates_format_parse_and_filter() {
     let (path, doc) = temporal_sample();
     assert_eq!(doc.dataset().format_value(1, 19_724).unwrap(), "2024-01-02");
-    assert_eq!(
-        doc.dataset()
-            .parse_bound(1, "2024-01-02")
-            .unwrap()
-            .axis_value(),
-        19_724.0
-    );
-    assert!(doc.dataset().parse_bound(1, "not a date").is_err());
+
+    assert!(doc
+        .query(
+            &QuerySpec::single(
+                1,
+                Filter::range(Some(("not a date").to_owned()), None, false)
+            ),
+            &Cancellation::default()
+        )
+        .is_err());
 
     let base = 1_704_099_600_000_000i64;
     assert_eq!(
         doc.dataset().format_value(2, base).unwrap(),
         "2024-01-01T09:00:00Z"
     );
-    assert_eq!(
-        doc.dataset()
-            .parse_bound(2, "2024-01-01T10:00:00Z")
-            .unwrap()
-            .axis_value(),
-        (base + 3_600_000_000) as f64
-    );
 
     // Range on dates: nulls excluded, bounds inclusive.
-    let min = doc.dataset().parse_bound(1, "2024-01-02").unwrap();
+    let min = ("2024-01-02").to_owned();
     let doc = doc
         .query(
-            &QuerySpec::single(
-                1,
-                Filter::range(
-                    (Some(min)).map(|b: gewu_core::Bound| b.filter_text()),
-                    None,
-                    false,
-                ),
-            ),
+            &QuerySpec::single(1, Filter::range(Some(min), None, false)),
             &gewu_core::Cancellation::default(),
         )
         .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
-    let max = doc
-        .dataset()
-        .parse_bound(2, "2024-01-01T10:00:00Z")
-        .unwrap();
+    let max = ("2024-01-01T10:00:00Z").to_owned();
     let doc = doc
         .query(
-            &QuerySpec::single(
-                2,
-                Filter::range(
-                    None,
-                    (Some(max)).map(|b: gewu_core::Bound| b.filter_text()),
-                    false,
-                ),
-            ),
+            &QuerySpec::single(2, Filter::range(None, Some(max), false)),
             &gewu_core::Cancellation::default(),
         )
         .unwrap();

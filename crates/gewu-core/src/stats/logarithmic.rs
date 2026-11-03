@@ -425,16 +425,22 @@ fn finite_ranges<N: Copy>(
         .map(|index| {
             context.check_at(index)?;
             Ok(RangeBounds {
-                min: Some(if index == 0 {
-                    min.clone()
-                } else {
-                    lower(cuts[index - 1])?
-                }),
-                max: Some(if index == cuts.len() {
-                    max.clone()
-                } else {
-                    upper(cuts[index])?
-                }),
+                min: Some(
+                    if index == 0 {
+                        min.clone()
+                    } else {
+                        lower(cuts[index - 1])?
+                    }
+                    .into(),
+                ),
+                max: Some(
+                    if index == cuts.len() {
+                        max.clone()
+                    } else {
+                        upper(cuts[index])?
+                    }
+                    .into(),
+                ),
             })
         })
         .collect()
@@ -477,8 +483,8 @@ mod tests {
             let predicate = column
                 .compile_filter(
                     &Filter::range(
-                        (range.min.clone()).map(|b: crate::Bound| b.filter_text()),
-                        (range.max.clone()).map(|b: crate::Bound| b.filter_text()),
+                        (range.min.clone()).map(|b| b.value),
+                        (range.max.clone()).map(|b| b.value),
                         false,
                     ),
                     &Cancellation::default(),

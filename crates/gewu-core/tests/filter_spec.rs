@@ -101,8 +101,8 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
                 &QuerySpec::single(
                     0,
                     Filter::range(
-                        bounds.min.as_ref().map(|b| b.filter_text()),
-                        bounds.max.as_ref().map(|b| b.filter_text()),
+                        bounds.min.as_ref().map(|b| b.value.clone()),
+                        bounds.max.as_ref().map(|b| b.value.clone()),
                         false,
                     ),
                 ),

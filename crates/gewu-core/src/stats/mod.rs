@@ -169,10 +169,28 @@ pub struct RangeHistogram {
     pub ranges: Vec<RangeBounds>,
 }
 
+/// Display and filter input projections of an exact native endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeBound {
+    pub value: String,
+    pub label: String,
+    pub coordinate: f64,
+}
+
+impl From<Bound> for RangeBound {
+    fn from(bound: Bound) -> Self {
+        Self {
+            value: bound.filter_text(),
+            label: bound.display().to_owned(),
+            coordinate: bound.axis_value(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeBounds {
-    pub min: Option<crate::Bound>,
-    pub max: Option<crate::Bound>,
+    pub min: Option<RangeBound>,
+    pub max: Option<RangeBound>,
 }
 /// Range-filter charts have a bounded number of options, independent of row count.
 const MAX_BINS: u32 = 60;
@@ -627,9 +645,14 @@ fn bin_ranges<C: Copy>(
                 min: if i == 0 {
                     None
                 } else {
-                    Some(lower(cuts[i - 1])?)
+                    Some(lower(cuts[i - 1])?.into())
                 },
-                max: cuts.get(i).copied().map(&upper).transpose()?,
+                max: cuts
+                    .get(i)
+                    .copied()
+                    .map(&upper)
+                    .transpose()?
+                    .map(Into::into),
             })
         })
         .collect()
@@ -759,8 +782,8 @@ mod tests {
             let predicate = column
                 .compile_filter(
                     &Filter::range(
-                        (bounds.min.clone()).map(|b: crate::Bound| b.filter_text()),
-                        (bounds.max.clone()).map(|b: crate::Bound| b.filter_text()),
+                        (bounds.min.clone()).map(|b| b.value),
+                        (bounds.max.clone()).map(|b| b.value),
                         false,
                     ),
                     &Cancellation::default(),

@@ -43,10 +43,6 @@ impl Dataset {
         crate::stats::analysis::structure(self.column(column)?.array().data_type())
     }
 
-    pub fn parse_bound(&self, column: u32, text: &str) -> Result<crate::Bound> {
-        self.column(column)?.parse_bound(text)
-    }
-
     /// Open a supported file using its format's default options.
     /// CSV/TSV and XLSX use the first record as headers; XLSX opens its first sheet.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {

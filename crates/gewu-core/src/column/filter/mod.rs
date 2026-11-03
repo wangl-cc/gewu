@@ -16,7 +16,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-pub use super::bound::Bound;
+use super::bound::Bound;
 use crate::{
     predicate::Predicate,
     types::{self, Domain, Encoding},

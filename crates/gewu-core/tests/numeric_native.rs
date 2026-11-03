@@ -7,7 +7,7 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Cancellation, Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
+use gewu_core::{Cancellation, Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
 use parquet::arrow::ArrowWriter;
 
 fn statistics(doc: &std::sync::Arc<gewu_core::View>) -> NumericStatistics {
@@ -33,18 +33,11 @@ fn document(array: ArrayRef) -> std::sync::Arc<gewu_core::View> {
 
 fn check_range(
     doc: &std::sync::Arc<gewu_core::View>,
-    min: Option<Bound>,
-    max: Option<Bound>,
+    min: Option<String>,
+    max: Option<String>,
     expected: &[u64],
 ) -> Arc<gewu_core::View> {
-    let spec = QuerySpec::single(
-        0,
-        Filter::range(
-            min.map(|b: gewu_core::Bound| b.filter_text()),
-            max.map(|b: gewu_core::Bound| b.filter_text()),
-            false,
-        ),
-    );
+    let spec = QuerySpec::single(0, Filter::range(min, max, false));
     let view = doc
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
@@ -55,22 +48,6 @@ fn check_range(
         doc.dataset().schema().field(0).data_type()
     );
     view
-}
-
-fn bound_i64(doc: &std::sync::Arc<gewu_core::View>, column: u32, value: i64) -> Bound {
-    Bound::from_i64(
-        doc.dataset().schema().field(column as usize).data_type(),
-        value,
-    )
-    .unwrap()
-}
-
-fn bound_u64(doc: &std::sync::Arc<gewu_core::View>, column: u32, value: u64) -> Bound {
-    Bound::from_u64(
-        doc.dataset().schema().field(column as usize).data_type(),
-        value,
-    )
-    .unwrap()
 }
 
 #[test]
@@ -94,19 +71,22 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
                 (Some("1e30"), None, &[]),
                 (None, Some("-1e30"), &[]),
             ] {
-                let min = min.map(|text| doc.dataset().parse_bound(0, text).unwrap());
-                let max = max.map(|text| doc.dataset().parse_bound(0, text).unwrap());
+                let min = min.map(|text| (text).to_owned());
+                let max = max.map(|text| (text).to_owned());
                 check_range(&doc, min, max, expected);
             }
-            let max = bound_i64(&doc, 0, <$native>::MAX as i64);
-            let min = bound_i64(&doc, 0, <$native>::MIN as i64);
+            let max = (<$native>::MAX as i64).to_string();
+            let min = (<$native>::MIN as i64).to_string();
             check_range(&doc, Some(max), None, &[6]);
             check_range(&doc, None, Some(min), &[0]);
-            let outside = bound_u64(&doc, 0, u64::MAX);
+            let outside = (u64::MAX).to_string();
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.dataset().parse_bound(0, input),
+                    doc.query(
+                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
+                        &Cancellation::default()
+                    ),
                     Err(Error::InvalidArgument(_))
                 ));
             }
@@ -137,15 +117,18 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
                 (Some("1e30"), None, &[]),
                 (Some("-1"), None, &[0, 1, 2, 3]),
             ] {
-                let min = min.map(|text| doc.dataset().parse_bound(0, text).unwrap());
-                let max = max.map(|text| doc.dataset().parse_bound(0, text).unwrap());
+                let min = min.map(|text| (text).to_owned());
+                let max = max.map(|text| (text).to_owned());
                 check_range(&doc, min, max, expected);
             }
-            let max = bound_u64(&doc, 0, <$native>::MAX as u64);
+            let max = (<$native>::MAX as u64).to_string();
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.dataset().parse_bound(0, input),
+                    doc.query(
+                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
+                        &Cancellation::default()
+                    ),
                     Err(Error::InvalidArgument(_))
                 ));
             }
@@ -168,38 +151,20 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &signed,
-        Some(bound_i64(&signed, 0, large + 1)),
-        Some(bound_i64(&signed, 0, large + 1)),
+        Some((large + 1).to_string()),
+        Some((large + 1).to_string()),
         &[2],
     );
     check_range(
         &signed,
-        Some(bound_i64(&signed, 0, large)),
-        Some(bound_i64(&signed, 0, large)),
+        Some((large).to_string()),
+        Some((large).to_string()),
         &[1],
     );
-    check_range(
-        &signed,
-        Some(
-            signed
-                .dataset()
-                .parse_bound(0, "9223372036854775808")
-                .unwrap(),
-        ),
-        None,
-        &[],
-    );
-    check_range(
-        &signed,
-        None,
-        Some(
-            signed
-                .dataset()
-                .parse_bound(0, "-9223372036854775808")
-                .unwrap(),
-        ),
-        &[0],
-    );
+    check_range(&signed, Some(("9223372036854775808").to_owned()), None, &[]);
+    check_range(&signed, None, Some(("-9223372036854775808").to_owned()), &[
+        0,
+    ]);
 
     let unsigned = document(Arc::new(UInt64Array::from(vec![
         0,
@@ -209,30 +174,20 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &unsigned,
-        Some(bound_u64(&unsigned, 0, large as u64 + 1)),
-        Some(bound_u64(&unsigned, 0, large as u64 + 1)),
+        Some((large as u64 + 1).to_string()),
+        Some((large as u64 + 1).to_string()),
         &[2],
     );
     check_range(
         &unsigned,
-        Some(
-            unsigned
-                .dataset()
-                .parse_bound(0, "18446744073709551616")
-                .unwrap(),
-        ),
+        Some(("18446744073709551616").to_owned()),
         None,
         &[],
     );
     check_range(
         &unsigned,
         None,
-        Some(
-            unsigned
-                .dataset()
-                .parse_bound(0, "18446744073709551616")
-                .unwrap(),
-        ),
+        Some(("18446744073709551616").to_owned()),
         &[0, 1, 2, 3],
     );
 
@@ -257,33 +212,18 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
         None,
     ])));
     // The stored f32 value is slightly greater than the f64 value 0.1.
-    check_range(
-        &doc,
-        None,
-        Some(doc.dataset().parse_bound(0, "0.1").unwrap()),
-        &[3],
-    );
-    check_range(
-        &doc,
-        Some(doc.dataset().parse_bound(0, "0.1").unwrap()),
-        Some(doc.dataset().parse_bound(0, "1").unwrap()),
-        &[0, 1],
-    );
+    check_range(&doc, None, Some(("0.1").to_owned()), &[3]);
+    check_range(&doc, Some(("0.1").to_owned()), Some(("1").to_owned()), &[
+        0, 1,
+    ]);
     check_range(&doc, None, None, &[0, 1, 3, 4]);
-    check_range(
-        &doc,
-        Some(doc.dataset().parse_bound(0, "inf").unwrap()),
-        None,
-        &[4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(doc.dataset().parse_bound(0, "-inf").unwrap()),
-        &[3],
-    );
+    check_range(&doc, Some(("inf").to_owned()), None, &[4]);
+    check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.dataset().parse_bound(0, "NaN"),
+        doc.query(
+            &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
+            &Cancellation::default()
+        ),
         Err(Error::InvalidArgument(_))
     ));
 }
@@ -297,66 +237,39 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
         Some(i8::MAX),
         None,
     ])));
-    assert_eq!(
-        integers
-            .dataset()
-            .parse_bound(0, "1.2")
-            .unwrap()
-            .axis_value(),
-        1.2
-    );
-    check_range(
-        &integers,
-        Some(integers.dataset().parse_bound(0, "1.2").unwrap()),
-        None,
-        &[2, 3],
-    );
-    assert_eq!(
-        integers
-            .dataset()
-            .parse_bound(0, "128")
-            .unwrap()
-            .axis_value(),
-        128.0
-    );
-    check_range(
-        &integers,
-        Some(integers.dataset().parse_bound(0, "128").unwrap()),
-        None,
-        &[],
-    );
+
+    check_range(&integers, Some(("1.2").to_owned()), None, &[2, 3]);
+
+    check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.dataset().parse_bound(0, "not a number"),
+        integers.query(
+            &QuerySpec::single(
+                0,
+                Filter::range(Some(("not a number").to_owned()), None, false)
+            ),
+            &Cancellation::default()
+        ),
         Err(Error::InvalidArgument(_))
     ));
-    assert!(integers.dataset().parse_bound(0, "not a number").is_err());
+    assert!(integers
+        .query(
+            &QuerySpec::single(
+                0,
+                Filter::range(Some(("not a number").to_owned()), None, false)
+            ),
+            &Cancellation::default()
+        )
+        .is_err());
 
     let floats = document(Arc::new(Float32Array::from(vec![0.0, 0.1, 1.0])));
-    assert_eq!(
-        floats.dataset().parse_bound(0, "0.1").unwrap().axis_value(),
-        0.1
-    );
-    check_range(
-        &floats,
-        None,
-        Some(floats.dataset().parse_bound(0, "0.1").unwrap()),
-        &[0],
-    );
+
+    check_range(&floats, None, Some(("0.1").to_owned()), &[0]);
 
     let unsigned = document(Arc::new(UInt64Array::from(vec![u64::MAX - 1, u64::MAX])));
     // Both values have the same approximate chart coordinate, but the raw
     // filter must still select only the exact maximum.
-    assert_eq!(
-        unsigned
-            .dataset()
-            .parse_bound(0, &(u64::MAX - 1).to_string())
-            .unwrap()
-            .axis_value(),
-        bound_u64(&unsigned, 0, u64::MAX).axis_value()
-    );
-    check_range(&unsigned, Some(bound_u64(&unsigned, 0, u64::MAX)), None, &[
-        1,
-    ]);
+
+    check_range(&unsigned, Some((u64::MAX).to_string()), None, &[1]);
 }
 
 #[test]
@@ -374,16 +287,10 @@ fn temporal_axis_projection_and_filters_use_the_columns_physical_units() {
     ];
     for (array, input) in cases {
         let doc = document(array);
-        assert_eq!(
-            doc.dataset().parse_bound(0, input).unwrap().axis_value(),
-            1.0
-        );
-        check_range(
-            &doc,
-            Some(doc.dataset().parse_bound(0, input).unwrap()),
-            Some(doc.dataset().parse_bound(0, input).unwrap()),
-            &[1],
-        );
+
+        check_range(&doc, Some((input).to_owned()), Some((input).to_owned()), &[
+            1,
+        ]);
     }
 }
 
@@ -398,16 +305,12 @@ fn float64_ranges_compare_large_integer_bounds_exactly() {
         2_f64.powi(64),
     ])));
     // The odd integer between these adjacent floats cannot be represented by f64.
-    check_range(&doc, Some(bound_i64(&doc, 0, large + 1)), None, &[3, 4]);
-    check_range(&doc, None, Some(bound_i64(&doc, 0, large + 1)), &[0, 1, 2]);
-    check_range(&doc, Some(bound_i64(&doc, 0, -large - 1)), None, &[
-        1, 2, 3, 4,
-    ]);
-    check_range(&doc, None, Some(bound_i64(&doc, 0, -large - 1)), &[0]);
-    check_range(&doc, Some(bound_u64(&doc, 0, u64::MAX)), None, &[4]);
-    check_range(&doc, None, Some(bound_u64(&doc, 0, u64::MAX)), &[
-        0, 1, 2, 3,
-    ]);
+    check_range(&doc, Some((large + 1).to_string()), None, &[3, 4]);
+    check_range(&doc, None, Some((large + 1).to_string()), &[0, 1, 2]);
+    check_range(&doc, Some((-large - 1).to_string()), None, &[1, 2, 3, 4]);
+    check_range(&doc, None, Some((-large - 1).to_string()), &[0]);
+    check_range(&doc, Some((u64::MAX).to_string()), None, &[4]);
+    check_range(&doc, None, Some((u64::MAX).to_string()), &[0, 1, 2, 3]);
 }
 
 #[test]
@@ -440,12 +343,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         (1, 1, 5)
     );
 
-    let doc = check_range(
-        &doc,
-        Some(doc.dataset().parse_bound(0, "2").unwrap()),
-        None,
-        &[1, 2],
-    );
+    let doc = check_range(&doc, Some(("2").to_owned()), None, &[1, 2]);
     let summary = statistics(&doc);
     assert_eq!(
         (doc.row_count(), values(&doc).distinct_count, summary.mean),
@@ -496,12 +394,7 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         assert_eq!(histogram.counts, [1, 1, 1]);
         let min = doc.dataset().format_value(0, 1).unwrap();
         let max = doc.dataset().format_value(0, 2).unwrap();
-        check_range(
-            &doc,
-            Some(doc.dataset().parse_bound(0, &min).unwrap()),
-            Some(doc.dataset().parse_bound(0, &max).unwrap()),
-            &[1, 2],
-        );
+        check_range(&doc, Some(min), Some(max), &[1, 2]);
     }
 }
 
@@ -528,34 +421,12 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
         let doc = document(array);
         assert_eq!(values(&doc).distinct_count, 2);
         // Chart coordinates may round, but filter endpoints remain exact.
-        assert_eq!(
-            doc.dataset()
-                .parse_bound(0, &base.to_string())
-                .unwrap()
-                .axis_value(),
-            doc.dataset()
-                .parse_bound(0, &(base + 1).to_string())
-                .unwrap()
-                .axis_value()
-        );
+
+        check_range(&doc, Some((base + 1).to_string()), None, &[1]);
         check_range(
             &doc,
-            Some(
-                doc.dataset()
-                    .parse_bound(0, &(base + 1).to_string())
-                    .unwrap(),
-            ),
-            None,
-            &[1],
-        );
-        check_range(
-            &doc,
-            Some(doc.dataset().parse_bound(0, &format!("{base}.1")).unwrap()),
-            Some(
-                doc.dataset()
-                    .parse_bound(0, &format!("{}.9", base + 1))
-                    .unwrap(),
-            ),
+            Some(format!("{base}.1")),
+            Some(format!("{}.9", base + 1)),
             &[1],
         );
     }

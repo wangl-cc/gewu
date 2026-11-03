@@ -51,12 +51,12 @@ pub struct RangeBound {
     pub label: String,
     pub coordinate: f64,
 }
-impl From<core::Bound> for RangeBound {
-    fn from(bound: core::Bound) -> Self {
+impl From<core::RangeBound> for RangeBound {
+    fn from(bound: core::RangeBound) -> Self {
         Self {
-            value: bound.filter_text(),
-            label: bound.display().into(),
-            coordinate: bound.axis_value(),
+            value: bound.value,
+            label: bound.label,
+            coordinate: bound.coordinate,
         }
     }
 }

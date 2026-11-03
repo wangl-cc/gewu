@@ -16,9 +16,8 @@ mod stats;
 mod types;
 mod view;
 
-pub use column::{
-    Bound, ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice,
-};
+pub(crate) use column::Bound;
+pub use column::{ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice};
 pub use dataset::Dataset;
 pub use error::{Error, Result};
 pub use file::{
@@ -32,7 +31,7 @@ pub use query::{
 };
 pub use stats::{
     AnalysisCapabilities, AnalysisField, AxisScale, ColumnOverview, Histogram, LengthSummary,
-    LengthUnit, NumericStatistics, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
-    ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind,
+    ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use view::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, View};

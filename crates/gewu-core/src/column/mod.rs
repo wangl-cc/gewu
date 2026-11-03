@@ -16,8 +16,8 @@ use std::{
     time::Duration,
 };
 
-use arrow::{array::ArrayRef, datatypes::DataType};
-pub use bound::Bound;
+use arrow::array::ArrayRef;
+pub(crate) use bound::Bound;
 pub(crate) use dictionary::Dictionary;
 pub(crate) use metadata::display_type;
 pub use metadata::{ColumnInfo, ValueCategory};
@@ -159,10 +159,6 @@ impl Column {
         }
     }
 
-    pub(crate) fn logical_data_type(&self) -> &DataType {
-        types::value_type(self.array.data_type())
-    }
-
     pub(crate) fn info(&self) -> ColumnInfo {
         ColumnInfo::from_column(self)
     }
@@ -174,10 +170,6 @@ impl Column {
     ) -> Result<Predicate<'a>> {
         filter::compile_filter(self, filter, cancel)
     }
-
-    pub(crate) fn parse_bound(&self, text: &str) -> Result<Bound> {
-        Bound::parse(self.logical_data_type(), text)
-    }
 }
 
 #[cfg(test)]
@@ -188,7 +180,7 @@ mod tests {
             StructArray,
         },
         buffer::NullBuffer,
-        datatypes::{Field, Int32Type, Int8Type},
+        datatypes::{DataType, Field, Int32Type, Int8Type},
     };
 
     use super::*;

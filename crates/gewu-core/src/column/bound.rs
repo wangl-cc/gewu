@@ -26,7 +26,7 @@ use crate::{
 /// not interchangeable between different units, scales, widths or time zones.
 /// Cloning shares immutable parsed state; it does not copy labels or digits.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Bound {
+pub(crate) struct Bound {
     inner: Arc<BoundData>,
 }
 
@@ -64,7 +64,7 @@ impl Bound {
     /// Parse an endpoint according to the complete column type. Integer and
     /// Decimal inputs retain exact fractional bounds and arbitrary digit lengths.
     /// Invalid inputs, NaN and unsupported types return an error.
-    pub fn parse(data_type: &DataType, text: &str) -> Result<Self> {
+    pub(crate) fn parse(data_type: &DataType, text: &str) -> Result<Self> {
         let text = text.trim();
         if let Some(ticks) = text.strip_prefix('@') {
             if matches!(
@@ -124,7 +124,7 @@ impl Bound {
 
     /// Construct an exact integer endpoint. For dates/times the integer is in
     /// the column's physical unit. Negative bounds on unsigned columns are valid.
-    pub fn from_i64(data_type: &DataType, value: i64) -> Result<Self> {
+    pub(crate) fn from_i64(data_type: &DataType, value: i64) -> Result<Self> {
         match direct_domain(data_type) {
             Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
                 Self::native_exact(data_type, value.into(), 0, value.to_string(), value as f64)
@@ -142,7 +142,7 @@ impl Bound {
 
     /// Construct an unsigned integer endpoint without passing through f64.
     /// Temporal physical values must still fit their signed representation.
-    pub fn from_u64(data_type: &DataType, value: u64) -> Result<Self> {
+    pub(crate) fn from_u64(data_type: &DataType, value: u64) -> Result<Self> {
         match direct_domain(data_type) {
             Some(Domain::Integer | Domain::Decimal | Domain::Duration) => Self::native_exact(
                 data_type,
@@ -163,7 +163,7 @@ impl Bound {
     /// Construct a floating range endpoint. Only floating columns accept this
     /// constructor. Float16/32 endpoints are not narrowed: bin boundaries can
     /// lie between native values. Infinity is valid; NaN is not ordered.
-    pub fn from_f64(data_type: &DataType, value: f64) -> Result<Self> {
+    pub(crate) fn from_f64(data_type: &DataType, value: f64) -> Result<Self> {
         if !data_type.is_floating() || value.is_nan() {
             return Err(invalid_type(data_type));
         }
@@ -188,7 +188,7 @@ impl Bound {
     /// Construct an exact decimal endpoint as `coefficient * 10^-scale`.
     /// The input scale need not equal the column's scale; range preparation
     /// rounds inward to the column's native coefficient grid.
-    pub fn from_decimal(data_type: &DataType, coefficient: i256, scale: i8) -> Result<Self> {
+    pub(crate) fn from_decimal(data_type: &DataType, coefficient: i256, scale: i8) -> Result<Self> {
         if !matches!(direct_domain(data_type), Some(Domain::Decimal)) {
             return Err(invalid_type(data_type));
         }
@@ -204,7 +204,7 @@ impl Bound {
     }
 
     /// Lossless filter protocol text, independent of display formatting.
-    pub fn filter_text(&self) -> String {
+    pub(crate) fn filter_text(&self) -> String {
         match &self.inner.value {
             Value::Exact { literal, .. } => literal.filter_text(),
             Value::Float { .. } => self.inner.display.clone(),
@@ -213,18 +213,18 @@ impl Bound {
     }
 
     /// Label to restore in a text editor. It is not used to execute a filter.
-    pub fn display(&self) -> &str {
+    pub(crate) fn display(&self) -> &str {
         &self.inner.display
     }
 
     /// Approximate histogram coordinate. Adjacent large integer/decimal values
     /// can share this coordinate while remaining distinct filter endpoints.
-    pub fn axis_value(&self) -> f64 {
+    pub(crate) fn axis_value(&self) -> f64 {
         self.inner.axis
     }
 
     /// Complete logical type, including width, scale, unit and time zone.
-    pub fn data_type(&self) -> &DataType {
+    pub(crate) fn data_type(&self) -> &DataType {
         &self.inner.data_type
     }
 
@@ -467,5 +467,66 @@ fn format_decimal(coefficient: i256, scale: i8) -> String {
         format!("{sign}{}.{}", &digits[..split], &digits[split..])
     } else {
         format!("{sign}0.{}{digits}", "0".repeat(scale - digits.len()))
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use arrow::datatypes::TimeUnit;
+
+    use super::*;
+
+    #[test]
+    fn parsed_coordinates_preserve_units_without_narrowing_input() {
+        for (data_type, text, coordinate) in [
+            (DataType::Int8, "1.2", 1.2),
+            (DataType::Int8, "128", 128.0),
+            (DataType::Float32, "0.1", 0.1),
+            (DataType::Date32, "1970-01-02", 1.0),
+            (DataType::Date32, "2024-01-02", 19724.0),
+            (DataType::Time32(TimeUnit::Millisecond), "00:00:00.001", 1.0),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                "1970-01-01T00:00:00.000001Z",
+                1.0,
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                "2024-01-01T10:00:00Z",
+                1704103200000000.0,
+            ),
+        ] {
+            assert_eq!(
+                Bound::parse(&data_type, text).unwrap().axis_value(),
+                coordinate
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_exact_endpoints_can_share_only_their_plot_coordinate() {
+        for (data_type, first, second) in [
+            (
+                DataType::UInt64,
+                (u64::MAX - 1).to_string(),
+                u64::MAX.to_string(),
+            ),
+            (
+                DataType::Decimal128(16, 0),
+                "9007199254740992".into(),
+                "9007199254740993".into(),
+            ),
+            (
+                DataType::Decimal256(16, 0),
+                "9007199254740992".into(),
+                "9007199254740993".into(),
+            ),
+        ] {
+            let first = Bound::parse(&data_type, &first).unwrap();
+            let second = Bound::parse(&data_type, &second).unwrap();
+            assert_eq!(first.axis_value(), second.axis_value());
+            assert_ne!(first.filter_text(), second.filter_text());
+            assert_eq!(first.compare(&second), Ordering::Less);
+        }
     }
 }
