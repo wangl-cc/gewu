@@ -23,30 +23,42 @@ struct ViewerTests {
     }
 
     @Test func newerApplySupersedesAnOlderOne() async throws {
-        let view = try Self.dataset().view()
-        let viewer = Viewer(view: view, spec: Self.spec(city: nil, district: nil))
+        let dataset = try Self.dataset()
+        let view = dataset.view()
+        let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
         let older = Task { await viewer.apply(Self.spec(city: "bj", district: nil), debounce: true) }
         // Let the older request start first; the main actor runs tasks in order.
         await Task.yield()
         let newer = await viewer.apply(Self.spec(city: "sh", district: nil))
-        guard case .applied = newer else { Issue.record("The newest request must apply"); return }
-        guard case .superseded = await older.value else { Issue.record("The older request must not apply"); return }
+        guard case .applied = newer else {
+            Issue.record("The newest request must apply")
+            return
+        }
+        guard case .superseded = await older.value else {
+            Issue.record("The older request must not apply")
+            return
+        }
         #expect(viewer.applied.spec == Self.spec(city: "sh", district: nil))
         #expect(viewer.applied.view.rowCount() == 2)
     }
 
     @Test func failedApplyKeepsTheAppliedView() async throws {
-        let initial = try Self.dataset().view()
-        let viewer = Viewer(view: initial, spec: Self.spec(city: nil, district: nil))
+        let dataset = try Self.dataset()
+        let initial = dataset.view()
+        let viewer = Viewer(dataset: dataset, view: initial, spec: Self.spec(city: nil, district: nil))
         var invalid = Self.spec(city: nil, district: nil)
         invalid.columns[0].filter = Filter(condition: .range(min: "1", max: nil), includeNulls: false)
-        guard case .failed = await viewer.apply(invalid) else { Issue.record("A text range must fail"); return }
+        guard case .failed = await viewer.apply(invalid) else {
+            Issue.record("A text range must fail")
+            return
+        }
         #expect(viewer.applied.view === initial)
     }
 
     @Test func resultsAreSharedWithinAViewAndReleasedWhenItChanges() async throws {
-        let view = try Self.dataset().view()
-        let viewer = Viewer(view: view, spec: Self.spec(city: nil, district: nil))
+        let dataset = try Self.dataset()
+        let view = dataset.view()
+        let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
         _ = await viewer.apply(Self.spec(city: "bj", district: "haidian"))
         let facet = try await viewer.facet(1)
         #expect(try await viewer.facet(1) === facet, "One computation per View and column")
@@ -66,12 +78,16 @@ struct ViewerTests {
     }
 
     @Test func closingSupersedesPendingQueries() async throws {
-        let view = try Self.dataset().view()
-        let viewer = Viewer(view: view, spec: Self.spec(city: nil, district: nil))
+        let dataset = try Self.dataset()
+        let view = dataset.view()
+        let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
         let pending = Task { await viewer.apply(Self.spec(city: "bj", district: nil), debounce: true) }
         await Task.yield()
         viewer.close()
-        guard case .superseded = await pending.value else { Issue.record("Closing must stop queries"); return }
+        guard case .superseded = await pending.value else {
+            Issue.record("Closing must stop queries")
+            return
+        }
         #expect(viewer.applied.spec == Self.spec(city: nil, district: nil))
     }
 }

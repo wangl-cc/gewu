@@ -95,6 +95,7 @@ fn find_scans(c: &mut Criterion) {
     drop(reopened);
     drop(reader);
     let filtered = dictionary_doc
+        .dataset()
         .query(
             &QuerySpec::single(1, Filter::exact(vec!["true".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -143,6 +144,7 @@ fn find_scans(c: &mut Criterion) {
     }));
     let (_wide_file, wide_doc) = document(columns);
     let sorted = wide_doc
+        .dataset()
         .query(
             &QuerySpec::new().with_sort(0, true, 0),
             &gewu_core::Cancellation::default(),

@@ -82,7 +82,8 @@ struct TableExecutionTests {
         defer { try? FileManager.default.removeItem(at: path) }
         let csv = "value,label\n" + (0..<130).map { "\($0),row\($0)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
-        let view = try GewuDataset.open(path: path.path).view()
+        let dataset = try GewuDataset.open(path: path.path)
+        let view = dataset.view()
         let reader = TableRowReader()
         let source = try await reader.read(view, start: 2, count: 4, columns: [])
         #expect(source.cells.isEmpty && source.sourceRows == [2, 3, 4, 5])
@@ -91,7 +92,7 @@ struct TableExecutionTests {
             start, count, columns in
             calls += 1
             if calls == 2 {
-                let other = try view.query(
+                let other = try dataset.query(
                     spec: QuerySpec(columns: [
                         ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)
                     ]),

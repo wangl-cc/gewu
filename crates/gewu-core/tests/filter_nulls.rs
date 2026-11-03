@@ -55,6 +55,7 @@ fn contains(include_nulls: bool) -> Filter {
 
 fn rows(doc: &std::sync::Arc<gewu_core::View>, spec: QuerySpec) -> Vec<u64> {
     let view = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     view.rows(0, 20, &[0, 1]).unwrap().source_rows
@@ -132,6 +133,7 @@ fn choices_count_included_nulls_and_respect_all_filters() {
         .with_filter(2, Filter::exact(vec!["A".into()], false, false))
         .with_filter(3, Filter::contains("needle".into(), false, false));
     let values = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(2, &Cancellation::default())
@@ -148,6 +150,7 @@ fn choices_count_included_nulls_and_respect_all_filters() {
 
     // All filters leave source rows 0 and 1: null and one finite value.
     let choices = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())

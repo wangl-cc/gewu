@@ -61,7 +61,7 @@ final class DocumentModel: ObservableObject {
             columns: metadata.columns.indices.map {
                 ColSpec(column: UInt32($0), sort: nil, filter: nil)
             })
-        viewer = Viewer(view: dataset.view(), spec: initial)
+        viewer = Viewer(dataset: dataset, view: dataset.view(), spec: initial)
         spec = initial
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn

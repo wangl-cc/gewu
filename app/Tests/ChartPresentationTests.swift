@@ -36,7 +36,7 @@ struct ChartPresentationTests {
         try "x,y\n-1,10\n1,0\n10,100\n100,1000\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
-        let viewer = Viewer(view: document.view(), spec: QuerySpec(columns: []))
+        let viewer = Viewer(dataset: document, view: document.view(), spec: QuerySpec(columns: []))
         let model = ScatterModel()
         await model.load(
             viewer: viewer, x: 0, y: 1,
@@ -55,8 +55,8 @@ struct ChartPresentationTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
         try "value\n1\n2\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let view = try GewuDataset.open(path: url.path).view()
-        let viewer = Viewer(view: view, spec: QuerySpec(columns: []))
+        let dataset = try GewuDataset.open(path: url.path)
+        let viewer = Viewer(dataset: dataset, view: dataset.view(), spec: QuerySpec(columns: []))
         let model = ScatterModel()
         var task: Task<Void, Never>?
         let observation = model.$loading.sink { loading in

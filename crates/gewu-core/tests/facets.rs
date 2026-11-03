@@ -88,7 +88,10 @@ fn busy_spec() -> QuerySpec {
 fn choices_include_only_visible_values() {
     let (path, doc) = sample("distinct");
     let spec = busy_spec();
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
+    let view = doc
+        .dataset()
+        .query(&spec, &Cancellation::default())
+        .unwrap();
 
     // Both filters apply to all candidate columns: rows a and f.
     assert_eq!(labels_of(&view, 1), [("cat".into(), 1), ("dog".into(), 1),]);
@@ -105,11 +108,15 @@ fn choices_and_distribution_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
     let spec = QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false));
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
+    let view = doc
+        .dataset()
+        .query(&spec, &Cancellation::default())
+        .unwrap();
     let names: Vec<String> = labels_of(&view, 0).into_iter().map(|(l, _)| l).collect();
     assert_eq!(names, ["a", "d"]);
 
     let h = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
@@ -126,6 +133,7 @@ fn histogram_domain_and_counts_use_visible_rows() {
     let spec = busy_spec().with_filter(3, Filter::range(Some("60".into()), None, false));
     // All filters apply: only row f remains.
     let h = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
@@ -134,6 +142,7 @@ fn histogram_domain_and_counts_use_visible_rows() {
     assert_eq!(h.counts.iter().sum::<u64>(), 1);
     // The price domain contains only the visible value.
     let h = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_distribution(2, 4, gewu_core::AxisScale::Linear, &Cancellation::default())
@@ -153,6 +162,7 @@ fn failed_apply_keeps_the_old_view() {
     let before = doc.clone();
     let bad = QuerySpec::single(0, Filter::range(Some("1".into()), None, false));
     assert!(doc
+        .dataset()
         .query(&bad, &gewu_core::Cancellation::default())
         .is_err());
     assert_eq!(
@@ -190,8 +200,14 @@ fn cancellation_belongs_to_one_request() {
     let token = Cancellation::default();
     token.cancel();
     let spec = busy_spec();
-    assert!(matches!(doc.query(&spec, &token), Err(Error::Cancelled)));
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
+    assert!(matches!(
+        doc.dataset().query(&spec, &token),
+        Err(Error::Cancelled)
+    ));
+    let view = doc
+        .dataset()
+        .query(&spec, &Cancellation::default())
+        .unwrap();
     assert_eq!(view.row_count(), 2);
     assert_eq!(doc.row_count(), 6);
     std::fs::remove_file(path).ok();
@@ -216,12 +232,14 @@ fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
     assert_eq!(choices.null_count, 0);
     let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
     assert_eq!(
-        doc.query(&by_value, &gewu_core::Cancellation::default())
+        doc.dataset()
+            .query(&by_value, &gewu_core::Cancellation::default())
             .unwrap()
             .row_count(),
         (n / 1000) as u64
     );
-    doc.query(&QuerySpec::all(1), &gewu_core::Cancellation::default())
+    doc.dataset()
+        .query(&QuerySpec::all(1), &gewu_core::Cancellation::default())
         .unwrap();
 
     std::fs::remove_file(path).ok();

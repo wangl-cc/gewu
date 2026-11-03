@@ -36,6 +36,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         )
         .with_filter(2, Filter::contains("keep".into(), false, false));
     let view = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     let rows = view.rows(0, len as u32, &[0, 1, 2]).unwrap();
@@ -50,7 +51,8 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         Filter::range(Some("20".into()), Some("10".into()), false),
     );
     assert!(matches!(
-        doc.query(&invalid, &gewu_core::Cancellation::default()),
+        doc.dataset()
+            .query(&invalid, &gewu_core::Cancellation::default()),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
@@ -90,6 +92,7 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
         );
 
     let view = doc
+        .dataset()
         .query(&expensive_first, &gewu_core::Cancellation::default())
         .unwrap();
     let expected: Vec<u64> = (100..=200)

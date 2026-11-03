@@ -201,6 +201,7 @@ mod delimited {
             .map(|dataset| std::sync::Arc::new(dataset).view())
             .unwrap();
         let doc = doc
+            .dataset()
             .query(
                 &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
                     .with_sort(0, true, 0),
@@ -224,6 +225,7 @@ mod delimited {
             );
         }
         let empty = doc
+            .dataset()
             .query(
                 &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
                 &gewu_core::Cancellation::default(),
@@ -370,6 +372,7 @@ mod xlsx {
             .map(|dataset| std::sync::Arc::new(dataset).view())
             .unwrap();
         let doc = doc
+            .dataset()
             .query(
                 &QuerySpec::new().with_sort(0, false, 0),
                 &gewu_core::Cancellation::default(),
@@ -388,6 +391,7 @@ mod xlsx {
             doc.rows(0, 2, &[1, 2]).unwrap().cells
         );
         let empty = doc
+            .dataset()
             .query(
                 &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
                 &gewu_core::Cancellation::default(),

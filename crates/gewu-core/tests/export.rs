@@ -163,11 +163,13 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
 }
 
 fn filtered(doc: &std::sync::Arc<gewu_core::View>) -> Arc<gewu_core::View> {
-    doc.query(
-        &QuerySpec::single(0, Filter::range(Some("2".into()), None, false)).with_sort(0, true, 0),
-        &gewu_core::Cancellation::default(),
-    )
-    .unwrap()
+    doc.dataset()
+        .query(
+            &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
+                .with_sort(0, true, 0),
+            &gewu_core::Cancellation::default(),
+        )
+        .unwrap()
 }
 
 #[test]
@@ -211,12 +213,13 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
     let doc = filtered(&doc);
     let export = doc.export(&[1, 0, 2, 3], FileType::Parquet).unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
-    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.dataset()
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     let cancellation = Cancellation::default();
     cancellation.cancel();
     assert!(matches!(
-        doc.query(&QuerySpec::default(), &cancellation),
+        doc.dataset().query(&QuerySpec::default(), &cancellation),
         Err(Error::Cancelled)
     ));
     let path = directory.path().join("result.parquet");
@@ -295,6 +298,7 @@ fn parquet_export_honors_explicit_compression() {
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
     let doc = doc
+        .dataset()
         .query(
             &QuerySpec::single(0, Filter::exact(vec!["-1".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -431,9 +435,11 @@ fn analysis_distribution_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
     let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
     let view = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     let filter_histogram = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())
@@ -450,7 +456,8 @@ fn analysis_distribution_includes_the_columns_own_filter() {
     assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
-    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.dataset()
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         view.analyze_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())

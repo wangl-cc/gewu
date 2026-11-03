@@ -9,6 +9,8 @@ use arrow::datatypes::SchemaRef;
 
 use crate::{column::Column, file, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result};
 
+mod query;
+
 /// An immutable tabular dataset loaded into memory.
 pub struct Dataset {
     pub(crate) source_path: PathBuf,

@@ -10,10 +10,11 @@ struct HistogramScaleTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
         let view = document.view()
+        let viewer = Viewer(dataset: document, view: view, spec: QuerySpec(columns: []))
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                dataset: document, view: view, column: 0,
+                dataset: document, viewer: viewer, column: 0,
                 expanded: InspectorSection.distribution.mask,
                 bins: 2, scale: scale)
             guard let histogram = model.distribution else {

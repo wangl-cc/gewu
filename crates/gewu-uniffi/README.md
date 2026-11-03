@@ -6,7 +6,7 @@ See [data types](../../docs/data-types.md), [Find and filtering](../../docs/sear
 
 ## Migration status
 
-Core, FFI and the App use immutable Dataset/View handles. Each window owns its applied View/spec pair and pending query draft. Background tasks capture a View and their own cancellation signal; only the window decides whether to publish a result. The App test target validates these consumers against generated bindings.
+Core, FFI and the App use immutable Dataset/View handles. Each window owns its Dataset, applied View/spec pair and pending query draft. Query tasks capture the Dataset; snapshot operations capture a View; each task owns its cancellation signal. Only the window decides whether to publish a result. The App test target validates these consumers against generated bindings.
 
 ## Objects and ownership
 
@@ -27,7 +27,7 @@ There is no backend current View, query registration, commit, version lookup, qu
 1. Call `GewuDataset::open(path)` on a worker. `open_sheet(path, sheet)` selects a named XLSX sheet; `open_with_options(path, sheet, has_header)` controls headers and sheet selection. Parquet ignores the header option.
 2. Read `dataset.info()` for source schema and file metadata. Call `dataset.view()` for all source rows and columns in source order. This allocates the initial row-ID array, so include it in background opening work.
 3. Build a complete `QuerySpec.columns` list in display order. Each entry contains a source-schema index, optional `ColSort { priority, descending }` and optional filter. Omitted columns do not filter or sort; an empty list hides every column.
-4. Create a fresh `Cancellation` before queueing `view.query(spec, cancellation)`. The query always reads the full Dataset, even when invoked on a filtered View. It returns a new View and does not change existing Views.
+4. Create a fresh `Cancellation` before queueing `dataset.query(spec, cancellation)`. The query always reads the full Dataset. It returns a new View and does not change existing Views.
 5. Read `view.columns()`, `view.row_count()` and `view.rows(start, count, columns)`. Explicit columns remain source-schema indexes and determine returned cell order.
 
 `start` is a zero-based display-row offset and the block is clipped to available rows. `cells` is row-major; `nil` means null. `source_rows` contains source indexes independent of display order. Row blocks contain owned formatted strings; request bounded visible blocks.
@@ -83,7 +83,7 @@ Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or ro
 
 ## Filter candidates
 
-`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; Text filters are available when `capabilities.text_match` is set, and value selection when `filter_choices` returns a complete list. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
+`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; Text filters are available when `capabilities.text_match` is set, and value selection when `filter_choices` returns a complete list. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `dataset.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
 
 `view.filter_choices(column, cancellation)` returns `ValueChoice { label, value, count }` and a separate null count, all from the given View's rows. Filter editors pass the column's facet View, so the edited column's own filter does not hide its alternatives. Zero-count values are absent. `Some([])` is an empty complete list; `None` means no complete bounded dictionary list is available. Exact filters remain valid without that list; no unbounded distinct calculation is introduced.
 

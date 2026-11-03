@@ -98,6 +98,7 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = document(vec![("number", numbers), ("label", labels), ("keep", keep)]);
     let view = doc
+        .dataset()
         .query(
             &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
                 .with_sort(0, true, 0),
@@ -129,7 +130,8 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     assert_eq!(view.rows(0, 3, &[0]).unwrap().source_rows, [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.dataset()
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
         find.highlight(0, 3, &Cancellation::default())

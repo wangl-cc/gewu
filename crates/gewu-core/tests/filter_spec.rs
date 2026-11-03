@@ -53,6 +53,7 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
     assert!(doc.dataset().info().columns[2].capabilities.exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())
@@ -68,13 +69,15 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         Filter::exact(vec![values[0].value.clone()], false, false),
     );
     assert_eq!(
-        doc.query(&chosen, &gewu_core::Cancellation::default())
+        doc.dataset()
+            .query(&chosen, &gewu_core::Cancellation::default())
             .unwrap()
             .row_count(),
         200
     );
     assert_eq!(
-        doc.query(&chosen, &gewu_core::Cancellation::default())
+        doc.dataset()
+            .query(&chosen, &gewu_core::Cancellation::default())
             .unwrap()
             .filter_choices(0, &Cancellation::default())
             .unwrap()
@@ -97,6 +100,7 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
         .unwrap();
     for (bin, bounds) in distribution.ranges.iter().enumerate() {
         let view = doc
+            .dataset()
             .query(
                 &QuerySpec::single(
                     0,
@@ -118,7 +122,7 @@ fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
     let before = doc.clone();
     assert!(matches!(
-        doc.query(
+        doc.dataset().query(
             &QuerySpec::single(0, Filter::range(Some("invalid".into()), None, false)),
             &gewu_core::Cancellation::default()
         ),
@@ -151,12 +155,13 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
     ]);
     for value in values {
         assert_eq!(
-            doc.query(
-                &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
-                &gewu_core::Cancellation::default()
-            )
-            .unwrap()
-            .row_count(),
+            doc.dataset()
+                .query(
+                    &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
+                    &gewu_core::Cancellation::default()
+                )
+                .unwrap()
+                .row_count(),
             value.count
         );
     }
@@ -199,6 +204,7 @@ fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
         .values
         .is_none());
     let view = doc
+        .dataset()
         .query(
             &QuerySpec::single(0, Filter::exact(vec!["value-100000".into()], false, false)),
             &gewu_core::Cancellation::default(),
@@ -226,6 +232,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
         .with_filter(1, Filter::exact(vec!["1".into()], false, false));
     let choices = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(0, &Cancellation::default())
@@ -240,7 +247,8 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         [("Cat", 1)]
     );
     assert_eq!(
-        doc.query(&spec, &gewu_core::Cancellation::default())
+        doc.dataset()
+            .query(&spec, &gewu_core::Cancellation::default())
             .unwrap()
             .filter_choices(0, &Cancellation::default())
             .unwrap()
@@ -256,6 +264,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
+            .dataset()
             .query(
                 &QuerySpec::single(0, Filter::exact(values, exclude, include_nulls)),
                 &gewu_core::Cancellation::default(),
@@ -298,6 +307,7 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             .enumerate()
         {
             let view = doc
+                .dataset()
                 .query(
                     &QuerySpec::single(
                         column,
@@ -331,6 +341,7 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         (true, true, 299),
     ] {
         let view = doc
+            .dataset()
             .query(
                 &QuerySpec::single(
                     0,

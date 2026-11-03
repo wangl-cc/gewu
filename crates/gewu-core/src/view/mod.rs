@@ -10,7 +10,7 @@ mod analysis;
 mod export;
 mod filter;
 mod find;
-mod query;
+mod rows;
 
 /// A query result. Query conditions and current-window state belong to callers.
 pub struct View {
@@ -25,6 +25,18 @@ impl View {
             columns: (0..dataset.columns().len() as u32).collect(),
             rows: (0..dataset.n_rows() as u32).collect(),
             dataset,
+        })
+    }
+
+    pub(crate) fn from_query(
+        dataset: Arc<Dataset>,
+        columns: Box<[u32]>,
+        rows: Vec<u32>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            dataset,
+            columns,
+            rows: rows.into(),
         })
     }
 
@@ -114,6 +126,7 @@ mod tests {
         let dataset = dataset();
         let initial = dataset.view();
         let sorted = initial
+            .dataset()
             .query(
                 &QuerySpec::all(2).with_sort(0, true, 0),
                 &Cancellation::default(),
@@ -144,9 +157,13 @@ mod tests {
         let spec = QuerySpec::all(2)
             .with_filter(0, Filter::range(Some("11998".into()), None, false))
             .with_sort(0, true, 0);
-        let filtered = initial.query(&spec, &Cancellation::default()).unwrap();
+        let filtered = initial
+            .dataset()
+            .query(&spec, &Cancellation::default())
+            .unwrap();
         let find = filtered.find("odd", &[1]).unwrap();
         let hidden = filtered
+            .dataset()
             .query(
                 &QuerySpec {
                     columns: vec![ColSpec {
@@ -162,6 +179,7 @@ mod tests {
         assert_eq!(hidden.row_count(), 12_000);
         assert!(Arc::ptr_eq(filtered.dataset(), hidden.dataset()));
         let restored = hidden
+            .dataset()
             .query(&QuerySpec::all(2), &Cancellation::default())
             .unwrap();
         assert_eq!(restored.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
@@ -188,16 +206,19 @@ mod tests {
         let token = Cancellation::default();
         token.cancel();
         assert!(matches!(
-            initial.query(&spec, &token),
+            initial.dataset().query(&spec, &token),
             Err(Error::Cancelled)
         ));
         // Enter the real row scan, then stop at its next checkpoint.
         let interrupted = Cancellation::after_checks(4);
         assert!(matches!(
-            initial.query(&spec, &interrupted),
+            initial.dataset().query(&spec, &interrupted),
             Err(Error::Cancelled)
         ));
-        let sorted = initial.query(&spec, &Cancellation::default()).unwrap();
+        let sorted = initial
+            .dataset()
+            .query(&spec, &Cancellation::default())
+            .unwrap();
         assert_eq!(sorted.rows(0, 1, &[0]).unwrap().source_rows, [11999]);
         for bad in [
             QuerySpec::single(5, Filter::exact(vec![], false, false)),
@@ -217,7 +238,7 @@ mod tests {
             QuerySpec::single(0, Filter::exact(vec!["invalid".into()], false, false)),
         ] {
             assert!(matches!(
-                initial.query(&bad, &Cancellation::default()),
+                initial.dataset().query(&bad, &Cancellation::default()),
                 Err(Error::InvalidArgument(_))
             ));
         }

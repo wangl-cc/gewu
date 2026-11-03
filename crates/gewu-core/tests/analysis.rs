@@ -10,6 +10,7 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
     let dataset = Arc::new(Dataset::open(file.path()).unwrap());
     let original = dataset.view();
     let current = original
+        .dataset()
         .query(
             &QuerySpec::all(2).with_filter(1, Filter::contains("b".into(), true, false)),
             &Cancellation::default(),

@@ -52,7 +52,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
     // Chart coordinates may round a large ID; typed filters below must not.
     let before = doc.view();
     assert!(matches!(
-        before.query(
+        doc.query(
             query(0, Filter {
                 condition: FilterCondition::Range {
                     min: Some("not a number".into()),
@@ -83,7 +83,6 @@ fn typed_filters_compile_and_execute_across_ffi() {
         },
     ] {
         let view = doc
-            .view()
             .query(
                 query(0, Filter {
                     condition,
@@ -121,20 +120,19 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert!(info.columns[0].capabilities.text_match);
     assert!(info.columns[0].capabilities.exact);
     let equals = |case_sensitive| {
-        doc.view()
-            .query(
-                query(0, Filter {
-                    condition: FilterCondition::Text {
-                        text: "CAT".into(),
-                        mode: crate::TextMatch::Equals,
-                        case_sensitive,
-                    },
-                    include_nulls: false,
-                }),
-                Cancellation::new(),
-            )
-            .unwrap()
-            .row_count()
+        doc.query(
+            query(0, Filter {
+                condition: FilterCondition::Text {
+                    text: "CAT".into(),
+                    mode: crate::TextMatch::Equals,
+                    case_sensitive,
+                },
+                include_nulls: false,
+            }),
+            Cancellation::new(),
+        )
+        .unwrap()
+        .row_count()
     };
     assert_eq!(equals(false), 1);
     assert_eq!(equals(true), 0);
@@ -146,7 +144,6 @@ fn text_filter_modes_and_choices_cross_ffi() {
         include_nulls: false,
     });
     let choices = doc
-        .view()
         .query(state, Cancellation::new())
         .unwrap()
         .filter_choices(0, Cancellation::new())
@@ -163,7 +160,6 @@ fn text_filter_modes_and_choices_cross_ffi() {
         "Only current-view values are candidates"
     );
     let view = doc
-        .view()
         .query(
             query(0, Filter {
                 condition: FilterCondition::Exact {
@@ -229,7 +225,6 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     ] {
         let bounds = &distribution.ranges[bin];
         let view = doc
-            .view()
             .query(
                 query(0, Filter {
                     condition: FilterCondition::Range {
@@ -293,7 +288,6 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 "cat".into()
             )]);
             let filtered = selected
-                .view()
                 .query(
                     query(0, Filter {
                         condition: FilterCondition::Exact {

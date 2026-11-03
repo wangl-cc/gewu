@@ -141,7 +141,8 @@ fn apply_view(c: &mut Criterion) {
     for (name, spec) in &cases {
         g.bench_function(*name, |b| {
             b.iter(|| {
-                doc.query(black_box(spec), &gewu_core::Cancellation::default())
+                doc.dataset()
+                    .query(black_box(spec), &gewu_core::Cancellation::default())
                     .unwrap()
             })
         });
@@ -157,6 +158,7 @@ fn rows(c: &mut Criterion) {
     let mut g = c.benchmark_group("rows");
 
     let plain = doc
+        .dataset()
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     g.bench_function("block_256_all_columns", |b| {
@@ -219,7 +221,8 @@ fn facets(c: &mut Criterion) {
     doc.filter_choices(city, &Cancellation::default()).unwrap();
     g.bench_function("choices_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.query(&other_filter, &gewu_core::Cancellation::default())
+            doc.dataset()
+                .query(&other_filter, &gewu_core::Cancellation::default())
                 .unwrap()
                 .filter_choices(city, &Cancellation::default())
                 .unwrap()
@@ -241,7 +244,8 @@ fn facets(c: &mut Criterion) {
     let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {
-            doc.query(&label_filter, &gewu_core::Cancellation::default())
+            doc.dataset()
+                .query(&label_filter, &gewu_core::Cancellation::default())
                 .unwrap()
                 .filter_distribution(
                     price,
@@ -254,7 +258,8 @@ fn facets(c: &mut Criterion) {
         })
     });
 
-    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+    doc.dataset()
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
 
     let cancellation = Cancellation::default();

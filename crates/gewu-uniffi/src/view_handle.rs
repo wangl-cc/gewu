@@ -4,8 +4,8 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    AxisScale, FileType, FilterChoices, FindSession, GewuError, GewuExport, QuerySpec,
-    RangeHistogram, RowBlock,
+    AxisScale, FileType, FilterChoices, FindSession, GewuError, GewuExport, RangeHistogram,
+    RowBlock,
 };
 
 #[derive(uniffi::Object)]
@@ -15,16 +15,6 @@ pub struct GewuView {
 
 #[uniffi::export]
 impl GewuView {
-    pub fn query(
-        &self,
-        spec: QuerySpec,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<Arc<Self>, GewuError> {
-        Ok(Arc::new(Self {
-            inner: self.inner.query(&spec.into(), &cancellation.inner)?,
-        }))
-    }
-
     pub fn reorder_columns(&self, order: Vec<u32>) -> Result<Arc<Self>, GewuError> {
         Ok(Arc::new(Self {
             inner: self.inner.reorder_columns(&order)?,

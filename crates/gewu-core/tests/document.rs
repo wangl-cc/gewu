@@ -74,12 +74,14 @@ fn sorts_with_nulls_last() {
     let (path, doc) = sample();
     let spec = QuerySpec::new().with_sort(2, false, 0);
     let doc = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
     let spec = QuerySpec::new().with_sort(2, true, 0);
     let doc = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
@@ -102,6 +104,7 @@ fn checkbox_filter_and_choices() {
     )
     .with_sort(3, true, 0);
     let v = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(v.row_count(), 4);
@@ -109,6 +112,7 @@ fn checkbox_filter_and_choices() {
 
     // Distinct values of another column respect this filter.
     let prices = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(2, &Cancellation::default())
@@ -125,6 +129,7 @@ fn checkbox_filter_and_choices() {
     );
     // The filtered column also lists only values present in this view.
     let labels = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
         .filter_choices(1, &Cancellation::default())
@@ -139,18 +144,21 @@ fn null_contains_and_typed_equality() {
     let (path, doc) = sample();
     let spec = QuerySpec::single(2, Filter::exact(vec![], false, true));
     let doc = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["d"]);
 
     let spec = QuerySpec::single(1, Filter::contains("D".into(), false, false));
     let doc = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
     let spec = QuerySpec::single(2, Filter::exact(vec!["2.25".into()], false, false));
     let doc = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(names(&doc), ["e"]);
@@ -158,9 +166,10 @@ fn null_contains_and_typed_equality() {
 }
 
 #[test]
-fn querying_a_view_recomputes_from_the_dataset() {
+fn dataset_queries_recompute_from_the_full_source() {
     let (path, original) = sample();
     let filtered = original
+        .dataset()
         .query(
             &QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false)),
             &Cancellation::default(),
@@ -168,6 +177,7 @@ fn querying_a_view_recomputes_from_the_dataset() {
         .unwrap();
     assert_eq!(names(&filtered), ["a", "d"]);
     let restored = filtered
+        .dataset()
         .query(&QuerySpec::all(4), &Cancellation::default())
         .unwrap();
     assert_eq!(names(&restored), names(&original));
@@ -191,6 +201,7 @@ fn range_filter_on_floats_skips_nulls() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
+            .dataset()
             .query(
                 &QuerySpec::single(2, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
@@ -213,6 +224,7 @@ fn range_filter_on_integers() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
+            .dataset()
             .query(
                 &QuerySpec::single(3, Filter::range(min, max, false)),
                 &gewu_core::Cancellation::default(),
@@ -227,7 +239,7 @@ fn range_filter_on_integers() {
 fn range_filter_rejects_text_columns() {
     let (path, doc) = sample();
     assert!(matches!(
-        doc.query(
+        doc.dataset().query(
             &QuerySpec::single(1, Filter::range(Some(("0").to_owned()), None, false)),
             &Cancellation::default()
         ),
@@ -409,6 +421,7 @@ fn contains_filter_is_for_text_only() {
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
+            .dataset()
             .query(
                 &QuerySpec::single(column, Filter::contains("1700".into(), false, false)),
                 &gewu_core::Cancellation::default(),
@@ -430,6 +443,7 @@ fn dates_format_parse_and_filter() {
     );
 
     assert!(doc
+        .dataset()
         .query(
             &QuerySpec::single(
                 1,
@@ -447,6 +461,7 @@ fn dates_format_parse_and_filter() {
     // Range on dates: nulls excluded, bounds inclusive.
     let min = ("2024-01-02").to_owned();
     let doc = doc
+        .dataset()
         .query(
             &QuerySpec::single(1, Filter::range(Some(min), None, false)),
             &gewu_core::Cancellation::default(),
@@ -457,6 +472,7 @@ fn dates_format_parse_and_filter() {
     // Range on timestamps.
     let max = ("2024-01-01T10:00:00Z").to_owned();
     let doc = doc
+        .dataset()
         .query(
             &QuerySpec::single(2, Filter::range(None, Some(max), false)),
             &gewu_core::Cancellation::default(),

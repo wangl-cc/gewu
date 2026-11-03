@@ -46,6 +46,16 @@ impl GewuDataset {
         }))
     }
 
+    pub fn query(
+        &self,
+        spec: crate::QuerySpec,
+        cancellation: Arc<crate::Cancellation>,
+    ) -> Result<Arc<crate::GewuView>, GewuError> {
+        Ok(Arc::new(crate::GewuView {
+            inner: self.inner.query(&spec.into(), &cancellation.inner)?,
+        }))
+    }
+
     pub fn info(&self) -> FileInfo {
         self.inner.info().into()
     }

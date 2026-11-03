@@ -10,6 +10,8 @@ import Foundation
 /// epoch, so export and copy capture a View directly instead of going through here.
 @MainActor
 final class Viewer {
+    let dataset: GewuDataset
+
     struct Applied {
         let view: GewuView
         let spec: QuerySpec
@@ -25,22 +27,43 @@ final class Viewer {
         case failed(Error)
     }
 
-    enum ResultKey: Hashable {
-        case facet(UInt32)
-        case filterChoices(UInt32)
-        case filterDistribution(UInt32, bins: UInt32, scale: AxisScale)
-        case nullCount(UInt32)
-        case statistics(UInt32)
-        case distribution(UInt32, bins: UInt32, scale: AxisScale)
-        case values(UInt32)
-        case lengths(UInt32, bins: UInt32)
-        case scatter(x: UInt32?, y: UInt32, limit: UInt32, xScale: AxisScale, yScale: AxisScale)
+    private struct DistributionKey: Hashable {
+        let column: UInt32
+        let bins: UInt32
+        let scale: AxisScale
+    }
+
+    private struct LengthKey: Hashable {
+        let column: UInt32
+        let bins: UInt32
+    }
+
+    private struct ScatterKey: Hashable {
+        let x: UInt32?
+        let y: UInt32
+        let limit: UInt32
+        let xScale: AxisScale
+        let yScale: AxisScale
+    }
+
+    @MainActor
+    private final class ResultCache<Key: Hashable, Value: Sendable> {
+        var tasks: [Key: Task<Value, Error>] = [:]
     }
 
     /// Work and results that belong to one applied View.
+    @MainActor
     private final class Epoch {
         let cancellation = Cancellation()
-        var results: [ResultKey: Any] = [:]
+        let facets = ResultCache<UInt32, GewuView>()
+        let filterChoices = ResultCache<UInt32, FilterChoices>()
+        let filterDistributions = ResultCache<DistributionKey, RangeHistogram?>()
+        let nullCounts = ResultCache<UInt32, UInt64>()
+        let statistics = ResultCache<UInt32, NumericStatistics>()
+        let distributions = ResultCache<DistributionKey, Histogram>()
+        let values = ResultCache<UInt32, ValueSummary>()
+        let lengths = ResultCache<LengthKey, LengthSummary>()
+        let scatter = ResultCache<ScatterKey, ScatterResult>()
     }
 
     private(set) var applied: Applied {
@@ -54,7 +77,8 @@ final class Viewer {
     // Bound concurrent queries; the generation decides which completed query applies.
     private let worker = DispatchQueue(label: "gewu.viewer.queries", qos: .userInitiated)
 
-    init(view: GewuView, spec: QuerySpec) {
+    init(dataset: GewuDataset, view: GewuView, spec: QuerySpec) {
+        self.dataset = dataset
         applied = Applied(view: view, spec: spec)
     }
 
@@ -67,7 +91,7 @@ final class Viewer {
         pending?.cancel()
         let signal = Cancellation()
         pending = signal
-        let source = applied.view
+        let dataset = dataset
         let worker = worker
         do {
             if debounce { try await Task.sleep(for: .milliseconds(150)) }
@@ -77,7 +101,7 @@ final class Viewer {
                 try await withCheckedThrowingContinuation { continuation in
                     worker.async {
                         do {
-                            continuation.resume(returning: try source.query(spec: spec, cancellation: signal))
+                            continuation.resume(returning: try dataset.query(spec: spec, cancellation: signal))
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -122,21 +146,25 @@ final class Viewer {
 
     /// The rows a column's filter editor describes; see `FilterFacet`.
     func facet(_ column: UInt32) async throws -> GewuView {
-        let facet = FilterFacet(view: applied.view, spec: applied.spec, column: column)
+        let facet = FilterFacet(spec: applied.spec, column: column)
         if facet.usesAppliedView { return applied.view }
-        return try await cached(.facet(column)) { try facet.resolve(cancellation: $0) }
+        let dataset = dataset
+        return try await cached(epoch.facets, key: column) {
+            try facet.resolve(dataset: dataset, cancellation: $0)
+        }
     }
 
     func filterChoices(_ column: UInt32) async throws -> FilterChoices {
         let view = try await facet(column)
-        return try await cached(.filterChoices(column)) {
+        return try await cached(epoch.filterChoices, key: column) {
             try view.filterChoices(column: column, cancellation: $0)
         }
     }
 
     func filterDistribution(_ column: UInt32, bins: UInt32, scale: AxisScale) async throws -> RangeHistogram? {
         let view = try await facet(column)
-        return try await cached(.filterDistribution(column, bins: bins, scale: scale)) {
+        let key = DistributionKey(column: column, bins: bins, scale: scale)
+        return try await cached(epoch.filterDistributions, key: key) {
             try view.filterDistribution(column: column, bins: bins, scale: scale, cancellation: $0)
         }
     }
@@ -145,31 +173,37 @@ final class Viewer {
 
     func countNulls(_ column: UInt32) async throws -> UInt64 {
         let view = applied.view
-        return try await cached(.nullCount(column)) { try view.countNulls(column: column, cancellation: $0) }
+        return try await cached(epoch.nullCounts, key: column) {
+            try view.countNulls(column: column, cancellation: $0)
+        }
     }
 
     func statistics(_ column: UInt32) async throws -> NumericStatistics {
         let view = applied.view
-        return try await cached(.statistics(column)) {
+        return try await cached(epoch.statistics, key: column) {
             try view.analyzeStatistics(column: column, cancellation: $0)
         }
     }
 
     func distribution(_ column: UInt32, bins: UInt32, scale: AxisScale) async throws -> Histogram {
         let view = applied.view
-        return try await cached(.distribution(column, bins: bins, scale: scale)) {
+        let key = DistributionKey(column: column, bins: bins, scale: scale)
+        return try await cached(epoch.distributions, key: key) {
             try view.analyzeDistribution(column: column, bins: bins, scale: scale, cancellation: $0)
         }
     }
 
     func values(_ column: UInt32) async throws -> ValueSummary {
         let view = applied.view
-        return try await cached(.values(column)) { try view.analyzeValues(column: column, cancellation: $0) }
+        return try await cached(epoch.values, key: column) {
+            try view.analyzeValues(column: column, cancellation: $0)
+        }
     }
 
     func lengths(_ column: UInt32, bins: UInt32) async throws -> LengthSummary {
         let view = applied.view
-        return try await cached(.lengths(column, bins: bins)) {
+        let key = LengthKey(column: column, bins: bins)
+        return try await cached(epoch.lengths, key: key) {
             try view.analyzeLengths(column: column, bins: bins, cancellation: $0)
         }
     }
@@ -178,7 +212,8 @@ final class Viewer {
         x: UInt32?, y: UInt32, limit: UInt32, xScale: AxisScale, yScale: AxisScale
     ) async throws -> ScatterResult {
         let view = applied.view
-        return try await cached(.scatter(x: x, y: y, limit: limit, xScale: xScale, yScale: yScale)) {
+        let key = ScatterKey(x: x, y: y, limit: limit, xScale: xScale, yScale: yScale)
+        return try await cached(epoch.scatter, key: key) {
             try view.analyzeScatter(
                 xColumn: x, yColumn: y, limit: limit, xScale: xScale, yScale: yScale, cancellation: $0)
         }
@@ -188,25 +223,26 @@ final class Viewer {
     /// which runs off the main actor and stops when the epoch ends. Failures are
     /// not cached, and a result that finishes after its epoch ended is reported as
     /// cancelled rather than returned.
-    private func cached<T: Sendable>(
-        _ key: ResultKey, _ compute: @escaping @Sendable (Cancellation) throws -> T
-    ) async throws -> T {
+    private func cached<Key: Hashable, Value: Sendable>(
+        _ cache: ResultCache<Key, Value>, key: Key,
+        _ compute: @escaping @Sendable (Cancellation) throws -> Value
+    ) async throws -> Value {
         let epoch = epoch
-        let task: Task<T, Error>
-        if let existing = epoch.results[key] as? Task<T, Error> {
+        let task: Task<Value, Error>
+        if let existing = cache.tasks[key] {
             task = existing
         } else {
             let signal = epoch.cancellation
             task = Task.detached(priority: .userInitiated) { try compute(signal) }
-            epoch.results[key] = task
+            cache.tasks[key] = task
         }
         do {
             let value = try await task.value
             guard epoch === self.epoch else { throw CancellationError() }
             return value
         } catch {
-            if let stored = epoch.results[key] as? Task<T, Error>, stored == task {
-                epoch.results[key] = nil
+            if let stored = cache.tasks[key], stored == task {
+                cache.tasks[key] = nil
             }
             throw error
         }
@@ -216,7 +252,6 @@ final class Viewer {
 /// The rows a column's filter editor describes: the applied filters on the other
 /// columns, without sorting. The column's own filter never hides its alternatives.
 struct FilterFacet {
-    let view: GewuView
     let spec: QuerySpec
     let column: UInt32
 
@@ -226,13 +261,12 @@ struct FilterFacet {
     }
 
     /// May run a query over the whole dataset; call off the main actor.
-    func resolve(cancellation: Cancellation) throws -> GewuView {
-        if usesAppliedView { return view }
+    func resolve(dataset: GewuDataset, cancellation: Cancellation) throws -> GewuView {
         let others = spec.columns.compactMap { entry -> ColSpec? in
             guard entry.column != column, let filter = entry.filter else { return nil }
             return ColSpec(column: entry.column, sort: nil, filter: filter)
         }
-        return try view.query(spec: QuerySpec(columns: others), cancellation: cancellation)
+        return try dataset.query(spec: QuerySpec(columns: others), cancellation: cancellation)
     }
 }
 

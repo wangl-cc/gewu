@@ -12,7 +12,7 @@ For builds, tests and formatting, follow the [Rust development guide](../../DEVE
 
 A View owns an `Arc<Dataset>`, a `Box<[u32]>` of source columns in display order, and an `Arc<[u32]>` of source rows in display order. It does not store query conditions or window state.
 
-- `view.query(spec, cancellation)` validates a complete specification, filters and sorts the **full Dataset**, and returns a new View. Relaxing a filter can therefore recover rows absent from the input View. Queries neither change nor invalidate existing Views.
+- `dataset.query(spec, cancellation)` validates a complete specification, filters and sorts the **full Dataset**, and returns a new View. Relaxing a filter can therefore recover rows absent from previous Views. Queries neither change nor invalidate existing Views.
 - `view.reorder_columns(order)` accepts exactly a permutation of the existing visible columns. It creates a new column array and shares the Dataset and row array; it performs no row computation.
 - `view.rows(start, count, columns)` returns formatted cells and source row IDs from that View. Explicit column arguments are source-schema indexes in the requested order.
 - `view.find(query, columns)` captures shared row and column data for bounded navigation and highlighting.
@@ -28,7 +28,7 @@ The whole input is decoded into memory. Query execution reads native Arrow array
 
 `Filter` carries one `FilterCondition` and an orthogonal null policy. Range and exact values arrive as text and are bound once against the column's Arrow type. `Bound` remains internal to execution and histogram construction. Public histogram endpoints are `RangeBound { value, label, coordinate }` projections; submit their lossless `value` text directly to a filter. Display labels and approximate plot coordinates must not be used as filter inputs.
 
-`Dataset::info().columns[*].capabilities` reports supported operations. `View::query` compiles each filter once and executes the resulting predicates; invalid typed input returns an error without producing a new View. Compilation parses scalar inputs and binds borrowed arrays; value-list filters may build the column's compact encoding. Case-sensitive Text filters compare strings directly. Case-insensitive filters compile one reusable Unicode case-folding matcher per query, without recompiling it for every batch; Equals compares ASCII values with ASCII folding and uses the matcher only when either side is non-ASCII.
+`Dataset::info().columns[*].capabilities` reports supported operations. `Dataset::query` compiles each filter once and executes the resulting predicates; invalid typed input returns an error without producing a new View. Compilation parses scalar inputs and binds borrowed arrays; value-list filters may build the column's compact encoding. Case-sensitive Text filters compare strings directly. Case-insensitive filters compile one reusable Unicode case-folding matcher per query, without recompiling it for every batch; Equals compares ASCII values with ASCII folding and uses the matcher only when either side is non-ASCII.
 
 Compiled predicates evaluate in bounded batches with cancellation checks. Native row predicates can skip rows already rejected by another filter. Sorting compares source row IDs in bounded runs and merges, with cancellation checkpoints between units of work. Sort-key columns are not widened or copied in full. Nulls remain last in both directions; equal keys retain source-row order. Comparator preparation and individual value comparisons are not interruptible, so checkpoints do not imply a fixed wall-clock deadline. The query returns its new View after a final cancellation check; publication belongs to the caller.
 
@@ -106,9 +106,10 @@ Each operation owns its type support and execution rules. Find privately dispatc
 
 | Path | Responsibility |
 | --- | --- |
-| [dataset/](src/dataset) | Decoded data, metadata and shared column cache ownership. |
+| [dataset/](src/dataset) | Decoded data, metadata, query execution and shared column cache ownership. |
+| [dataset/query.rs](src/dataset/query.rs) | Complete query validation and execution over the full Dataset. |
 | [view/](src/view) | Immutable row/column mappings and operations over a bound View. |
-| [view/query.rs](src/view/query.rs) | Complete query execution and row formatting. |
+| [view/rows.rs](src/view/rows.rs) | Formatted row blocks from a bound View. |
 | [view/analysis.rs](src/view/analysis.rs) | Typed analyses and direct scatter calculation. |
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and distributions. |
 | [view/choices.rs](src/view/choices.rs) | Bounded text paging over selected rows. |

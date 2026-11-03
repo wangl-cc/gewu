@@ -39,6 +39,7 @@ fn check_range(
 ) -> Arc<gewu_core::View> {
     let spec = QuerySpec::single(0, Filter::range(min, max, false));
     let view = doc
+        .dataset()
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(
@@ -83,7 +84,7 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(
+                    doc.dataset().query(
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
@@ -125,7 +126,7 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(
+                    doc.dataset().query(
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
@@ -192,9 +193,11 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     );
 
     signed
+        .dataset()
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     unsigned
+        .dataset()
         .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();
     assert_eq!(values(&signed).distinct_count, 4);
@@ -220,7 +223,7 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
     check_range(&doc, Some(("inf").to_owned()), None, &[4]);
     check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.query(
+        doc.dataset().query(
             &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
             &Cancellation::default()
         ),
@@ -242,7 +245,7 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
 
     check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.query(
+        integers.dataset().query(
             &QuerySpec::single(
                 0,
                 Filter::range(Some(("not a number").to_owned()), None, false)
@@ -252,6 +255,7 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
         Err(Error::InvalidArgument(_))
     ));
     assert!(integers
+        .dataset()
         .query(
             &QuerySpec::single(
                 0,
