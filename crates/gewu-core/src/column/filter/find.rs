@@ -4,11 +4,7 @@
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{nested, scalar, text};
-use crate::{
-    predicate::Predicate,
-    types::{direct_domain, Domain},
-    Result,
-};
+use crate::{predicate::Predicate, Result};
 
 pub(crate) fn compile<'a>(
     array: &'a ArrayRef,
@@ -28,11 +24,32 @@ pub(crate) fn compile<'a>(
         | DataType::LargeListView(_)
         | DataType::FixedSizeList(..)
         | DataType::Struct(_) => nested::search(array, query, matcher),
-        data_type => match direct_domain(data_type) {
-            Some(Domain::Text) => text::contains(array, query, false, matcher).map(Some),
-            Some(Domain::Binary | Domain::Interval) | None => Ok(None),
-            Some(_) => scalar::search(array, query),
-        },
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            text::contains(array, query, false, matcher).map(Some)
+        }
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(..)
+        | DataType::Decimal64(..)
+        | DataType::Decimal128(..)
+        | DataType::Decimal256(..)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(..)
+        | DataType::Duration(_) => scalar::search(array, query),
+        _ => Ok(None),
     }
 }
 

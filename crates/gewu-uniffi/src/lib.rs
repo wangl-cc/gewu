@@ -11,6 +11,7 @@ mod export;
 mod file;
 mod filter;
 mod find;
+mod query;
 mod scale;
 mod scatter;
 #[cfg(test)]
@@ -34,9 +35,10 @@ pub use filter::{
     ValueChoice,
 };
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
+pub use query::{ColSort, ColSpec, QuerySpec};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use view::{ColSort, ColSpec, QuerySpec, RowBlock};
+pub use view::RowBlock;
 pub use view_handle::GewuView;
 
 uniffi::setup_scaffolding!();

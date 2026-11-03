@@ -16,16 +16,14 @@ use arrow::{
     datatypes::DataType,
 };
 
-use super::bound::Bound;
-use crate::{
-    predicate::Predicate,
-    types::{self, Domain, Encoding},
-    Cancellation, Error, Filter, Result,
-};
+use crate::{predicate::Predicate, scalar::Bound, types, Cancellation, Error, Filter, Result};
 
 /// Text matching is defined only for text values, including dictionaries.
 pub(crate) fn supports_text_match(data_type: &DataType) -> bool {
-    types::domain(data_type) == Some(Domain::Text)
+    matches!(
+        types::value_type(data_type),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 /// Equality parses scalar values or compares text; dictionaries follow values.
@@ -33,8 +31,8 @@ pub(crate) fn supports_equals(data_type: &DataType) -> bool {
     let data_type = types::value_type(data_type);
     range::supports(data_type)
         || matches!(
-            types::direct_domain(data_type),
-            Some(Domain::Text | Domain::Boolean)
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Boolean
         )
 }
 
@@ -110,7 +108,7 @@ fn compile_condition<'a>(
             )));
         }
     }
-    if types::encoding(array.data_type()) == Encoding::Dictionary {
+    if matches!(array.data_type(), DataType::Dictionary(..)) {
         return nested::dictionary(array, |values| {
             compile_condition(values, condition, cancel).map(Some)
         })?
@@ -138,7 +136,10 @@ fn compile_condition<'a>(
             range::compile_range(array, min.as_ref(), max.as_ref())
         }
         FilterCondition::Exact { values, exclude } if supports_equals(array.data_type()) => {
-            let predicate = if types::domain(array.data_type()) == Some(Domain::Text) {
+            let predicate = if matches!(
+                types::value_type(array.data_type()),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) {
                 text::selected_values(array, values, cancel)?
             } else {
                 Predicate::any_of(

@@ -11,15 +11,11 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use super::filter::scalar::{
+use super::{
     decimal::{Endpoint, Literal},
     float, temporal,
 };
-use crate::{
-    format,
-    types::{direct_domain, Domain},
-    Error, Result,
-};
+use crate::{format, Error, Result};
 
 /// A parsed endpoint for one column's logical type. Construct through [`Self::parse`]
 /// for text inputs or a native constructor for numerical controls. Bounds are
@@ -31,15 +27,15 @@ pub(crate) struct Bound {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::column) struct BoundData {
-    pub(in crate::column) data_type: DataType,
-    pub(in crate::column) value: Value,
-    pub(in crate::column) display: String,
-    pub(in crate::column) axis: f64,
+pub(crate) struct BoundData {
+    pub(crate) data_type: DataType,
+    pub(crate) value: Value,
+    pub(crate) display: String,
+    pub(crate) axis: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::column) enum Value {
+pub(crate) enum Value {
     Exact {
         literal: Literal,
         lower: Endpoint,
@@ -55,7 +51,7 @@ pub(in crate::column) enum Value {
 }
 
 impl Bound {
-    pub(in crate::column) fn new(inner: BoundData) -> Self {
+    pub(crate) fn new(inner: BoundData) -> Self {
         Self {
             inner: Arc::new(inner),
         }
@@ -68,8 +64,12 @@ impl Bound {
         let text = text.trim();
         if let Some(ticks) = text.strip_prefix('@') {
             if matches!(
-                direct_domain(data_type),
-                Some(Domain::Date | Domain::Time | Domain::Timestamp)
+                data_type,
+                DataType::Date32
+                    | DataType::Date64
+                    | DataType::Time32(_)
+                    | DataType::Time64(_)
+                    | DataType::Timestamp(..)
             ) {
                 let value = ticks
                     .parse::<i64>()
@@ -82,15 +82,27 @@ impl Bound {
                 }));
             }
         }
-        match direct_domain(data_type) {
-            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
+        match data_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+            | DataType::Duration(_) => {
                 let literal = Literal::parse(text).ok_or_else(|| invalid_text(data_type, text))?;
                 let axis = text
                     .parse::<f64>()
                     .map_err(|_| invalid_text(data_type, text))?;
                 Self::exact(data_type, literal, text.to_owned(), axis)
             }
-            Some(Domain::Float) => {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
                 let value = text
                     .parse::<f64>()
                     .map_err(|_| invalid_text(data_type, text))?;
@@ -109,7 +121,11 @@ impl Bound {
                     axis: value,
                 }))
             }
-            Some(Domain::Date | Domain::Time | Domain::Timestamp) => {
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(..) => {
                 let value = temporal::parse_value(data_type, text)?;
                 Ok(Self::new(BoundData {
                     data_type: data_type.clone(),
@@ -125,12 +141,30 @@ impl Bound {
     /// Construct an exact integer endpoint. For dates/times the integer is in
     /// the column's physical unit. Negative bounds on unsigned columns are valid.
     pub(crate) fn from_i64(data_type: &DataType, value: i64) -> Result<Self> {
-        match direct_domain(data_type) {
-            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => {
+        match data_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+            | DataType::Duration(_) => {
                 Self::native_exact(data_type, value.into(), 0, value.to_string(), value as f64)
             }
-            Some(Domain::Float) => Self::float_integer(data_type, i128::from(value)),
-            Some(Domain::Date | Domain::Time | Domain::Timestamp) => Ok(Self::new(BoundData {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Self::float_integer(data_type, i128::from(value))
+            }
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(..) => Ok(Self::new(BoundData {
                 data_type: data_type.clone(),
                 value: Value::Temporal(value),
                 display: format_temporal(data_type, value)?,
@@ -143,16 +177,34 @@ impl Bound {
     /// Construct an unsigned integer endpoint without passing through f64.
     /// Temporal physical values must still fit their signed representation.
     pub(crate) fn from_u64(data_type: &DataType, value: u64) -> Result<Self> {
-        match direct_domain(data_type) {
-            Some(Domain::Integer | Domain::Decimal | Domain::Duration) => Self::native_exact(
+        match data_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+            | DataType::Duration(_) => Self::native_exact(
                 data_type,
                 i256::from_i128(i128::from(value)),
                 0,
                 value.to_string(),
                 value as f64,
             ),
-            Some(Domain::Float) => Self::float_integer(data_type, i128::from(value)),
-            Some(Domain::Date | Domain::Time | Domain::Timestamp) => Self::from_i64(
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Self::float_integer(data_type, i128::from(value))
+            }
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(..) => Self::from_i64(
                 data_type,
                 i64::try_from(value).map_err(|_| invalid_type(data_type))?,
             ),
@@ -189,7 +241,13 @@ impl Bound {
     /// The input scale need not equal the column's scale; range preparation
     /// rounds inward to the column's native coefficient grid.
     pub(crate) fn from_decimal(data_type: &DataType, coefficient: i256, scale: i8) -> Result<Self> {
-        if !matches!(direct_domain(data_type), Some(Domain::Decimal)) {
+        if !matches!(
+            data_type,
+            DataType::Decimal32(..)
+                | DataType::Decimal64(..)
+                | DataType::Decimal128(..)
+                | DataType::Decimal256(..)
+        ) {
             return Err(invalid_type(data_type));
         }
         let axis =
@@ -228,25 +286,25 @@ impl Bound {
         &self.inner.data_type
     }
 
-    pub(in crate::column) fn compare(&self, other: &Self) -> Ordering {
+    pub(crate) fn compare(&self, other: &Self) -> Ordering {
         compare(&self.inner.value, &other.inner.value)
     }
 
-    pub(in crate::column) fn float_lower(&self) -> f64 {
+    pub(crate) fn float_lower(&self) -> f64 {
         match self.inner.value {
             Value::Float { lower, .. } => lower,
             _ => unreachable!("bound constructors validate type"),
         }
     }
 
-    pub(in crate::column) fn float_upper(&self) -> f64 {
+    pub(crate) fn float_upper(&self) -> f64 {
         match self.inner.value {
             Value::Float { upper, .. } => upper,
             _ => unreachable!("bound constructors validate type"),
         }
     }
 
-    pub(in crate::column) fn exact_lower(&self) -> Endpoint {
+    pub(crate) fn exact_lower(&self) -> Endpoint {
         match self.inner.value {
             Value::Exact { lower, .. } => lower,
             Value::Temporal(v) => Endpoint::Finite(v.into()),
@@ -254,7 +312,7 @@ impl Bound {
         }
     }
 
-    pub(in crate::column) fn exact_upper(&self) -> Endpoint {
+    pub(crate) fn exact_upper(&self) -> Endpoint {
         match self.inner.value {
             Value::Exact { upper, .. } => upper,
             Value::Temporal(v) => Endpoint::Finite(v.into()),
@@ -316,29 +374,28 @@ impl Bound {
     }
 }
 
-pub(in crate::column) fn coefficient_scale(data_type: &DataType) -> Result<i8> {
+pub(crate) fn coefficient_scale(data_type: &DataType) -> Result<i8> {
     match data_type {
         DataType::Decimal32(_, s)
         | DataType::Decimal64(_, s)
         | DataType::Decimal128(_, s)
         | DataType::Decimal256(_, s) => Ok(*s),
-        _ if matches!(
-            direct_domain(data_type),
-            Some(Domain::Integer | Domain::Duration)
-        ) =>
-        {
-            Ok(0)
-        }
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Duration(_) => Ok(0),
         _ => Err(invalid_type(data_type)),
     }
 }
 
 /// Inward endpoints for an exact native coefficient. Native controls never
 /// route numerical values through the text parser, even when scales differ.
-pub(in crate::column) fn rescale_coefficient(
-    coefficient: i256,
-    power: i16,
-) -> (Endpoint, Endpoint) {
+pub(crate) fn rescale_coefficient(coefficient: i256, power: i16) -> (Endpoint, Endpoint) {
     if coefficient == i256::ZERO {
         return (Endpoint::Finite(i256::ZERO), Endpoint::Finite(i256::ZERO));
     }
@@ -388,7 +445,7 @@ pub(in crate::column) fn rescale_coefficient(
     (Endpoint::Finite(lower), Endpoint::Finite(upper))
 }
 
-pub(in crate::column) fn compare(left: &Value, right: &Value) -> Ordering {
+pub(crate) fn compare(left: &Value, right: &Value) -> Ordering {
     match (left, right) {
         (Value::Exact { literal: left, .. }, Value::Exact { literal: right, .. }) => {
             left.compare(right)
@@ -429,13 +486,13 @@ pub(in crate::column) fn compare(left: &Value, right: &Value) -> Ordering {
     }
 }
 
-pub(in crate::column) fn invalid_type(data_type: &DataType) -> Error {
+pub(crate) fn invalid_type(data_type: &DataType) -> Error {
     Error::InvalidArgument(format!(
         "value is not a valid range endpoint for {data_type}"
     ))
 }
 
-pub(in crate::column) fn invalid_text(data_type: &DataType, text: &str) -> Error {
+pub(crate) fn invalid_text(data_type: &DataType, text: &str) -> Error {
     Error::InvalidArgument(format!(
         "cannot read {text:?} as a range endpoint for {data_type}"
     ))

@@ -10,9 +10,22 @@ pub enum AxisScale {
 
 /// Logarithmic axes apply to native numbers, not temporal coordinates.
 pub(crate) fn supports_logarithmic(data_type: &arrow::datatypes::DataType) -> bool {
-    use crate::types::{direct_domain, Domain};
+    use arrow::datatypes::DataType::*;
     matches!(
-        direct_domain(data_type),
-        Some(Domain::Integer | Domain::Float | Domain::Decimal)
+        data_type,
+        Int8 | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Decimal32(..)
+            | Decimal64(..)
+            | Decimal128(..)
+            | Decimal256(..)
     )
 }

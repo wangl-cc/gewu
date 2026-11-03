@@ -64,13 +64,4 @@ impl Filter {
     pub fn contains(text: String, case_sensitive: bool, include_nulls: bool) -> Self {
         Self::text(text, TextMatch::Contains, case_sensitive, include_nulls)
     }
-
-    pub(crate) fn estimated_cost(&self) -> u8 {
-        match &self.condition {
-            FilterCondition::Exact { values, .. } if values.is_empty() => 0,
-            FilterCondition::Exact { .. } => 1,
-            FilterCondition::Range { .. } => 2,
-            FilterCondition::Text { .. } => 3,
-        }
-    }
 }

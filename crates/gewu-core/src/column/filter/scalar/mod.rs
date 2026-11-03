@@ -9,25 +9,24 @@ pub(crate) mod temporal;
 use arrow::array::{Array, ArrayRef, AsArray};
 
 use super::range::compile_range;
-use crate::{
-    column::Bound,
-    predicate::Predicate,
-    selection::RowSelection,
-    types::{direct_domain, Domain},
-    Error, Result,
-};
+use crate::{predicate::Predicate, scalar::Bound, selection::RowSelection, Error, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    Ok(match direct_domain(array.data_type()) {
-        Some(Domain::Integer) => integer::search(array, text),
-        Some(Domain::Float) => float::search(array, text),
-        Some(Domain::Decimal) => decimal::search(array, text),
-        Some(Domain::Boolean) => boolean(text).map(|target| bool_predicate(array, target)),
-        Some(Domain::Date | Domain::Timestamp | Domain::Time | Domain::Duration) => {
+    use arrow::datatypes::DataType::*;
+    Ok(match array.data_type() {
+        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => {
+            integer::search(array, text)
+        }
+        Float16 | Float32 | Float64 => float::search(array, text),
+        Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => {
+            decimal::search(array, text)
+        }
+        Boolean => boolean(text).map(|target| bool_predicate(array, target)),
+        Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) | Duration(_) => {
             return temporal::search(array, text);
         }
         _ => {
@@ -41,11 +40,13 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
 
 pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a>> {
     let text = text.trim();
-    match direct_domain(array.data_type()) {
-        Some(Domain::Boolean) => boolean(text)
+    match array.data_type() {
+        arrow::datatypes::DataType::Boolean => boolean(text)
             .map(|target| bool_predicate(array, target))
             .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
-        Some(Domain::Float) => float::equals(array, text),
+        arrow::datatypes::DataType::Float16
+        | arrow::datatypes::DataType::Float32
+        | arrow::datatypes::DataType::Float64 => float::equals(array, text),
         _ => {
             let bound = Bound::parse(array.data_type(), text)?;
             compile_range(array, Some(&bound), Some(&bound))

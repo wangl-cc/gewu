@@ -1,32 +1,25 @@
-//! Temporal text uses the column's unit and time zone, with search prefixes
-//! interpreted as periods and explicit bounds as single instants.
-
-use std::sync::Arc;
+//! Temporal predicates use the column's unit and time zone, with search prefixes
+//! interpreted as periods.
 
 use arrow::{
-    array::{downcast_temporal_array, Array, ArrayRef, AsArray, PrimitiveArray, StringArray},
-    compute::cast,
+    array::{downcast_temporal_array, Array, ArrayRef, AsArray},
     datatypes::*,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
 use super::decimal::{native_range, Endpoint, Literal};
-use crate::{
-    predicate::Predicate,
-    types::{direct_domain, Domain},
-    Error, Result,
-};
+use crate::{predicate::Predicate, scalar::temporal::parse_physical, Result};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let data_type = array.data_type();
-    let domain = direct_domain(data_type);
-    let period = match domain {
-        Some(Domain::Date | Domain::Timestamp) => date_period(text, domain == Some(Domain::Date)),
-        Some(Domain::Time) => time_period(text).map(|(start, step)| {
+    let period = match data_type {
+        DataType::Date32 | DataType::Date64 => date_period(text, true),
+        DataType::Timestamp(..) => date_period(text, false),
+        DataType::Time32(_) | DataType::Time64(_) => time_period(text).map(|(start, step)| {
             let start = NaiveDate::default().and_time(start);
             (start, start + step)
         }),
-        Some(Domain::Duration) => {
+        DataType::Duration(_) => {
             let Some(literal) = Literal::parse_integer(text) else {
                 return Ok(None);
             };
@@ -45,27 +38,6 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
             Endpoint::Finite(hi.into()),
         )
     }))
-}
-
-pub(in crate::column) fn parse_value(data_type: &DataType, text: &str) -> Result<i64> {
-    parse_physical(data_type, text)?
-        .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as {data_type}")))
-}
-
-/// Cast only the input scalar. Column data always stays in its native array.
-fn parse_physical(data_type: &DataType, text: &str) -> Result<Option<i64>> {
-    let input: ArrayRef = Arc::new(StringArray::from(vec![text]));
-    let typed = cast(&input, data_type)?;
-    let typed = typed.as_ref();
-    Ok(downcast_temporal_array!(typed => physical_scalar(typed),
-        _ => unreachable!("temporal scalar dispatch")))
-}
-
-fn physical_scalar<T: ArrowPrimitiveType>(array: &PrimitiveArray<T>) -> Option<i64>
-where
-    T::Native: Into<i64>,
-{
-    array.is_valid(0).then(|| array.value(0).into())
 }
 
 pub(in crate::column) fn bind(array: &ArrayRef, lo: Endpoint, hi: Endpoint) -> Predicate<'_> {

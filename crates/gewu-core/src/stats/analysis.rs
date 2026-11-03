@@ -3,7 +3,7 @@
 use arrow::{array::Array, datatypes::DataType};
 
 use super::ArrayView;
-use crate::{column::display_type, scope::Selection, types, Cancellation, Error, Result};
+use crate::{scope::Selection, types, types::display_type, Cancellation, Error, Result};
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.
 /// Overview is available for every loaded column.

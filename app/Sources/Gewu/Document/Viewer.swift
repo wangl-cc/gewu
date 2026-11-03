@@ -269,12 +269,3 @@ struct FilterFacet {
         return try dataset.query(spec: QuerySpec(columns: others), cancellation: cancellation)
     }
 }
-
-extension Error {
-    /// Cancellation from Swift or from Core; never shown to the user.
-    var isCancellation: Bool {
-        if self is CancellationError { return true }
-        if let error = self as? GewuError, case .Cancelled = error { return true }
-        return false
-    }
-}

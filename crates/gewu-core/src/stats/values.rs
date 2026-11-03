@@ -35,20 +35,33 @@ pub struct ValueSummary {
 
 /// Scalar values with comparable labels and bounded distinct estimates.
 pub(super) fn supports(data_type: &DataType) -> bool {
-    use crate::types::{domain, Domain};
+    use DataType::*;
     matches!(
-        domain(data_type),
-        Some(
-            Domain::Text
-                | Domain::Boolean
-                | Domain::Integer
-                | Domain::Float
-                | Domain::Decimal
-                | Domain::Date
-                | Domain::Time
-                | Domain::Timestamp
-                | Domain::Duration
-        )
+        crate::types::value_type(data_type),
+        Utf8 | LargeUtf8
+            | Utf8View
+            | Boolean
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Decimal32(..)
+            | Decimal64(..)
+            | Decimal128(..)
+            | Decimal256(..)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Timestamp(..)
+            | Duration(_)
     )
 }
 

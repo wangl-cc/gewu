@@ -154,4 +154,4 @@ xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
 build/view-bindings/view-smoke
 ```
 
-The public handles are [dataset.rs](src/dataset.rs) and [view_handle.rs](src/view_handle.rs). Feature modules own records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.
+The public handles are [dataset.rs](src/dataset.rs) and [view_handle.rs](src/view_handle.rs). [query.rs](src/query.rs) owns query specifications, [view.rs](src/view.rs) owns row blocks, and other feature modules own their records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.

@@ -12,6 +12,8 @@ mod filter;
 mod find;
 mod rows;
 
+pub use rows::RowBlock;
+
 /// A query result. Query conditions and current-window state belong to callers.
 pub struct View {
     dataset: Arc<Dataset>,

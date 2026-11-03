@@ -1,41 +1,9 @@
-//! Shared Arrow type descriptions and scalar classifications.
+//! Shared Arrow type structure and display projections.
 //!
-//! Arrow's [`DataType`] is the source of truth. This module describes values
-//! and storage; each operation owns its support rules and native dispatch.
+//! Arrow's [`DataType`] is the source of truth. Each operation owns its
+//! support rules and native dispatch.
 
 use arrow::datatypes::DataType;
-
-/// How Arrow stores a type. Dictionary encoding is lossless and does not
-/// change the value domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Encoding {
-    Direct,
-    Dictionary,
-}
-
-/// The parameter-free scalar class that policy code matches on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Domain {
-    Text,
-    Boolean,
-    Integer,
-    Float,
-    Decimal,
-    Date,
-    Time,
-    Timestamp,
-    Duration,
-    Interval,
-    Binary,
-}
-
-/// Storage encoding of the outermost Arrow type.
-pub(crate) fn encoding(data_type: &DataType) -> Encoding {
-    match data_type {
-        DataType::Dictionary(..) => Encoding::Dictionary,
-        _ => Encoding::Direct,
-    }
-}
 
 /// Borrow the value type beneath any dictionary wrappers.
 pub(crate) fn value_type(mut data_type: &DataType) -> &DataType {
@@ -43,30 +11,6 @@ pub(crate) fn value_type(mut data_type: &DataType) -> &DataType {
         data_type = values;
     }
     data_type
-}
-
-/// Scalar semantics, independent of dictionary encoding.
-pub(crate) fn domain(data_type: &DataType) -> Option<Domain> {
-    direct_domain(value_type(data_type))
-}
-
-/// Scalar class of a native array. Dictionary keys are not scalar values.
-pub(crate) fn direct_domain(data_type: &DataType) -> Option<Domain> {
-    use DataType::*;
-    Some(match data_type {
-        Utf8 | LargeUtf8 | Utf8View => Domain::Text,
-        Boolean => Domain::Boolean,
-        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Domain::Integer,
-        Float16 | Float32 | Float64 => Domain::Float,
-        Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => Domain::Decimal,
-        Date32 | Date64 => Domain::Date,
-        Time32(_) | Time64(_) => Domain::Time,
-        Timestamp(..) => Domain::Timestamp,
-        Duration(_) => Domain::Duration,
-        Interval(_) => Domain::Interval,
-        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => Domain::Binary,
-        _ => return None,
-    })
 }
 
 /// Whether the entire schema has a display description, including children.
@@ -88,7 +32,50 @@ pub(crate) fn is_describable(data_type: &DataType) -> bool {
             }
             _ => false,
         },
-        _ => direct_domain(data_type).is_some(),
+        Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
+        | Float32 | Float64 | Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..)
+        | Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) | Duration(_) | Interval(_)
+        | Binary | LargeBinary | BinaryView | FixedSizeBinary(_) | Utf8 | LargeUtf8 | Utf8View => {
+            true
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn display_type(data_type: &DataType) -> String {
+    use DataType::*;
+    match value_type(data_type) {
+        Null => "null".into(),
+        Boolean => "bool".into(),
+        Int8 => "int8".into(),
+        Int16 => "int16".into(),
+        Int32 => "int32".into(),
+        Int64 => "int64".into(),
+        UInt8 => "uint8".into(),
+        UInt16 => "uint16".into(),
+        UInt32 => "uint32".into(),
+        UInt64 => "uint64".into(),
+        Float16 => "float16".into(),
+        Float32 => "float32".into(),
+        Float64 => "float64".into(),
+        Decimal32(precision, scale)
+        | Decimal64(precision, scale)
+        | Decimal128(precision, scale)
+        | Decimal256(precision, scale) => format!("decimal({precision},{scale})"),
+        Date32 | Date64 => "date".into(),
+        Time32(_) | Time64(_) => "time".into(),
+        Timestamp(_, Some(timezone)) => format!("timestamp({timezone})"),
+        Timestamp(_, None) => "timestamp".into(),
+        Duration(_) => "duration".into(),
+        Interval(_) => "interval".into(),
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => "binary".into(),
+        Utf8 | LargeUtf8 | Utf8View => "string".into(),
+        List(_) | LargeList(_) | ListView(_) | LargeListView(_) | FixedSizeList(..) => {
+            "list".into()
+        }
+        Struct(_) => "struct".into(),
+        Map(..) => "map".into(),
+        _ => unreachable!("Column validates supported types at construction"),
     }
 }
 
@@ -97,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dictionary_preserves_domain_but_not_native_dispatch() {
+    fn nested_dictionaries_expose_their_value_type() {
         let encoded = DataType::Dictionary(
             Box::new(DataType::Int8),
             Box::new(DataType::Dictionary(
@@ -105,9 +92,7 @@ mod tests {
                 Box::new(DataType::Int64),
             )),
         );
-        assert_eq!(domain(&encoded), Some(Domain::Integer));
-        assert_eq!(direct_domain(&encoded), None);
-        assert_eq!(encoding(&encoded), Encoding::Dictionary);
         assert_eq!(value_type(&encoded), &DataType::Int64);
+        assert!(is_describable(&encoded));
     }
 }

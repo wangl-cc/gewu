@@ -5,7 +5,6 @@
 //! - [`dictionary`]: compact distinct-value dictionary encoding
 //! - [`filter`]: Single-column filter and Find predicate compilation
 
-pub(crate) mod bound;
 pub(crate) mod dictionary;
 pub(crate) mod filter;
 mod metadata;
@@ -17,9 +16,7 @@ use std::{
 };
 
 use arrow::array::ArrayRef;
-pub(crate) use bound::Bound;
 pub(crate) use dictionary::Dictionary;
-pub(crate) use metadata::display_type;
 pub use metadata::{ColumnInfo, ValueCategory};
 
 use crate::{predicate::Predicate, types, Cancellation, Filter, Result};

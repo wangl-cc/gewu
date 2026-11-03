@@ -71,7 +71,7 @@ impl Dataset {
         // Execute cheap, highly selective filters (null checks, indexed values, range bounds)
         // before expensive string or substring scans. In bounded batch execution, this zeroes
         // out matching rows early and triggers `break` before evaluating costlier predicates.
-        active_filters.sort_by_key(|(_, f)| f.estimated_cost());
+        active_filters.sort_by_key(|(_, filter)| filter_cost(filter));
 
         let predicates = active_filters
             .iter()
@@ -135,5 +135,14 @@ impl Dataset {
             None
         };
         sort_rows(rows, &comparators, primitive, || token.check())
+    }
+}
+
+fn filter_cost(filter: &Filter) -> u8 {
+    match &filter.condition {
+        crate::FilterCondition::Exact { values, .. } if values.is_empty() => 0,
+        crate::FilterCondition::Exact { .. } => 1,
+        crate::FilterCondition::Range { .. } => 2,
+        crate::FilterCondition::Text { .. } => 3,
     }
 }

@@ -9,10 +9,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{
-    types::{direct_domain, Domain},
-    Cancellation, Result,
-};
+use crate::{Cancellation, Result};
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -32,17 +29,29 @@ pub struct NumericStatistics {
 }
 
 pub(crate) fn supports(data_type: &DataType) -> bool {
+    use DataType::*;
     matches!(
-        direct_domain(data_type),
-        Some(
-            Domain::Integer
-                | Domain::Float
-                | Domain::Decimal
-                | Domain::Date
-                | Domain::Time
-                | Domain::Timestamp
-                | Domain::Duration
-        )
+        data_type,
+        Int8 | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+            | Decimal32(..)
+            | Decimal64(..)
+            | Decimal128(..)
+            | Decimal256(..)
+            | Date32
+            | Date64
+            | Time32(_)
+            | Time64(_)
+            | Timestamp(..)
+            | Duration(_)
     )
 }
 
