@@ -29,6 +29,9 @@ final class DocumentModel: ObservableObject {
     @Published var selectedColumn: Int?
     @Published var inspectedColumn: Int?
     @Published var inspectorPage = InspectorPage.column
+    @Published var inspectorRequest = 0
+    @Published var showsColumns = false
+    var inspectorVisible = true
     @Published var chartX: Int?
     @Published var chartY: Int?
     @Published var selectedSourceRow: UInt64?
@@ -85,14 +88,13 @@ final class DocumentModel: ObservableObject {
             + ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)
     }
 
-    func status(rowNumberBase: Int) -> String {
+    var status: String {
         var text =
             view.rowCount() == info.rowCount
             ? "\(formatCount(view.rowCount())) rows"
             : "\(formatCount(view.rowCount())) of \(formatCount(info.rowCount)) rows"
         text += " · \(appliedSpec.columns.count) columns"
         if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
-        if let row = selectedSourceRow { text += " · row \(formatRowNumber(row, base: rowNumberBase)) in file" }
         if let findStatus = find.status { text += " · \(findStatus)" }
         return text
     }
@@ -219,6 +221,21 @@ final class DocumentModel: ObservableObject {
         guard Int(column) < info.columns.count, !spec.columns.contains(where: { $0.column == column }) else { return }
         spec.columns.append(ColSpec(column: column, sort: nil, filter: nil))
         refresh()
+    }
+
+    func showAllColumns() {
+        let visible = Set(spec.columns.map(\.column))
+        let missing = info.columns.indices.map(UInt32.init).filter { !visible.contains($0) }
+        guard !missing.isEmpty else { return }
+        spec.columns += missing.map { ColSpec(column: $0, sort: nil, filter: nil) }
+        refresh()
+    }
+
+    func inspectColumn(_ column: Int) {
+        guard info.columns.indices.contains(column) else { return }
+        inspectedColumn = column
+        inspectorPage = .column
+        inspectorRequest &+= 1
     }
 
     func refresh(debounce: Bool = false) {

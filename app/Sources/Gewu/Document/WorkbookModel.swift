@@ -12,7 +12,11 @@ final class WorkbookModel: ObservableObject {
     @Published private(set) var isOpening = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
-    @Published var showsInspector = UserDefaults.standard.bool(forKey: "ShowColumnInspector")
+    @Published var showsInspector: Bool {
+        didSet { preferences.set(showsInspector, forKey: Self.inspectorPreference) }
+    }
+    static let inspectorPreference = "ShowColumnInspector"
+    private let preferences: UserDefaults
     @Published var showsImportOptions = false
     @Published private(set) var hasHeader: Bool
 
@@ -29,6 +33,7 @@ final class WorkbookModel: ObservableObject {
     init(
         url: URL,
         hasHeader: Bool = true,
+        preferences: UserDefaults = .standard,
         sheetNames: @escaping @Sendable (String) throws -> [String] = { try xlsxSheetNames(path: $0) },
         openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDataset = { path, sheet, header in
             try GewuDataset.openWithOptions(path: path, sheet: sheet, hasHeader: header)
@@ -36,6 +41,8 @@ final class WorkbookModel: ObservableObject {
         didOpen: @escaping @MainActor (URL) -> Void = { FileCoordinator.shared.recordRecent($0) }
     ) {
         self.url = url
+        self.preferences = preferences
+        showsInspector = preferences.object(forKey: Self.inspectorPreference) as? Bool ?? true
         self.hasHeader = hasHeader
         self.sheetNames = sheetNames
         self.openDocument = openDocument

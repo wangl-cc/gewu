@@ -8,21 +8,10 @@ struct DocumentScene: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: sidebarVisibility) {
-            Group {
-                if workbook.showsInspector, let model = workbook.document {
-                    InspectorSidebar(model: model).id(ObjectIdentifier(model))
-                } else {
-                    ContentUnavailableView(
-                        "Column Analysis", systemImage: "sidebar.left",
-                        description: Text("Open a table to inspect its columns."))
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
-        } detail: {
+        Group {
             VStack(spacing: 0) {
                 if let model = workbook.document {
-                    LoadedDocumentView(model: model).id(ObjectIdentifier(model))
+                    LoadedDocumentView(model: model, workbook: workbook).id(ObjectIdentifier(model))
                 } else if workbook.isOpening {
                     ProgressView("Opening \(workbook.url.lastPathComponent)…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -38,18 +27,32 @@ struct DocumentScene: View {
                         }
                     }
                 }
-                if workbook.sheets.count > 1 {
-                    Divider()
-                    worksheetBar
-                } else if workbook.isOpening, workbook.document != nil {
-                    ProgressView("Opening worksheet…").controlSize(.small).padding(6)
-                }
             }
             .navigationTitle(workbook.url.lastPathComponent)
             .navigationDocument(workbook.url)
             .navigationSubtitle(workbook.document?.subtitle ?? "")
         }
-        .navigationSplitViewStyle(.balanced)
+        .inspector(isPresented: $workbook.showsInspector) {
+            Group {
+                if let model = workbook.document {
+                    InspectorSidebar(model: model).id(ObjectIdentifier(model))
+                } else {
+                    ContentUnavailableView(
+                        "Column Analysis", systemImage: "chart.bar",
+                        description: Text("Open a table to inspect its columns."))
+                }
+            }
+            .inspectorColumnWidth(min: 240, ideal: 300, max: 460)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    workbook.showsInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.right")
+                }.help("Show or hide Inspector")
+            }
+        }
         .frame(minWidth: 620, minHeight: 400)
         .focusedSceneObject(workbook)
         .task { workbook.open() }
@@ -64,39 +67,6 @@ struct DocumentScene: View {
         }
     }
 
-    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(
-            get: { workbook.showsInspector ? .all : .detailOnly },
-            set: { workbook.showsInspector = $0 != .detailOnly })
-    }
-
-    private var worksheetBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(workbook.sheets, id: \.self) { sheet in
-                    Button {
-                        workbook.selectSheet(sheet)
-                    } label: {
-                        HStack(spacing: 5) {
-                            if workbook.pendingSheet == sheet { ProgressView().controlSize(.mini) }
-                            Text(sheet.rawValue).lineLimit(1)
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background {
-                            if workbook.selectedSheet == sheet {
-                                RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.15))
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Worksheet \(sheet.rawValue)")
-                    .accessibilityAddTraits(workbook.selectedSheet == sheet ? .isSelected : [])
-                }
-            }.padding(5)
-        }
-        .scrollIndicators(.hidden)
-        .fixedSize(horizontal: false, vertical: true)
-    }
 }
 
 private struct ImportOptionsView: View {
@@ -142,21 +112,24 @@ private struct ImportOptionsView: View {
 
 private struct LoadedDocumentView: View {
     @ObservedObject var model: DocumentModel
+    @ObservedObject var workbook: WorkbookModel
     @ObservedObject private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
     @FocusState private var searchFocused: Bool
     @State private var showsSorting = false
 
-    init(model: DocumentModel) {
+    init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
+        self.workbook = workbook
         _find = ObservedObject(wrappedValue: model.find)
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            AppliedFiltersView(model: model)
             DataTable(model: model, showsRowNumbers: showsRowNumbers)
             Divider()
-            DocumentStatus(model: model)
+            DocumentStatus(model: model, workbook: workbook)
         }
         .toolbar {
             ToolbarItem {
@@ -175,12 +148,19 @@ private struct LoadedDocumentView: View {
                 }
             }
             ToolbarItem {
+                ExportToolbarButton(model: model, export: model.export)
+            }
+            ToolbarItem {
                 Button {
                     showsSorting = true
                 } label: {
                     Label("Sort", systemImage: "arrow.up.arrow.down")
                 }
             }
+        }
+        .onChange(of: model.inspectorRequest) { _, _ in workbook.showsInspector = true }
+        .onChange(of: workbook.showsInspector, initial: true) { _, visible in
+            model.inspectorVisible = visible
         }
         .sheet(isPresented: $showsSorting) { SortingView(model: model) }
         .searchable(text: $find.query, placement: .toolbar, prompt: "Find in visible columns")
@@ -199,20 +179,40 @@ private struct LoadedDocumentView: View {
 
 private struct DocumentStatus: View {
     @ObservedObject var model: DocumentModel
+    @ObservedObject var workbook: WorkbookModel
     @ObservedObject private var find: FindModel
-    @AppStorage("RowNumberBase") private var rowNumberBase = 0
 
-    init(model: DocumentModel) {
+    init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
+        self.workbook = workbook
         _find = ObservedObject(wrappedValue: model.find)
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(model.status(rowNumberBase: rowNumberBase)).lineLimit(1).textSelection(.enabled)
-            if model.canClearFilters {
-                Button("Clear Filters") { model.clearFilters() }.buttonStyle(.borderless)
+            if workbook.sheets.count > 1 {
+                Menu {
+                    ForEach(workbook.sheets, id: \.self) { sheet in
+                        Button {
+                            workbook.selectSheet(sheet)
+                        } label: {
+                            if workbook.selectedSheet == sheet {
+                                Label(sheet.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(sheet.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(workbook.selectedSheet?.rawValue ?? "Worksheets", systemImage: "tablecells")
+                        .lineLimit(1)
+                }.frame(maxWidth: 180).help("Switch worksheet")
             }
+            if workbook.isOpening {
+                ProgressView().controlSize(.small)
+                    .help(workbook.pendingSheet.map { "Opening \($0.rawValue)…" } ?? "Opening…")
+            }
+            Text(model.status).monospacedDigit().lineLimit(1).textSelection(.enabled)
             Spacer(minLength: 0)
             CopyStatus(copying: model.copying)
             ExportStatus(export: model.export)

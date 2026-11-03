@@ -42,7 +42,7 @@ struct ViewerCommands: Commands {
                 Button("Find Previous") {}.keyboardShortcut("g", modifiers: [.command, .shift]).disabled(true)
             }
         }
-        SidebarCommands()
+        InspectorCommands()
         CommandGroup(after: .sidebar) {
             if let workbook, let model {
                 ForEach(InspectorPage.allCases, id: \.self) { page in
@@ -60,8 +60,7 @@ struct ViewerCommands: Commands {
             }
             Divider()
             Button("Analyze Selected Column") {
-                model?.inspectedColumn = model?.selectedColumn
-                model?.inspectorPage = .column
+                if let column = model?.selectedColumn { model?.inspectColumn(column) }
                 workbook?.showsInspector = true
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
@@ -101,6 +100,6 @@ private struct ExportCommand: View {
     var body: some View {
         Button("Export…") { model.chooseExport() }
             .keyboardShortcut("e", modifiers: [.command, .shift])
-            .disabled(model.isBusy || !export.isIdle)
+            .disabled(model.isBusy || !export.isIdle || model.appliedSpec.columns.isEmpty)
     }
 }

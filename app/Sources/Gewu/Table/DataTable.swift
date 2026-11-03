@@ -541,6 +541,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         showFilter(at: index)
     }
 
+    func showColumnFilter(_ column: UInt32) {
+        guard model.appliedSpec.columns.contains(where: { $0.column == column }) else { return }
+        scrollToColumn(Int(column))
+        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+    }
+
     var displayedColumns: [UInt32] {
         table.tableColumns.filter { !$0.isHidden }.compactMap(columnIndex).map(UInt32.init)
     }

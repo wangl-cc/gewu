@@ -4,6 +4,27 @@ import Testing
 
 @Suite @MainActor
 struct QuerySpecTests {
+    @Test func removingOneAppliedFilterPreservesOtherFiltersSortingAndFindInput() async throws {
+        let model = try model()
+        defer { model.stop() }
+        model.find.query = "x"
+        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: 0)
+        model.setFilter(Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false), column: 2)
+        model.setSortDirection(column: 1, descending: true)
+        try await settled(model)
+        model.reorderColumns([2, 0, 1])
+        model.setFilter(nil, column: 2)
+        try await settled(model)
+        #expect(model.appliedFilterColumns == [0])
+        #expect(model.view.rowCount() == 2)
+        #expect(model.sortedColumns.map(\.column) == [1])
+        #expect(model.find.query == "x")
+        model.clearFilters()
+        try await settled(model)
+        #expect(model.view.rowCount() == 3 && model.appliedFilterColumns.isEmpty)
+        #expect(model.sortedColumns.map(\.column) == [1] && model.find.query == "x")
+    }
+
     private func model() throws -> DocumentModel {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-query-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }

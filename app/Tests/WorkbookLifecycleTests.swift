@@ -186,7 +186,7 @@ struct WorkbookLifecycleTests {
             #expect(point.sourceRow == 0, "Presentation must not change source row identity")
             let label = formatRowNumber(point.sourceRow, base: base)
             #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
-            #expect(document.status(rowNumberBase: base).contains("row \(label) in file"))
+            #expect(!document.status.contains("in file"), "Keep source row labels in the gutter, not the status bar")
         }
         document.selectedSourceRow = nil
         let message = "Invalid numeric bound"
