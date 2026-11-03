@@ -4,6 +4,20 @@ import Testing
 
 @Suite @MainActor
 struct QuerySpecTests {
+    @Test func showAllRestoresHiddenColumnsWithoutRestoringTheirConditions() async throws {
+        let model = try model()
+        defer { model.stop() }
+        model.reorderColumns([2, 1, 0])
+        model.setSortDirection(column: 0, descending: true)
+        model.removeColumn(0)
+        try await settled(model)
+        model.showAllColumns()
+        try await settled(model)
+        #expect(model.appliedSpec.columns.map(\.column) == [2, 1, 0])
+        #expect(model.appliedSpec.columns.last?.sort == nil)
+        #expect(model.appliedSpec.columns.last?.filter == nil)
+    }
+
     @Test func removingOneAppliedFilterPreservesOtherFiltersSortingAndFindInput() async throws {
         let model = try model()
         defer { model.stop() }
@@ -88,23 +102,6 @@ struct QuerySpecTests {
         #expect(model.spec.columns.last?.filter == nil)
         #expect(model.spec.columns.last?.sort == nil)
         try await settled(model)
-    }
-
-    @Test func shiftHeaderClickUsesExplicitMultiSortCallback() throws {
-        let table = NSTableView(frame: NSRect(x: 0, y: 0, width: 120, height: 100))
-        let column = NSTableColumn(identifier: .init("value"))
-        column.width = 120
-        table.addTableColumn(column)
-        let header = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 120, height: 32))
-        table.headerView = header
-        var clicked: Int?
-        header.onShiftSort = { clicked = $0 }
-        let event = try #require(
-            NSEvent.mouseEvent(
-                with: .leftMouseDown, location: NSPoint(x: 20, y: 10), modifierFlags: .shift,
-                timestamp: 0, windowNumber: 0, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-        header.mouseDown(with: event)
-        #expect(clicked == 0)
     }
 
     @Test func exactDraftPreservesBytesAndNullsAreIndependent() {

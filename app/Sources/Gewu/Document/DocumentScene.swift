@@ -133,19 +133,12 @@ private struct LoadedDocumentView: View {
         }
         .toolbar {
             ToolbarItem {
-                Menu {
-                    ForEach(Array(model.info.columns.enumerated()), id: \.offset) { index, column in
-                        Toggle(
-                            column.name,
-                            isOn: Binding(
-                                get: { model.spec.columns.contains { $0.column == UInt32(index) } },
-                                set: {
-                                    if $0 { model.showColumn(UInt32(index)) } else { model.hideColumn(UInt32(index)) }
-                                }))
-                    }
+                Button {
+                    model.showsColumns.toggle()
                 } label: {
                     Label("Columns", systemImage: "tablecells")
                 }
+                .popover(isPresented: $model.showsColumns) { ColumnsView(model: model) }
             }
             ToolbarItem {
                 ExportToolbarButton(model: model, export: model.export)

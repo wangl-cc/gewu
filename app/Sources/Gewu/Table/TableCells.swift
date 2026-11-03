@@ -39,6 +39,7 @@ final class ColumnHeaderCell: NSTableHeaderCell {
     var textSize: CGFloat = 12
     var subtitle = ""
     var filtered = false
+    var inspected = false
     var rightAligned = false
     var sorted = false
     var sortAscending = true
@@ -90,6 +91,12 @@ final class ColumnHeaderCell: NSTableHeaderCell {
         // owns the single separator; cells draw only their fill and contents.
         (isHighlighted ? NSColor.selectedControlColor : NSColor.controlBackgroundColor).setFill()
         frame.fill()
+        if inspected, !stringValue.isEmpty {
+            NSColor.controlAccentColor.withAlphaComponent(0.08).setFill()
+            frame.fill()
+            NSColor.controlAccentColor.setFill()
+            NSRect(x: frame.minX, y: frame.maxY - 2, width: frame.width, height: 2).fill()
+        }
         drawInterior(withFrame: frame, in: controlView)
 
         // AppKit draws the trailing empty area with a copy of the last cell
@@ -172,8 +179,7 @@ final class FilterHeaderView: NSTableHeaderView {
     var onFilterClick: ((Int) -> Void)?
     var columnMenu: ((Int) -> NSMenu?)?
     /// Any other click on a column header (it also sorts, as usual).
-    var onColumnClick: ((Int) -> Void)?
-    var onShiftSort: ((Int) -> Void)?
+    private(set) var sortingMultiple = false
     private var hovered: ColumnHeaderCell?
 
     override func draw(_ dirtyRect: NSRect) {
@@ -202,15 +208,17 @@ final class FilterHeaderView: NSTableHeaderView {
         if let (index, _) = funnelCell(at: event) {
             onFilterClick?(index)
         } else {
-            let index = column(at: convert(event.locationInWindow, from: nil))
-            if index >= 0 { onColumnClick?(index) }
-            // AppKit treats Shift as column selection and skips didClick.
-            // Handle this explicit multi-sort gesture before native tracking.
-            if index >= 0, event.modifierFlags.contains(.shift) {
-                onShiftSort?(index)
-                return
-            }
-            super.mouseDown(with: event)
+            // Keep AppKit's click/drag/divider tracking intact. Shift means
+            // multi-sort for a completed click, not native column selection.
+            sortingMultiple = event.modifierFlags.contains(.shift)
+            defer { sortingMultiple = false }
+            let tracked =
+                NSEvent.mouseEvent(
+                    with: event.type, location: event.locationInWindow,
+                    modifierFlags: event.modifierFlags.subtracting(.shift), timestamp: event.timestamp,
+                    windowNumber: event.windowNumber, context: nil, eventNumber: event.eventNumber,
+                    clickCount: event.clickCount, pressure: event.pressure) ?? event
+            super.mouseDown(with: tracked)
         }
     }
 
