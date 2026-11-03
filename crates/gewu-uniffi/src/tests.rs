@@ -248,11 +248,9 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
     std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
     let info = doc.info();
-    assert_eq!(info.format, "CSV");
+    assert_eq!(info.format, FileType::Csv);
     assert_eq!(info.row_count, 2);
-    assert_eq!(info.row_groups, None);
-    assert!(info.compression.is_empty());
-    assert!(info.sheet.is_none());
+    assert!(matches!(info.metadata, FileMetadata::Delimited));
     assert!(matches!(
         crate::xlsx_sheet_names(source.to_str().unwrap().to_owned()),
         Err(GewuError::InvalidArgument { .. })
@@ -262,10 +260,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
         Err(GewuError::InvalidArgument { .. })
     ));
 
-    for (format, extension, name) in [
-        (FileType::Xlsx, "xlsx", "XLSX"),
-        (FileType::Parquet, "parquet", "Parquet"),
-    ] {
+    for (format, extension) in [(FileType::Xlsx, "xlsx"), (FileType::Parquet, "parquet")] {
         let destination = source.with_extension(extension);
         doc.view()
             .export(vec![0, 1], format)
@@ -274,16 +269,20 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             .unwrap();
         let reopened = GewuDataset::open(destination.to_str().unwrap().to_owned()).unwrap();
         let info = reopened.info();
-        assert_eq!(info.format, name);
+        assert_eq!(info.format, format);
         assert_eq!(info.row_count, 2);
         if extension == "xlsx" {
-            assert_eq!(info.row_groups, None);
-            let sheet = info.sheet.unwrap();
+            let FileMetadata::Xlsx { sheet, sheets } = info.metadata else {
+                panic!("expected XLSX metadata")
+            };
             let path = destination.to_str().unwrap().to_owned();
-            assert_eq!(crate::xlsx_sheet_names(path.clone()).unwrap(), info.sheets);
-            assert_eq!(info.sheets, vec![sheet.clone()]);
+            assert_eq!(crate::xlsx_sheet_names(path.clone()).unwrap(), sheets);
+            assert_eq!(sheets, vec![sheet.clone()]);
             let selected = GewuDataset::open_sheet(path.clone(), sheet.clone()).unwrap();
-            assert_eq!(selected.info().sheet, Some(sheet));
+            assert!(matches!(
+                selected.info().metadata,
+                FileMetadata::Xlsx { sheet: selected, .. } if selected == sheet
+            ));
             assert_eq!(selected.view().rows(0, 1, vec![0]).unwrap().cells, [Some(
                 "cat".into()
             )]);
@@ -306,9 +305,16 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 Err(GewuError::InvalidArgument { .. })
             ));
         } else {
-            assert_eq!(info.row_groups, Some(1));
-            assert!(!info.compression.is_empty());
-            assert!(info.sheet.is_none());
+            let FileMetadata::Parquet {
+                row_groups,
+                compression,
+                ..
+            } = info.metadata
+            else {
+                panic!("expected Parquet metadata")
+            };
+            assert_eq!(row_groups, 1);
+            assert!(!compression.is_empty());
         }
         std::fs::remove_file(destination).unwrap();
     }

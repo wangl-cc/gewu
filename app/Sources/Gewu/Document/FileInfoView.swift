@@ -14,29 +14,32 @@ struct FileDetails: Codable, Hashable {
     init(info: FileInfo) {
         path = info.path
         var details = [
-            Detail(title: "Kind", value: "\(info.format) table"),
+            Detail(title: "Kind", value: "\(info.format.displayName) table"),
             Detail(
                 title: "Size",
                 value: ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)),
             Detail(title: "Rows", value: formatCount(info.rowCount)),
             Detail(title: "Columns", value: formatCount(UInt64(info.columns.count))),
         ]
-        if let rowGroups = info.rowGroups {
+        switch info.metadata {
+        case .parquet(let rowGroups, let compression, let createdBy, let keyValues):
             details.append(Detail(title: "Row groups", value: formatCount(UInt64(rowGroups))))
             details.append(
                 Detail(
                     title: "Compression",
-                    value: info.compression.isEmpty ? "None" : info.compression.joined(separator: ", ")))
-        }
-        if let createdBy = info.createdBy {
-            details.append(Detail(title: "Created by", value: createdBy))
-        }
-        if let sheet = info.sheet {
+                    value: compression.isEmpty ? "None" : compression.joined(separator: ", ")))
+            if let createdBy {
+                details.append(Detail(title: "Created by", value: createdBy))
+            }
+            metadata = keyValues.map { Detail(title: $0.key, value: $0.value) }
+        case .delimited:
+            metadata = []
+        case .xlsx(let sheet, let sheets):
             details.append(Detail(title: "Worksheet", value: sheet))
-            details.append(Detail(title: "Workbook sheets", value: info.sheets.joined(separator: ", ")))
+            details.append(Detail(title: "Workbook sheets", value: sheets.joined(separator: ", ")))
+            metadata = []
         }
         items = details
-        metadata = info.metadata.map { Detail(title: $0.key, value: $0.value) }
     }
 }
 

@@ -49,7 +49,10 @@ final class WorkbookModel: ObservableObject {
         self.didOpen = didOpen
     }
 
-    var selectedSheet: WorksheetName? { document?.info.sheet.map(WorksheetName.init) }
+    var selectedSheet: WorksheetName? {
+        guard case .xlsx(let sheet, _)? = document?.info.metadata else { return nil }
+        return WorksheetName(rawValue: sheet)
+    }
 
     var supportsHeaderOption: Bool { ["csv", "tsv", "xlsx"].contains(url.pathExtension.lowercased()) }
 
@@ -135,7 +138,11 @@ final class WorkbookModel: ObservableObject {
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
-                self.sheets = next.info.sheets.map(WorksheetName.init)
+                if case .xlsx(_, let sheets) = next.info.metadata {
+                    self.sheets = sheets.map(WorksheetName.init)
+                } else {
+                    self.sheets = []
+                }
                 self.pendingSheet = nil
                 self.isOpening = false
                 self.task = nil

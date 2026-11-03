@@ -66,15 +66,9 @@ pub struct FileInfo {
     pub path: String,
     pub row_count: u64,
     pub columns: Vec<ColumnInfo>,
-    pub format: String,
-    pub row_groups: Option<u32>,
+    pub format: FileType,
     pub file_size: u64,
-    pub compression: Vec<String>,
-    pub created_by: Option<String>,
-    /// Footer key-value metadata (Arrow's own schema left out).
-    pub metadata: Vec<KeyValue>,
-    pub sheet: Option<String>,
-    pub sheets: Vec<String>,
+    pub metadata: FileMetadata,
 }
 
 #[derive(uniffi::Record)]
@@ -83,7 +77,7 @@ pub struct KeyValue {
     pub value: String,
 }
 
-#[derive(uniffi::Enum)]
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Csv,
     Tsv,
@@ -102,9 +96,59 @@ impl From<FileType> for core::FileType {
     }
 }
 
+impl From<core::FileType> for FileType {
+    fn from(value: core::FileType) -> Self {
+        match value {
+            core::FileType::Csv => Self::Csv,
+            core::FileType::Tsv => Self::Tsv,
+            core::FileType::Parquet => Self::Parquet,
+            core::FileType::Xlsx => Self::Xlsx,
+        }
+    }
+}
+
+#[derive(uniffi::Enum)]
+pub enum FileMetadata {
+    Parquet {
+        row_groups: u32,
+        compression: Vec<String>,
+        created_by: Option<String>,
+        /// Footer key-value metadata (Arrow's own schema left out).
+        key_values: Vec<KeyValue>,
+    },
+    Delimited,
+    Xlsx {
+        sheet: String,
+        sheets: Vec<String>,
+    },
+}
+
+impl From<core::FileMetadata> for FileMetadata {
+    fn from(value: core::FileMetadata) -> Self {
+        match value {
+            core::FileMetadata::Parquet {
+                row_groups,
+                compression,
+                created_by,
+                key_values,
+            } => Self::Parquet {
+                row_groups,
+                compression,
+                created_by,
+                key_values: key_values
+                    .into_iter()
+                    .map(|(key, value)| KeyValue { key, value })
+                    .collect(),
+            },
+            core::FileMetadata::Delimited => Self::Delimited,
+            core::FileMetadata::Xlsx { sheet, sheets } => Self::Xlsx { sheet, sheets },
+        }
+    }
+}
+
 impl From<core::FileInfo> for FileInfo {
     fn from(i: core::FileInfo) -> Self {
-        let mut info = FileInfo {
+        Self {
             path: i.path,
             row_count: i.row_count,
             columns: i
@@ -119,36 +163,9 @@ impl From<core::FileInfo> for FileInfo {
                     nullable: c.nullable,
                 })
                 .collect(),
-            format: i.format.to_string(),
-            row_groups: None,
+            format: i.format.into(),
             file_size: i.file_size,
-            compression: Vec::new(),
-            created_by: None,
-            metadata: Vec::new(),
-            sheet: None,
-            sheets: Vec::new(),
-        };
-        match i.metadata {
-            core::FileMetadata::Parquet {
-                row_groups,
-                compression,
-                created_by,
-                key_values,
-            } => {
-                info.row_groups = Some(row_groups);
-                info.compression = compression;
-                info.created_by = created_by;
-                info.metadata = key_values
-                    .into_iter()
-                    .map(|(key, value)| KeyValue { key, value })
-                    .collect();
-            }
-            core::FileMetadata::Delimited => {}
-            core::FileMetadata::Xlsx { sheet, sheets } => {
-                info.sheet = Some(sheet);
-                info.sheets = sheets;
-            }
+            metadata: i.metadata.into(),
         }
-        info
     }
 }

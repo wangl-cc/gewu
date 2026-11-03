@@ -34,7 +34,7 @@ There is no backend current View, query registration, commit, version lookup, qu
 
 `view.reorder_columns(order)` accepts exactly a permutation of current visible columns. It returns a new View, allocates only its column array and shares source data and row IDs. Missing, duplicate or extra columns are errors. Hiding/showing columns uses a complete query.
 
-`FileInfo` carries source metadata: Parquet row groups, compression and footer entries; XLSX sheet information; absent optional fields for other formats are normal.
+`FileInfo` carries a typed `FileType` and tagged `FileMetadata`: Parquet row groups, compression and footer entries are available only in the Parquet case, while XLSX sheet information is available only in the Xlsx case.
 
 ### Window state and future frontend migration
 

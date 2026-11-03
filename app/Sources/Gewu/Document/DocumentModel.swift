@@ -79,7 +79,11 @@ final class DocumentModel: ObservableObject {
     }
 
     var subtitle: String {
-        let source = info.sheet.map { "\(info.format) · \($0)" } ?? info.format
+        let source =
+            switch info.metadata {
+            case .xlsx(let sheet, _): "\(info.format.displayName) · \(sheet)"
+            default: info.format.displayName
+            }
         return "\(source) · \(formatCount(info.rowCount)) rows · \(info.columns.count) columns · "
             + ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)
     }
