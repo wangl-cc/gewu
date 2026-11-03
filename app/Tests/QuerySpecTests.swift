@@ -4,6 +4,30 @@ import Testing
 
 @Suite @MainActor
 struct QuerySpecTests {
+    @Test func nativeColumnDragAllowsPreflightAndKeepsTheRowGutterFixed() throws {
+        let model = try model()
+        let controller = DataTableController(model: model)
+        defer {
+            controller.stopLoading()
+            model.stop()
+        }
+        let scroll = try #require(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try #require(scroll.documentView as? NSTableView)
+        controller.update(showsRowNumbers: true, fontSize: 12, rowHeight: 28, rowNumberBase: 0)
+        #expect(table.allowsColumnReordering)
+        #expect(controller.tableView(table, shouldReorderColumn: 2, toColumn: -1))
+        #expect(controller.tableView(table, shouldReorderColumn: 2, toColumn: 1))
+        #expect(!controller.tableView(table, shouldReorderColumn: 2, toColumn: 0))
+        #expect(!controller.tableView(table, shouldReorderColumn: 0, toColumn: -1))
+        #expect(!controller.tableView(table, shouldReorderColumn: 0, toColumn: 2))
+
+        table.moveColumn(2, toColumn: 1)
+        #expect(model.appliedSpec.columns.map(\.column) == [1, 0, 2])
+        controller.update(showsRowNumbers: true, fontSize: 12, rowHeight: 28, rowNumberBase: 0)
+        #expect(controller.displayedColumns == [1, 0, 2])
+        #expect(model.sortedColumns.isEmpty)
+    }
+
     @Test func showAllRestoresHiddenColumnsWithoutRestoringTheirConditions() async throws {
         let model = try model()
         defer { model.stop() }

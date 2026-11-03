@@ -212,6 +212,12 @@ final class FilterHeaderView: NSTableHeaderView {
             // multi-sort for a completed click, not native column selection.
             sortingMultiple = event.modifierFlags.contains(.shift)
             defer { sortingMultiple = false }
+            // Ordinary drags need the original event; reconstructing it loses
+            // native tracking information. Only normalize Shift-click sorting.
+            guard sortingMultiple else {
+                super.mouseDown(with: event)
+                return
+            }
             let tracked =
                 NSEvent.mouseEvent(
                     with: event.type, location: event.locationInWindow,

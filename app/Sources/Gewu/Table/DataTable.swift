@@ -421,7 +421,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableView(_ tableView: NSTableView, shouldReorderColumn column: Int, toColumn newColumn: Int) -> Bool {
-        table.tableColumns[column].identifier != rowHeaderID && newColumn > 0
+        // AppKit first asks with -1 whether dragging may begin, before proposing a destination.
+        tableView.tableColumns[column].identifier != rowHeaderID && (newColumn == -1 || newColumn > 0)
     }
 
     func tableViewColumnDidMove(_ notification: Notification) {
