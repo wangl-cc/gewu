@@ -12,8 +12,7 @@ use arrow::{
 };
 
 use crate::{
-    column::{Column, ColumnCapabilities},
-    file, format, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
+    column::Column, file, format, Error, FileInfo, FileMetadata, FileType, OpenOptions, Result,
 };
 
 /// An immutable tabular dataset loaded into memory.
@@ -120,10 +119,6 @@ impl Dataset {
         self.columns
             .get(c as usize)
             .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
-    }
-
-    pub fn column_capabilities(&self, column: u32) -> Result<ColumnCapabilities> {
-        Ok(self.column(column)?.capabilities())
     }
 
     pub fn format_value(&self, column: u32, value: i64) -> Result<String> {

@@ -47,7 +47,7 @@ impl GewuDataset {
     }
 
     pub fn info(&self) -> FileInfo {
-        self.inner.as_ref().into()
+        self.inner.info().into()
     }
 
     pub fn analysis_capabilities(&self, column: u32) -> Result<AnalysisCapabilities, GewuError> {

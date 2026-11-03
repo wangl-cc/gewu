@@ -16,7 +16,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
     let source = std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
     std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
-    assert!(doc.info().columns[0].capabilities.histogram);
+    assert!(doc.analysis_capabilities(0).unwrap().distribution);
     assert!(doc.info().columns[0].capabilities.scatter);
     let points = doc
         .view()

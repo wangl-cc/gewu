@@ -95,7 +95,7 @@ struct ColumnFilterView: View {
     @ViewBuilder private var exactEditor: some View {
         if let values = choices?.values {
             ChoiceFilterView(values: values, draft: $exact)
-        } else if info.valueCategory == .text {
+        } else if info.capabilities.contains {
             TextFilterView(document: doc, column: column, querySpec: querySpec, draft: $exact)
         } else {
             HStack {

@@ -31,8 +31,6 @@ pub struct ColumnCapabilities {
     pub contains: bool,
     pub range: bool,
     pub exact: bool,
-    /// Histograms currently require a directly stored numeric array.
-    pub histogram: bool,
     /// Direct numeric and temporal arrays support approximate plot coordinates.
     pub scatter: bool,
     /// Direct numeric values support positive-only logarithmic charts.
@@ -153,7 +151,6 @@ impl Column {
             contains: filter::supports_contains(data_type),
             range: filter::range::supports(data_type),
             exact: filter::supports_equals(data_type),
-            histogram: crate::stats::supports_histogram(data_type),
             scatter: crate::stats::scatter::supports(data_type),
             logarithmic: crate::stats::supports_logarithmic(data_type),
         }
@@ -278,7 +275,6 @@ mod tests {
                     contains,
                     range: ordered,
                     exact: equals,
-                    histogram: ordered && !matches!(data_type, DataType::Dictionary(..)),
                     scatter: ordered && !matches!(data_type, DataType::Dictionary(..)),
                     logarithmic,
                 },
@@ -598,7 +594,6 @@ mod tests {
             contains: false,
             range: true,
             exact: true,
-            histogram: false,
             scatter: false,
             logarithmic: false,
         });

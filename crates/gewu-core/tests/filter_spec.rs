@@ -47,10 +47,10 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         .unwrap()
         .values
         .is_none());
-    assert!(doc.dataset().column_capabilities(1).unwrap().range);
-    assert!(doc.dataset().column_capabilities(1).unwrap().exact);
-    assert!(doc.dataset().column_capabilities(2).unwrap().contains);
-    assert!(doc.dataset().column_capabilities(2).unwrap().exact);
+    assert!(doc.dataset().info().columns[1].capabilities.range);
+    assert!(doc.dataset().info().columns[1].capabilities.exact);
+    assert!(doc.dataset().info().columns[2].capabilities.contains);
+    assert!(doc.dataset().info().columns[2].capabilities.exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc
         .query(&spec, &gewu_core::Cancellation::default())

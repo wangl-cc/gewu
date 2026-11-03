@@ -34,7 +34,6 @@ pub struct ColumnCapabilities {
     pub contains: bool,
     pub range: bool,
     pub exact: bool,
-    pub histogram: bool,
     pub scatter: bool,
     pub logarithmic: bool,
 }
@@ -45,7 +44,6 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
             contains: capabilities.contains,
             range: capabilities.range,
             exact: capabilities.exact,
-            histogram: capabilities.histogram,
             scatter: capabilities.scatter,
             logarithmic: capabilities.logarithmic,
         }
@@ -103,28 +101,21 @@ impl From<FileType> for core::FileType {
     }
 }
 
-impl From<&core::Dataset> for FileInfo {
-    fn from(document: &core::Dataset) -> Self {
-        let i = document.info();
+impl From<core::FileInfo> for FileInfo {
+    fn from(i: core::FileInfo) -> Self {
         let mut info = FileInfo {
-            path: i.path.clone(),
+            path: i.path,
             row_count: i.row_count,
             columns: i
                 .columns
-                .iter()
-                .enumerate()
-                .map(|(column, c)| {
-                    let capabilities = document
-                        .column_capabilities(column as u32)
-                        .expect("column came from this document's schema");
-                    ColumnInfo {
-                        name: c.name.clone(),
-                        value_category: c.value_category.into(),
-                        display_type: c.display_type.clone(),
-                        technical_type: c.technical_type.clone(),
-                        capabilities: capabilities.into(),
-                        nullable: c.nullable,
-                    }
+                .into_iter()
+                .map(|c| ColumnInfo {
+                    name: c.name,
+                    value_category: c.value_category.into(),
+                    display_type: c.display_type,
+                    technical_type: c.technical_type,
+                    capabilities: c.capabilities.into(),
+                    nullable: c.nullable,
                 })
                 .collect(),
             format: i.format.to_string(),
@@ -136,28 +127,25 @@ impl From<&core::Dataset> for FileInfo {
             sheet: None,
             sheets: Vec::new(),
         };
-        match &i.metadata {
+        match i.metadata {
             core::FileMetadata::Parquet {
                 row_groups,
                 compression,
                 created_by,
                 key_values,
             } => {
-                info.row_groups = Some(*row_groups);
-                info.compression = compression.clone();
-                info.created_by = created_by.clone();
+                info.row_groups = Some(row_groups);
+                info.compression = compression;
+                info.created_by = created_by;
                 info.metadata = key_values
-                    .iter()
-                    .map(|(key, value)| KeyValue {
-                        key: key.clone(),
-                        value: value.clone(),
-                    })
+                    .into_iter()
+                    .map(|(key, value)| KeyValue { key, value })
                     .collect();
             }
             core::FileMetadata::Delimited => {}
             core::FileMetadata::Xlsx { sheet, sheets } => {
-                info.sheet = Some(sheet.clone());
-                info.sheets = sheets.clone();
+                info.sheet = Some(sheet);
+                info.sheets = sheets;
             }
         }
         info

@@ -75,7 +75,7 @@ struct ColumnAnalysisView: View {
     init(model: DocumentModel, column: Int) {
         self.model = model
         self.column = column
-        let numeric = model.info.columns[column].capabilities.histogram
+        let numeric = (try? model.doc.analysisCapabilities(column: UInt32(column)).distribution) ?? false
         _expanded = State(initialValue: numeric ? 7 : 9)
     }
 

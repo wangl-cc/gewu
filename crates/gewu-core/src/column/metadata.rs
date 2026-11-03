@@ -2,7 +2,7 @@
 
 use arrow::datatypes::DataType;
 
-use super::Column;
+use super::{Column, ColumnCapabilities};
 use crate::types::{domain, value_type, Domain};
 
 /// Coarse value semantics for choosing cell presentation, not operation support.
@@ -29,7 +29,7 @@ impl ValueCategory {
     }
 }
 
-/// Display information for one column. Capabilities are queried separately.
+/// Display information and supported operations for one column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
     pub name: String,
@@ -37,6 +37,7 @@ pub struct ColumnInfo {
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
+    pub capabilities: ColumnCapabilities,
 }
 
 impl ColumnInfo {
@@ -48,6 +49,7 @@ impl ColumnInfo {
             display_type: display_type(data_type),
             technical_type: data_type.to_string(),
             nullable: column.nullable,
+            capabilities: column.capabilities(),
         }
     }
 }
@@ -115,6 +117,8 @@ mod tests {
                 "timestamp(Europe/London)",
             ),
             (DataType::Boolean, ValueCategory::Text, "bool"),
+            (DataType::Utf8, ValueCategory::Text, "string"),
+            (DataType::Binary, ValueCategory::Text, "binary"),
             (
                 DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 ValueCategory::Text,
@@ -133,6 +137,10 @@ mod tests {
             assert_eq!(info.display_type, label);
             assert_eq!(info.technical_type, data_type.to_string());
             assert!(info.nullable);
+            assert_eq!(
+                info.capabilities.contains,
+                matches!(data_type, DataType::Utf8)
+            );
         }
     }
 }
