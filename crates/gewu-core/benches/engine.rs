@@ -57,9 +57,11 @@ fn apply_view(c: &mut Criterion) {
         col(&doc, "label"),
         col(&doc, "city"),
     );
-    let (amount, uuid) = (col(&doc, "amount"), col(&doc, "uuid"));
-    // Build the label index once, so InValues measures filtering only.
+    let (amount, uuid, country) = (col(&doc, "amount"), col(&doc, "uuid"), col(&doc, "country"));
+    // Build low-cardinality dictionaries once, so value filters measure filtering only.
     doc.filter_choices(label, &Cancellation::default()).unwrap();
+    doc.filter_choices(country, &Cancellation::default())
+        .unwrap();
 
     let cases: Vec<(&str, QuerySpec)> = vec![
         ("no_filter", QuerySpec::default()),
@@ -95,6 +97,14 @@ fn apply_view(c: &mut Criterion) {
             "contains_city",
             QuerySpec::default()
                 .with_filter(city, Filter::contains("city-12".into(), false, false)),
+        ),
+        (
+            "contains_label",
+            QuerySpec::default().with_filter(label, Filter::contains("o".into(), false, false)),
+        ),
+        (
+            "contains_country",
+            QuerySpec::default().with_filter(country, Filter::contains("a".into(), false, false)),
         ),
         (
             "is_null_label",

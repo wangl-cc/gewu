@@ -398,6 +398,68 @@ mod tests {
     }
 
     #[test]
+    fn dictionary_contains_matches_row_by_row_contains() {
+        use arrow::{
+            array::{LargeStringArray, StringViewArray},
+            datatypes::Int16Type,
+        };
+
+        let rows = [
+            Some("Élan"),
+            Some("élan"),
+            None,
+            Some(""),
+            Some("ÉLAN vital"),
+            Some("x"),
+            Some("Élan"),
+            None,
+            Some("abc"),
+        ];
+        // Extra distinct values exceed the dictionary limit, forcing per-row matching.
+        let filler: Vec<String> = (0..300).map(|i| format!("filler-{i}")).collect();
+        let build = |extended: bool, kind: usize| -> ArrayRef {
+            let values = rows
+                .iter()
+                .copied()
+                .chain(filler.iter().map(|v| Some(v.as_str())).filter(|_| extended));
+            match kind {
+                0 => Arc::new(values.collect::<StringArray>()),
+                1 => Arc::new(values.collect::<LargeStringArray>()),
+                2 => Arc::new(values.collect::<StringViewArray>()),
+                _ => Arc::new(values.collect::<DictionaryArray<Int16Type>>()),
+            }
+        };
+        for kind in 0..4 {
+            let encoded = col(build(false, kind));
+            let plain = col(build(true, kind));
+            let cancel = Cancellation::default();
+            assert!(encoded.dictionary(&cancel).unwrap().is_some());
+            assert!(plain.dictionary(&cancel).unwrap().is_none());
+            for text in ["", "élan", "ÉLAN", "a", "zz"] {
+                for case_sensitive in [false, true] {
+                    for include_nulls in [false, true] {
+                        let filter = Filter::contains(text.into(), case_sensitive, include_nulls);
+                        let hits = |column: &Column| {
+                            let mut hits = vec![false; rows.len()];
+                            column
+                                .compile_filter(&filter, &cancel)
+                                .unwrap()
+                                .evaluate(0..rows.len(), &mut hits, &cancel)
+                                .unwrap();
+                            hits
+                        };
+                        assert_eq!(
+                            hits(&encoded),
+                            hits(&plain),
+                            "kind {kind}: {text:?} case_sensitive={case_sensitive} include_nulls={include_nulls}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn non_text_contains_is_rejected_even_for_empty_text_and_null_arrays() {
         use arrow::datatypes::{Field, Fields, IntervalUnit};
 

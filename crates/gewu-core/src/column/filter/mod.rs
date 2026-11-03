@@ -47,21 +47,30 @@ pub(crate) fn compile_filter<'a>(
 ) -> Result<Predicate<'a>> {
     cancel.check()?;
     use crate::FilterCondition;
-    if let FilterCondition::Exact { values, exclude } = &filter.condition {
-        if !values.is_empty() && supports_equals(column.array.data_type()) {
-            if let Some(dictionary) = column.dictionary(cancel)? {
-                let selection = compile_condition(
-                    dictionary.values(),
-                    &FilterCondition::Exact {
-                        values: values.clone(),
-                        exclude: false,
-                    },
-                    cancel,
-                )?;
-                let mut matched = vec![false; dictionary.values().len()];
-                selection.evaluate(0..matched.len(), &mut matched, cancel)?;
-                return Ok(dictionary.matching_codes(&matched, *exclude, filter.include_nulls));
-            }
+    // Conditions that depend only on the value are evaluated once per distinct
+    // dictionary value, then rows are matched by code.
+    let data_type = column.array.data_type();
+    let per_value = match &filter.condition {
+        FilterCondition::Exact { values, exclude }
+            if !values.is_empty() && supports_equals(data_type) =>
+        {
+            let condition = FilterCondition::Exact {
+                values: values.clone(),
+                exclude: false,
+            };
+            Some((condition, *exclude))
+        }
+        FilterCondition::Contains { .. } if supports_contains(data_type) => {
+            Some((filter.condition.clone(), false))
+        }
+        _ => None,
+    };
+    if let Some((condition, exclude)) = per_value {
+        if let Some(dictionary) = column.dictionary(cancel)? {
+            let selection = compile_condition(dictionary.values(), &condition, cancel)?;
+            let mut matched = vec![false; dictionary.values().len()];
+            selection.evaluate(0..matched.len(), &mut matched, cancel)?;
+            return Ok(dictionary.matching_codes(&matched, exclude, filter.include_nulls));
         }
     }
     let array = &column.array;
