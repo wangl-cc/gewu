@@ -100,7 +100,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
 }
 
 #[test]
-fn text_filter_modes_and_paged_choices_cross_ffi() {
+fn text_filter_modes_and_choices_cross_ffi() {
     let source = std::env::temp_dir().join(format!(
         "gewu-uniffi-filter-spec-{}.csv",
         std::process::id()
@@ -149,16 +149,17 @@ fn text_filter_modes_and_paged_choices_cross_ffi() {
         .view()
         .query(state, Cancellation::new())
         .unwrap()
-        .text_choices(0)
+        .filter_choices(0, Cancellation::new())
+        .unwrap()
+        .values
         .unwrap();
-    let first = choices
-        .page(String::new(), None, 1, crate::Cancellation::new())
-        .unwrap();
-    assert_eq!(first.values.len(), 1);
-    assert_eq!(first.values[0].value, "cat");
-    assert_eq!(first.values[0].count, 1);
-    assert!(
-        first.next.is_none(),
+    let counts: Vec<_> = choices
+        .iter()
+        .map(|c| (c.value.as_str(), c.count))
+        .collect();
+    assert_eq!(
+        counts,
+        [("cat", 1)],
         "Only current-view values are candidates"
     );
     let view = doc
@@ -177,11 +178,6 @@ fn text_filter_modes_and_paged_choices_cross_ffi() {
     assert_eq!(view.rows(0, 10, vec![0]).unwrap().cells, [Some(
         "dog".into()
     )]);
-    choices.cancel();
-    assert!(matches!(
-        choices.page(String::new(), None, 1, crate::Cancellation::new()),
-        Err(GewuError::Cancelled)
-    ));
     std::fs::remove_file(source).unwrap();
 }
 

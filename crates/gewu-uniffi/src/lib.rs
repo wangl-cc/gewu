@@ -15,7 +15,6 @@ mod scale;
 mod scatter;
 #[cfg(test)]
 mod tests;
-mod text_choices;
 mod view;
 mod view_handle;
 
@@ -37,7 +36,6 @@ pub use filter::{
 pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 pub use view::{ColSort, ColSpec, QuerySpec, RowBlock};
 pub use view_handle::GewuView;
 

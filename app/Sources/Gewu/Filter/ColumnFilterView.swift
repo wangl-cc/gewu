@@ -5,21 +5,23 @@ enum FilterMode: String, CaseIterable {
     case range = "Range"
     case text = "Text"
 
-    /// A nil mode means the initial bounded candidate request is still needed.
+    /// Value selection is offered only when the column has a complete list of values,
+    /// so a nil mode means the bounded candidate request is still needed.
     static func initial(
         capabilities: ColumnCapabilities, current: Filter?, choices: FilterChoices? = nil
     ) -> FilterMode? {
+        let selectable: Bool? = capabilities.exact ? choices.map { $0.values != nil } : false
         if let current {
             switch current.condition {
             case .range: if capabilities.range { return .range }
             case .text: if capabilities.textMatch { return .text }
-            case .exact: if capabilities.exact { return .exact }
+            case .exact:
+                guard let selectable else { return nil }
+                if selectable { return .exact }
             }
         }
-        if capabilities.exact {
-            guard let choices else { return nil }
-            if choices.values != nil { return .exact }
-        }
+        guard let selectable else { return nil }
+        if selectable { return .exact }
         return capabilities.range ? .range : (capabilities.textMatch ? .text : .exact)
     }
 }
@@ -51,6 +53,7 @@ struct ColumnFilterView: View {
     let facet: FilterFacet
     let column: UInt32
     let info: ColumnInfo
+    let current: Filter?
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode?
     @State private var exact: ExactFilterDraft
@@ -62,7 +65,6 @@ struct ColumnFilterView: View {
     @State private var error: String?
     @State private var histogramBins: UInt32 = 60
     @State private var histogramScale: AxisScale = .linear
-    @State private var literal = ""
     @State private var loading = false
     @State private var retry = 0
     /// Resolved once per editor; candidates and distributions all describe it.
@@ -75,6 +77,7 @@ struct ColumnFilterView: View {
         self.facet = facet
         self.column = facet.column
         self.info = info
+        self.current = current
         self.onApply = onApply
         _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
         _exact = State(initialValue: ExactFilterDraft(current))
@@ -88,7 +91,7 @@ struct ColumnFilterView: View {
             switch $0 {
             case .range: info.capabilities.range
             case .text: info.capabilities.textMatch
-            case .exact: info.capabilities.exact
+            case .exact: info.capabilities.exact && choices?.values != nil
             }
         }
     }
@@ -136,32 +139,13 @@ struct ColumnFilterView: View {
     @ViewBuilder private var exactEditor: some View {
         if let values = choices?.values {
             ChoiceFilterView(values: values, draft: $exact)
-        } else if info.capabilities.textMatch {
-            if let facetView { TextFilterView(view: facetView, column: column, draft: $exact) }
-        } else {
             HStack {
-                TextField("Exact value", text: $literal).textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    exact.values.insert(LiteralTextValue(value: literal))
-                    literal = ""
-                }
+                Button("All Values") { exact.all(true) }
+                Button("No Values") { exact.all(false) }
+                Spacer()
+                Text(exact.exclude ? "All except \(exact.values.count)" : "\(exact.values.count) selected")
+                    .font(.caption)
             }
-            List {
-                ForEach(exact.values.sorted { $0.value < $1.value }, id: \.self) { value in
-                    HStack {
-                        Text(value.label)
-                        Spacer()
-                        Button("Remove") { exact.values.remove(value) }
-                    }
-                }
-            }.frame(height: 160)
-            Toggle("Exclude these values", isOn: $exact.exclude)
-        }
-        HStack {
-            Button("All Values") { exact.all(true) }
-            Button("No Values") { exact.all(false) }
-            Spacer()
-            Text(exact.exclude ? "All except \(exact.values.count)" : "\(exact.values.count) selected").font(.caption)
         }
     }
 
@@ -177,6 +161,7 @@ struct ColumnFilterView: View {
         error = nil
         let facet = facet
         let column = column
+        let current = current
         let mode = mode
         let bins = histogramBins
         let scale = histogramScale
@@ -192,31 +177,26 @@ struct ColumnFilterView: View {
                 guard !Task.isCancelled else { return }
                 facetView = view
             }
-            if mode == .range {
-                let result = try await withTaskCancellationHandler {
-                    try await Task.detached {
-                        try view.filterDistribution(
-                            column: column, bins: bins, scale: scale, cancellation: cancellation)
-                    }.value
-                } onCancel: {
-                    cancellation.cancel()
-                }
-                guard !Task.isCancelled else { return }
-                distribution = result
-                range.restoreLabels(from: result)
-            } else if mode == nil || (mode == .exact && choices == nil) {
-                let result = try await withTaskCancellationHandler {
-                    try await Task.detached {
-                        try view.filterChoices(column: column, cancellation: cancellation)
-                    }.value
-                } onCancel: {
-                    cancellation.cancel()
+            // Choices decide whether value selection is offered and supply the null count.
+            if info.capabilities.exact && choices == nil {
+                let result = try await runCancellable(cancellation: cancellation) {
+                    try view.filterChoices(column: column, cancellation: cancellation)
                 }
                 guard !Task.isCancelled else { return }
                 choices = result
                 if mode == nil {
-                    self.mode = FilterMode.initial(capabilities: info.capabilities, current: nil, choices: result)
+                    // Choosing a mode restarts this task for that editor.
+                    self.mode = FilterMode.initial(capabilities: info.capabilities, current: current, choices: result)
                 }
+            }
+            if mode == .range {
+                let result = try await runCancellable(cancellation: cancellation) {
+                    try view.filterDistribution(
+                        column: column, bins: bins, scale: scale, cancellation: cancellation)
+                }
+                guard !Task.isCancelled else { return }
+                distribution = result
+                range.restoreLabels(from: result)
             }
         } catch {
             guard !Task.isCancelled else { return }
@@ -230,7 +210,6 @@ struct ColumnFilterView: View {
         textMatch = TextMatchDraft(nil)
         range = RangeDraft(nil)
         nullMode = .include
-        literal = ""
         error = nil
     }
 

@@ -64,11 +64,15 @@ struct WindowPresentationTests {
                 capabilities: text,
                 current: Filter(condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
                 == .text)
-        #expect(
-            FilterMode.initial(
-                capabilities: text,
-                current: Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true))
-                == .exact)
+        // Value selection waits for choices and needs a complete list of values.
+        let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)
+        #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
+        let labels = try view.filterChoices(column: 1, cancellation: Cancellation())
+        #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)
+        let manyLabels = dataset.info().columns[3].capabilities
+        let unlisted = try view.filterChoices(column: 3, cancellation: Cancellation())
+        #expect(unlisted.values == nil)
+        #expect(FilterMode.initial(capabilities: manyLabels, current: selected, choices: unlisted) == .text)
     }
 
     @Test func inspectorChoicesSurviveTypeChangesWithoutRequestingUnsupportedLogBins() {

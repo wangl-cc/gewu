@@ -50,9 +50,4 @@ impl View {
         cancel.check()?;
         Ok(result)
     }
-
-    /// Reusable paging over this view's selected rows; no scan occurs here.
-    pub fn text_choices(&self, column: u32) -> Result<crate::TextChoices> {
-        crate::TextChoices::new(self.column_array(column)?.clone(), self.selection())
-    }
 }

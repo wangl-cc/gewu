@@ -186,25 +186,21 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
 }
 
 #[test]
-fn high_cardinality_text_pages_do_not_require_a_value_index() {
+fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
     let doc = document(vec![(
         "text",
         Arc::new(StringArray::from_iter_values(
             (0..100_001).map(|i| format!("value-{i:06}")),
         )),
     )]);
-    let choices = doc.text_choices(0).unwrap();
-    let page = choices
-        .page("value-100000", None, 100, &Cancellation::default())
-        .unwrap();
-    assert_eq!(page.values.len(), 1);
-    assert_eq!(page.values[0].count, 1);
+    assert!(doc
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
     let view = doc
         .query(
-            &QuerySpec::single(
-                0,
-                Filter::exact(vec![page.values[0].value.clone()], false, false),
-            ),
+            &QuerySpec::single(0, Filter::exact(vec!["value-100000".into()], false, false)),
             &gewu_core::Cancellation::default(),
         )
         .unwrap();
@@ -232,15 +228,12 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
     let choices = doc
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
-        .text_choices(0)
-        .unwrap();
-    doc.query(&QuerySpec::all(2), &gewu_core::Cancellation::default())
+        .filter_choices(0, &Cancellation::default())
         .unwrap();
     assert_eq!(
         choices
-            .page("", None, 10, &Cancellation::default())
-            .unwrap()
             .values
+            .unwrap()
             .iter()
             .map(|v| (v.value.as_str(), v.count))
             .collect::<Vec<_>>(),
@@ -270,15 +263,6 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
             .unwrap();
         assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, expected);
     }
-    choices.cancel();
-    assert!(matches!(
-        choices.page("", None, 10, &Cancellation::default()),
-        Err(Error::Cancelled)
-    ));
-    assert!(matches!(
-        doc.text_choices(1),
-        Err(Error::InvalidArgument(_))
-    ));
 }
 
 #[test]

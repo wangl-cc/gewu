@@ -134,11 +134,10 @@ fn choices_count_included_nulls_and_respect_all_filters() {
     let values = doc
         .query(&spec, &gewu_core::Cancellation::default())
         .unwrap()
-        .text_choices(2)
+        .filter_choices(2, &Cancellation::default())
         .unwrap()
-        .page("", None, 100, &Cancellation::default())
-        .unwrap()
-        .values;
+        .values
+        .unwrap();
     assert_eq!(
         values
             .iter()

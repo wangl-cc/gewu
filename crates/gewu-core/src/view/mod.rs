@@ -7,13 +7,10 @@ use arrow::array::ArrayRef;
 use crate::{column::Column, scope::Selection, Dataset, Error, Result};
 
 mod analysis;
-pub mod choices;
 mod export;
 mod filter;
 mod find;
 mod query;
-
-pub use choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
 
 /// A query result. Query conditions and current-window state belong to callers.
 pub struct View {
@@ -148,7 +145,6 @@ mod tests {
             .with_filter(0, Filter::range(Some("11998".into()), None, false))
             .with_sort(0, true, 0);
         let filtered = initial.query(&spec, &Cancellation::default()).unwrap();
-        let choices = filtered.text_choices(1).unwrap();
         let find = filtered.find("odd", &[1]).unwrap();
         let hidden = filtered
             .query(
@@ -178,16 +174,6 @@ mod tests {
         assert_eq!(
             find.next(None, 10, &Cancellation::default()).unwrap()[0].display_row,
             0
-        );
-        let page = choices
-            .page("", None, 10, &Cancellation::default())
-            .unwrap();
-        assert_eq!(
-            page.values
-                .iter()
-                .map(|value| (value.value.as_str(), value.count))
-                .collect::<Vec<_>>(),
-            [("even", 1), ("odd", 1)]
         );
         assert_eq!(
             restored.count_nulls(0, &Cancellation::default()).unwrap(),

@@ -15,7 +15,7 @@ Views and state are grouped by feature under `app/Sources/Gewu`:
 | `App/` | App entry point, file opening, settings, commands, Sparkle updates and shared display formatting. |
 | `Document/` | Workbook window, sheet loading, per-table query state and file information. |
 | `Table/` | AppKit table, row cache, copying and row gutter. |
-| `Filter/` | Filter editors and candidate paging. |
+| `Filter/` | Filter editors, facets and applied-filter chips. |
 | `Inspector/` | Column analysis presentation and requests. |
 | `Export/` | Save panel, export jobs, progress and format selection. |
 | `Charts/` | Histograms, scatter plots and chart labels. |

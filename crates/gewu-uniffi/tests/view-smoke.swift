@@ -84,9 +84,8 @@ enum ViewSmoke {
         } catch GewuError.Cancelled {}
         check(try filtered.query(spec: full, cancellation: Cancellation()).rowCount() == 3)
 
-        let choices = try filtered.textChoices(column: 1)
-        let page = try choices.page(query: "", after: nil, limit: 10, cancellation: Cancellation())
-        check(page.values.map(\.value) == ["three", "two"])
+        let choices = try filtered.filterChoices(column: 1, cancellation: Cancellation())
+        check(choices.values?.map(\.value) == ["three", "two"])
         let find = try filtered.find(query: "three", columns: [1])
         let hits = try find.next(after: nil, limit: 10, cancellation: Cancellation())
         check(hits.count == 1 && hits[0].displayRow == 0)

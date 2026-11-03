@@ -34,4 +34,4 @@ pub use stats::{
     NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
     ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
-pub use view::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, View};
+pub use view::View;

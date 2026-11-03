@@ -5,7 +5,7 @@ use gewu_core as core;
 
 use crate::{
     AxisScale, FileType, FilterChoices, FindSession, GewuError, GewuExport, QuerySpec,
-    RangeHistogram, RowBlock, TextChoices,
+    RangeHistogram, RowBlock,
 };
 
 #[derive(uniffi::Object)]
@@ -138,12 +138,6 @@ impl GewuView {
             .inner
             .filter_distribution(column, bins, scale.into(), &cancellation.inner)?
             .map(Into::into))
-    }
-
-    pub fn text_choices(&self, column: u32) -> Result<Arc<TextChoices>, GewuError> {
-        Ok(Arc::new(TextChoices {
-            inner: self.inner.text_choices(column)?,
-        }))
     }
 
     pub fn analyze_scatter(

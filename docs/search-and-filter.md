@@ -39,9 +39,9 @@ Parsing, precision, case sensitivity and nested-value behavior are defined in [d
 
 ## Editor selection
 
-Core reports static type capabilities (`range`, `text_match`, `exact`); the app owns editor selection. Ordered columns initially show Range, text initially shows the Text editor in Contains mode, and other exact-capable columns show Exact. Users can switch among supported modes. Each mode retains its own draft, and Apply submits only the current mode with the shared null option. Columns without content-filter support show only null options and do not request filter candidates or distributions.
+Core reports static type capabilities (`range`, `text_match`, `exact`); the app owns editor selection. Select Values is offered only when the column has a complete bounded list of values, and is then shown first. Otherwise ordered columns show Range and text shows the Text editor in Contains mode. An existing filter reopens in its own mode when that mode is still offered. Users can switch among offered modes. Each mode retains its own draft, and Apply submits only the current mode with the shared null option. Columns without content-filter support show only null options and do not request filter candidates or distributions.
 
-Candidate values and range distributions are requested on demand. Exact selection can use a complete bounded list, text pages, or manually entered values. Dictionary availability is an execution optimization, not a restriction on the filter protocol.
+Candidate values and range distributions are requested on demand. Value selection is offered only for columns with a complete bounded list of values; other columns use Text or Range filters. The Exact condition itself remains valid for any exact-capable column.
 
 ## Candidate values and counts
 
@@ -49,7 +49,7 @@ A column's filter editor describes its **facet**: the rows that pass the applied
 
 Only values present in the facet are listed; values excluded by other columns' filters are absent, as in a spreadsheet AutoFilter. A selected value that is absent from the facet stays in the filter without being listed. The backend APIs describe whichever View they are given; the app computes the facet View, and Core does not implicitly remove the edited column's filter. Selecting a candidate updates the window's complete QuerySpec and computes a new View from the full Dataset.
 
-Searching within a text candidate list only narrows the candidates shown. It uses case-insensitive substring matching and does not change the current view. Selecting a candidate uses its exact, case-sensitive value. Candidate pages contain non-null values in UTF-8 lexical order. `FilterChoices.null_count` reports missing values separately. Complete bounded candidates are returned as `Some(values)`; `None` means no complete bounded list is available, while `Some([])` is an empty list.
+Searching within a candidate list only narrows the candidates shown. It uses case-insensitive substring matching and does not change the current view. Selecting a candidate uses its exact, case-sensitive value. `FilterChoices.null_count` reports missing values separately. Complete bounded candidates are returned as `Some(values)`; `None` means no complete bounded list is available, while `Some([])` is an empty list.
 
 ## Filter charts and analysis
 

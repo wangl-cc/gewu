@@ -198,7 +198,7 @@ fn cancellation_belongs_to_one_request() {
 }
 
 #[test]
-fn high_cardinality_choices_use_paging_and_exact_filters_without_a_dictionary() {
+fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
     // 150,000 distinct names, with "x" also on every 1000th row.
     let n = 150_000i64;
     let names: ArrayRef = Arc::new(StringArray::from_iter_values((0..n).map(|i| {
@@ -214,14 +214,6 @@ fn high_cardinality_choices_use_paging_and_exact_filters_without_a_dictionary() 
     let choices = doc.filter_choices(0, &Cancellation::default()).unwrap();
     assert!(choices.values.is_none());
     assert_eq!(choices.null_count, 0);
-    let page = doc
-        .text_choices(0)
-        .unwrap()
-        .page("x", None, 10, &Cancellation::default())
-        .unwrap();
-    assert_eq!(page.values.len(), 1);
-    assert_eq!(page.values[0].count, (n / 1000) as u64);
-
     let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
     assert_eq!(
         doc.query(&by_value, &gewu_core::Cancellation::default())

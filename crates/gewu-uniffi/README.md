@@ -16,7 +16,6 @@ Core, FFI and the App use immutable Dataset/View handles. Each window owns its a
 | `GewuView` | Wraps an immutable row/column projection over that Dataset. |
 | `Cancellation` | Caller-owned terminal signal for one query, analysis, candidate or Find request. |
 | `FindSession` | Captures shared data, typed query and ordered column scope for navigation/highlights. |
-| `TextChoices` | Captures a string column and selected rows for bounded candidate paging. |
 | `GewuExport` | Captures row/column data, progress and cancellation for one atomic file write. |
 
 UniFFI manages object lifetimes through generated Swift classes. Views retain their Dataset after the original Dataset handle is released. Find, candidate and export objects retain the buffers and row selection they need. Release old handles when their data is no longer needed: retaining multiple query results retains their row arrays, while source Arrow buffers and caches remain shared.
@@ -66,13 +65,13 @@ All exported functions are synchronous. UniFFI neither schedules workers nor for
 | Opening, sheet listing, initial `view()` | Background I/O, decoding or row-ID allocation. |
 | `query`, `analyze_*`, `filter_choices`, `filter_distribution` | Background scans, native kernels or dictionary construction. |
 | Find pages/highlights, text pages, export writes | Background; even bounded outputs can require full scans. |
-| Metadata, `reorder_columns`, `find`, `text_choices`, `export` creation | Metadata access or shared snapshot capture. |
+| Metadata, `reorder_columns`, `find`, `export` creation | Metadata access or shared snapshot capture. |
 | `rows` | Small visible blocks; cost grows with cell count and formatting. |
 | Cancellation and export progress | Control calls while worker tasks run. |
 
 Create cancellation before queueing work. Request replacement, panel dismissal or Task cancellation must explicitly cancel the relevant handle. Signals are terminal: never reset or reuse an already-cancelled signal. Queries and analyses check cancellation at entry, in long-running kernels and before returning. Different Views and unrelated requests never cancel each other. A race after the final cancellation check can still return successfully; the UI must also gate publication by captured View/context and request identity.
 
-Find and TextChoices have two cancellation scopes. Cancelling one page/highlight request leaves the captured object usable; calling the object's `cancel()` permanently closes it and reaches active scans. Neither a new query nor releasing the Dataset handle closes these objects automatically.
+Find has two cancellation scopes. Cancelling one page/highlight request leaves the captured object usable; calling the object's `cancel()` permanently closes it and reaches active scans. Neither a new query nor releasing the Dataset handle closes these objects automatically.
 
 Dictionary construction publishes only a completed encoding or confirmed unsupported/high-cardinality result. Cancellation leaves it retryable; waiting requests observe their own cancellation. Checkpoints bound units of scan work, not wall-clock time inside individual comparisons or third-party kernels.
 
@@ -84,11 +83,11 @@ Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or ro
 
 ## Filter candidates
 
-`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; text candidate paging is selected by `capabilities.text_match`. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
+`dataset.info().columns` reports static capabilities projected by Core; the frontend chooses its editor. `ValueCategory` controls presentation only; Text filters are available when `capabilities.text_match` is set, and value selection when `filter_choices` returns a complete list. Distribution availability comes from `AnalysisCapabilities.distribution`. Submit filters through `view.query(spec, cancellation)`: compilation checks typed input and returns an error directly on failure, leaving the existing View unchanged. Exact filters may build a shared compact dictionary, so queries run on a worker.
 
-`view.filter_choices(column, cancellation)` returns `ValueChoice { label, value, count }` and a separate null count, all from the View's visible rows, including the edited column's filter. Zero-count values are absent. `Some([])` is an empty complete list; `None` means no complete bounded dictionary list is available. Exact filters remain valid without that list; no unbounded distinct calculation is introduced.
+`view.filter_choices(column, cancellation)` returns `ValueChoice { label, value, count }` and a separate null count, all from the given View's rows. Filter editors pass the column's facet View, so the edited column's own filter does not hide its alternatives. Zero-count values are absent. `Some([])` is an empty complete list; `None` means no complete bounded dictionary list is available. Exact filters remain valid without that list; no unbounded distinct calculation is introduced.
 
-`view.text_choices(column)` captures selected rows without scanning. `page(query, after, limit, cancellation)` scans those rows in any display order and returns up to 200 non-null distinct values in UTF-8 order. Search is a case-insensitive literal substring; selection is exact. Cursors are exclusive values, and counts cover all selected occurrences. Swift selection identity must compare UTF-8 bytes because ordinary String equality merges canonically equivalent spellings.
+Value selection is exact. Swift selection identity must compare UTF-8 bytes because ordinary String equality merges canonically equivalent spellings.
 
 `view.filter_distribution(column, bins, scale, cancellation)` returns optional `RangeHistogram` with `RangeBound { value, label, coordinate }` endpoints. Its domain and counts both use visible rows. Empty Views have no fallback to the source domain. Bins must be in 1...60; discrete domains may use fewer.
 
