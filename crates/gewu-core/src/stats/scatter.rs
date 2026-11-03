@@ -47,17 +47,12 @@ pub struct ScatterPoint {
 
 #[derive(Debug, Clone)]
 pub struct ScatterResult {
-    /// None means the zero-based source row index, not display position.
-    pub x_column: Option<u32>,
-    pub y_column: u32,
     pub x_axis_kind: ScatterAxisKind,
     pub y_axis_kind: ScatterAxisKind,
-    pub total_rows: u64,
     /// Rows with finite, non-null values in both requested axis domains.
     pub eligible_rows: u64,
     /// Finite pairs omitted because a logarithmic axis is zero or negative.
     pub non_positive_rows: u64,
-    pub sampled: bool,
     pub points: Vec<ScatterPoint>,
 }
 
@@ -150,16 +145,12 @@ pub(crate) fn analyze(
     }
     context.check()?;
     Ok(ScatterResult {
-        x_column: x.as_ref().map(|(column, _)| *column),
-        y_column: y.0,
         x_axis_kind: x.as_ref().map_or(ScatterAxisKind::Number, |(_, array)| {
             ScatterAxisKind::from_arrow(array.data_type())
         }),
         y_axis_kind: ScatterAxisKind::from_arrow(y.1.data_type()),
-        total_rows: rows.len() as u64,
         eligible_rows,
         non_positive_rows,
-        sampled: eligible_rows > points.len() as u64,
         points,
     })
 }
@@ -263,12 +254,8 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                (
-                    result.total_rows,
-                    result.eligible_rows,
-                    result.non_positive_rows
-                ),
-                (8, eligible, excluded)
+                (result.eligible_rows, result.non_positive_rows),
+                (eligible, excluded)
             );
             let point = result.points.iter().find(|p| p.source_row == 4).unwrap();
             assert_eq!((point.x, point.y), (3.0, 2.0));
@@ -299,7 +286,7 @@ mod tests {
         };
         let result = make((0..1000).collect());
         assert_eq!((result.eligible_rows, result.non_positive_rows), (10, 990));
-        assert!(result.sampled);
+        assert!(result.eligible_rows > result.points.len() as u64);
         assert_eq!(result.points.len(), 5);
         assert!(result
             .points
@@ -314,7 +301,7 @@ mod tests {
         assert_eq!(ids(result), ids(make((0..1000).rev().collect())));
         let empty = make((0..990).collect());
         assert_eq!((empty.eligible_rows, empty.non_positive_rows), (0, 990));
-        assert!(empty.points.is_empty() && !empty.sampled);
+        assert!(empty.points.is_empty() && empty.eligible_rows == 0);
     }
 
     #[test]
@@ -344,10 +331,7 @@ mod tests {
             &c,
         )
         .unwrap();
-        assert_eq!(
-            (result.total_rows, result.eligible_rows, result.sampled),
-            (5, 2, false)
-        );
+        assert_eq!((result.eligible_rows, result.points.len()), (2, 2));
         assert_eq!(
             result
                 .points
@@ -413,7 +397,7 @@ mod tests {
         };
         let first = sample((0..20000).collect(), &c).unwrap();
         let reversed = sample((0..20000).rev().collect(), &c).unwrap();
-        assert!(first.sampled);
+        assert!(first.eligible_rows > first.points.len() as u64);
         assert_eq!((first.eligible_rows, first.points.len()), (20000, 64));
         assert_eq!(
             first

@@ -119,11 +119,8 @@ fn summarize(
         integer: true,
         counts: Vec::new(),
         bin_edges: Vec::new(),
-        null_count,
-        nan_count: 0,
         non_positive_count: 0,
         infinite_count: 0,
-        total,
     };
     if non_null == 0 {
         return Ok(LengthSummary {
@@ -213,13 +210,19 @@ mod tests {
         );
         assert_eq!(result.mean, Some(4.0 / 3.0));
         assert_eq!(result.histogram.counts, [1, 0, 2]);
-        assert_eq!(result.histogram.null_count, 1);
+        assert_eq!(
+            ArrayView::new(&array, &all).count_nulls(&context).unwrap(),
+            1
+        );
         for rows in [vec![], vec![3]] {
             let sel = crate::scope::Selection::Rows(Arc::from(rows.clone()));
             let result = analyze(ArrayView::new(&array, &sel), 40, &context).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
-            assert_eq!(result.histogram.null_count, rows.len() as u64);
+            assert_eq!(
+                ArrayView::new(&array, &sel).count_nulls(&context).unwrap(),
+                rows.len() as u64
+            );
         }
         let sel2 = crate::scope::Selection::Rows(Arc::from(vec![2]));
         let result = analyze(ArrayView::new(&array, &sel2), 40, &context).unwrap();
@@ -251,8 +254,10 @@ mod tests {
         assert_eq!(
             (
                 result.empty_count,
-                result.histogram.null_count,
-                result.histogram.total
+                ArrayView::new(&array, &sel)
+                    .count_nulls(&Cancellation::default())
+                    .unwrap(),
+                sel.len()
             ),
             (1, 1, 3)
         );

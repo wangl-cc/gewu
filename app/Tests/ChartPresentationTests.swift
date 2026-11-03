@@ -37,14 +37,14 @@ struct ChartPresentationTests {
         let document = try await Task.detached { try GewuSession.open(path: url.path) }.value
         let model = ScatterModel()
         await model.load(
-            document: document, version: 0, x: 0, y: 1,
+            document: document, version: 0, rowCount: document.currentView().rowCount, x: 0, y: 1,
             xScale: .log10, yScale: .log10)
         let result = try #require(model.result)
         #expect(model.xScale == .log10 && model.yScale == .log10)
         #expect(result.nonPositiveRows == 2 && result.points.map(\.sourceRow) == [2, 3])
         #expect(result.points[0].x == 10 && result.points[0].xLabel == "10")
         await model.load(
-            document: document, version: 0, x: 0, y: 1)
+            document: document, version: 0, rowCount: document.currentView().rowCount, x: 0, y: 1)
         #expect(model.xScale == .linear && model.yScale == .linear && model.result?.eligibleRows == 4)
     }
 

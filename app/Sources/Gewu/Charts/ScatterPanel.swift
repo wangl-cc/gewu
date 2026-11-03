@@ -90,7 +90,7 @@ struct ScatterPanel: View {
                                     .help("Hover details retain the original date/time text and precision.")
                             }
                             Text(
-                                result.sampled
+                                result.eligibleRows > UInt64(result.points.count)
                                     ? "\(formatCount(UInt64(result.points.count))) sampled of \(formatCount(result.eligibleRows)) pairs"
                                     : "\(formatCount(result.eligibleRows)) pairs"
                             )
@@ -106,7 +106,7 @@ struct ScatterPanel: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
-                        let invalidRows = result.totalRows - result.eligibleRows - result.nonPositiveRows
+                        let invalidRows = chart.totalRows - result.eligibleRows - result.nonPositiveRows
                         if invalidRows > 0 {
                             Text("\(formatCount(invalidRows)) rows omitted: missing or non-finite values")
                                 .font(.caption2).foregroundStyle(.secondary)
@@ -133,7 +133,8 @@ struct ScatterPanel: View {
             hovered = nil
             guard let y = model.chartY else { return }
             await chart.load(
-                document: model.doc, version: model.current.version, x: model.chartX, y: y,
+                document: model.doc, version: model.current.version, rowCount: model.current.rowCount, x: model.chartX,
+                y: y,
                 limit: pointLimit, rowNumberBase: rowNumberBase,
                 xScale: request.xScale, yScale: request.yScale)
         }
@@ -156,6 +157,7 @@ struct ScatterPanel: View {
 @MainActor
 final class ScatterModel: ObservableObject {
     @Published private(set) var result: ScatterResult?
+    private(set) var totalRows: UInt64 = 0
     private(set) var xDates: [Date]?
     private(set) var yDates: [Date]?
     private(set) var xScale: AxisScale = .linear
@@ -173,7 +175,7 @@ final class ScatterModel: ObservableObject {
     }
 
     func load(
-        document: GewuSession, version: UInt64, x: Int?, y: Int,
+        document: GewuSession, version: UInt64, rowCount: UInt64, x: Int?, y: Int,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,
@@ -215,6 +217,7 @@ final class ScatterModel: ObservableObject {
             yDates = loaded.2
             self.xScale = xScale
             self.yScale = yScale
+            totalRows = rowCount
             result = loaded.0
         } catch {
             guard !Task.isCancelled, ticket == request else { return }

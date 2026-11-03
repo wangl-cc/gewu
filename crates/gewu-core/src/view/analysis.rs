@@ -3,8 +3,8 @@
 use super::View;
 use crate::{
     stats::{self, ArrayView},
-    AxisScale, Cancellation, ColumnOverview, Error, Histogram, LengthSummary, NumericStatistics,
-    Result, ValueSummary,
+    AxisScale, Cancellation, Error, Histogram, LengthSummary, NumericStatistics, Result,
+    ValueSummary,
 };
 
 impl View {
@@ -26,13 +26,9 @@ impl View {
         stats::scatter::analyze(x, y, &self.rows, limit, x_scale, y_scale, cancellation)
     }
 
-    /// Logical row and missing-value counts in the requested view.
-    pub fn analyze_overview(
-        &self,
-        column: u32,
-        cancellation: &Cancellation,
-    ) -> Result<ColumnOverview> {
-        self.with_analysis_view(column, cancellation, |view| view.overview(cancellation))
+    /// Logical missing-value count in the requested view.
+    pub fn count_nulls(&self, column: u32, cancellation: &Cancellation) -> Result<u64> {
+        self.with_analysis_view(column, cancellation, |view| view.count_nulls(cancellation))
     }
 
     /// Native numeric statistics over the requested view. Execute off the UI thread.

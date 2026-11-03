@@ -30,7 +30,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
         )
         .unwrap();
     assert_eq!(points.eligible_rows, 2);
-    assert!(!points.sampled);
+    assert_eq!(points.eligible_rows, points.points.len() as u64);
     assert_eq!(points.points[1].source_row, 1);
     assert_eq!(points.points[1].y_label, "9007199254740993");
     let cancelled = Cancellation::new();

@@ -61,15 +61,12 @@ impl GewuView {
         }))
     }
 
-    pub fn analyze_overview(
+    pub fn count_nulls(
         &self,
         column: u32,
         cancellation: Arc<crate::Cancellation>,
-    ) -> Result<crate::ColumnOverview, GewuError> {
-        Ok(self
-            .inner
-            .analyze_overview(column, &cancellation.inner)?
-            .into())
+    ) -> Result<u64, GewuError> {
+        Ok(self.inner.count_nulls(column, &cancellation.inner)?)
     }
 
     pub fn analyze_statistics(

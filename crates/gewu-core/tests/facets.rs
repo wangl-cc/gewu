@@ -115,7 +115,7 @@ fn choices_and_distribution_apply_column_filters() {
         .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    assert_eq!(h.total, 2);
+    assert_eq!(h.counts.iter().sum::<u64>(), 2);
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
     std::fs::remove_file(path).ok();
 }
@@ -131,7 +131,7 @@ fn histogram_domain_and_counts_use_visible_rows() {
         .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    assert_eq!(h.total, 1);
+    assert_eq!(h.counts.iter().sum::<u64>(), 1);
     // The price domain contains only the visible value.
     let h = doc
         .query(&spec, &gewu_core::Cancellation::default())
@@ -139,7 +139,7 @@ fn histogram_domain_and_counts_use_visible_rows() {
         .filter_distribution(2, 4, gewu_core::AxisScale::Linear, &Cancellation::default())
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    assert_eq!(h.total, 1);
+    assert_eq!(h.counts.iter().sum::<u64>(), 1);
     // A constant visible domain does not fall back to the source range.
     assert_eq!(h.min_label.as_deref(), Some("7"));
     assert_eq!(h.max_label.as_deref(), Some("7"));
@@ -248,12 +248,7 @@ fn value_analysis_excludes_nulls_and_recounts_candidates() {
         .map(|v| (v.label.as_str(), v.count))
         .collect();
     assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
-    assert_eq!(
-        doc.analyze_overview(1, &Cancellation::default())
-            .unwrap()
-            .null_count,
-        1
-    );
+    assert_eq!(doc.count_nulls(1, &Cancellation::default()).unwrap(), 1);
     std::fs::remove_file(path).ok();
 }
 

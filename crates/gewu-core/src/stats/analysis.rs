@@ -24,15 +24,8 @@ pub struct AnalysisField {
     pub nullable: bool,
 }
 
-/// Row and logical-null counts in the requested view.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnOverview {
-    pub rows: u64,
-    pub null_count: u64,
-}
-
 impl ArrayView<'_> {
-    pub(crate) fn overview(&self, cancellation: &Cancellation) -> Result<ColumnOverview> {
+    pub(crate) fn count_nulls(&self, cancellation: &Cancellation) -> Result<u64> {
         let null_count = match self.array.logical_nulls() {
             None => 0,
             Some(nulls) if matches!(self.rows, Selection::All(_)) => nulls.null_count() as u64,
@@ -45,10 +38,7 @@ impl ArrayView<'_> {
                 count
             }
         };
-        Ok(ColumnOverview {
-            rows: self.len() as u64,
-            null_count,
-        })
+        Ok(null_count)
     }
 }
 
@@ -212,7 +202,7 @@ mod tests {
             text.dataset().column_structure(0),
             Err(Error::InvalidArgument(_))
         ));
-        assert_eq!(text.analyze_overview(0, &cancel).unwrap().rows, 1);
+        assert_eq!(text.count_nulls(0, &cancel).unwrap(), 0);
         assert_eq!(
             number.analyze_statistics(0, &cancel).unwrap().mean,
             Some(1.0)
@@ -266,7 +256,9 @@ mod tests {
             view(&dates)
                 .analyze_distribution(0, 2, AxisScale::Linear, &cancellation)
                 .unwrap()
-                .total,
+                .counts
+                .iter()
+                .sum::<u64>(),
             2
         );
     }
@@ -300,10 +292,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let ColumnOverview { rows, null_count } = view(&array)
-            .analyze_overview(0, &Cancellation::default())
+        let null_count = view(&array)
+            .count_nulls(0, &Cancellation::default())
             .unwrap();
-        assert_eq!((rows, null_count), (5, 2));
+        assert_eq!(null_count, 2);
         let summary = view(&array)
             .analyze_values(0, &Cancellation::default())
             .unwrap();

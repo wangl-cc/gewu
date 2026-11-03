@@ -101,8 +101,8 @@ struct ColumnAnalysisView: View {
             VStack(alignment: .leading, spacing: 10) {
                 if analysis.matches(document: model.doc, version: model.current.version, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
-                    if let overview = analysis.overview {
-                        Text("Missing \(countWithPercent(overview.nullCount, total: overview.rows))")
+                    if let nullCount = analysis.nullCount {
+                        Text("Missing \(countWithPercent(nullCount, total: analysis.rowCount))")
                             .font(.caption).foregroundStyle(.secondary)
                             .help(
                                 "Missing values in the current results. Column type: \(model.info.columns[column].technicalType)"
@@ -150,7 +150,8 @@ struct ColumnAnalysisView: View {
         .task(id: request) {
             await analysis.load(
                 document: model.doc, version: model.current.version,
-                column: UInt32(column), expanded: expanded, bins: histogramBins, scale: histogramScale)
+                column: UInt32(column), rowCount: model.current.rowCount, expanded: expanded, bins: histogramBins,
+                scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
     }
@@ -195,17 +196,17 @@ struct ColumnAnalysisView: View {
             }
         case .values:
             if let summary = analysis.values {
-                detail("Distinct", (summary.estimated ? "≈ " : "") + formatCount(summary.distinctCount))
+                detail("Distinct", "≈ " + formatCount(summary.distinctCount))
                 if !summary.values.isEmpty {
-                    Text(summary.estimated ? "Common values · estimated" : "Values")
+                    Text("Common values · estimated")
                         .font(.caption).foregroundStyle(.secondary)
                         .help(
                             "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
                         )
                     ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: 3) {
-                            detail(item.label, countWithPercent(item.count, total: model.current.rowCount))
-                            ProgressView(value: Double(item.count), total: Double(max(model.current.rowCount, 1)))
+                            detail(item.label, countWithPercent(item.count, total: analysis.rowCount))
+                            ProgressView(value: Double(item.count), total: Double(max(analysis.rowCount, 1)))
                                 .tint(.accentColor)
                         }
                     }

@@ -49,7 +49,7 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
         )
         .unwrap()
     };
-    assert_eq!(scatter(&original).total_rows, 3);
+    assert_eq!(scatter(&original).eligible_rows, 3);
     assert_eq!(
         scatter(&current)
             .points
@@ -65,11 +65,8 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
         Err(Error::Cancelled)
     ));
     assert_eq!(
-        original
-            .analyze_overview(0, &Cancellation::default())
-            .unwrap()
-            .rows,
-        3
+        original.count_nulls(0, &Cancellation::default()).unwrap(),
+        0
     );
     assert!(matches!(
         current.analyze_statistics(1, &Cancellation::default()),

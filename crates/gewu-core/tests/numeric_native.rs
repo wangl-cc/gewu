@@ -339,7 +339,11 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
-        (histogram.null_count, histogram.nan_count, histogram.total),
+        (
+            doc.count_nulls(0, &Cancellation::default()).unwrap(),
+            summary.nan_count,
+            doc.row_count()
+        ),
         (1, 1, 5)
     );
 

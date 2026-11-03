@@ -447,8 +447,8 @@ fn analysis_distribution_includes_the_columns_own_filter() {
             &gewu_core::Cancellation::default(),
         )
         .unwrap();
-    assert_eq!(filter_histogram.total, 3);
-    assert_eq!(view_histogram.total, 3);
+    assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 3);
+    assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
     doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
         .unwrap();

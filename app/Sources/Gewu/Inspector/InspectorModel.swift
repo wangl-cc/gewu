@@ -5,7 +5,8 @@ import SwiftUI
 @MainActor
 final class InspectorModel: ObservableObject {
     @Published private(set) var sections: [InspectorSection] = []
-    @Published private(set) var overview: ColumnOverview?
+    @Published private(set) var nullCount: UInt64?
+    private(set) var rowCount: UInt64 = 0
     @Published private(set) var statistics: NumericStatistics?
     @Published private(set) var distribution: Histogram?
     @Published private(set) var values: ValueSummary?
@@ -38,7 +39,7 @@ final class InspectorModel: ObservableObject {
     }
 
     func load(
-        document: GewuSession, version: UInt64, column: UInt32, expanded: Int, bins: UInt32 = 40,
+        document: GewuSession, version: UInt64, column: UInt32, rowCount: UInt64, expanded: Int, bins: UInt32 = 40,
         scale: AxisScale = .linear
     ) async {
         guard !Task.isCancelled else { return }
@@ -53,8 +54,9 @@ final class InspectorModel: ObservableObject {
         let next = Context(document: ObjectIdentifier(document), version: version, column: column)
         if context != next {
             context = next
+            self.rowCount = rowCount
             sections = []
-            overview = nil
+            nullCount = nil
             statistics = nil
             distribution = nil
             values = nil
@@ -89,8 +91,8 @@ final class InspectorModel: ObservableObject {
             do {
                 switch section {
                 case .overview:
-                    try await load(\.overview, ticket: ticket, context: next) { cancellation in
-                        try document.analyzeOverview(version: version, column: column, cancellation: cancellation)
+                    try await load(\.nullCount, ticket: ticket, context: next) { cancellation in
+                        try document.countNulls(version: version, column: column, cancellation: cancellation)
                     }
                 case .statistics:
                     try await load(\.statistics, ticket: ticket, context: next) { cancellation in
@@ -125,7 +127,7 @@ final class InspectorModel: ObservableObject {
 
     private func hasResult(_ section: InspectorSection) -> Bool {
         switch section {
-        case .overview: overview != nil
+        case .overview: nullCount != nil
         case .statistics: statistics != nil
         case .distribution: distribution != nil
         case .values: values != nil

@@ -233,7 +233,6 @@ pub(crate) fn analyze(view: ArrayView<'_>, context: &Cancellation) -> Result<Val
     context.check()?;
     Ok(ValueSummary {
         distinct_count: sketch.distinct(),
-        estimated: true,
         values,
     })
 }

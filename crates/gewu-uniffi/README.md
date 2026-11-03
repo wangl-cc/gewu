@@ -100,7 +100,7 @@ Send endpoint `value` unchanged. Numeric text preserves integer/decimal precisio
 
 | View method | Result |
 | --- | --- |
-| `analyze_overview(column, cancellation)` | `ColumnOverview`: rows and logical nulls. |
+| `count_nulls(column, cancellation)` | Logical null count (`u64`); row count belongs to the View. |
 | `analyze_statistics(column, cancellation)` | `NumericStatistics`: native extrema/median labels, moments and non-finite counts. |
 | `analyze_distribution(column, bins, scale, cancellation)` | `Histogram`: distribution over visible values. |
 | `analyze_values(column, cancellation)` | `ValueSummary`: estimated cardinality and recounted candidates. |

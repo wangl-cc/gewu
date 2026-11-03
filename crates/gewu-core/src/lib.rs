@@ -30,8 +30,8 @@ pub use query::{
     MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 pub use stats::{
-    AnalysisCapabilities, AnalysisField, AxisScale, ColumnOverview, Histogram, LengthSummary,
-    LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind,
-    ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    AnalysisCapabilities, AnalysisField, AxisScale, Histogram, LengthSummary, LengthUnit,
+    NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
+    ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use view::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices, View};

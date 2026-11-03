@@ -20,7 +20,7 @@ pub(crate) mod scatter;
 mod values;
 
 pub(crate) use analysis::capabilities;
-pub use analysis::{AnalysisCapabilities, AnalysisField, ColumnOverview};
+pub use analysis::{AnalysisCapabilities, AnalysisField};
 pub use lengths::LengthUnit;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
@@ -53,9 +53,8 @@ pub struct ValueFrequency {
 pub struct ValueSummary {
     /// Non-null distinct values, estimated with a fixed-capacity sketch.
     pub distinct_count: u64,
-    /// Applies to distinct cardinality and candidate selection. Counts recount
-    /// candidates over all rows; 64-bit hash collisions may merge values.
-    pub estimated: bool,
+    /// Approximate candidate selection, recounted over all selected rows.
+    /// 64-bit hash collisions may merge values.
     pub values: Vec<ValueFrequency>,
 }
 
@@ -151,14 +150,10 @@ pub struct Histogram {
     /// strictly increasing values. Empty for linear or empty histograms. Native
     /// cuts that collapse at f64 log precision are nudged apart for display only.
     pub bin_edges: Vec<f64>,
-    pub null_count: u64,
-    pub nan_count: u64,
     /// Finite non-positive values omitted by logarithmic binning; zero for linear bins.
     pub non_positive_count: u64,
     /// Infinities omitted by logarithmic binning. Linear bins include them at the edges.
     pub infinite_count: u64,
-    /// Rows counted (including nulls and NaN).
-    pub total: u64,
 }
 
 /// Drawing coordinates and exact filter endpoints for the same bins.
@@ -311,19 +306,6 @@ fn statistics(
             ));
         }
     }
-    let total = rows.len() as u64;
-    let null_count = match rows {
-        Selection::All(_) => array.null_count() as u64,
-        Selection::Rows(_) if array.null_count() == 0 => 0,
-        Selection::Rows(_) => {
-            let mut null_count = 0;
-            for (index, row) in rows.iter().enumerate() {
-                context.check_at(index)?;
-                null_count += u64::from(array.is_null(row));
-            }
-            null_count
-        }
-    };
     context.check()?;
     Ok(Histogram {
         scale: AxisScale::Linear,
@@ -334,11 +316,8 @@ fn statistics(
         integer: array.data_type().is_integer() || array.data_type().is_temporal(),
         counts: Vec::new(),
         bin_edges: Vec::new(),
-        null_count,
-        nan_count: total - null_count,
         non_positive_count: 0,
         infinite_count: 0,
-        total,
     })
 }
 
@@ -695,20 +674,15 @@ fn count<T: ArrowPrimitiveType>(
         integer,
         counts: vec![0; bins],
         bin_edges: Vec::new(),
-        null_count: 0,
-        nan_count: 0,
         non_positive_count: 0,
         infinite_count: 0,
-        total: rows.len() as u64,
     };
     for (index, row) in rows.iter().enumerate() {
         context.check_at(index)?;
-        if array.is_null(row) {
-            histogram.null_count += 1;
-        } else if let Some(bin) = classify(array.value(row)) {
-            histogram.counts[bin] += 1;
-        } else {
-            histogram.nan_count += 1;
+        if array.is_valid(row) {
+            if let Some(bin) = classify(array.value(row)) {
+                histogram.counts[bin] += 1;
+            }
         }
     }
     context.check()?;
@@ -805,12 +779,16 @@ mod tests {
             selected.iter().all(|&count| count <= 1),
             "bin ranges overlap"
         );
-        assert_eq!(result.histogram.total, rows.len() as u64);
         assert_eq!(
             result.histogram.counts.iter().sum::<u64>()
-                + result.histogram.null_count
-                + result.histogram.nan_count,
-            result.histogram.total
+                + ArrayView::new(&array, &rows)
+                    .count_nulls(&Cancellation::default())
+                    .unwrap()
+                + ArrayView::new(&array, &rows)
+                    .numeric_statistics(&Cancellation::default())
+                    .unwrap()
+                    .nan_count,
+            rows.len() as u64
         );
         result
     }
@@ -837,7 +815,6 @@ mod tests {
             &Cancellation::default(),
         )
         .unwrap();
-        assert_eq!(histogram.total, 2);
         assert_eq!(histogram.counts.len(), 99);
         assert_eq!(histogram.counts[0], 1);
         assert_eq!(histogram.counts[98], 1);
@@ -859,7 +836,6 @@ mod tests {
             .unwrap();
             let result = verify_bins(array, Selection::All(4), 3);
             assert_eq!(result.histogram.counts, [1, 1, 1]);
-            assert_eq!(result.histogram.null_count, 1);
         }
     }
 
@@ -871,9 +847,19 @@ mod tests {
             let h = counts(ArrayView::new(&array, &rows), 3, &Cancellation::default()).unwrap();
             assert!(h.counts.is_empty());
             assert_eq!((h.lo, h.hi), (None, None));
-            assert_eq!(h.total, array.len() as u64);
-            assert_eq!(h.null_count, array.null_count() as u64);
-            assert_eq!(h.null_count + h.nan_count, h.total);
+            let view = ArrayView::new(&array, &rows);
+            assert_eq!(
+                view.count_nulls(&Cancellation::default()).unwrap(),
+                array.null_count() as u64
+            );
+            assert_eq!(
+                view.count_nulls(&Cancellation::default()).unwrap()
+                    + view
+                        .numeric_statistics(&Cancellation::default())
+                        .unwrap()
+                        .nan_count,
+                rows.len() as u64
+            );
             assert!(build_scaled(
                 ArrayView::new(&array, &rows),
                 3,
@@ -894,7 +880,19 @@ mod tests {
             (Selection::Rows(Arc::from(vec![])), 0, 0, 0),
         ] {
             let h = counts(ArrayView::new(&array, &rows), 40, &Cancellation::default()).unwrap();
-            assert_eq!((h.total, h.null_count, h.nan_count), (total, nulls, nans));
+            assert_eq!(
+                (
+                    rows.len(),
+                    ArrayView::new(&array, &rows)
+                        .count_nulls(&Cancellation::default())
+                        .unwrap(),
+                    ArrayView::new(&array, &rows)
+                        .numeric_statistics(&Cancellation::default())
+                        .unwrap()
+                        .nan_count
+                ),
+                (total, nulls, nans)
+            );
             assert!(h.counts.is_empty());
             assert!(h.min_label.is_none() && h.max_label.is_none());
         }
@@ -1043,10 +1041,7 @@ mod tests {
         let float16 = arrow::compute::cast(&float32, &DataType::Float16).unwrap();
         verify_bins(float16, Selection::All(7), 3);
         let result = verify_bins(float32, Selection::All(7), 3);
-        assert_eq!(
-            (result.histogram.null_count, result.histogram.nan_count),
-            (1, 1)
-        );
+        assert_eq!(result.histogram.counts.iter().sum::<u64>(), 5);
         let infinities: ArrayRef = Arc::new(Float64Array::from(vec![
             f64::NEG_INFINITY,
             0.0,
@@ -1123,7 +1118,6 @@ mod tests {
         .is_none());
         let histogram =
             counts(ArrayView::new(&array, &rows), 60, &Cancellation::default()).unwrap();
-        assert_eq!(histogram.total, 0);
         assert!(histogram.counts.is_empty());
     }
 }

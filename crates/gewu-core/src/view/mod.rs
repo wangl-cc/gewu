@@ -190,11 +190,8 @@ mod tests {
             [("even", 1), ("odd", 1)]
         );
         assert_eq!(
-            restored
-                .analyze_overview(0, &Cancellation::default())
-                .unwrap()
-                .rows,
-            12_000
+            restored.count_nulls(0, &Cancellation::default()).unwrap(),
+            0
         );
     }
 

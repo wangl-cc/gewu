@@ -20,8 +20,8 @@ mod view;
 mod view_handle;
 
 pub use analysis::{
-    AnalysisCapabilities, AnalysisField, ColumnOverview, Histogram, LengthSummary, LengthUnit,
-    NumericStatistics, ValueFrequency, ValueSummary,
+    AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
+    ValueFrequency, ValueSummary,
 };
 pub use cancellation::Cancellation;
 pub use dataset::GewuDataset;

@@ -140,7 +140,7 @@ where
     let extrema = positive_extrema(array, rows, context, |value| value.into() > 0)?;
     let Some((min, max)) = extrema else {
         return H::finish(
-            count(array, rows, empty(rows), context, |_| Class::NonPositive)?,
+            count(array, rows, empty(), context, |_| Class::NonPositive)?,
             || Ok(Vec::new()),
         );
     };
@@ -166,7 +166,7 @@ where
     let histogram = count(
         array,
         rows,
-        with_domain(rows, edges, &lower, &upper),
+        with_domain(edges, &lower, &upper),
         context,
         |value| {
             if value.into() <= 0 {
@@ -201,7 +201,7 @@ where
     let extrema = positive_extrema(array, rows, context, |value| widen(value) > i256::ZERO)?;
     let Some((min, max)) = extrema else {
         return H::finish(
-            count(array, rows, empty(rows), context, |_| Class::NonPositive)?,
+            count(array, rows, empty(), context, |_| Class::NonPositive)?,
             || Ok(Vec::new()),
         );
     };
@@ -244,7 +244,7 @@ where
     let histogram = count(
         array,
         rows,
-        with_domain(rows, edges, &lower, &upper),
+        with_domain(edges, &lower, &upper),
         context,
         |value| {
             if widen(value) <= i256::ZERO {
@@ -276,7 +276,7 @@ where
     })?;
     let Some((min, max)) = extrema else {
         return H::finish(
-            count(array, rows, empty(rows), context, |value| {
+            count(array, rows, empty(), context, |value| {
                 classify_float(value.into(), &[])
             })?,
             || Ok(Vec::new()),
@@ -304,7 +304,7 @@ where
     let histogram = count(
         array,
         rows,
-        with_domain(rows, edges, &lower, &upper),
+        with_domain(edges, &lower, &upper),
         context,
         |value| classify_float(value.into(), &cuts),
     )?;
@@ -334,7 +334,7 @@ fn classify_float(value: f64, cuts: &[f64]) -> Class {
     }
 }
 
-fn empty(rows: &Selection) -> Histogram {
+fn empty() -> Histogram {
     Histogram {
         scale: AxisScale::Log10,
         lo: None,
@@ -344,11 +344,8 @@ fn empty(rows: &Selection) -> Histogram {
         integer: false,
         counts: Vec::new(),
         bin_edges: Vec::new(),
-        null_count: 0,
-        nan_count: 0,
         non_positive_count: 0,
         infinite_count: 0,
-        total: rows.len() as u64,
     }
 }
 
@@ -377,7 +374,7 @@ fn plot_edges(
     Ok(edges)
 }
 
-fn with_domain(rows: &Selection, bin_edges: Vec<f64>, min: &Bound, max: &Bound) -> Histogram {
+fn with_domain(bin_edges: Vec<f64>, min: &Bound, max: &Bound) -> Histogram {
     Histogram {
         lo: bin_edges.first().copied(),
         hi: bin_edges.last().copied(),
@@ -385,7 +382,7 @@ fn with_domain(rows: &Selection, bin_edges: Vec<f64>, min: &Bound, max: &Bound) 
         max_label: Some(max.display().to_owned()),
         counts: vec![0; bin_edges.len() - 1],
         bin_edges,
-        ..empty(rows)
+        ..empty()
     }
 }
 
@@ -398,14 +395,12 @@ fn count<T: ArrowPrimitiveType>(
 ) -> Result<Histogram> {
     for (index, row) in rows.iter().enumerate() {
         context.check_at(index)?;
-        if array.is_null(row) {
-            histogram.null_count += 1;
-        } else {
+        if array.is_valid(row) {
             match classify(array.value(row)) {
                 Class::Bin(bin) => histogram.counts[bin] += 1,
                 Class::NonPositive => histogram.non_positive_count += 1,
                 Class::Infinite => histogram.infinite_count += 1,
-                Class::NaN => histogram.nan_count += 1,
+                Class::NaN => {}
             }
         }
     }
@@ -456,7 +451,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, Cancellation, Filter, RangeHistogram};
+    use crate::{column::Column, stats::ArrayView, Cancellation, Filter, RangeHistogram};
 
     fn verify(array: ArrayRef, rows: Selection, bins: u32) -> Histogram {
         let result: RangeHistogram = build(&array, &rows, bins, &Cancellation::default()).unwrap();
@@ -508,11 +503,16 @@ mod tests {
         );
         assert_eq!(
             histogram.counts.iter().sum::<u64>()
-                + histogram.null_count
-                + histogram.nan_count
+                + ArrayView::new(&array, &rows)
+                    .count_nulls(&Cancellation::default())
+                    .unwrap()
+                + ArrayView::new(&array, &rows)
+                    .numeric_statistics(&Cancellation::default())
+                    .unwrap()
+                    .nan_count
                 + histogram.non_positive_count
                 + histogram.infinite_count,
-            histogram.total
+            rows.len() as u64
         );
         histogram
     }
@@ -536,13 +536,8 @@ mod tests {
         let histogram = verify(array.clone(), Selection::All(array.len()), 3);
         assert_eq!(histogram.counts, [2, 2, 2]);
         assert_eq!(
-            (
-                histogram.non_positive_count,
-                histogram.infinite_count,
-                histogram.nan_count,
-                histogram.null_count
-            ),
-            (2, 2, 1, 1)
+            (histogram.non_positive_count, histogram.infinite_count),
+            (2, 2)
         );
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(
@@ -556,12 +551,8 @@ mod tests {
         assert_eq!(histogram.counts, [1, 0, 1]);
         assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
         assert_eq!(
-            (
-                histogram.non_positive_count,
-                histogram.infinite_count,
-                histogram.null_count
-            ),
-            (1, 1, 1)
+            (histogram.non_positive_count, histogram.infinite_count),
+            (1, 1)
         );
     }
 
@@ -657,16 +648,11 @@ mod tests {
         assert!(histogram.counts.is_empty());
         assert_eq!((histogram.lo, histogram.hi), (None, None));
         assert_eq!(
-            (
-                histogram.non_positive_count,
-                histogram.infinite_count,
-                histogram.nan_count,
-                histogram.null_count
-            ),
-            (2, 1, 1, 1)
+            (histogram.non_positive_count, histogram.infinite_count),
+            (2, 1)
         );
         let histogram = verify(array.clone(), Selection::Rows(Arc::from(vec![])), 5);
-        assert_eq!(histogram.total, 0);
+        assert!(histogram.counts.is_empty());
         let context = Cancellation::default();
         assert!(build::<Histogram>(&array, &Selection::All(5), 0, &context).is_err());
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1, 10]));

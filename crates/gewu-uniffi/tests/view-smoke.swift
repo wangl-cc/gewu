@@ -70,7 +70,7 @@ enum ViewSmoke {
         let restored = try filtered.query(spec: full, cancellation: Cancellation())
         check(restored.rowCount() == 3)
         check(try original.rows(start: 0, count: 3, columns: [0]).sourceRows == [0, 1, 2])
-        check(try filtered.analyzeOverview(column: 0, cancellation: Cancellation()).rows == 2)
+        check(try filtered.countNulls(column: 0, cancellation: Cancellation()) == 0)
 
         let cancelled = Cancellation()
         cancelled.cancel()
@@ -79,7 +79,7 @@ enum ViewSmoke {
             preconditionFailure("cancelled query returned a View")
         } catch GewuError.Cancelled {}
         do {
-            _ = try filtered.analyzeOverview(column: 0, cancellation: cancelled)
+            _ = try filtered.countNulls(column: 0, cancellation: cancelled)
             preconditionFailure("cancelled analysis returned a result")
         } catch GewuError.Cancelled {}
         check(try filtered.query(spec: full, cancellation: Cancellation()).rowCount() == 3)

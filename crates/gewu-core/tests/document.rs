@@ -247,7 +247,13 @@ fn histogram_counts() {
     assert_eq!((h.lo, h.hi), (Some(1.0), Some(9.0)));
     assert!(!h.integer);
     assert_eq!(h.counts, [2, 1, 0, 2]);
-    assert_eq!((h.null_count, h.total), (1, 6));
+    assert_eq!(
+        (
+            doc.count_nulls(2, &Cancellation::default()).unwrap(),
+            doc.row_count()
+        ),
+        (1, 6)
+    );
 
     // Small integer span: one bin per integer would need 51 bins, so with
     // 60 bins each integer 10..=60 gets its own.
@@ -468,7 +474,7 @@ fn dates_format_parse_and_filter() {
         .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_725.0)));
-    assert_eq!(h.null_count, 0);
+    assert_eq!(doc.count_nulls(1, &Cancellation::default()).unwrap(), 0);
     std::fs::remove_file(path).ok();
 }
 

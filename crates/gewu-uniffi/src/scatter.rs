@@ -31,28 +31,20 @@ pub struct ScatterPoint {
 
 #[derive(uniffi::Record)]
 pub struct ScatterResult {
-    pub x_column: Option<u32>,
-    pub y_column: u32,
     pub x_axis_kind: ScatterAxisKind,
     pub y_axis_kind: ScatterAxisKind,
-    pub total_rows: u64,
     pub eligible_rows: u64,
     pub non_positive_rows: u64,
-    pub sampled: bool,
     pub points: Vec<ScatterPoint>,
 }
 
 impl From<core::ScatterResult> for ScatterResult {
     fn from(result: core::ScatterResult) -> Self {
         Self {
-            x_column: result.x_column,
-            y_column: result.y_column,
             x_axis_kind: result.x_axis_kind.into(),
             y_axis_kind: result.y_axis_kind.into(),
-            total_rows: result.total_rows,
             eligible_rows: result.eligible_rows,
             non_positive_rows: result.non_positive_rows,
-            sampled: result.sampled,
             points: result
                 .points
                 .into_iter()

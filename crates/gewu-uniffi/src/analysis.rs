@@ -45,7 +45,6 @@ pub struct NumericStatistics {
 #[derive(uniffi::Record)]
 pub struct ValueSummary {
     pub distinct_count: u64,
-    pub estimated: bool,
     pub values: Vec<ValueFrequency>,
 }
 
@@ -67,21 +66,6 @@ pub struct AnalysisField {
     pub nullable: bool,
 }
 
-#[derive(uniffi::Record)]
-pub struct ColumnOverview {
-    pub rows: u64,
-    pub null_count: u64,
-}
-
-impl From<core::ColumnOverview> for ColumnOverview {
-    fn from(value: core::ColumnOverview) -> Self {
-        Self {
-            rows: value.rows,
-            null_count: value.null_count,
-        }
-    }
-}
-
 impl From<core::NumericStatistics> for NumericStatistics {
     fn from(value: core::NumericStatistics) -> Self {
         Self {
@@ -100,7 +84,6 @@ impl From<core::ValueSummary> for ValueSummary {
     fn from(value: core::ValueSummary) -> Self {
         Self {
             distinct_count: value.distinct_count,
-            estimated: value.estimated,
             values: value.values.into_iter().map(Into::into).collect(),
         }
     }
@@ -152,11 +135,8 @@ pub struct Histogram {
     pub integer: bool,
     pub counts: Vec<u64>,
     pub bin_edges: Vec<f64>,
-    pub null_count: u64,
-    pub nan_count: u64,
     pub non_positive_count: u64,
     pub infinite_count: u64,
-    pub total: u64,
 }
 
 impl From<core::Histogram> for Histogram {
@@ -170,11 +150,8 @@ impl From<core::Histogram> for Histogram {
             integer: h.integer,
             counts: h.counts,
             bin_edges: h.bin_edges,
-            null_count: h.null_count,
-            nan_count: h.nan_count,
             non_positive_count: h.non_positive_count,
             infinite_count: h.infinite_count,
-            total: h.total,
         }
     }
 }
