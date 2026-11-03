@@ -1,310 +1,243 @@
 # Gewu 改进计划与 TODO
 
-本清单同时记录当前故障、实现脆弱性、功能改进与性能优化。当前调用路径能够正常工作，不足以否定隐含生命周期、初始化顺序或跨层约定带来的维护风险；改动也应针对明确的风险，避免仅因出现某种写法就统一替换。
-
-## 审查与完成标准
-
-- **故障**：代码路径已能解释错误行为。注明触发条件；尚未实机复现的视觉和手势问题仍需 UI 验证。
-- **脆弱性**：当前可以正常工作，但正确性依赖没有在接口或所有权中表达的约束。写清什么变化会破坏约束，再选择最小的加固方案。
-- **功能**：产品能力或交互选择。缺少该能力不等于实现错误；改变数据含义、导出范围或用户操作习惯前，先明确行为。
-- **优化待测**：已发现重复工作或潜在开销，但收益、内存代价和瓶颈仍需代表性测量。复杂度分析不等于实际加速。
-- **文档**：面向用户的说明、示例与展示，应与已交付能力和实测证据一致。
-- 一条可以有多个类别。原有结论被修正时保留有效目标；有明确约束且不需要修改的子项说明原因，不为了清单数量制造改动。
-- 完成需要覆盖该条的实际范围、处理审查反馈并通过相应验收。分别报告构建、自动化测试、性能测量和实机 UI 验证；测试放在拥有该行为的边界，避免逐层重复同一矩阵。
-
-## 1. UI、架构与实现改进
-
-### 1.1 查找（P0）
-
-- [ ] **T01 — 分离工具栏 Find 与行过滤**【功能、脆弱性】
-  - **依据**：当前工具栏查找通过 `ViewState.search` 裁剪行集，联动统计和导出；与保留上下文的 Find 行为混在一起。
-  - **查找范围**：当前没有列隐藏功能，工具栏／⌘F 查找当前筛选结果中的所有列，不受屏幕视口或单元格是否已渲染限制；命中屏幕外的行列后滚动定位。T03 引入列隐藏后，查找范围为全部未隐藏列，仍不限于屏幕内的列。仅可见区域需要绘制高亮，这不缩小查找范围。
-  - **方向**：Find 仅改变高亮与导航；行过滤必须指定列及该列支持的条件，多列条件可以显式组合。移除 `ViewState.search` 及 Core／UniFFI／CLI 中对应的跨列文本过滤入口，同步迁移调用方、测试和文档；类型解析与匹配逻辑仍供 Find 和列过滤复用。Rust Find 捕获视图版本、查询和列范围，返回有界游标结果；Swift 保留当前匹配及可见区域的高亮，不传回全量匹配数组或设置静默命中上限。
-  - **验收**：未渲染及屏幕外列的匹配可查到并跳转；查找不改变行数、统计和导出；跨越 100,000 个匹配仍能双向遍历并环绕。Core／UniFFI／CLI 的过滤条件均明确指定列，不再通过跨列查找词裁剪行集；视图、列范围、查询变化及关闭文档后旧结果不能发布。实机验证查找输入、快捷键导航、屏幕外定位与高亮。
-
-### 1.2 表头与列管理（P1）
-
-- [ ] **T02 — 明确表头手势与列选择的更新时机**【脆弱性】
-  - **依据**：`FilterHeaderView.mouseDown` 在原生事件追踪前同步更新观察状态，桥接刷新可能与排序、拖拽和调宽交错；尚不能仅凭该调用认定所有手势已失效。
-  - **方向**：让 AppKit 完成手势追踪，在明确的点击／选择边界更新状态。保留操作列与分析列的不同职责；先核对调用方，再决定是否删除 `selectedColumn`。分析列标记与排序、过滤标记应可区分。
-  - **验收**：点击排序、拖拽重排、分割线调宽、双击自适应及 Inspector 开关组合下均正常，操作不意外切换分析列。
-
-- [ ] **T03 — 支持列隐藏与显隐管理**【功能】
-  - **依据**：宽表需要收起无关列；隐藏、查找范围、复制和导出范围是相关但不同的产品行为。
-  - **方向**：按稳定的源列身份保存显隐与顺序，提供可搜索的列管理入口。明确隐藏列是否参与复制和导出，并在导出界面说明实际范围；隐藏不能被静默当成删除数据。
-  - **验收**：重排、隐藏、恢复后排序／过滤仍作用于正确源列；Find 跳过隐藏列；复制、导出与界面声明一致，支持恢复全部列。
-
-- [ ] **T04 — 设计表头上下文操作**【功能】
-  - **依据**：宽表下定位分析列和执行列操作的入口较深；右键菜单的存在和长度属于产品选择。
-  - **方向**：优先提供分析当前列、筛选、排序和适应列宽；与列管理入口协调隐藏／恢复操作。菜单使用点击位置对应的源列，避免依赖旧选中列；不把所有已有命令机械复制进去。
-  - **验收**：重排列后菜单目标正确，空白区域没有错误列操作，禁用状态和键盘入口一致；结合实机使用确认菜单范围。
-
-### 1.3 行查看、图表联动与分布语义（P1）
-
-- [ ] **T05 — 增加单元格上下文操作**【功能】
-  - **依据**：当前纯行选择适合整行复制，但缺少单个值的复制、包含和排除入口。
-  - **方向**：保留行选择模型，从点击的行列取得上下文；提供复制单元格／整行及类型支持的等值包含、排除。使用原类型值或经过类型层解析的输入，不能从截断显示文本或近似绘图坐标构造条件。
-  - **验收**：null、空字符串、长文本、精确数值及不支持等值的嵌套类型行为明确；排序后目标行正确。
-
-- [ ] **T06 — 增加行详情预览**【功能】
-  - **依据**：超长文本与嵌套值在单行表格中无法完整阅读。
-  - **方向**：通过 Space／Inspect Row 展示所选行的字段详情，支持列名搜索、完整复制和多行显示；读取在后台进行，宽表按需要加载。嵌套格式化交给类型层，不把普通字符串一律当 JSON。
-  - **验收**：完整值不被静默截断；宽表和超大单元格保持可操作，关闭／切换行后取消旧工作并释放数据，明确多行选择时预览哪一行。
-
-- [ ] **T07 — 实现表格与图表双向定位**【功能】
-  - **依据**：主表选择和侧栏图表缺少稳定的定位联系。
-  - **方向**：通过源行身份与视图版本关联；表格选中行可单独叠加到采样散点图，点击散点定位当前显示行。直方图所属 bin 使用与统计一致的原类型边界，不能仅比较近似 f64。
-  - **验收**：排序、过滤后定位正确；不在样本中的选中行仍可显示；被过滤行、null、非正数对数轴等排除情况有明确行为，异步结果不跳回旧行。
-
-- [ ] **T08 — 明确低基数分布展示与估计标记**【功能】
-  - **依据**：等宽数值直方图出现空 bin 不属于计算错误，`0/100` 的数值间隔有意义。当前 Values 使用哈希与有界候选估计，未发生容量淘汰也不能仅据此声称严格精确。
-  - **方向**：保留用户分箱设置及原类型区间语义；若低基数数据需要离散频数图，应明确区分展示模式，而非按不同值个数静默替换 histogram。若提供精确的小基数 Values 路径，使用能验证值相等性的表示，并分别说明 distinct 与高频候选的精确性。
-  - **验收**：`0/1`、`0/100`、稀疏整数、float 和 Decimal 的图形含义与过滤边界一致；估计标记来自实际算法保证。是否自动展开 Values 单独作为展示选择验证。
-
-### 1.4 侧栏、工具栏与状态栏（P2）
-
-- [ ] **T09 — 统一分析侧栏的位置与显隐行为**【功能】
-  - **依据**：当前使用 `NavigationSplitView` 左侧栏，不能把它描述成仍使用 HSplitView，也不能仅凭左右位置判为缺陷。默认展开、记忆显隐和工具栏归属需要一致的产品决定。
-  - **方向**：结合此前 Preview 风格的侧栏选择，明确采用内容侧栏还是右侧 Inspector；使用对应的原生布局。显隐持久化与 T27 共用一处实现，默认值另行明确。
-  - **验收**：展开／收起时按钮、搜索、标题与表头位置协调，窄窗口和新窗口行为一致；以构建后的实机界面确认，不以 SwiftUI 源码顺序代替。
-
-- [ ] **T10 — 补齐工具栏常用操作入口**【功能】
-  - **依据**：列管理、导出和分析侧栏需要便捷入口，但应控制工具栏密度。
-  - **方向**：与 T03、T09 一起安排 Columns、Export、侧栏切换及搜索的原生工具栏位置；按钮状态直接观察实际拥有状态的对象。
-  - **验收**：宽窄窗口、侧栏展开、导出运行和文档加载时布局及可用状态正确，菜单和快捷键继续可用。
-
-- [ ] **T11 — 整理状态栏与工作表切换器**【功能】
-  - **依据**：状态文本、过滤操作与独立 worksheet strip 占用空间，数字宽度变化可能造成布局变化；标签和菜单各有可发现性取舍。
-  - **方向**：数字使用等宽数字字体，过滤清除操作与 T52 协调；评估紧凑工作表菜单与现有标签条，保留当前表、待加载和失败状态的可见性。
-  - **验收**：长文件名／表名、大计数和窄窗口下不挤压关键操作；Unicode 名称按字节身份区分，切换失败仍能操作当前表。
-
-- [ ] **T52 — 集中展示列筛选条件并统一重置操作**【功能】
-  - **依据**：现有菜单 `Clear All Filters` 和状态栏 `Clear Filters` 已能清除全部列筛选；范围编辑器已有 Reset，用于重置草稿后再 Apply。当前缺少集中展示已应用条件、定位编辑器和逐列移除的入口，文本／类别编辑器也缺少统一的 Reset。
-  - **方向**：增加过滤条件条，按列展示已应用条件；点击条件定位并打开对应列编辑器，移除操作只清除该列条件。复用已有的全局清除逻辑，并与 T11 协调入口位置。统一列编辑器的 Reset 草稿语义，经 Apply 后移除该列过滤；区分“取消勾选值”和“移除过滤条件”。
-  - **验收**：条件摘要与已应用筛选一致；重排列后仍能定位正确列；逐列移除保留其他列条件，清除全部保留排序与 Find 输入。范围、文本和类别编辑器重置后 Apply 的结果一致，关闭未应用的编辑器不改变筛选；过滤条、编辑器和现有清除入口完成实机 UI 验证。
-
-### 1.5 打开文件、工作表与原生窗口（P2/P3）
-
-- [x] **T12 — 无文件启动采用文件选择器，避免误弹 Settings**【故障】
-  - **依据**：首次打开流程需要区分文档窗口与设置等辅助窗口，并协调启动、窗口恢复与文件事件。
-  - **方向**：由文件打开协调器处理启动、窗口恢复和文件事件，判断实际文档窗口；Settings 不应抢占首次打开流程。
-  - **验收记录要求**：保留空启动、已有／恢复文档窗口、文件事件到达、取消选择器和 Dock 重开等验证记录，避免仅通过调整场景声明顺序推断完整行为。
-
-- [ ] **T13 — 保留工作表状态并复用 XLSX 工作簿读取资源**【功能、优化待测】
-  - **依据**：列出工作表和打开表分别读取工作簿，切换时重新解析；保存全部已访问 `DocumentModel` 又会长期保留所有解码数据和索引。
-  - **方向**：分开轻量 UI／查询状态与数据所有权，默认只保留当前表的解码数据。状态按字节精确的工作表身份保存，源文件／导入选项／schema 变化时校验或失效，避免复用文档专属 category key。另行设计可复用的 Rust 工作簿句柄，明确其内存、并发访问、关闭与文件变化策略。
-  - **验收**：成功切换后恢复有效的筛选、排序、选择及已支持的布局状态；失败保留当前表，首表失败仍保留表目录。实际改写同一路径后旧状态正确失效；访问多表后内存不随全部解码表累积，测量首次打开和切换成本。
-
-- [ ] **T14 — 支持原生窗口标签页**【功能】
-  - **依据**：多文档需要更紧凑的组织方式；先验证当前系统行为，不能仅凭未手动设置开关断言标签页不可用。
-  - **方向**：使用系统窗口分组与菜单能力，明确文档窗口的 tabbing 行为，避免将 Settings、Info 等辅助窗口混入。
-  - **验收**：合并、拆出、切换、关闭及恢复标签时，焦点命令、文档与后台工作都归属正确。
-
-- [ ] **T15 — 扩展按可见列进行的自动列宽采样**【功能、优化待测】
-  - **依据**：当前最多对先收到数据的 32 列做自动拟合，后续可见列缺少同等处理；固定上限是否合适需实机评估。
-  - **方向**：初次进入视口且尚未测量的列按需后台采样，限制行数与文本采样大小；样本读取、字符串截取和测量都不能阻塞主线程。与 T20 共用宽度状态，不覆盖手工宽度。
-  - **验收**：超过 32 列的宽表横向滚动后仍可获得合理宽度；超长 Unicode 文本的采样工作有界，首屏延迟和列宽上限用实测决定。
-
-### 1.6 Swift 生命周期与实现健壮性
-
-- [ ] **T16 — 明确切换分析列时的视图状态生命周期**【脆弱性、功能】
-  - **依据**：`.id(column)` 会重建分析视图和本地状态；这是可解释的身份策略，不是单凭修饰符即可认定的 bug，但目前会丢失分箱和展开设置。
-  - **方向**：区分应跨列保留的展示偏好与必须按列失效的分析结果；移除强制重建时同步处理不兼容的类型能力、比例尺、展开项和旧任务取消。
-  - **验收**：切换数值、文本、嵌套列后偏好按约定保留，旧结果不显示，对数比例尺不会进入不支持的类型。
-
-- [ ] **T17 — 处理防抖、回车导航与视图更新之间的竞态**【故障、脆弱性】
-  - **依据**：当前搜索防抖刷新与立即导航使用不同时间点的视图，刷新会清空选择；Find 分离后仍需处理延迟请求与视图提交交错。
-  - **方向**：请求身份在提交时捕获，旧请求只取消自身；视图更新期间延后 Find 准备，接受新视图后按最新输入恢复。定义构建中按回车、连续换方向和清空查询的行为，导航不能长期阻塞可见高亮。
-  - **验收**：快速输入回车、连续导航、查询清空、过滤／排序和关闭窗口后无旧选择回写或无意义 StaleVersion 提示；命令可用性直接观察 Find 状态。
-
-- [ ] **T18 — 明确命令行选项与文件路径解析**【故障】
-  - **依据**：当前对以 `-` 开头的参数统一吞掉下一项，且 `--` 未切换后续解析状态，会漏开文件。
-  - **方向**：`--` 后全部按路径处理；只有明确识别的带值参数才消费下一项，不能把所有 `-NS`／`-Apple` 前缀都当成相同语法。不存在或无法打开的路径通过正常错误入口反馈，不能静默跳过。
-  - **验收**：覆盖 `-- -data.csv other.csv`、无值选项后跟路径、系统带值参数和不存在的文件，并保留 Finder 文件打开事件路径。
-
-- [ ] **T19 — 明确嵌套观察对象的订阅边界**【脆弱性】
-  - **依据**：现有 ExportCommand、ExportStatus 和 CopyStatus 直接观察子对象，当前没有已证实的刷新缺失。但通过 DocumentModel 读取子对象派生属性的新视图，容易漏订阅。
-  - **方向**：让依赖导出、复制或 Find 状态的组件明确观察其拥有者，减少会误导调用方的跨对象派生属性。若需要聚合观察，限制到真正依赖的状态；不默认全面转发或为此迁移整个观察框架。
-  - **验收**：相关按钮、进度和命令在仅子对象变化时也能更新；新增入口有明确的状态来源，不依赖无关父对象刷新。
-
-- [ ] **T20 — 稳定异步自动拟合与手动列宽的所有权**【脆弱性、功能】
-  - **依据**：数据到达后异步改宽会改变布局，也可能覆盖用户刚调整的宽度；同步把数据读取移到主线程会引入新的阻塞风险。
-  - **方向**：后台读取、截取样本和测量；为自动、手动及显式 Fit 区分更新时机，过期结果不得覆盖新宽度。排序／筛选不能无条件重置为表头宽度，先给出稳定的合理初始宽度。
-  - **验收**：加载中手动调宽、连续 Fit、排序／筛选、字体变化和宽表滚动后宽度按约定保留；以实机检查跳动和响应性，超长组合字符也不能造成主线程无界采样。
-
-- [ ] **T21 — 让查找高亮适配选中与非激活状态**【脆弱性；待 UI 验证】
-  - **依据**：当前显式设置普通与命中文字颜色，可能与原生选中行、深浅色和非激活窗口样式冲突；具体可读性需实机验证。
-  - **方向**：普通内容采用语义颜色，命中片段与整格高亮根据背景状态选择配色；复用 cell 时清除旧 attributed text／命中样式。
-  - **验收**：深浅色、选中／未选中、窗口激活／非激活及 cell 复用时文字可读，高亮不会遗留到其他值。
-
-- [ ] **T22 — 区分候选搜索防抖与翻页加载**【故障、功能】
-  - **依据**：`TextChoicesModel.load` 每次清空页面并等待 200ms，首次打开和翻页也承担搜索防抖延迟。
-  - **方向**：只对查询输入变化防抖；翻页及时执行，加载时可保留旧内容，但必须明确其属于旧页并禁用会误作用于旧结果的导航。
-  - **验收**：首次打开、下一页、返回首项和连续输入没有无意义延迟／闪白；失败、清空查询和取消后页游标与展示一致。
-
-- [ ] **T23 — 明确直方图光标的作用范围与恢复**【脆弱性；待 UI 验证】
-  - **依据**：鼠标移动直接设置光标，当前缺少完整退出处理且 tracking 使用 activeAlways；不能把未实测的表现描述为必然“全局卡死”。
-  - **方向**：使用匹配视图生命周期和窗口活动状态的光标／tracking 机制，处理移出、拖拽结束、窗口失活与视图拆除，避免旧视图的清理覆盖新视图光标。
-  - **验收**：交互区域内显示正确光标，移出、关闭弹窗、取消拖拽和切换窗口后恢复正常，实机检查。
-
-- [ ] **T24 — 打通筛选与导出的任务取消和收尾**【故障、脆弱性】
-  - **依据**：筛选弹窗的 Swift 任务取消没有贯通同步 Rust 准备。导出的 Rust job 已能取消，不能因未调用 Swift `task.cancel()` 就认定取消无效；仍需明确等待、轮询、结果发布与关闭的关系。
-  - **方向**：筛选使用调用方持有的准备句柄，将取消传入实际扫描、等待和计数。导出继续等待工作返回并完成收尾，明确轮询生命周期、提交成功与取消竞态；正常取消不弹错误框，不能仅为形式一致机械增加 cancel 调用。
-  - **验收**：关闭／切换筛选弹窗后旧工作及时退出；导出取消前后目标文件保持原子语义，进度收尾且旧消息不污染新任务。
-
-- [ ] **T25 — 明确超大可见数据的生命周期与读取失败恢复**【脆弱性】
-  - **依据**：拒绝入缓存后数据会直接填入可见 cell，不能据此断言静止视口必然无限重拉；但滚动回来可能重复读取。当前 `failedVersion` 使任意块错误阻断该版本后续读取，缺少按错误性质区分的恢复策略。
-  - **方向**：普通缓存保持字节／单元格预算；不可避免的超大显示数据由当前视口明确持有并及时释放，不增加永久无预算槽。区分过期版本、可重试块错误与文档级错误，设计有限重试或明确 Retry，不能产生重试风暴。
-  - **验收**：超大文本静止、滚走再回来和切换视图时读取次数、显示完整性及内存可解释；单块失败不无条件锁死整表。
-
-- [ ] **T26 — 测量并优化缓存访问、滚动调度与散点命中测试**【优化待测】
-  - **依据**：LRU 命中维护数组、待加载队列和悬停点投影均有重复工作；其是否主导帧耗时需测量，不把每次 hover 回调等同于每个显示帧。
-  - **方向**：按块复用 gutter 查询，优先加载当前视口并丢弃过期排队工作；按测量结果选择更简单的 LRU 实现，不能仅把 FIFO 改成 LIFO 就声称解决视口优先。散点投影可按轴／尺寸变化缓存，只有命中身份变化才更新状态；保持屏幕距离、对数和时间轴的命中语义。
-  - **验收**：代表性宽表滚动及最大配置点数的悬停耗时改善；点位正确、待加载任务有界且不饿死当前可见块，分别记录 CPU 和内存变化。
-
-- [ ] **T27 — 集中偏好键并补齐侧栏显隐持久化**【故障、脆弱性】
-  - **依据**：`showsInspector` 读取保存值但缺少对应写回；偏好键和默认值分散，修改时容易不一致。
-  - **方向**：使用一处键与默认值定义，让相关 `AppStorage`／UserDefaults 调用复用；在明确的偏好更新边界写入。与 T09 共用显隐逻辑，不引入通用配置框架。
-  - **验收**：切换侧栏后新窗口／重启按约定恢复；各入口默认值和有效范围一致。
-
-- [ ] **T28 — 显式表达 AppKit 生命周期与边界条件**【脆弱性；按子项处理】
-  - **代理所有权**：SavePanel completion 当前捕获 `selection`，实际生命周期成立；但代理存活间接依赖读取压缩选项的业务代码。让面板所有者明确持有代理至关闭，并验证默认 Parquet／其他格式及取消流程；不把现状写成已发生的提前释放。
-  - **挂载依赖**：当前 lazy gutter 在 table 挂载后创建，顺序正确；其初始化仍隐含依赖外部顺序。通过显式传入监听对象或清晰的挂载／解绑入口表达依赖，避免仅换一个回调仍遗漏重挂载。
-  - **类型与几何边界**：核对 XLSX UTType 的可用性假设以及零尺寸、隐藏列和边界索引的实际入口，在拥有约束的一层处理；不静默换成含义不同的格式类型。现有列最小宽度和索引检查应纳入判断，避免无条件重复防御。
-  - **视图身份**：FileDetails 是不可变快照，当前 offset 身份和无状态展示不需要机械替换。若列表以后可插删／重排或携带编辑状态，再采用稳定领域身份；同样核对结构字段列表的更新方式。
-  - **验收**：生命周期调整能覆盖原隐含依赖的变化场景；边界检查有可到达路径或明确接口约束，避免为假设场景扩张实现。
-
-### 1.7 FFI 与引擎协同
-
-- [ ] **T29 — 为可能长时间阻塞的表格读取明确执行器**【脆弱性、优化待测】
-  - **依据**：`TableRowReader` actor 内调用同步 FFI，会占用其执行线程；长文本格式化和多窗口并发可能影响其他任务，但不能预设固定线程池大小或宣称已发生饥饿。
-  - **方向**：评估受控的后台串行队列或适合阻塞工作的执行边界，限制并发和排队；任务身份在入队前确定，取消能够阻止尚未开始的读取。同步调用内部若不能中断，应明确其延迟上限而非伪装可抢占。
-  - **验收**：大文本、多窗口下 UI 与其他任务保持响应；旧队列不会持续处理已离开视口的数据，测量线程与排队情况。
-
-- [ ] **T30 — 有界合并可见列读取**【优化待测】
-  - **依据**：单列块读取重复传输源行号并产生多次 FFI 开销；查询分离前还有重复匹配工作，须在 T01 后重新测量。
-  - **方向**：按行块合并少量当前缺失的可见列，限制批大小、并发和返回数据寿命；保留列级缓存和完整值。避免在宽表／长字符串上一次物化所有列，单个超大值不应被错误宣称受固定字节上限保证。
-  - **验收**：比较 FFI 次数、首屏延迟、滚动响应和峰值内存，普通表有收益且宽表／超大文本不明显退化；取消和部分缓存命中正确。
-
-- [ ] **T31 — 让 Facet 准备可取消，并评估复用筛选行集**【脆弱性、优化待测】
-  - **依据**：Facet 会重复计算其他列过滤结果，当前准备缺少调用方取消；视图显示行与 Facet 源顺序行集不能混用。
-  - **方向**：先建立独立准备句柄，将取消传入扫描、索引等待和 histogram。若复用当前视图或在弹窗内保留 Facet，必须匹配数据／过滤状态与排除列，保留计数算法需要的源顺序；切换 bins／scale 可复用同一合适快照，不默认缓存所有结果。
-  - **验收**：排序不改变候选计数，零计数选项仍按契约保留；快速关闭、换列、换分箱时旧任务退出。
-
-- [ ] **T32 — 按需共享 Inspector 的基础统计扫描**【优化待测】
-  - **依据**：展开多个 section 时部分扫描重复，但 Overview 的空值计数可能有快路径，各 section 的行域和成本也不同，不能统一断言固定重复次数。
-  - **方向**：在同一文档／视图／列及相同统计范围内共享已有基础结果；保持只计算用户展开 section 的策略。区分 source 全列 histogram 域与当前视图统计，不能为省扫描改变范围或强制运行 median／Values。
-  - **验收**：分别测量单 section 与多 section 成本，范围与取消语义保持一致，缓存生命周期和占用有界。
-
-- [ ] **T33 — 由 Rust 返回匹配单元格位置**【优化待测】
-  - **依据**：`moveToMatch` 为定位列而读取并格式化整行多列，只使用 matched 标记，产生不必要的文本传输。
-  - **方向**：通过 T01 的 Find 会话返回有界行列游标；普通 rows 不依赖可变的全局 Find 状态，可见高亮与导航复用查询语义。按有界批次复用谓词与临时存储，避免逐单元格重复创建 formatter 或缓冲。
-  - **验收**：宽表定位无需传回整行字符串，重排／隐藏后滚动到正确列，查询变化不清空已有格式化文本缓存。
-
-- [ ] **T34 — 显式传递散点时间坐标语义**【脆弱性、优化待测】
-  - **依据**：Swift 从已格式化的标签反解日期，依赖文本格式且重复解析；绘图坐标与精确原值需要分开。
-  - **方向**：为 Date／Timestamp 传递有明确单位的绘图坐标或轴元数据，保留精确标签与源行身份。明确时区、无时区时间、Time 和 Duration 的不同含义；不要统一将所有 temporal 类型解释为 Unix 日期。
-  - **验收**：纳秒、时区、日期边界及时间跨度绘图正确，提示保留精度，不因单个解析失败静默把整轴变成裸数字；验证 Rust 边界和生成后的 Swift 消费方。
-
-- [ ] **T35 — 复用已存在的文本值索引提供候选页**【优化待测】
-  - **依据**：当前候选分页可以扫描源列并保持有界内存；已有索引时仍反复扫描存在优化空间，但“可构建索引”不代表应立即构建。
-  - **方向**：复用已经发布的 ValueIndex 及共享标签，只为当前 Facet 保存所需计数；冷路径继续有界扫描，不为打开弹窗常驻整列 codes。子串匹配仍需扫描候选，不能声称二分查找可直接解决任意子串搜索。
-  - **验收**：冷热路径分页顺序、null、Unicode 精确身份和零计数一致；页面有界，取消及时，打开候选页不隐式创建完整索引。
-
-- [ ] **T36 — 按真实调用契约收敛 UniFFI 接口**【脆弱性】
-  - **依据**：有多个默认值便利方法和历史分析接口，需要核对前端、CLI／Core 与 Rust 测试的不同职责；名字相似不等于语义重复。
-  - **方向**：仅移除已确认无消费者的 FFI 暴露，合并单纯的默认参数包装；保留请求提交时捕获 generation 的契约，不将其退化为后台执行时取得“最新 generation”。不因前端不用就删除 CLI 使用的 Core 报告接口。
-  - **验收**：Rust 边界和重新生成绑定后的 Swift 构建／测试通过，旧排队请求不会使新请求失效；生成文件不手工编辑。
-
-### 1.8 Rust 数据读取与计算
-
-- [ ] **T37 — 区分基数探测与索引构建，并补齐构建取消**【脆弱性、优化待测】
-  - **依据**：低基数探测后可能再次构建索引；但探测只需保存阈值内不同值，完整索引还保留每行 codes，两者内存成本不同。
-  - **方向**：保留有界推荐探测，复用已有完成索引，仅在稳定键过滤等实际需要时构建。构建、计数、重映射与等待共享构建者均响应调用方取消；只发布完整结果，保留成功索引的键稳定性。
-  - **验收**：高基数列仅打开编辑器不常驻 O(rows) codes；取消的构建不发布残缺索引，被取消的等待者不必等其他长构建结束；测量重复扫描与内存取舍。
-
-- [ ] **T38 — 降低批次合并峰值并处理偏移宽度限制**【优化待测、功能】
-  - **依据**：全部批次与合并结果可能同时存活，32 位字符串／二进制 offset 存在容量限制；实际峰值取决于列宽、共享 buffer 与转换，不能保证固定 2× 或优化后固定 1 + 1/N。
-  - **方向**：评估按列消费并释放原块，确认真正解除引用；识别需要 LargeUtf8／LargeBinary 的列并同步 schema 和相关路径。窄 offset 提升需要新 offset buffer，不笼统声称完全零拷贝；嵌套类型与单列极宽情况单独处理。
-  - **验收**：单批／多批、偏斜宽表和大 offset 边界值正确，失败可解释；测量峰值 RSS 与打开耗时，后续筛选、显示和导出接受提升后的类型。
-
-- [ ] **T39 — 减少分隔符文件重复解析并扩展格式识别**【优化待测、功能】
-  - **依据**：含推断 Float64 列时可能执行 schema 推断、整数精度检查和实际读取三遍；完整推断承担发现后部混合值的正确性职责。
-  - **方向**：精度检查只扫描尚未判定的列，全部判定后提前结束；评估合并推断与精度检测，保留完整数据语义，不默认改成有限采样。后缀别名和分隔符嗅探单独作为功能，处理引号、嵌入换行及歧义，提供显式格式覆盖。
-  - **验收**：尾部混合类型、大整数、科学计数法、带引号分隔符和多行字段不丢失／静默取整；记录解析遍数与耗时，普通文本不被不可解释地猜成表格。
-
-- [ ] **T40 — 补齐 Dictionary 逻辑值的分析能力**【功能】
-  - **依据**：实际进入 Arrow Dictionary 的数值、时间和文本列缺少部分分析；Parquet 磁盘字典编码与 Arrow 逻辑 Dictionary 不能直接等同，应通过真实读入验证可达性。
-  - **方向**：把 key 到 value 的差异放在窄的借用访问层，复用原类型的统计、median、histogram、scatter 与长度规则；不整列解码、不以 f64 替代精确比较，也不复制一套字典专用算法。
-  - **验收**：键 null、value null、重复／未使用字典项与普通数组语义一致；覆盖相邻大整数、Decimal、temporal、对数排除值及真实 Parquet 往返。能力声明与实现一致，相关 feature、取消和内存行为通过验证。
-
-- [ ] **T41 — 明确 XLSX 错误单元格的展示策略并优化遍历**【功能、优化待测】
-  - **依据**：当前明确拒绝包含 Excel 错误值的工作表，这是现有读取契约；支持查看此类报表有价值，但不能用错误→null 的隐式转换完成。
-  - **方向**：先确定错误值如何保留、展示、筛选、统计和导出，再实现容错读取；若提供用户选择的转换，明确提示信息损失。读取遍历合并与错误表示分别评估，避免更改语义来换取较少 pass。
-  - **验收**：`#N/A`、`#DIV/0!`、真正空值和普通同名字符串可按约定区分，表头错误策略明确；有效单元格保持精度，文档契约与 UI 一致。
-
-- [ ] **T42 — 优化恒等行映射并评估 median 的内存／速度取舍**【优化待测】
-  - **依据**：未过滤未排序视图可以用隐式恒等映射代替 `Vec<u32>`；median 的行号 buffer 则用于对不可变原列选择顺序统计量，不应统称为冗余。
-  - **方向**：让视图、Find、导出、分析和定位一致支持 Selection::All／显式行序；清除过滤但仍有排序时不能误用恒等映射。median 原生值复制作为独立实验，比较 u32 行号与各类型值宽度，保留精确结果和可取消选择。
-  - **验收**：初始／清空后的恒等视图避免行号 buffer，排序过滤结果一致；median 对 Int64、Decimal128/256 等分别报告峰值内存和时间，不能把更大的值 buffer 声称为通用省内存方案。
-
-## 2. 文档、工具与分发
-
-展示内容的性能措辞来自可复现测量，能力描述对应已交付实现；真实截图仍按用户安排准备，不使用模拟画面代替实机证据。
-
-### 2.1 真实数据与视觉展示
-
-- [ ] **T43 — 准备代表性展示数据集**【文档】
-  - 选择有明确来源与许可、包含数值／类别／时间或嵌套列的公开数据，记录规模与生成／下载方式。使用真实行数，不预设某个月份的数据一定有特定规模；避免含个人敏感内容。
-
-- [ ] **T44 — 截取真实界面与交互录屏**【文档】
-  - 待相关 UI 稳定后，由用户安排真实截图；展示过滤、分析和图表的实际能力。录屏保留真实等待过程，不以剪辑后的片段证明“秒开”或“无延迟”，注明必要的数据与机器条件。
-
-- [ ] **T45 — 在 README 顶部加入界面预览**【文档】
-  - 使用 T44 的真实截图、简洁说明和可访问的替代文本；确保图片对应已交付版本，展示主表及分析功能而非仅有装饰图。
-
-### 2.2 产品定位
-
-- [ ] **T46 — 说明使用场景与解决的问题**【文档】
-  - 描述在 Python／Jupyter 分析前快速查看数据内容、类型、分布与筛选结果的用途；说明交互查看与程序化分析各自职责，性能数字链接到测量条件。
-
-- [ ] **T47 — 准确介绍原生架构与性能证据**【文档】
-  - 介绍 Swift／AppKit 与 Rust／Arrow 的实际分工；内存和响应优势通过代表性测量说明，不承诺“极低常驻内存”“千万行无延迟”或未经验证的 ProMotion 表现，也不以竞品标签代替比较证据。
-
-- [ ] **T48 — 说明与数据分析工具的互补关系**【文档】
-  - 用具体工作流说明与 Python、Polars／DuckDB 等工具配合的方式；避免宣称尚未提供的集成或自动化能力。
-
-### 2.3 功能说明
-
-- [ ] **T49 — 按实际能力整理特性列表**【文档】
-  - 覆盖表格查看、按需列分析、交互直方图、采样散点图、支持格式和多工作表。明确采样／近似统计及格式限制；“只读查看”与“可导出到其他文件”分别说明，不作无法保证的绝对安全承诺。
-
-### 2.4 CLI 收敛与分发说明
-
-- [ ] **T50 — 移除当前独立 CLI，后续用途另行确定**【功能】
-  - **依据**：当前 CLI 每次重新打开文件、解码和查询，无法跨命令复用 App 持有的文档与索引；面向大数据的全量文本／JSON 传输也不适合作为默认交互方式。
-  - **方向**：移除 `gewu-cli` crate、workspace 成员及对应测试和使用入口，清理构建、依赖与文档引用。处理依赖 CLI 的内存测量脚本，保留必要的 Core 测试和长生命周期基准；仅在确认没有其他用途后删除 CLI 专用接口，不影响 App。未来是否提供连接 GUI／daemon 已打开文档的客户端，以及使用何种数据传输方式，待实际需求明确后再定，本条不实现替代服务。
-  - **验收**：workspace 与 App 构建／测试通过，没有失效的 CLI 命令、链接和脚本；Core 的必要验证不依赖已删除的程序。
-
-- [ ] **T51 — 保持安装、签名与分发状态准确**【文档】
-  - 如实说明当前发布产物、签名／公证状态及针对下载来源的隔离属性处理方法，路径不限定在 Applications。Developer ID、公证或 Homebrew 分发在实际具备后再写成已支持；验证现有下载与说明链接。
-
-### 2.5 重构收尾与开发者文档
-
-本节面向开发者的架构与契约文档，区别于 2.1–2.4 的产品说明；渐进重构收尾时再集中重写，并与最终命名一并定稿。
-
-- [ ] **T53 — 按最终命名重写 Core 与 FFI 文档**【文档、脆弱性】
-  - **依据**：重构期间文档未随代码同步。`crates/gewu-core/README.md` 仍有 8 处 `Document::` 接口名和 1 处“以 `Document` 别名保留”的说明（Rust 侧别名已删除），Code map 的 23 条路径引用中 21 条已指向不存在的路径（仅 `column/`、`file/` 仍存在）；`crates/gewu-uniffi/README.md` 只做了机械改名，尚未与最终契约核对。`docs/data-types.md`、`search-and-filter.md`、`file-formats.md` 描述的是重构未改变的行为，目前没有旧符号残留，不需要重写。
-  - **方向**：在命名冻结之后再动笔：Rust 侧确定使用 `Session` 且不复留 `Document` 别名，按 T54 处理 Swift／FFI 的 `GewuDocument` 过渡别名，并确认 `QuerySpec`、`Filter`、`Column` 的公开面（`LogicalType` 已收敛为值语义，存储编码由 `ColumnInfo::encoding` 单独报告）。Core README 按执行路径组织（打开 `Dataset` → 视图 `Session` 与版本发布 → `QuerySpec` 与谓词执行 → 行读取与导出 → `task/` 长任务及其取消），Code map 按新目录重画，`pub(crate)` 模块不作为公开契约描述；FFI README 的对象表、调用顺序和取消作用域与 Core 对齐；`docs/*.md` 只校订受影响的表述，不重写产品行为说明。同一次变更改正错误的别名说明，并把该文档重写作为重构收尾的完成条件。
-  - **验收**：markdownlint 通过；旧符号清单（`Document::`、`GewuDocument`、`ViewState`、`FilterEditorKind`、`is_dictionary`、`value_index` 及不存在的 `src/*.rs` 路径）grep 结果为零；README 中的相对链接和锚点可达；文档中的 API 名与模块路径和最终代码一一对应；交付说明中列出刻意未改动的用户文档及理由。
-
-- [ ] **T54 — 收敛 Swift 端 `GewuDocument` 过渡别名**【脆弱性】
-  - **依据**：Rust 侧已删除 `Document` 别名，App 中 `GewuDocument` 出现 24 次（含 `DocumentModel.swift` 中的 `typealias` 定义本身）、`GewuSession` 出现 11 次，同一类型存在两个名字；若不处理，T53 无法确定文档应使用哪个名字，后续 UI 改动也会继续分叉。
-  - **方向**：在 FFI 命名定案后统一为一个名字（优先 `GewuSession`），同步 `DocumentModel`、`WorkbookModel`、`FindModel`、`InspectorModel`、`Table/` 与 `Charts/` 等消费方及 `app/README.md` 的说明；如确有保留理由，写明原因与期限，不默认长期并存。只改 Swift 消费方，不手工编辑生成的绑定。
-  - **验收**：App 中同一类型只出现一个公开名字（或别名有明确记录的理由）；`xcodebuild` 构建与 `GewuTests` 通过，`swift-format` lint 通过；`app/README.md`、FFI README 与 Swift 代码的命名一致。
-
-- [x] **T55 — 把字典编码移出 `LogicalType`（类型模型第二阶段）**【重构】
-  - **依据**：`LogicalType::Dictionary { value_type }` 仍把存储编码当逻辑类型：下游需递归穿透，`dictionary<int64>` 因编码被剥夺 range／直方图／散点能力，`display_name` 输出 `dict<string>`，且 `Other { raw_name }` 仍兜住 `Null`／`Map`／`Union` 等类型。第一阶段已把四维模型和派生集中到 `types/`，FFI 契约未动。
-  - **方向**：编码独立为 `ColumnInfo`／FFI 的独立字段（或 `Encoding` 枚举），`LogicalType` 收敛为值语义投影；`Null`／`Map` 显式化，未支持的 Arrow 类型在读取边界显式报错或跳过列，不再静默降级；当 range／直方图内核支持字典数组后，再按“值域有序 + 可解码”放开 `dictionary` 列的 ordered 能力。解析层 `column/filter/{range,scalar,temporal}` 改用 `Domain` 分派，使 `LogicalType` 只承担显示投影；同步改 `gewu-uniffi` 镜像、Swift 消费方与 `docs/data-types.md`。
-  - **验收**：`cargo test`／`clippy`／`cargo deny` 通过；App `xcodebuild test` 通过；Core／FFI 文档与 `docs/data-types.md` 不再出现 `dict<...>` 形式的类型描述；公开契约变更在交付说明中列出。
-  - **完成记录**：`LogicalType` 已收敛为值语义（新增 `Null`／`Map`，删除 `Dictionary`／`Other`），`ColumnInfo.encoding` 与 FFI `ColumnEncoding` 单独报告存储编码；无模型的 Arrow 类型在 `Column::new` 处返回 `Unsupported`；解析层 `range`／`scalar`／`temporal` 改用 `Domain` 分派。FFI 枚举与 `ColumnInfo` 字段变更属公开契约破坏，已同步 Swift 生成绑定与文档。
+本文档汇总了当前关于 **UI 与交互设计** 以及 **文档与开源展示** 的改进方案和待办清单。
+
+---
+
+## 1. UI 与交互改进 (UI & Interaction)
+
+当前 Gewu 的底层架构（Rust + Apache Arrow + AppKit 虚拟表格）性能表现优异，但在前端交互与 macOS 人机界面指南（HIG）规范上，存在若干功能权责错位与细节待打磨点。
+
+### 1.1 核心搜索与过滤心智重构 (P0)
+
+当前问题：界面入口采用标准查找（`⌘F`、`Find Next ⌘G`），但底层行为却将 `search` 作为跨列过滤条件执行全表行裁剪、联动侧边栏统计重算与 Facet 计数，破坏了前后行上下文，导致“在被过滤掉的行里继续遍历”的割裂体验。
+
+- [ ] **理顺“查找（Find）”与“过滤（Filter）”的权责**
+  - **问题**：`ViewState` 中包含了 `search: Option<String>`，`apply_view_checked` 将搜索词与列过滤一起作为行裁剪条件，导致按 `⌘F` 输入关键词时整表行数缩减、侧边栏统计重算、前后行上下文丢失。
+  - **解决办法**：
+    1. **查找模式（`⌘F`）脱离 `ViewState`**：从 Rust `ViewState`（行裁剪、Inspector 统计、Facet 计数与导出）中移除 `search` 字段；查找不改变当前视图行数、不触发侧边栏重算，仅在当前视图行集上对命中单元格加亮底色。
+    2. **Rust 端匹配索引与跳转（`⌘G` / `⇧⌘G`）**：在 Rust 侧新增可取消的 `find_matches(version, query)` 接口，维护全表匹配坐标索引 `Vec<(u32, u16)>`（`display_row, column`）与总匹配数；Swift 端按索引 `O(1)` 纵向 + 横向滚动定位到目标单元格，并在当前焦点匹配格绘制醒目外框（Focus Ring）。
+    3. **行裁剪归属于列漏斗（Column Filter）**：仅由 `ViewState.filters` 触发数据集缩减与统计更新；为 `ContainsEditor` 与 `NullFilterView` 补齐缺失的 `Reset` 按钮。
+    4. **新增已激活过滤条件胶囊条（Active Filter Bar）**：在 `DocumentScene.swift` 表头上方新增水平胶囊条（当 `!model.filters.isEmpty` 时展示，如 `borough = Manhattan ×`），点击胶囊打开对应列的 `ColumnFilterView`，点击 `×` 调用 `setFilter(column, nil)`，右侧提供一键 `Clear All`。
+
+### 1.2 表头功能补齐与手势修复 (P1)
+
+当前问题：列无法隐藏；表头 `mouseDown` 同步修改 `@Published var selectedColumn` 触发 SwiftUI 重绘，干扰了 AppKit 原生手势追踪；切换侧边栏分析列在宽表下入口过深。
+
+- [ ] **修复表头手势干扰与列状态标记**
+  - **问题**：`FilterHeaderView.mouseDown` 在调用 `super.mouseDown(with:)` 之前同步执行 `controller.onSelectColumn?(columnIndex)` 更新 `@Published var selectedColumn`，触发 SwiftUI 视图树重绘并打断 AppKit `NSTableHeaderView` 的点击排序、拖拽重排与分割线调宽手势。
+  - **解决办法**：移除 `DocumentModel.selectedColumn` 及 `FilterHeaderView.mouseDown` 中的同步状态写入，完全交由 `super.mouseDown(with:)` 原生事件循环处理排序、重排与调宽；保持点击表格与 `inspectedColumn` 解耦，当右侧 Inspector 展开时，仅在 `ColumnHeaderCell` 中对 `column == inspectedColumn` 绘制极淡强调色背景与底边 `2pt` 强调色指示线。
+- [ ] **支持列隐藏（Column Hiding & Visibility）与导出联动**
+  - **问题**：处理几十上百列的宽表时无法隐藏无关列，且无统一列显隐管理入口。
+  - **解决办法**：在 `DocumentModel` 中维护 `hiddenColumns: Set<UInt32>` 并同步设置 `NSTableColumn.isHidden`；更新 `DataTableController.displayedColumns` 过滤掉 `isHidden` 列（使复制、导出与查找跳转自动跳过隐藏列）；在工具栏与表头右键菜单提供带搜索框的 `Customize Columns…` 气泡列表。
+- [ ] **表头右键上下文菜单（Context Menu）补齐**
+  - **问题**：表头不支持右键菜单，宽表下切换 Inspector 分析列或执行列级操作入口过深。
+  - **解决办法**：重写 `FilterHeaderView.menu(for event: NSEvent) -> NSMenu?`，通过 `column(at:)` 定位目标列，提供 `Analyze Column`（更新 `inspectedColumn` 并展开 Inspector）、`Filter Column…`、`Sort Ascending / Descending / Clear Sort`、`Fit Column Width`、`Fit All Columns` 以及 `Hide Column` / `Show All Columns`。
+
+### 1.3 行选择价值升级、图表双向联动与分箱修复 (P1)
+
+当前问题：表格当前的行选择除了 `⌘C` 整行复制外没有任何探查意义；超长文本和 Parquet 嵌套结构被列宽截断后无法在软件内查看完整内容；表格与侧边栏图表相互孤立；低基数/二值数值列在直方图中仍被强行切分为数十个空 Bin。
+
+- [ ] **保持纯粹的行选择模型，提供单元格右键上下文菜单**
+  - **问题**：表格缺少右键上下文菜单，用户无法直接根据单元格当前值快速过滤或单独复制单个单元格文本。
+  - **解决办法**：保持 `NSTableView` 纯行选择模型（不引入复杂的单元格焦点状态机），通过 `tableView.clickedRow` 与 `tableView.clickedColumn` 构建动态 `NSMenu`：提供 `Filter to "<value>"`（直接写入 `ColumnFilter.values` 或等值条件）、`Exclude "<value>"`、`Copy "<value>"`（仅复制该单元格原始文本）与 `Copy Row`。
+- [ ] **选中行空格键预览（`Space` / `Inspect Row`）**
+  - **问题**：超长字符串、JSON 文本及 Parquet `Struct` / `List` 嵌套列被表格列宽与单行高度截断后，无法在应用内查看完整内容。
+  - **解决办法**：在 `DataTable` 中监听 `Space` 键（及右键菜单 `Inspect Row…`），调用 `doc.rows(version: ..., start: row, count: 1, columns: allColumns)` 获取选中行完整字段，弹出带列名搜索框的纵向详情卡片（Row Record View），支持多行自动换行与 JSON / 嵌套结构缩进展示。
+- [ ] **选中行 ↔ 侧边栏图表双向定位联动（Table ↔ Chart）**
+  - **问题**：主表选中行与侧边栏的直方图、散点图完全孤立，无法查看选中行在整体分布中的位置，也无法从散点图离群点反查原表行。
+  - **解决办法**：
+    1. **表格 → 直方图**：当 `selectedDisplayRow` 非空时，读取该行在当前分析列的数值并定位所属 Bin 下标，在 `HistogramView` 中将该柱子染为 `controlAccentColor`。
+    2. **表格 → 散点图**：读取选中行在 `(xColumn, yColumn)` 的坐标值，作为独立高亮 `PointMark` 叠加在 `ScatterChart` 最上层。
+    3. **散点图 → 表格**：在 `ScatterChart` 中点击数据点时，通过 Rust 接口将该点的 `sourceRow` 映射为当前视图的 `displayRow`（`Selection::index_of(source_row)`），驱动 `DataTable` 滚动并选中该行。
+- [ ] **修复低基数/二值列的直方图分箱与 `Distinct` 精确度显示**
+  - **问题**：`histogram.rs` 对浮点/小数及不相邻整数列一律按跨度切分 40 个 Bin，导致二值列（如 `0/100`）出现 38 个空 Bin；`values.rs` 将 `ValueSummary.estimated` 硬编码为 `true`，导致所有精确统计都显示 `≈ K` 与 `estimated`。
+  - **解决办法**：在 `histogram.rs` 第一遍扫描时用容量为 `bins + 1` 的小型集合统计不同值个数 `K`，若 $K \le \text{bins}$ 则将分箱数收敛为 $K$；在 `values.rs` 中根据 Sketch 是否发生过淘汰或哈希碰撞返回真实的 `estimated` 布尔值，且当数值列 $K \le 10$ 时默认展开 `Values` 面板。
+
+### 1.4 右侧 Inspector 布局、工具栏与底栏规范化 (P2)
+
+当前问题：列分析面板（Inspector）被放在了窗口左侧的主导航栏位置，且每次打开新文件默认关闭、不记忆状态；顶部工具栏缺少核心功能入口；底栏左侧混合了动态长度的提示文本且未使用等宽数字字体，导致右侧紧邻的 `Clear Filters` 按钮频繁左右跳动。
+
+- [ ] **将 Inspector 移至窗口右侧，并改为“默认打开 + 记忆状态”**
+  - **问题**：`DocumentScene.swift` 使用 `HSplitView` 将 `ColumnInfoView` 放在左侧（违反 macOS HIG 右侧 Inspector 惯例），且每次新建 `WorkbookModel` 时默认收起。
+  - **解决办法**：将 `ColumnInfoView` 移至主表格右侧（使用原生 `.inspector(isPresented:)` 或右侧分栏），通过 `UserDefaults.standard.register(defaults: ["ShowColumnInspector": true])` 默认开启，并在切换显隐时写回 `UserDefaults`。
+- [ ] **顶部工具栏（Toolbar）补齐核心操作入口**
+  - **问题**：顶部工具栏仅有搜索框，列管理、导出与 Inspector 开关只能去菜单栏或用快捷键查找。
+  - **解决办法**：在 `DocumentScene.swift` 的 `.toolbar` 中新增 `Columns`（弹出列显隐气泡）、`Export`（触发 `model.exportFile()`）和最右侧 `Inspector`（`sidebar.right` 图标，切换 `workbook.showsInspector`）三个标准 `ToolbarItem`。
+- [ ] **收敛底部状态栏并融合多工作表（XLSX Worksheet）切换器**
+  - **问题**：底栏数字未用等宽字体导致 `Clear Filters` 按钮随行号跳动；多工作表 `.xlsx` 在底栏下方额外堆叠了一整行 `worksheetBar`。
+  - **解决办法**：为底栏所有统计数字添加 `.monospacedDigit()`，移除 `row X in file` 与快捷键长提示，将 `Clear Filters` 移至顶部 Active Filter Bar；删除独立的 `worksheetBar`，在 `StatusBarView` 最左侧内嵌紧凑的 `Menu` 下拉组件（`[ ⊞ Sheet1 ▾ ]`）用于切换 `.xlsx` 工作表。
+
+### 1.5 启动行为修复、XLSX 子表切换加速与原生体验提升 (P2/P3)
+
+当前问题：无文件启动 App 时会错误弹出 `Settings` 窗口并拦截文件选择面板；切换 `.xlsx` 工作表时每次都会销毁旧表并从磁盘重新解压解析全局字符串表（`sharedStrings.xml`），且首次打开时重复解析两次，导致即使是很小的子表切换也有明显延迟。
+
+- [x] **修复无文件启动时误弹 `Settings` 窗口的问题（保持 Preview 风格直弹 `NSOpenPanel`）**
+  - **问题**：`GewuApp.swift` 将 `Settings` 放在 `WindowGroup` 之前，且 `AppDelegate` 的 `hasExistingWindows` 未排除非文档窗口，导致空启动时误弹设置窗口并跳过文件选择框。
+  - **解决办法**：将 `WindowGroup("Gewu", id: "viewer", ...)` 移至首位，为 `Settings` 增加 `.defaultLaunchBehavior(.suppressed)` 与 `.restorationBehavior(.disabled)`，并在 `AppDelegate.hasExistingWindows` 中排除 `Settings` / `About` / `Sparkle` 窗口。
+- [ ] **XLSX 子表按需缓存与底层工作簿句柄复用**
+  - **问题**：首次打开 `.xlsx` 时先调 `xlsxSheetNames` 再调 `openDocument` 重复解压两次；切换子表时每次销毁旧 `DocumentModel` 并重新从磁盘解析整个 ZIP 与 `sharedStrings.xml`。
+  - **解决办法**：在 `WorkbookModel` 中新增 `private var sheetCache: [String: DocumentModel] = [:]` 缓存已打开过的子表（瞬间切回并保留各自的列宽、过滤与滚动位置）；在 Rust 侧新增 `XlsxWorkbook` 句柄持有已打开的 `calamine::Xlsx` 实例（复用已解析的 `sharedStrings.xml`），避免切换未缓存子表时重复解压文件。
+- [ ] **支持原生窗口标签页（Window Tabs）**
+  - **问题**：打开多个数据文件时会散落多个独立窗口，无法像 Finder / Preview 一样合并为单窗口标签页。
+  - **解决办法**：在 `AppDelegate.applicationDidFinishLaunching`（或窗口挂载时）设置 `NSWindow.allowsAutomaticWindowTabbing = true`，并在菜单栏 `Window` 下启用系统原生标签页合并命令（`Merge All Windows` / `Show Tab Bar`）。
+- [ ] **自动列宽策略优化**
+  - **问题**：`DataTable.swift` 硬编码了前 32 列、前 32 行采样以及 `maxAutoFitWidth = 320` 上限，导致第 33 列之后的列完全不做自适应，且长文本列偏窄。
+  - **解决办法**：结合 1.6 的同步首屏列宽采样，对所有初始落入可视区域（以及横向滚动新进入可视区域但尚未测量过）的列按需根据已缓存的 32 行样本计算列宽，并将长文本列的默认自动列宽上限适度放宽（如 `420pt`）。
+
+### 1.6 Swift 前端脆弱写法与最佳实践整治 (Code Quality & Best Practices)
+
+当前问题：Swift 前端在视图生命周期身份（View Identity）、异步状态同步、AppKit 桥接细节、热路径性能及偏好设置管理上存在若干脆弱写法（Fragile Patterns），容易在后续迭代或边界场景下诱发隐蔽 Bug。
+
+- [ ] **移除 `ColumnAnalysisView` 上多余的 `.id(column)` 强制销毁修饰符**
+  - **问题**：`ColumnInfoView.swift` 中对 `ColumnAnalysisView` 附加了 `.id(column)`，导致每次切换被分析列时整个子视图树与 `@StateObject InspectorModel` 被连根销毁重建，用户的折叠/展开状态（`expanded`）、分箱数（`histogramBins`）与坐标轴比例（`histogramScale` / `frequencyScale`）全部丢失，且使 `InspectorModel` 内部已设计的 `Context` 切换逻辑形同虚设。
+  - **解决办法**：移除 `ColumnInfoView.swift` 第 43 行的 `.id(column)`，依赖现有的 `.task(id: request)` 与 `InspectorModel.Context` 自动感知 `column` 变化并取消旧任务；在 `onChange(of: column)` 中仅按新列的 `capabilities` 平滑修正不兼容的展开项或对数比例尺。
+- [ ] **消除搜索防抖（Debounce）与回车跳转/`selectedDisplayRow` 清空的竞态**
+  - **问题**：`DocumentScene.swift` 中 `onChange(of: model.searchText)` 使用 150ms 防抖异步刷新，而 `onSubmit(of: .search)` 立即同步调用 `findNext()`；且 `DocumentModel.refresh()` 完成后会无条件将 `selectedDisplayRow = nil` 清空，导致输入搜索词后立即按回车跳转会被随后的异步刷新抹掉选中状态。
+  - **解决办法**：结合 1.1 将查找从 `ViewState` 过滤管线中剥离（查找不再调用 `refresh()` 重建视图、不再清空 `selectedDisplayRow`）；若查找索引仍在构建中，回车跳转（`findNext`）应等待当前查找任务完成后再定位到首个匹配项。
+- [ ] **加固命令行参数解析与文件存在性校验**
+  - **问题**：`AppDelegate.swift` 中 `applicationDidFinishLaunching` 遍历 `CommandLine.arguments` 时，遇到任何以 `-` 开头的参数都会盲目调用 `_ = args.next()` 吞掉下一个参数；若启动时带有无参布尔 Flag（如 `-NSDocumentRevisionsDebugMode`），紧随其后的真实文件路径会被误吞。
+  - **解决办法**：仅对已知带值系统参数（如 `-NS...` / `-Apple...`）成对跳过，对非 `-` 开头的参数先通过 `FileManager.default.fileExists(atPath:)` 校验路径存在性后再调用 `FileCoordinator.shared.open(...)`。
+- [ ] **修复嵌套 `ObservableObject`（`ExportModel` / `CopyModel`）状态未向 `DocumentModel` 转发的问题**
+  - **问题**：`DocumentModel` 内部持有 `lazy var export` 与 `lazy var copying` 两个嵌套 `ObservableObject`，并暴露了计算属性 `var canExport: Bool { !isBusy && export.isIdle }`；但由于 SwiftUI 不会自动订阅嵌套 `ObservableObject` 的 `objectWillChange`，任何仅观察 `DocumentModel` 的视图（如工具栏按钮）在导出状态变化时不会收到重绘通知。
+  - **解决办法**：在 `DocumentModel.init` 中将 `export` 与 `copying` 改为非 `lazy` 属性，并通过 Combine `export.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }` 转发变更通知（或统一迁移至 Swift `@Observable` 宏）。
+- [ ] **消除表格异步自动列宽导致的二次跳动，并优化双击自适应列宽**
+  - **问题**：`DataTable.swift` 在 `buildColumns` 时先用空数据计算表头宽度，随后在异步 `loadNext()` 返回数据块时动态修改前 32 列的宽度（`initialFitsRemaining`），导致首屏渲染后表格产生肉眼可见的横向跳动，甚至可能覆盖用户刚刚手动拖拽调整过的列宽；且双击分割线 `sizeToFitWidthOfColumn` 先同步返回旧宽度再异步改宽度。
+  - **解决办法**：在文档打开阶段（`DocumentModel.init` 或 `buildColumns`）同步读取前 32 行样本一次性完成初始列宽计算，彻底移除 `loadNext()` 中的异步改宽逻辑（`initialFitsRemaining`）；在 `sizeToFitWidthOfColumn` 中优先直接读取 `RowCache` 已缓存的当前可见行数据同步返回精确列宽。
+- [ ] **修复搜索高亮硬编码字体颜色导致选中行反白失效的问题**
+  - **问题**：`TableCells.swift` 的 `highlighted()` 与 `DataTable.swift` 的 `render()` 将文本颜色硬编码为 `NSColor.labelColor` 与 `.black`，破坏了 `NSTableView` 在选中行（深蓝/强调色高亮背景）下自动将文字反白（`alternateSelectedControlTextColor`）的原生机制。
+  - **解决办法**：在 `highlighted()` 中不对未命中的普通字符设置显式 `.foregroundColor`（仅对命中子串区间设置黄色底色 `.backgroundColor: .findHighlightColor` 与深色前景 `.foregroundColor: .black`）；对于非文本列的整格命中（`MatchCellView.wholeCellMatch`），根据 `backgroundStyle == .emphasized` 动态切换文本与高亮胶囊配色。
+- [ ] **优化 `TextChoicesModel` 无条件 200ms 延迟与翻页闪白问题**
+  - **问题**：`TextChoicesModel.load()` 在每次调用开头都无条件执行 `page = nil` 与 `Task.sleep(for: .milliseconds(200))`，导致首次点开文本列漏斗弹窗或点击 `Next Page` / `First Page` 翻页时也会白等 200ms 并清空列表造成闪烁。
+  - **解决办法**：为 `TextChoicesModel.load()` 增加 `debounce: Bool` 参数，仅在 `query` 搜索词输入变化时传入 `debounce: true`（首次打开与翻页传入 `false` 立即执行）；加载新页期间保留旧 `page` 数据展示，待新页返回后再原子替换。
+- [ ] **修复 `HistogramView` 鼠标移出后全局光标卡死（Cursor Leak）问题**
+  - **问题**：`HistogramView.swift` 在 `mouseMoved` 中直接调用 `NSCursor.crosshair.set()` / `resizeLeftRight.set()` / `openHand.set()`，但 `NSTrackingArea` 未注册 `.mouseEnteredAndExited` 且未实现 `mouseExited` 恢复默认箭头光标，同时使用了 `.activeAlways`，导致鼠标移出直方图区域甚至窗口非激活时全局光标仍卡在十字准星或双向箭头状态。
+  - **解决办法**：将 `NSTrackingArea` 选项改为 `[.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect]`，新增 `override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }`，并在 `dismantleNSView` 时重置光标。
+- [ ] **补齐 `ColumnFilterView` 与 `ExportModel` 异步任务的取消传递及 `CancellationError` 兜底过滤**
+  - **问题**：`ColumnFilterView.load()` 使用非结构化的 `Task.detached` 调用 `doc.filterSpecWithBins(...)`，在弹窗关闭或切换分箱/比例尺导致 `.task(id:)` 取消时，既未取消后台任务也未通知 Rust 端中断；`ExportModel.cancel()` 仅调用了 `job?.cancel()` 而未调用 `task?.cancel()`；部分 `reportError` 未统一过滤 `Swift.CancellationError`。
+  - **解决办法**：结合 1.7 的可取消过滤会话句柄，在 `ColumnFilterView.load()` 中使用 `withTaskCancellationHandler` 桥接 `.task(id:)` 的取消事件并在 `onCancel` 中调用 Rust 会话的 `cancel()`；在 `ExportModel.cancel()` 中同步调用 `task?.cancel()`；在所有 `reportError` 入口统一增加 `if error is CancellationError || (error as? GewuError) == .Cancelled { return }`。
+- [ ] **修复超大行块（>8MB）拒绝入库引发的后台无限重拉死循环与 `failedVersion` 整表锁死**
+  - **问题**：当 64 行块包含超长文本（如大 JSON / Base64）总字节超过 `RowCache` 的 8MB 上限时，`cache.insert` 返回 `false` 拒绝入库；紧接着行号槽重绘（`gutter.needsDisplay = true`）或滚动 1px 再次调用 `block(for:)` 发现缓存仍为 `nil`，会立即将该 `Key` 重新加入 `pending` 队列并触发 `loadNext()`，造成无法停止的高频死循环；此外，一旦任意块读取抛错，`self.failedVersion = version` 会将整个视图版本永久锁死在 `"…"` 状态。
+  - **解决办法**：在 `RowCache` 中增设单槽位临时缓存 `private var oversized: (key: Key, block: RowBlock)?` 兜底保存最近一次超出预算的块，防止同一视口位置重复入队；将 `DataTableController.failedVersion` 改为按块记录 `private var failedKeys: Set<RowCache.Key> = []`（在视图版本切换时清空），避免单个块异常锁死整张表。
+- [ ] **优化 `RowCache` 与 `ScatterChart` 热路径性能（消除每帧 8,192 次 `ChartProxy.position` 投影计算）**
+  - **问题**：`RowCache.block(for:)` 在每次单元格渲染和行号槽（`RowGutterView.draw`）每帧滚动重绘时都会对 `order` 数组执行 `order.removeAll { $0 == key }` 的 `O(N)` 线性扫描与搬移；同时 `DataTableController.pending` 采用 FIFO（`removeFirst()`）导致快速滚动时先加载已滚过的历史块；`ScatterChart` 在 `onContinuousHover` 每帧都在主线程对 4,096 个点调用 `proxy.position(forX:)` / `proxy.position(forY:)`（单帧高达 8,192 次坐标投影计算）并无条件写入 `@Binding var hovered` 触发全量重绘。
+  - **解决办法**：在 `RowCache` 中用单调递增访问计数（或双向链表节点）替代 `Array.removeAll` 实现 `O(1)` 命中更新，并在 `RowGutterView.draw` 中按 64 行块复用同一次 `block` 查询；将 `DataTableController.pending` 改为 LIFO（优先弹出当前处于 `visibleRect` 内的块）；在 `ScatterChart.nearest(to:proxy:)` 中改为对鼠标当前像素坐标调用 1 次 `proxy.value(atX:as:)` / `proxy.value(atY:as:)`（或结合 `proxy.plotSize` 按轴极值做简单线性/对数归一化），仅当 `nearest?.sourceRow != hovered?.sourceRow` 时才更新 `hovered`，并将高亮悬停点拆分为独立的叠加 `PointMark`。
+- [ ] **收敛散落的 `UserDefaults` 字符串常量并补齐 `ShowColumnInspector` 持久化写入**
+  - **问题**：`WorkbookModel.swift` 仅在初始化时读取 `UserDefaults.standard.bool(forKey: "ShowColumnInspector")`，但切换 `showsInspector` 时从未写回 `UserDefaults`；同时 `"TableFontSize"`、`"RowNumberBase"` 等近 10 个偏好设置 Key 以裸字符串字面量散落在 8 个文件中。
+  - **解决办法**：新建统一的 `AppPreferences` 集中定义所有 `UserDefaults` Key 常量与初始默认值（通过 `UserDefaults.standard.register(defaults:)` 统一注册），并在 `WorkbookModel.showsInspector` 的 `didSet` 中写回 `UserDefaults`。
+- [ ] **修复 AppKit 弱引用代理、视图挂载顺序及几何/类型边界防御隐患**
+  - **问题**：
+    1. `ExportModel.swift` 将局部变量 `let selection = ExportSelection()` 赋值给 `weak` 属性 `NSSavePanel.delegate`，当默认格式非 Parquet 时仅靠闭包捕获维持生命周期；
+    2. `RowGutterView.init(table:)` 依赖传入的 `table` 已经挂载到 `enclosingScrollView` 才能注册滚动通知；
+    3. `ExportFileFormat.swift` 对 `.xlsx` 使用了强制解包 `UTType("org.openxmlformats.spreadsheetml.sheet")!`；
+    4. `HistogramView.snappedValue` 未校验 `plot.width > 0`（宽度为 0 时除零产生 `NaN`），`MatchCellView.draw` 在列宽 `< 4pt` 时计算 `bounds.width - 4` 产生负宽度 `NSRect`；
+    5. `FileInfoView` 与 `ColumnInfoView` 中 `ForEach` 使用了不稳定的 `id: \.offset`。
+  - **解决办法**：
+    1. 在 `ExportModel` 中新增实例属性 `private var selection: ExportSelection?` 显式强引用持有代理直至 Sheet 关闭；在 `RowGutterView` 中将滚动监听注册移至 `viewDidMoveToSuperview()`；
+    2. 在 `ExportFileFormat.swift` 中改为非可选的 `UTType(importedAs: "org.openxmlformats.spreadsheetml.sheet", conformingTo: .data)`；
+    3. 在 `HistogramView.snappedValue` 开头增加 `guard !counts.isEmpty, plot.width > 0 else { return lo }`，在 `MatchCellView.draw` 中使用 `max(0, min(text.width + 8, bounds.width - 4))`，在 `DataTable` 单元格渲染与选中行映射中补齐 `offset >= 0 && offset < count` 下界断言；
+    4. 为 `FileInfoView` 的详情项与 `ColumnInfoView` 的列表项提供稳定 `id`（或遵循 `Identifiable`）。
+
+### 1.7 前后端 FFI 边界与引擎协同优化 (FFI & Core Synergy)
+
+当前问题：虽然前后端在快照隔离（Snapshot Isolation）与精确边界对象（`Bound`）上设计扎实，但在表格数据块拉取粒度、Actor 协作线程池阻塞、Facet 过滤行集复用、同列多模块扫描、日期坐标跨边界传输及 UniFFI 历史接口收敛上存在明显的不合理开销。
+
+- [ ] **将 `TableRowReader` 同步 FFI 调用移出 Swift Actor 协作线程池**
+  - **问题**：`RowCache.swift` 中的 `TableRowReader` 声明为 Swift `actor`，在其隔离上下文中直接调用同步阻塞的 UniFFI 方法 `document.rows(...)`，会直接占用 Swift Concurrency 全局有限的协作线程池（Cooperative Thread Pool，线程数等于 CPU 核心数），在高负载或大文本格式化时易导致其他 UI 协程饥饿。
+  - **解决办法**：将 `TableRowReader` 内部改为持有一个专用的串行后台队列 `DispatchQueue(label: "gewu.table.reader", qos: .userInitiated)`，通过 `withCheckedThrowingContinuation` 在该队列上检查任务取消并执行 `document.rows(...)`，释放 Swift 协作线程池。
+- [ ] **合并可视列批量拉取，消除“单列 × 64 行”碎片化 FFI 调用与重复计算**
+  - **问题**：`GewuDocument.rows(version, start, count, columns)` 原生支持一次传入多列，但 Swift 端 `RowCache` 按单列拆分请求，导致同屏 15 列需串行发起 16 次异步 FFI 调用，每次重复克隆相同的 64 个 `source_rows: Vec<u64>`；且在存在搜索词时，Rust 端每次调用 `rows()` 都会重新构造 `UInt32Array`、执行 Arrow `take` 拷贝并重新编译正则表达式。
+  - **解决办法**：Swift 端在 `fillVisiblePlaceholders` / `loadNext` 中将同一行块起点（`start`）下所有缺失的当前可视列合并为一次 `doc.rows(version, start, count, columns)` 批量请求，再按列拆入 `RowCache`；Rust 端缓存或移除 `rows()` 内临时的正则重编译与 `take` 拷贝（结合 1.1 查找匹配索引直接标记命中单元格）。
+- [ ] **优化列漏斗（Facet）行集复用，补齐取消令牌（Cancellation Token）**
+  - **问题**：当点开自身尚未设置过滤条件的列漏斗弹窗时，其 Facet 行集完全等价于当前视图 `current_view.rows`，但 `RowScope::Facet` 仍会无条件调用 `self.select(...)` 从头重扫全表其他列的过滤条件；在数值列漏斗弹窗中切换 `Maximum bins` 或 `Linear / Log10` 比例尺时每次都会重跑全表过滤；且 `RowScope::Facet` 硬编码了 `CancelToken::never()`。
+  - **解决办法**：
+    1. 在 `Document::rows_in(RowScope::Facet { state, except })` 中，若 `!state.filters.iter().any(|f| f.column() == except)` 且 `state` 与当前已发布视图状态一致，直接复用 `self.views.current().rows.clone()`（`O(1)` 零扫描）；
+    2. 新增可取消的 `FilterSession` FFI 对象（类似 `TextChoices`），首次打开漏斗时捕获一次 Facet `Selection`，弹窗内切换 `bins` 或 `scale` 时直接在已捕获的 `Selection` 上重算直方图，并提供 `.cancel()` 方法供 Swift `.task(id:)` 取消时调用。
+- [ ] **合并 Inspector 同列多 Section 扫描，消除对同一列内存的 4~5 次重复遍历**
+  - **问题**：`InspectorModel` 当前按 `Overview` → `Statistics` → `Distribution` → `Values` 串行发起独立 FFI 任务：其中 `Overview` 扫一遍算空值，`Statistics` 扫一遍算极值/均值/标准差/NaN/Inf，`Distribution` 内部又重扫一遍算极值/空值/NaN/Inf 再做分箱。
+  - **解决办法**：在 Rust 端为数值列的 `ColumnAnalysis` 提供共享的列统计快照（或合并 `Overview` + `Statistics` + `Distribution` 的基础一遍扫描，直接将第一遍扫描得出的 `min / max / null_count / nan_count / infinite_count` 传给直方图分箱器，省去直方图内部重复的极值扫描 pass）。
+- [ ] **将查找列定位（`moveToMatch`）收归 Rust，消除 Swift 端循环格式化整行字符串的浪费**
+  - **问题**：`DataTable.swift` 的 `moveToMatch` 为了获知命中行内哪一列匹配，在 Swift 端按 64 列步长循环调用 `doc.rows()`，迫使 Rust 格式化整行单元格字符串跨 FFI 传回后又将 `block.cells` 全部丢弃，仅读取 `block.matched`。
+  - **解决办法**：在 Rust 端提供直接查询匹配单元格列坐标的轻量接口（结合 1.1 的查找索引，直接返回 `(display_row, column)`），彻底移除 Swift 端 `moveToMatch` 中的 `stride(from: 0, to: columns, by: 64)` 循环。
+- [ ] **散点图日期/时间轴直接传输归一化时间戳，消除 Swift 端 `ISO8601DateFormatter` 逐点字符串反解**
+  - **问题**：`scatter.rs` 将时间列转为无单位标识的物理整数 `f64` 与格式化字符串 `x_label / y_label`，导致 Swift 端在 `ScatterDates.make` 中创建两个 `ISO8601DateFormatter`、手动拼接 `"Z"` 时区并对最多 `4,096 × 2 = 8,192` 个字符串逐个反向解析回 `Foundation.Date`（且一旦任一点含纳秒或格式不兼容便整轴静默退化为裸数字轴）。
+  - **解决办法**：在 `scatter.rs` 中，当轴列为 `Date32`、`Date64` 或 `Timestamp(unit, _)` 时，将 `ScatterPoint.x` / `y` 统一按对应的 Arrow 时间单位换算为 Unix Epoch 秒数（`f64`）；Swift 端直接通过 `Date(timeIntervalSince1970: point.x)` `O(1)` 构造日期坐标，删除 `ScatterDates.make` 中的 `ISO8601DateFormatter` 字符串解析逻辑。
+- [ ] **低基数文本列（`DataKind::Text`）过滤候选复用 `ValueIndex`**
+  - **问题**：`Document` 已具备基数 $\le 100,000$ 的 `ValueIndex` 懒加载索引，但 `filter_spec_with_scale` 对所有 `DataKind::Text` 列一律走 `TextChoices::page_checked` 全表扫描；导致即使是仅有几个枚举值的千万行字符串列，每次打开弹窗、翻页或输入搜索字符都要从第 `0` 行到第 `N` 行重扫整列。
+  - **解决办法**：在 `prepare_text_choices` 中，若该文本列已构建（或可构建）`ValueIndex`（基数 $\le \text{INDEX\_LIMIT}$），直接在 `ValueIndex` 上执行一次 `counts_all(&rows)` 缓存有序候选列表；后续 `TextChoices::page_for_generation` 直接在该有序字典列表上做二分定位与子串过滤，使翻页与搜索耗时从 `O(N_rows)` 降至 `O(K_distinct)`。
+- [ ] **清理 UniFFI 边界残留的冗余平行接口与死数据结构**
+  - **问题**：演进过程中遗留了多套“新旧并存”的 FFI 接口与未使用的类型，扩大了生成的绑定体积与维护负担。
+  - **解决办法**：移除前端零调用的 `column_summary`（及 `ColumnSummary` 记录）与 `view_histogram`；利用 UniFFI 的 `#[uniffi(default = ...)]` 默认参数机制，将 `filter_spec` 与 `filter_spec_with_bins`、`prepare_analysis` 与 `prepare_analysis_with_bins`、`open` / `open_sheet` 与 `open_with_options`、`Export::write` 与 `write_with_options`、`TextChoices::page` 与 `page_for_generation` 分别收敛为单一规范方法，并同步更新 Rust 侧 FFI 测试。
+
+### 1.8 Rust 核心引擎性能与健壮性优化 (Rust Core Engine)
+
+当前问题：Rust 后端（`gewu-core`）在低基数索引构建与取消检查、大文件批次内存合并、CSV 多遍扫描、分隔符文件后缀嗅探、Parquet 字典列支持、XLSX 错误单元格容错及全表行号分配上存在若干深层瓶颈与兼容性限制。
+
+- [ ] **消除低基数列 `has_at_most` 与 `ValueIndex::build` 的二次重复全表扫描，并补齐 `CancelToken` 检查**
+  - **问题**：`document/filter.rs` 在首次打开列漏斗时先调 `value_index::has_at_most(array, 500)` 用 `RowConverter` 扫完千万行判断基数并丢弃哈希集合，紧接着在下一行进入 `FilterEditorKind::Choices` 时又调 `ValueIndex::build(array, 100_000)` 对同一列重跑一遍完全相同的 `RowConverter` 全列扫描；且 `ValueIndex::build` 在按 `CHUNK`（4,096 行）循环构建哈希表时未检查 `CancelToken`，在千万行大表上关闭弹窗后后台线程无法提前中止。
+  - **解决办法**：在 `ValueIndex::build(array, limit, cancel: &CancelToken)` 的每个 `CHUNK` 循环开头增加 `cancel.check()?`；在 `document/filter.rs` 判断 `low_cardinality` 时，直接调用 `self.index(column, &cancel)?`（内部调用一次 `ValueIndex::build` 并缓存到 `self.indexes[column]`），然后检查返回的 `index.len() <= CHOICE_LIMIT`，一举消除二次扫描并支持随时取消。
+- [ ] **优化 `collect_batches` 强制 `concat_batches` 导致的 2× 内存峰值与 2 GiB 字符串偏移溢出**
+  - **问题**：`file/mod.rs` 在加载 Parquet / CSV 时先将全部 `RecordBatch` 存入 `kept: Vec<RecordBatch>`，再调 `arrow::compute::concat_batches` 分配一整块连续内存并全量拷贝，导致打开文件瞬间内存峰值翻倍（2× RAM）；且当 `Utf8` / `Binary` 列总字节数超过 2 GiB（`i32::MAX`）时会因 32 位偏移量溢出直接报错失败。
+  - **解决办法**：
+    1. 在按列合并时，将 `kept: Vec<RecordBatch>` 拆解为按列的 `Vec<Vec<ArrayRef>>`，每合并完一列（`arrow::compute::concat`）立即释放该列原有的分块 `Vec<ArrayRef>`，将打开文件时的额外内存峰值从“整表 100%（2× RAM）”降至“单列大小（$\approx 1 + 1/N_{\text{cols}}$）”；
+    2. 在合并 `Utf8` / `Binary` 列前统计总字节数，若超过 `i32::MAX`（2 GiB），自动先将分块零拷贝/轻量转换为 `LargeUtf8` / `LargeBinary`（64 位偏移量）再执行 `concat`，彻底解决超长文本表的 2 GiB 溢出崩溃。
+- [ ] **减少 CSV / TSV 打开时的 3 遍全文件顺序解析开销，并支持常见文本后缀与分隔符嗅探**
+  - **问题**：`file/delimited.rs` 打开含浮点列的 CSV 时，第 1 遍用 `infer_schema(&mut file, None)` 扫完整个文件推断类型，第 2 遍在 `preserve_integer_precision` 中用 `csv::Reader` 重新逐行解析整个文件检查大整数精度（甚至所有待查列已标记 `preserve = true` 后仍不提前退出），第 3 遍再重新解析整个文件生成 Arrow 批次；此外 `FileType::detect` 仅硬编码匹配 `.parquet` / `.csv` / `.tsv` / `.xlsx` 后缀，拒绝打开 `.txt` / `.tab` 等合法分隔符数据文件。
+  - **解决办法**：
+    1. 在 `preserve_integer_precision` 中，将 `floating` 维护为待检查列集合，一旦某列检测到 $> 2^{53}$ 的整数失真即从待检集合移除，当集合为空时立即 `break` 提前终止文件扫描；且仅对不含小数点/指数符号且长度 $\ge 16$ 字节的字段调用 `parse::<i64>()`，跳过普通小数的解析开销；
+    2. 支持前 N 行采样推断（或单遍同时完成 Schema 推断与大整数精度检测），将最多 3 遍全文件磁盘读取收敛为 1~2 遍；
+    3. 在 `FileType::detect` 中扩展支持 `.tab`（映射为 `Tsv`）以及基于文件前几行 UTF-8 文本的分隔符嗅探（自动识别制表符或逗号分隔的 `.txt` / 无后缀文件）。
+- [ ] **补齐 Parquet 字典编码列（`DataType::Dictionary`）的统计、直方图、散点图与长度分析能力**
+  - **问题**：Parquet 文件极其普遍地使用 `Dictionary(Int32, ...)` 存储字符串甚至数值/日期列，但当前 `lengths::unit` 漏判了 `Dictionary` 包装的字符串列（导致侧边栏缺失 `Lengths` 面板），且 `Column::capabilities` 与 `Numeric::supports` 对所有 `Dictionary` 列一刀切禁用了 `histogram`、`scatter`、`logarithmic` 与 `Statistics`。
+  - **解决办法**：
+    1. 在 `lengths::unit` 中递归解包 `DataType::Dictionary(_, values)`，并在 `lengths::analyze` 中通过 `downcast_dictionary_array!` 先预计算字典 `values()` 的长度表（`O(K_dict)`），再按 `keys()` 汇总统计与直方图；
+    2. 在 `Column::capabilities`、`Numeric::new`、`histogram` 与 `scatter` 中支持 `DataType::Dictionary(_, values)`（通过字典 `keys` 索引底层数值/时间 `values` 数组），使字典编码的数值/日期列拥有与普通列完全一致的统计、直方图与散点图能力。
+- [ ] **改进 XLSX 公式错误单元格（`#N/A`、`#DIV/0!`）的容错处理并减少 `Range` 遍历次数**
+  - **问题**：`file/xlsx.rs` 当前只要在工作表中扫到哪怕 1 个 `Data::Error`（如业务表中极常见的 `VLOOKUP` `#N/A`）就拒绝打开整张表；且对 `calamine::Range` 进行了 3 遍遍历（扫错误、推断列类型、构建 Array）。
+  - **解决办法**：移除 `xlsx::read` 开头拒绝整表的 `Data::Error` 拦截循环；在 `column_array` 中将 `Data::Error(e)` 视为缺失值（`Null`）以保持数值/时间列的原生类型推断（或在文本列中保留错误字面量如 `"#N/A"`），确保含零星公式错误的真实 Excel 报表可正常打开查看。
+- [ ] **消除未过滤视图与中位数计算（`median`）中冗余的全表行号数组分配**
+  - **问题**：`ViewEngine::new` 与无过滤 `select()` 会分配长达 `n_rows` 的 `[0, 1, ..., n_rows - 1]` 恒等映射 `Vec<u32>`（千万行级白占数十至上百 MB 内存）；`analysis/median.rs` 对原生数值列计算中位数时，每次都分配完整 `ids: Vec<u32>` 并通过动态分发比较器 `DynComparator`（虚函数间接寻址）做原地选择。
+  - **解决办法**：
+    1. 将 `View.rows` 从 `Arc<Vec<u32>>` 升级为复用 `Selection` 枚举（`Selection::All(usize)` 表示未过滤未排序的恒等顺序，`Selection::Rows(Arc<Vec<u32>>)` 表示过滤或排序后的显式行号），使初始打开与清空过滤后的视图达到 **0 字节**行号内存占用；
+    2. 在 `analysis/median.rs` 中，对原生数值与时间类型（`Int*`、`UInt*`、`Float*`、`Decimal*`、`Date*`、`Timestamp*`）直接收集紧凑的原生值 `Vec<T::Native>` 调用标准库 `select_nth_unstable_by`（内联比较指令），消除 `DynComparator` 虚函数调用与跨行随机内存访问开销。
+
+---
+
+## 2. 文档与开源展示改进 (Documentation & Showcase)
+
+当前 README 严谨克制，但作为开源 macOS 桌面应用，缺乏视觉呈现，核心性能与差异化卖点表达过于平淡，更像一份“技术说明书”而非“产品主页”。
+
+### 2.1 视觉门面建设 (Hero Preview)
+
+- [ ] **准备代表性真实大数据集**
+  - 选用经典且直观的公开数据集（推荐：单月 290 万行的 NYC Taxi Parquet 数据，或包含嵌套列表的 GitHub Repositories 表）。
+- [ ] **截取高质量实机图片与动图**
+  - **主界面截图（Dark Mode）**：展示几百万行数据秒开状态、激活的列过滤器、展开的 Inspector 统计面板与车费分布直方图（Histogram）或行程散点图（Scatter Plot）。
+  - **交互短动图 / 视频（8~10 秒）**：展示拖入 Parquet 文件瞬间渲染、点击列即时重绘直方图、直接拖动直方图滑块调整数字范围过滤的丝滑过程。
+- [ ] **更新 README 顶部结构**
+  - 在标题下方直接放置 Hero 截图，让访问者在 3 秒内看懂软件形态与交互质感。
+
+### 2.2 定位与差异化价值提炼 (Why Gewu)
+
+- [ ] **强化解决的核心痛点**
+  - 明确表述：“在把数百万行 Parquet/CSV 喂给 Python / Jupyter 之前，双击即可无感秒开，即时查看数据分布与进行预筛选”。
+- [ ] **阐明架构优势（对抗传统 Electron 工具）**
+  - 突出 **Native Swift (AppKit) + Rust (Apache Arrow)** 组合，强调 **零 Electron 膨胀、极低常驻内存消耗、ProMotion 原生流畅滚动**。
+- [ ] **补充同类生态定位（与 DuckDB 形成互补）**
+  - 说明 Gewu 是数据工程师与分析师日常配合 DuckDB / Polars 使用的轻量、免写 SQL 视觉探查伴侣。
+
+### 2.3 特性叙事升级 (Features Showcase)
+
+- [ ] **重构特性列表（从扁平描述改为亮点聚焦）**
+  - **Native Mac Performance**：基于 Arrow 内存引擎，千万级虚拟滚动、多条件复合过滤无延迟。
+  - **Instant Column Profiling**：侧边栏常驻中位数、极值、空值率与频次统计。
+  - **Interactive Histograms & Scatter**：支持在直方图上直接拖动双把手滑块框选过滤范围；支持采样散点图。
+  - **Rich Format & Nested Data**：原生支持 Parquet 嵌套结构（Structs & Lists）、CSV/TSV 以及多工作表 XLSX。
+  - **Safe & Non-Destructive**：纯只读机制，彻底杜绝误修改源数据风险。
+
+### 2.4 开发者与自动化友好 (CLI & Ecosystem)
+
+- [ ] **提升 CLI 曝光度**
+  - 在特性或快速上手部分增加独立说明：Gewu 附带高性能独立命令行工具（`gewu`），输出结构化 JSON，专为脚本自动化与 AI Coding Agent 设计。
+- [ ] **规范与认证状态透明化**
+  - 保持并优化 macOS Quarantine（未公证）处理说明，未来条件成熟时规划 Apple Developer ID 签名与 Homebrew Cask 分发。
