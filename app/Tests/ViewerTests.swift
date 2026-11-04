@@ -55,26 +55,124 @@ struct ViewerTests {
         #expect(viewer.applied.view === initial)
     }
 
-    @Test func resultsAreSharedWithinAViewAndReleasedWhenItChanges() async throws {
+    @Test func facetsAreTemporaryAndChoicesFollowTheAppliedView() async throws {
         let dataset = try Self.dataset()
         let view = dataset.view()
         let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
         _ = await viewer.apply(Self.spec(city: "bj", district: "haidian"))
         let facet = try await viewer.facet(1)
-        #expect(try await viewer.facet(1) === facet, "One computation per View and column")
+        #expect(try await viewer.facet(1) !== facet, "Completed facets must not retain their row arrays in the cache")
         #expect(facet.rowCount() == 2, "The district facet keeps city = bj only")
+        weak var released: GewuView?
+        released = try await viewer.facet(1)
+        #expect(released == nil, "The Viewer must release a completed facet after its last consumer releases it")
+        let choices = try await viewer.filterChoices(1)
+        #expect(choices.values?.map(\.label).sorted() == ["chaoyang", "haidian"])
 
         // Column order does not affect any cached result.
         var reordered = viewer.applied.spec
         reordered.columns.reverse()
         try viewer.reorder([1, 0], spec: reordered)
-        #expect(try await viewer.facet(1) === facet)
+        #expect(try await viewer.filterChoices(1) == choices)
 
         _ = await viewer.apply(Self.spec(city: "sh", district: "pudong"))
         let replaced = try await viewer.facet(1)
         #expect(replaced !== facet)
         let labels = try await viewer.filterChoices(1).values?.map(\.label)
         #expect(labels == ["pudong", "xuhui"])
+    }
+
+    /// Hold scans before they enter Core, so cancellation and replacement do not depend on scan speed.
+    private static func queued(on worker: OperationQueue, count: Int = 1) async throws {
+        while worker.operations.filter({ !$0.isFinished }).count < count {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+    }
+
+    private static func expectCancelled<T>(_ task: Task<T, Error>) async {
+        do {
+            _ = try await task.value
+            Issue.record("Superseded work must not return a result")
+        } catch {
+            #expect(error.isCancellation)
+        }
+    }
+
+    @Test func changedParametersCancelQueuedWorkAndKeepOnlyTheLatestResult() async throws {
+        let dataset = try Self.dataset()
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, view: dataset.view(), spec: Self.spec(city: nil, district: nil), analysisWorker: worker)
+        #expect(worker.maxConcurrentOperationCount == 1)
+        let older = Task { try await viewer.lengths(1, bins: 2) }
+        try await Self.queued(on: worker)
+        let operation = try #require(worker.operations.first)
+        let newer = Task { try await viewer.lengths(1, bins: 3) }
+        while !operation.isCancelled { await Task.yield() }
+        worker.isSuspended = false
+        await Self.expectCancelled(older)
+        let result = try await newer.value
+        #expect(result == (try await viewer.lengths(1, bins: 3)))
+
+        // A previous parameter set must now require new work, rather than hitting history.
+        worker.isSuspended = true
+        let previous = Task { try await viewer.lengths(1, bins: 2) }
+        try await Self.queued(on: worker)
+        viewer.close()
+        worker.isSuspended = false
+        await Self.expectCancelled(previous)
+    }
+
+    @Test func resultBudgetEvictsOldColumnsIncludingQueuedWork() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("cache-budget-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let header = (0..<33).map { "c\($0)" }.joined(separator: ",")
+        let row = Array(repeating: "1", count: 33).joined(separator: ",")
+        try "\(header)\n\(row)\n".write(to: url, atomically: true, encoding: .utf8)
+        let dataset = try GewuDataset.open(path: url.path)
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, view: dataset.view(), spec: QuerySpec(columns: []), analysisWorker: worker)
+        var tasks: [Task<UInt64, Error>] = []
+        for column in 0..<32 {
+            tasks.append(Task { try await viewer.countNulls(UInt32(column)) })
+            try await Self.queued(on: worker, count: column + 1)
+        }
+        let operations = worker.operations
+        tasks.append(Task { try await viewer.countNulls(32) })
+        while !operations.contains(where: \.isCancelled) { await Task.yield() }
+        worker.isSuspended = false
+        await Self.expectCancelled(tasks[0])
+        for task in tasks.dropFirst() { #expect(try await task.value == 0) }
+    }
+
+    @Test func replacementCancelsCachedWorkAndOneConsumerCannotCancelAnother() async throws {
+        let dataset = try Self.dataset()
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, view: dataset.view(), spec: Self.spec(city: nil, district: nil), analysisWorker: worker)
+        let first = Task { try await viewer.countNulls(0) }
+        try await Self.queued(on: worker)
+        let other = Task { try await viewer.countNulls(0) }
+        first.cancel()
+        worker.isSuspended = false
+        await Self.expectCancelled(first)
+        #expect(try await other.value == 0)
+
+        worker.isSuspended = true
+        let old = Task { try await viewer.filterChoices(1) }
+        try await Self.queued(on: worker)
+        _ = await viewer.apply(Self.spec(city: "sh", district: nil))
+        worker.isSuspended = false
+        await Self.expectCancelled(old)
+        #expect(try await viewer.filterChoices(1).values?.map(\.label) == ["pudong", "xuhui"])
     }
 
     @Test func closingSupersedesPendingQueries() async throws {
