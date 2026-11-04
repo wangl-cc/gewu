@@ -25,7 +25,7 @@ use parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 use rand_distr::{Distribution, Exp, LogNormal, Normal, Poisson, Zipf};
 
 const LABELS: [&str; 8] = [

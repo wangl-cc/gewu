@@ -1,6 +1,6 @@
 //! Bounded Find scans over representative dense, sparse and fallback inputs.
 
-use std::sync::Arc;
+use std::{hint::black_box, sync::Arc};
 
 use arrow::{
     array::{
@@ -10,7 +10,7 @@ use arrow::{
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Int32Type},
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use gewu_core::{Cancellation, Filter, QuerySpec};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 

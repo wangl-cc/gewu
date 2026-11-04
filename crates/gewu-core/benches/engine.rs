@@ -7,9 +7,9 @@
 //! include one-time work such as building a column's value index; "hot"
 //! ones reuse a document where that work is already cached.
 
-use std::{path::PathBuf, time::Duration};
+use std::{hint::black_box, path::PathBuf, time::Duration};
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use gewu_core::{Cancellation, Filter, QuerySpec};
 
 fn bench_file() -> PathBuf {
