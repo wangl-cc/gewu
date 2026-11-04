@@ -36,8 +36,11 @@ pub(super) fn read(file: File) -> Result<LoadedFile, crate::FileError> {
             .map(|kv| (kv.key.clone(), kv.value.clone().unwrap_or_default()))
             .collect(),
     };
+    let batch_size = usize::try_from(meta.file_metadata().num_rows())
+        .unwrap_or(usize::MAX)
+        .max(1);
     let schema = builder.schema().clone();
-    let reader = builder.with_batch_size(64 * 1024).build()?;
+    let reader = builder.with_batch_size(batch_size).build()?;
     Ok(LoadedFile {
         batch: collect_batches(&schema, reader)?,
         metadata,
