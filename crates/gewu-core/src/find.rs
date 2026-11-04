@@ -4,14 +4,17 @@
 //! retain bounded cursors, while borrowed row selections and predicate scratch
 //! are reused across bounded display-row batches.
 
+mod error;
+
 use std::{ops::Range, sync::Arc};
 
 use arrow::array::ArrayRef;
+pub use error::FindError;
 use regex::RegexBuilder;
 
-use crate::{
-    column::predicate::compile_find, execution::predicate::Predicate, Cancellation, Error, Result,
-};
+use crate::{column::predicate::compile_find, execution::predicate::Predicate, Cancellation};
+
+type Result<T> = std::result::Result<T, FindError>;
 
 /// Maximum number of cell cursors returned by one directional Find request.
 pub const MAX_FIND_PAGE_SIZE: u32 = 256;
@@ -66,14 +69,12 @@ impl Find {
     ) -> Result<Self> {
         let query = query.trim().to_owned();
         if query.is_empty() {
-            return Err(Error::InvalidArgument("find query cannot be empty".into()));
+            return Err(crate::FindError::EmptyQuery);
         }
         let matcher = RegexBuilder::new(&regex::escape(&query))
             .case_insensitive(true)
             .build()
-            .map_err(|error| {
-                Error::InvalidArgument(format!("cannot compile text search: {error}"))
-            })?;
+            .map_err(|source| crate::FindError::QueryCompilationFailed { source })?;
         let token = Cancellation::default();
         Ok(Self {
             columns,
@@ -121,9 +122,11 @@ impl Find {
         let token = self.token.combined_with(operation);
         token.check()?;
         if !(1..=MAX_FIND_HIGHLIGHT_ROWS).contains(&count) {
-            return Err(Error::InvalidArgument(format!(
-                "find highlight rows must be between 1 and {MAX_FIND_HIGHLIGHT_ROWS}"
-            )));
+            return Err(crate::FindError::InvalidHighlightRows {
+                value: count,
+                min: 1,
+                max: MAX_FIND_HIGHLIGHT_ROWS,
+            });
         }
         let predicates = self.predicates()?;
         let len = self.rows.len() as u64;
@@ -224,7 +227,9 @@ impl Find {
     fn predicates(&self) -> Result<Vec<Option<Predicate<'_>>>> {
         self.columns
             .iter()
-            .map(|(_, array)| compile_find(array, &self.query, Some(&self.matcher)))
+            .map(|(_, array)| {
+                compile_find(array, &self.query, Some(&self.matcher)).map_err(FindError::from)
+            })
             .collect()
     }
 
@@ -259,7 +264,7 @@ impl Find {
                 scratch.matched[row * n_columns + column] = hit;
             }
         }
-        token.check()
+        Ok(token.check()?)
     }
 
     fn start_position(
@@ -274,20 +279,20 @@ impl Find {
                 Direction::Backward => self.rows.len() * n_columns - 1,
             }));
         };
-        let row = usize::try_from(cursor.display_row).map_err(|_| {
-            Error::InvalidArgument("find cursor row is outside the captured view".into())
-        })?;
+        let invalid_row = || crate::FindError::InvalidCursorRow {
+            row: cursor.display_row,
+            row_count: self.rows.len() as u64,
+        };
+        let row = usize::try_from(cursor.display_row).map_err(|_| invalid_row())?;
         let column = self
             .columns
             .iter()
             .position(|(column, _)| *column == cursor.column)
-            .ok_or_else(|| {
-                Error::InvalidArgument("find cursor column is outside the captured scope".into())
+            .ok_or_else(|| crate::FindError::InvalidCursorColumn {
+                column: cursor.column,
             })?;
         if row >= self.rows.len() {
-            return Err(Error::InvalidArgument(
-                "find cursor row is outside the captured view".into(),
-            ));
+            return Err(invalid_row());
         }
         let position = row * n_columns + column;
         Ok(match direction {
@@ -308,9 +313,11 @@ fn check_page_limit(limit: u32) -> Result<()> {
     if (1..=MAX_FIND_PAGE_SIZE).contains(&limit) {
         Ok(())
     } else {
-        Err(Error::InvalidArgument(format!(
-            "find page size must be between 1 and {MAX_FIND_PAGE_SIZE}"
-        )))
+        Err(crate::FindError::InvalidPageSize {
+            value: limit,
+            min: 1,
+            max: MAX_FIND_PAGE_SIZE,
+        })
     }
 }
 
@@ -344,7 +351,7 @@ mod tests {
             started.send(()).unwrap();
             resumed.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
             let result = cancel.check();
-            *inner_observed.lock().unwrap() = matches!(result, Err(Error::Cancelled));
+            *inner_observed.lock().unwrap() = matches!(result, Err(crate::CancellationError));
             result
         })))];
         std::thread::scope(|scope| {
@@ -357,7 +364,10 @@ mod tests {
                 operation.cancel();
             }
             resume.send(()).unwrap();
-            assert!(matches!(worker.join().unwrap(), Err(Error::Cancelled)));
+            assert!(matches!(
+                worker.join().unwrap(),
+                Err(FindError::Cancelled(_))
+            ));
         });
         assert!(
             *observed.lock().unwrap(),

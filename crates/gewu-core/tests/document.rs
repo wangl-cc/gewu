@@ -232,7 +232,7 @@ fn range_filter_rejects_text_columns() {
             &QuerySpec::single(1, Filter::range(Some(("0").to_owned()), None, false)),
             &Cancellation::default()
         ),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Filter(_))
     ));
     std::fs::remove_file(path).ok();
 }
@@ -418,7 +418,7 @@ fn contains_filter_is_for_text_only() {
             )
             .err()
             .unwrap();
-        assert!(matches!(err, Error::InvalidArgument(_)), "{err}");
+        assert!(matches!(err, Error::Filter(_)), "{err}");
     }
     assert_eq!(names(&doc.view()), names(&before));
     std::fs::remove_file(path).ok();

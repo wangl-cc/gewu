@@ -74,7 +74,9 @@ Scatter analysis accepts `x_scale` and `y_scale` with independent `AxisScale::Li
 
 `OpenOptions` supplies an explicit format, header policy (`has_header`) and XLSX worksheet name (`sheet`). The delimited adapter uses `arrow-csv` for decoding and writing, with the `csv` crate for the integer-precision check. XLSX uses Calamine for reading and `rust_xlsxwriter` for writing.
 
-`xlsx_sheet_names(path)` lists worksheets in workbook order without decoding their cells, including hidden and empty sheets but excluding chart sheets. This allows choosing a valid sheet even if another contains error cells. It still reads workbook metadata, styles and shared strings and requires background I/O. Listing retains no workbook snapshot; a subsequent open reads the file again. Without the `xlsx` feature it returns `Unsupported`.
+Errors belong to the module that owns the failed operation: file decoding uses `FileError`, export uses `ExportError`, filters use `FilterError`, and analysis kernels use `AnalysisError`. Scalar bounds and sorting have their own errors for shared lower-level operations. Public Dataset/View APIs aggregate these through `Error`, normalizing cancellation, I/O and internal failures across module boundaries. File adapters wrap Arrow and codec sources with the format and Decode/Encode operation, so the same external failure does not change category when its internal library path changes.
+
+`xlsx_sheet_names(path)` lists worksheets in workbook order without decoding their cells, including hidden and empty sheets but excluding chart sheets. This allows choosing a valid sheet even if another contains error cells. It still reads workbook metadata, styles and shared strings and requires background I/O. Listing retains no workbook snapshot; a subsequent open reads the file again. Without the `xlsx` feature it returns `FileError::FormatDisabled`.
 
 ### Cargo features
 
@@ -92,7 +94,7 @@ For an embedded core with only delimited-text support, use a dependency such as 
 gewu-core = { path = "crates/gewu-core", default-features = false, features = ["csv"] }
 ```
 
-`FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
+`FileType` variants remain available in every build; disabled formats return `FileError::FormatDisabled`. The app uses the default codec set.
 
 ## Type projections
 
@@ -128,6 +130,7 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [stats/histogram/](src/stats/histogram) | Linear/logarithmic binning, range projections and bin tests. |
 | [stats/numeric/](src/stats/numeric), [stats/lengths.rs](src/stats/lengths.rs), [stats/values.rs](src/stats/values.rs) | Analysis kernels and their result records. |
 | [file/](src/file) | Codecs, export progress and destination commit. |
+| [error.rs](src/error.rs) and module `error.rs` files | Public error aggregation and module-owned failure semantics. |
 | [cancellation.rs](src/cancellation.rs) | Terminal cancellation signals and composed request scopes. |
 
 ## Benchmarks

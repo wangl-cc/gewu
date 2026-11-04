@@ -2,11 +2,13 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
-use super::scalar::{decimal::Endpoint, float, integer, temporal};
+use super::{
+    scalar::{decimal::Endpoint, float, integer, temporal},
+    Result,
+};
 use crate::{
     execution::predicate::Predicate,
     scalar::{bound::invalid_type, Bound},
-    Error, Result,
 };
 
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -44,16 +46,17 @@ pub(crate) fn compile_range<'a>(
     let data_type = array.data_type();
     for bound in [min, max].into_iter().flatten() {
         if bound.data_type() != data_type {
-            return Err(Error::InvalidArgument(format!(
-                "{} bound cannot filter {data_type}",
-                bound.data_type()
-            )));
+            return Err(crate::FilterError::RangeTypeMismatch {
+                expected: data_type.clone(),
+                actual: bound.data_type().clone(),
+            });
         }
     }
-    if min.zip(max).is_some_and(|(lo, hi)| lo.compare(hi).is_gt()) {
-        return Err(Error::InvalidArgument(
-            "minimum must not exceed maximum".into(),
-        ));
+    if let Some((lo, hi)) = min.zip(max).filter(|(lo, hi)| lo.compare(hi).is_gt()) {
+        return Err(crate::FilterError::ReversedRange {
+            min: lo.display().into(),
+            max: hi.display().into(),
+        });
     }
     if data_type.is_floating() {
         let lower = min.map_or(f64::NEG_INFINITY, |bound| bound.float_lower());
@@ -73,7 +76,7 @@ pub(crate) fn compile_range<'a>(
         Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) | Duration(_) => {
             temporal::bind(array, lower, upper)
         }
-        _ => return Err(invalid_type(data_type)),
+        _ => return Err(invalid_type(data_type).into()),
     })
 }
 

@@ -5,7 +5,7 @@
 //! filtering never move data; they only produce a new list of row numbers.
 
 mod cancellation;
-pub use cancellation::Cancellation;
+pub use cancellation::{Cancellation, CancellationError};
 mod col_view;
 mod column;
 mod dataset;
@@ -20,18 +20,24 @@ mod stats;
 mod types;
 mod view;
 
-pub use column::{ColumnCapabilities, ColumnInfo, FilterChoices, ValueCategory, ValueChoice};
-pub use dataset::{Dataset, DatasetInfo};
-pub use error::{Error, Result};
-pub use file::{
-    xlsx_sheet_names, Export, ExportOptions, ExportProgress, FileMetadata, FileType, OpenOptions,
-    ParquetCompression,
+pub use column::{
+    ColumnCapabilities, ColumnError, ColumnInfo, ColumnOperation, FilterChoices, FilterError,
+    FilterKind, ValueCategory, ValueChoice, ValueParseError,
 };
-pub use find::{CellMatch, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE};
-pub use query::{ColSort, ColSpec, Filter, FilterCondition, QuerySpec, TextMatch};
+pub use dataset::{Dataset, DatasetInfo};
+pub use error::{Error, InternalError, IoError, IoOperation, Result};
+pub use file::{
+    xlsx_sheet_names, CodecError, Export, ExportError, ExportOptions, ExportProgress, FileError,
+    FileMetadata, FileOperation, FileType, OpenOptions, ParquetCompression,
+};
+pub use find::{
+    CellMatch, Find, FindError, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+};
+pub use query::{ColSort, ColSpec, Filter, FilterCondition, QueryError, QuerySpec, TextMatch};
+pub use scalar::BoundError;
 pub use stats::{
-    AnalysisCapabilities, AnalysisField, AxisScale, Histogram, LengthSummary, LengthUnit,
-    NumericStatistics, RangeBound, RangeBounds, RangeHistogram, ScatterAxisKind, ScatterPoint,
-    ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    AnalysisCapabilities, AnalysisError, AnalysisField, AnalysisOperation, AxisScale, Histogram,
+    LengthSummary, LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram,
+    ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
 pub use view::{RowBlock, View};

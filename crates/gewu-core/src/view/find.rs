@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::View;
-use crate::{Error, Find, Result};
+use crate::{Find, Result};
 
 impl View {
     /// Capture a view, query and ordered visible-column scope for cell Find.
@@ -15,13 +15,16 @@ impl View {
             .iter()
             .map(|&column| {
                 if !seen.insert(column) {
-                    return Err(Error::InvalidArgument("duplicate find column".into()));
+                    return Err(crate::ColumnError::Duplicate {
+                        operation: crate::ColumnOperation::Find,
+                        column,
+                    });
                 }
                 self.column_array(column)
                     .cloned()
                     .map(|array| (column, array))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Find::new(columns, self.rows.clone(), query.to_owned())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(Find::new(columns, self.rows.clone(), query.to_owned())?)
     }
 }

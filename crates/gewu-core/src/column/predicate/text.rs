@@ -8,10 +8,8 @@ use arrow::{
 };
 use regex::RegexBuilder;
 
-use crate::{
-    execution::{predicate::Predicate, selection::RowSelection},
-    Error, Result,
-};
+use super::Result;
+use crate::execution::{predicate::Predicate, selection::RowSelection};
 
 /// Borrow a string cell without decoding dictionaries or formatting a column.
 /// Both a null dictionary key and a key naming a null value yield `None`.
@@ -30,10 +28,10 @@ pub(crate) fn accessor(array: &ArrayRef) -> Result<StringAccessor<'_>> {
                 }) as StringAccessor<'_>)
             }, _ => unreachable!("dictionary type checked above"))
         }
-        _ => Err(Error::InvalidArgument(format!(
-            "{} is not a string column",
-            array.data_type()
-        ))),
+        _ => Err(crate::FilterError::UnsupportedType {
+            condition: crate::FilterKind::Text,
+            data_type: array.data_type().clone(),
+        }),
     }
 }
 
@@ -107,10 +105,10 @@ pub(super) fn contains<'a>(
         array.data_type(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
-        return Err(Error::InvalidArgument(format!(
-            "Contains requires text values, got {}",
-            array.data_type()
-        )));
+        return Err(crate::FilterError::UnsupportedType {
+            condition: crate::FilterKind::Text,
+            data_type: array.data_type().clone(),
+        });
     }
     if case_sensitive {
         let text = text.to_owned();
@@ -123,9 +121,7 @@ pub(super) fn contains<'a>(
             RegexBuilder::new(&regex::escape(text))
                 .case_insensitive(true)
                 .build()
-                .map_err(|error| {
-                    Error::InvalidArgument(format!("cannot compile text search: {error}"))
-                })?,
+                .map_err(|source| crate::FilterError::PatternCompilationFailed { source })?,
         ),
     };
     Ok(strings(array, move |value| matcher.is_match(value)))
@@ -147,10 +143,10 @@ pub(super) fn text_match<'a>(
                 array.data_type(),
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             ) {
-                return Err(Error::InvalidArgument(format!(
-                    "text matching requires text values, got {}",
-                    array.data_type()
-                )));
+                return Err(crate::FilterError::UnsupportedType {
+                    condition: crate::FilterKind::Text,
+                    data_type: array.data_type().clone(),
+                });
             }
             let text = text.to_owned();
             if case_sensitive {
@@ -159,9 +155,7 @@ pub(super) fn text_match<'a>(
             let folded = RegexBuilder::new(&format!(r"\A(?:{})\z", regex::escape(&text)))
                 .case_insensitive(true)
                 .build()
-                .map_err(|error| {
-                    Error::InvalidArgument(format!("cannot compile text match: {error}"))
-                })?;
+                .map_err(|source| crate::FilterError::PatternCompilationFailed { source })?;
             let ascii = text.is_ascii();
             // ASCII folding only applies when both sides are ASCII: under Unicode
             // folding an ASCII input still matches characters such as the Kelvin sign.

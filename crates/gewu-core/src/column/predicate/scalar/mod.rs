@@ -10,9 +10,9 @@ use arrow::array::{Array, ArrayRef, AsArray};
 
 use super::range::compile_range;
 use crate::{
+    column::predicate::Result,
     execution::{predicate::Predicate, selection::RowSelection},
     scalar::Bound,
-    Error, Result,
 };
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
@@ -34,10 +34,11 @@ pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predi
             return temporal::search(array, text);
         }
         _ => {
-            return Err(Error::InvalidArgument(format!(
-                "{} is not a scalar query type",
+            return Err(crate::InternalError::Invariant(format!(
+                "{} reached scalar Find dispatch without scalar semantics",
                 array.data_type()
-            )));
+            ))
+            .into());
         }
     })
 }
@@ -47,7 +48,11 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
     match array.data_type() {
         arrow::datatypes::DataType::Boolean => boolean(text)
             .map(|target| bool_predicate(array, target))
-            .ok_or_else(|| Error::InvalidArgument(format!("cannot read {text:?} as a boolean"))),
+            .ok_or_else(|| crate::FilterError::InvalidValue {
+                value: text.into(),
+                expected: arrow::datatypes::DataType::Boolean,
+                reason: crate::ValueParseError::InvalidSyntax,
+            }),
         arrow::datatypes::DataType::Float16
         | arrow::datatypes::DataType::Float32
         | arrow::datatypes::DataType::Float64 => float::equals(array, text),

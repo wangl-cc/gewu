@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
+use arrow::array::{ArrayRef, BooleanArray, Date32Array, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
     Cancellation, CellMatch, Error, Filter, QuerySpec, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
@@ -21,6 +21,20 @@ fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu
 fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::View>) {
     let (file, dataset) = dataset(columns);
     (file, dataset.view())
+}
+
+#[test]
+fn arbitrary_find_text_is_not_a_typed_input_error() {
+    let (_file, doc) = document(vec![
+        ("number", Arc::new(Int32Array::from(vec![1, 2]))),
+        ("flag", Arc::new(BooleanArray::from(vec![true, false]))),
+        ("date", Arc::new(Date32Array::from(vec![0, 1]))),
+    ]);
+    let find = doc.find("not a typed value", &[0, 1, 2]).unwrap();
+    assert!(find
+        .next(None, 10, &Cancellation::default())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -87,7 +101,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     for limit in [0, MAX_FIND_PAGE_SIZE + 1] {
         assert!(matches!(
             find.next(None, limit, &Cancellation::default()),
-            Err(Error::InvalidArgument(_))
+            Err(gewu_core::FindError::InvalidPageSize { .. })
         ));
     }
 }
@@ -147,18 +161,18 @@ fn find_rejects_invalid_scopes_queries_and_highlight_sizes() {
     for columns in [vec![0, 0], vec![0, 1]] {
         assert!(matches!(
             doc.find("a", &columns),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Column(_) | Error::Find(_))
         ));
     }
     assert!(matches!(
         doc.find("   ", &[0]),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_) | Error::Find(_))
     ));
     let find = doc.find("a", &[0]).unwrap();
     for count in [0, MAX_FIND_HIGHLIGHT_ROWS + 1] {
         assert!(matches!(
             find.highlight(0, count, &Cancellation::default()),
-            Err(Error::InvalidArgument(_))
+            Err(gewu_core::FindError::InvalidHighlightRows { .. })
         ));
     }
     assert_eq!(
@@ -237,11 +251,11 @@ fn cancelling_a_stale_snapshot_does_not_cancel_the_current_find() {
     stale.cancel();
     assert!(matches!(
         stale.next(None, 1, &Cancellation::default()),
-        Err(Error::Cancelled)
+        Err(gewu_core::FindError::Cancelled(_))
     ));
     assert!(matches!(
         stale.highlight(0, 1, &Cancellation::default()),
-        Err(Error::Cancelled)
+        Err(gewu_core::FindError::Cancelled(_))
     ));
     assert_eq!(current.next(None, 1, &Cancellation::default()).unwrap(), [
         CellMatch {
@@ -267,7 +281,7 @@ fn obsolete_operation_cancellation_leaves_new_navigation_and_highlights_usable()
     obsolete.cancel();
     assert!(matches!(
         find.next(None, 1, &obsolete),
-        Err(Error::Cancelled)
+        Err(gewu_core::FindError::Cancelled(_))
     ));
     let navigation = Cancellation::default();
     assert_eq!(find.next(None, 1, &navigation).unwrap(), [CellMatch {

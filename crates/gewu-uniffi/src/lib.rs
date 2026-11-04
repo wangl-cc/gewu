@@ -27,7 +27,10 @@ pub use analysis::{
 pub use cancellation::Cancellation;
 pub use column::{ColumnCapabilities, ColumnInfo, ValueCategory};
 pub use dataset::{DatasetInfo, GewuDataset};
-pub use error::GewuError;
+pub use error::{
+    AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
+    FindErrorKind, GewuError, IoOperation, LimitErrorKind, ValueParseError,
+};
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
 pub use file::{xlsx_sheet_names, FileMetadata, FileType, KeyValue};
 pub use filter::{

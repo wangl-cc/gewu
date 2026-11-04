@@ -62,7 +62,14 @@ fn typed_filters_compile_and_execute_across_ffi() {
             }),
             crate::Cancellation::new()
         ),
-        Err(GewuError::InvalidArgument { .. })
+        Err(GewuError::Filter {
+            kind: crate::FilterErrorKind::InvalidValue {
+                value,
+                expected_type,
+                reason: crate::ValueParseError::InvalidSyntax,
+            },
+            ..
+        }) if value == "not a number" && expected_type == "Int64"
     ));
     let values = doc
         .view()
@@ -119,6 +126,10 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert_eq!(info.columns[1].display_type, "int64");
     assert!(info.columns[0].capabilities.text_match);
     assert!(info.columns[0].capabilities.exact);
+    assert!(matches!(
+        doc.view().analyze_statistics(0, crate::Cancellation::new()),
+        Err(GewuError::Internal { .. })
+    ));
     let equals = |case_sensitive| {
         doc.query(
             query(0, Filter {
@@ -200,7 +211,7 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     assert!(matches!(
         doc.view()
             .filter_distribution(0, 0, AxisScale::Linear, crate::Cancellation::new()),
-        Err(GewuError::InvalidArgument { .. })
+        Err(GewuError::Internal { .. })
     ));
     let distribution = doc
         .view()
@@ -253,11 +264,11 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
     assert!(matches!(info.metadata, FileMetadata::Delimited));
     assert!(matches!(
         crate::xlsx_sheet_names(source.to_str().unwrap().to_owned()),
-        Err(GewuError::InvalidArgument { .. })
+        Err(GewuError::Internal { .. })
     ));
     assert!(matches!(
         GewuDataset::open_sheet(source.to_str().unwrap().to_owned(), "Sheet1".into()),
-        Err(GewuError::InvalidArgument { .. })
+        Err(GewuError::Internal { .. })
     ));
 
     for (format, extension) in [(FileType::Xlsx, "xlsx"), (FileType::Parquet, "parquet")] {
@@ -302,7 +313,10 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             assert_eq!(reopened.view().row_count(), 2);
             assert!(matches!(
                 GewuDataset::open_sheet(path, "absent".into()),
-                Err(GewuError::InvalidArgument { .. })
+                Err(GewuError::File {
+                    kind: crate::FileErrorKind::SheetNotFound { .. },
+                    ..
+                })
             ));
         } else {
             let FileMetadata::Parquet {
@@ -318,5 +332,22 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
         }
         std::fs::remove_file(destination).unwrap();
     }
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn malformed_csv_is_a_format_error_across_ffi() {
+    let source =
+        std::env::temp_dir().join(format!("gewu-uniffi-invalid-{}.csv", std::process::id()));
+    std::fs::write(&source, "id,label\n1\n").unwrap();
+    assert!(matches!(
+        GewuDataset::open(source.to_str().unwrap().to_owned()),
+        Err(GewuError::File {
+            kind: crate::FileErrorKind::Decode {
+                format: FileType::Csv
+            },
+            ..
+        })
+    ));
     std::fs::remove_file(source).unwrap();
 }

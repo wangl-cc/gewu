@@ -2,7 +2,7 @@
 
 use arrow::{array::Array, datatypes::DataType};
 
-use crate::{col_view::ColView, types, types::display_type, Cancellation, Error, Result};
+use crate::{col_view::ColView, stats::Result, types, types::display_type, Cancellation};
 
 pub(crate) fn count_nulls(view: ColView<'_>, cancellation: &Cancellation) -> Result<u64> {
     let null_count = match view.array().logical_nulls() {
@@ -70,9 +70,10 @@ fn supports_structure(data_type: &DataType) -> bool {
 pub(crate) fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
     let field = |name: &str, data_type: &DataType, nullable: bool| -> Result<AnalysisField> {
         if !types::is_describable(data_type) {
-            return Err(Error::Unsupported(format!(
-                "unsupported nested type {data_type}"
-            )));
+            return Err(crate::AnalysisError::UnsupportedDataType {
+                operation: crate::AnalysisOperation::Structure,
+                data_type: data_type.clone(),
+            });
         }
         Ok(AnalysisField {
             name: name.to_owned(),
@@ -96,9 +97,10 @@ pub(crate) fn structure(data_type: &DataType) -> Result<Vec<AnalysisField>> {
             field("Key", key, false)?,
             field("Value", value, true)?,
         ]),
-        _ => Err(Error::InvalidArgument(format!(
-            "{data_type} has no field structure"
-        ))),
+        _ => Err(crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Structure,
+            data_type: data_type.clone(),
+        }),
     }
 }
 
@@ -113,7 +115,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AxisScale, Cancellation, Dataset, View};
+    use crate::{AxisScale, Cancellation, Dataset, Error, View};
 
     fn dataset(array: &ArrayRef) -> Arc<Dataset> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
@@ -188,19 +190,19 @@ mod tests {
         let cancel = Cancellation::default();
         assert!(matches!(
             text.analyze_statistics(0, &cancel),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert!(matches!(
             number.analyze_lengths(0, 10, &cancel),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert!(matches!(
             binary.analyze_values(0, &cancel),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert!(matches!(
             dataset(&array).column_structure(0),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert_eq!(text.count_nulls(0, &cancel).unwrap(), 0);
         assert_eq!(
@@ -220,11 +222,11 @@ mod tests {
         let cancel = Cancellation::default();
         assert!(matches!(
             numbers.analyze_distribution(0, 0, AxisScale::Linear, &cancel),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert!(matches!(
             text.analyze_lengths(0, 0, &cancel),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         for bins in [10, 20] {
             for histogram in [
@@ -246,11 +248,11 @@ mod tests {
         let cancellation = Cancellation::default();
         assert!(matches!(
             view(&text).analyze_distribution(0, 2, AxisScale::Linear, &cancellation),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert!(matches!(
             view(&dates).analyze_distribution(0, 2, AxisScale::Log10, &cancellation),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Analysis(_))
         ));
         assert_eq!(
             view(&dates)

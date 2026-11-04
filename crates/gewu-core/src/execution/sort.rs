@@ -14,7 +14,17 @@ use arrow::{
     compute::{sort_to_indices, take, SortOptions},
 };
 
-use crate::Result;
+use crate::CancellationError;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SortError {
+    #[error(transparent)]
+    Cancelled(#[from] CancellationError),
+    #[error(transparent)]
+    Arrow(#[from] arrow::error::ArrowError),
+}
+
+type Result<T> = std::result::Result<T, SortError>;
 
 const RUN: usize = 4096;
 const NATIVE_RUN: usize = 65536;
@@ -24,7 +34,7 @@ pub(crate) fn sort_rows(
     mut rows: Vec<u32>,
     comparators: &[DynComparator],
     primitive: Option<(&ArrayRef, SortOptions)>,
-    mut check: impl FnMut() -> Result<()>,
+    mut check: impl FnMut() -> std::result::Result<(), CancellationError>,
 ) -> Result<Vec<u32>> {
     check()?;
     let compare = |left: &u32, right: &u32| {
@@ -148,7 +158,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::Error;
 
     fn agrees_with_arrow(rows: Vec<u32>, columns: &[(&ArrayRef, bool)]) {
         let selected = UInt32Array::from(rows.clone());
@@ -322,7 +331,7 @@ mod tests {
                     token.check()
                 },
             );
-            assert!(matches!(result, Err(Error::Cancelled)));
+            assert!(matches!(result, Err(SortError::Cancelled(_))));
             assert_eq!(checks, cancel_at);
         }
     }
@@ -361,7 +370,7 @@ mod tests {
             }
             token.check()
         });
-        assert!(matches!(result, Err(Error::Cancelled)));
+        assert!(matches!(result, Err(SortError::Cancelled(_))));
         assert_eq!(checkpoints, first_merge_check + 1);
     }
 }

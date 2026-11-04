@@ -11,7 +11,9 @@
 use std::ops::Range;
 
 use super::selection::RowSelection;
-use crate::{Cancellation, Result};
+use crate::{Cancellation, CancellationError};
+
+type Result<T> = std::result::Result<T, CancellationError>;
 
 pub(crate) const CHUNK: usize = 8 * 1024;
 

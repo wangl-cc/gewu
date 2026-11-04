@@ -49,7 +49,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     );
     assert!(matches!(
         doc.query(&invalid, &gewu_core::Cancellation::default()),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Filter(gewu_core::FilterError::ReversedRange { .. }))
     ));
     assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
 }

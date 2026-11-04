@@ -15,23 +15,25 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::{Cancellation, Error, Result};
+use crate::{Cancellation, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
+mod error;
 pub mod export;
 #[cfg(feature = "parquet")]
 mod parquet;
 #[cfg(feature = "xlsx")]
 mod xlsx;
 
+pub use error::{CodecError, ExportError, FileError, FileOperation};
 pub use export::{Export, ExportProgress};
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 pub(crate) const CHUNK_ROWS: usize = 8 * 1024;
 
 /// A recognized file format. Variants remain available when a codec feature
-/// is disabled; attempting to use that codec returns an Unsupported error.
+/// is disabled; attempting to use that codec returns `FileError::FormatDisabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Parquet,
@@ -49,17 +51,15 @@ impl FileType {
         }
     }
 
-    pub(crate) fn require_enabled(self) -> Result<()> {
+    pub(crate) fn require_enabled(self) -> Result<(), FileError> {
         if self.is_enabled() {
             Ok(())
         } else {
-            Err(Error::Unsupported(format!(
-                "{self} support is disabled in this build"
-            )))
+            Err(crate::FileError::FormatDisabled { format: self })
         }
     }
 
-    fn detect(path: &Path, file: &mut File) -> Result<Self> {
+    fn detect(path: &Path, file: &mut File) -> Result<Self, FileError> {
         // A CSV header can itself start with PAR1, so a recognized extension
         // takes precedence over the extensionless Parquet fallback.
         match path
@@ -75,15 +75,15 @@ impl FileType {
             _ => {}
         }
         let mut magic = [0; 4];
-        let n = file.read(&mut magic)?;
-        file.rewind()?;
+        let n = file
+            .read(&mut magic)
+            .map_err(|error| crate::IoError::new(crate::IoOperation::Read, path, error))?;
+        file.rewind()
+            .map_err(|error| crate::IoError::new(crate::IoOperation::Seek, path, error))?;
         if n == 4 && &magic == b"PAR1" {
             return Ok(Self::Parquet);
         }
-        Err(Error::Unsupported(
-            "expected a Parquet, CSV, TSV or XLSX file; specify a format for other extensions"
-                .into(),
-        ))
+        Err(crate::FileError::UnknownFormat)
     }
 }
 
@@ -168,45 +168,56 @@ pub(crate) struct LoadedFile {
 pub fn xlsx_sheet_names(path: impl AsRef<Path>) -> Result<Vec<String>> {
     FileType::Xlsx.require_enabled()?;
     let path = path.as_ref();
-    let mut file = File::open(path)?;
-    if FileType::detect(path, &mut file)? != FileType::Xlsx {
-        return Err(Error::InvalidArgument(
-            "worksheet listing requires XLSX".into(),
-        ));
+    let mut file = File::open(path)
+        .map_err(|error| crate::IoError::new(crate::IoOperation::Open, path, error))?;
+    let actual = FileType::detect(path, &mut file)?;
+    if actual != FileType::Xlsx {
+        return Err(crate::FileError::UnexpectedFormat {
+            operation: crate::FileOperation::SheetListing,
+            expected: FileType::Xlsx,
+            actual,
+        }
+        .into());
     }
     #[cfg(feature = "xlsx")]
-    return xlsx::sheet_names(file);
+    return Ok(xlsx::sheet_names(file).map_err(|error| FileError::decode(FileType::Xlsx, error))?);
     #[cfg(not(feature = "xlsx"))]
     unreachable!("XLSX availability was checked above")
 }
 
-pub(crate) fn read(path: &Path, options: &OpenOptions) -> Result<(FileType, LoadedFile)> {
-    let mut file = File::open(path)?;
+pub(crate) fn read(
+    path: &Path,
+    options: &OpenOptions,
+) -> Result<(FileType, LoadedFile), FileError> {
+    let mut file = File::open(path)
+        .map_err(|error| crate::IoError::new(crate::IoOperation::Open, path, error))?;
     let format = match options.format {
         Some(format) => format,
         None => FileType::detect(path, &mut file)?,
     };
     format.require_enabled()?;
     if options.sheet.is_some() && format != FileType::Xlsx {
-        return Err(Error::InvalidArgument(
-            "worksheet selection requires XLSX".into(),
-        ));
+        return Err(crate::FileError::UnexpectedFormat {
+            operation: crate::FileOperation::SheetSelection,
+            expected: FileType::Xlsx,
+            actual: format,
+        });
     }
     let loaded = match format {
         #[cfg(feature = "parquet")]
         FileType::Parquet => parquet::read(file),
         #[cfg(feature = "csv")]
-        FileType::Csv => delimited::read(file, b',', options),
+        FileType::Csv => delimited::read(file, path, b',', options),
         #[cfg(feature = "csv")]
-        FileType::Tsv => delimited::read(file, b'\t', options),
+        FileType::Tsv => delimited::read(file, path, b'\t', options),
         #[cfg(feature = "xlsx")]
         FileType::Xlsx => xlsx::read(file, options),
         #[allow(unreachable_patterns)]
-        _ => Err(Error::Unsupported(format!(
-            "{format} support is disabled in this build"
-        ))),
+        _ => Err(crate::FileError::FormatDisabled { format }),
     };
-    loaded.map(|loaded| (format, loaded))
+    loaded
+        .map_err(|error| FileError::decode(format, error))
+        .map(|loaded| (format, loaded))
 }
 
 /// Shared table materialization for batch-oriented readers.
@@ -214,16 +225,17 @@ pub(crate) fn read(path: &Path, options: &OpenOptions) -> Result<(FileType, Load
 fn collect_batches(
     schema: &SchemaRef,
     batches: impl Iterator<Item = std::result::Result<RecordBatch, arrow::error::ArrowError>>,
-) -> Result<RecordBatch> {
+) -> Result<RecordBatch, FileError> {
     let mut kept = Vec::new();
     let mut rows = 0usize;
     for batch in batches {
         let batch = batch?;
-        rows = rows
-            .checked_add(batch.num_rows())
-            .ok_or_else(|| Error::Unsupported("too many rows".into()))?;
+        rows = rows.saturating_add(batch.num_rows());
         if rows > u32::MAX as usize {
-            return Err(Error::Unsupported(format!("more than {} rows", u32::MAX)));
+            return Err(crate::FileError::DatasetRows {
+                actual: rows as u64,
+                limit: u32::MAX as u64,
+            });
         }
         kept.push(batch);
     }
@@ -250,7 +262,7 @@ pub(crate) struct ExportData<'a> {
 impl ExportData<'_> {
     /// Borrow contiguous source rows; gather sorted/filtered rows only for the
     /// current bounded chunk. Neither codec needs a whole-column copy.
-    fn batch(self, rows: &[u32]) -> Result<RecordBatch> {
+    fn batch(self, rows: &[u32]) -> Result<RecordBatch, crate::InternalError> {
         let columns = if let Some(&first) = rows
             .first()
             .filter(|_| rows.windows(2).all(|pair| pair[1] == pair[0] + 1))
@@ -282,7 +294,7 @@ pub(crate) struct WriteProgress<'a> {
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 impl WriteProgress<'_> {
-    pub fn check(self) -> Result<()> {
+    pub fn check(self) -> Result<(), crate::CancellationError> {
         self.cancellation.check()
     }
 
@@ -297,9 +309,11 @@ pub(crate) fn write(
     options: &ExportOptions,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
-) -> Result<()> {
-    format.require_enabled()?;
-    match format {
+) -> Result<(), ExportError> {
+    if !format.is_enabled() {
+        return Err(ExportError::FormatDisabled { format });
+    }
+    let result = match format {
         #[cfg(feature = "parquet")]
         FileType::Parquet => parquet::write(file, options.parquet_compression, data, progress),
         #[cfg(feature = "csv")]
@@ -311,9 +325,8 @@ pub(crate) fn write(
         #[allow(unreachable_patterns)]
         _ => {
             let _ = (file, options, data, progress);
-            Err(Error::Unsupported(format!(
-                "{format} support is disabled in this build"
-            )))
+            Err(ExportError::FormatDisabled { format })
         }
-    }
+    };
+    result.map_err(|error| ExportError::encode(format, error))
 }

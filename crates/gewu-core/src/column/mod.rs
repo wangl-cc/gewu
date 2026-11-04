@@ -6,6 +6,7 @@
 //! - [`predicate`]: Single-column filter and Find predicate compilation
 
 pub(crate) mod dictionary;
+mod error;
 mod metadata;
 pub(crate) mod predicate;
 pub(crate) mod value_text;
@@ -17,9 +18,12 @@ use std::{
 
 use arrow::array::ArrayRef;
 pub(crate) use dictionary::Dictionary;
+pub use error::{ColumnError, ColumnOperation, FilterError, FilterKind, ValueParseError};
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{execution::predicate::Predicate, types, Cancellation, Filter, Result};
+use crate::{execution::predicate::Predicate, types, Cancellation, FileError, Filter};
+
+pub(crate) type Result<T> = std::result::Result<T, ColumnError>;
 
 /// Operations supported by a column's type. Value-list availability
 /// additionally depends on cardinality and is reported by `crate::FilterChoices`.
@@ -79,13 +83,16 @@ impl Drop for DictionaryBuild<'_> {
 impl Column {
     /// Build a column. Fails for Arrow types without Gewu semantics rather
     /// than exposing a column no operation can describe.
-    pub(crate) fn new(name: impl Into<String>, array: ArrayRef) -> Result<Self> {
+    pub(crate) fn new(
+        name: impl Into<String>,
+        array: ArrayRef,
+    ) -> std::result::Result<Self, FileError> {
         let name = name.into();
         if !types::is_describable(array.data_type()) {
-            return Err(crate::Error::Unsupported(format!(
-                "column {name:?} has unsupported type {}",
-                array.data_type()
-            )));
+            return Err(crate::FileError::UnsupportedColumnType {
+                column: name,
+                data_type: array.data_type().clone(),
+            });
         }
         let nullable = array.is_nullable();
         Ok(Self {
@@ -150,7 +157,7 @@ impl Column {
         &'a self,
         filter: &Filter,
         cancel: &Cancellation,
-    ) -> Result<Predicate<'a>> {
+    ) -> predicate::Result<Predicate<'a>> {
         predicate::compile_filter(self, filter, cancel)
     }
 }
@@ -167,7 +174,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{execution::predicate::CHUNK, Cancellation, Error, TextMatch};
+    use crate::{execution::predicate::CHUNK, Cancellation, TextMatch};
 
     fn col(array: ArrayRef) -> Column {
         Column::new("test", array).unwrap()
@@ -189,7 +196,7 @@ mod tests {
             let column = col(array);
             assert!(matches!(
                 column.dictionary(&Cancellation::after_checks(5)),
-                Err(Error::Cancelled)
+                Err(crate::ColumnError::Cancelled(_))
             ));
             assert!(
                 column.dictionary.get().is_none(),
@@ -208,7 +215,7 @@ mod tests {
         let builder = DictionaryBuild(&column);
         assert!(matches!(
             column.dictionary(&Cancellation::after_checks(3)),
-            Err(Error::Cancelled)
+            Err(crate::ColumnError::Cancelled(_))
         ));
         assert!(column.dictionary.get().is_none());
         drop(builder);
@@ -287,7 +294,7 @@ mod tests {
             assert!(
                 matches!(
                     Column::new("unsupported", array),
-                    Err(crate::Error::Unsupported(_))
+                    Err(crate::FileError::UnsupportedColumnType { .. })
                 ),
                 "{data_type}"
             );
@@ -313,7 +320,9 @@ mod tests {
                 &Filter::exact(vec!["1".into(), "invalid".into()], false, false),
                 &Cancellation::default()
             ),
-            Err(Error::InvalidArgument(_))
+            Err(crate::FilterError::Bound(
+                crate::BoundError::InvalidValue { .. }
+            ))
         ));
 
         let array: ArrayRef = Arc::new(
@@ -551,7 +560,7 @@ mod tests {
                                     &Filter::text(text.into(), mode, false, true),
                                     &Cancellation::default(),
                                 ),
-                                Err(Error::InvalidArgument(_))
+                                Err(crate::FilterError::UnsupportedType { .. })
                             ),
                             "{data_type}: {mode:?} {text:?}"
                         );
@@ -724,7 +733,7 @@ mod tests {
             let test = predicate::compile_find(&array, "2", None).unwrap().unwrap();
             assert!(matches!(
                 test.evaluate(0..1, &mut [false], &token),
-                Err(Error::Cancelled)
+                Err(crate::CancellationError)
             ));
         }
     }

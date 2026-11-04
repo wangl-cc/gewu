@@ -11,7 +11,7 @@ use parquet::{
 use super::{collect_batches, ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
 use crate::{FileMetadata, ParquetCompression, Result};
 
-pub(super) fn read(file: File) -> Result<LoadedFile> {
+pub(super) fn read(file: File) -> Result<LoadedFile, crate::FileError> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let meta = builder.metadata();
     let compression: BTreeSet<String> = meta
@@ -49,7 +49,7 @@ pub(super) fn write(
     compression: ParquetCompression,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
-) -> Result<()> {
+) -> Result<(), crate::ExportError> {
     let properties = WriterProperties::builder()
         .set_compression(match compression {
             ParquetCompression::Zstd => Compression::ZSTD(Default::default()),

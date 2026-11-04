@@ -1,6 +1,7 @@
 //! Analysis modules and their public result projections.
 
 pub(crate) mod analysis;
+mod error;
 mod histogram;
 mod lengths;
 mod median;
@@ -11,6 +12,8 @@ mod values;
 
 pub(crate) use analysis::{capabilities, count_nulls};
 pub use analysis::{AnalysisCapabilities, AnalysisField};
+pub(crate) use error::Result;
+pub use error::{AnalysisError, AnalysisOperation};
 pub(crate) use histogram::{build_scaled, counts_scaled, supports_histogram};
 pub use histogram::{Histogram, RangeBound, RangeBounds, RangeHistogram};
 pub(crate) use lengths::analyze as analyze_lengths;

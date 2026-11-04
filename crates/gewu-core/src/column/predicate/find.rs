@@ -3,8 +3,8 @@
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
-use super::{nested, scalar, text};
-use crate::{execution::predicate::Predicate, Result};
+use super::{nested, scalar, text, Result};
+use crate::execution::predicate::Predicate;
 
 pub(crate) fn compile<'a>(
     array: &'a ArrayRef,

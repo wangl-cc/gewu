@@ -11,7 +11,7 @@ use arrow::{
 };
 
 use super::AxisScale;
-use crate::{col_view::ColView, scalar::Bound, Cancellation, Error, Result};
+use crate::{col_view::ColView, scalar::Bound, stats::Result, Cancellation};
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -183,23 +183,21 @@ fn statistics(
     context.check()?;
     let histogram = supports_histogram(array.data_type());
     if !histogram {
-        return Err(Error::InvalidArgument(format!(
-            "{} does not support histograms",
-            array.data_type()
-        )));
+        return Err(crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Distribution,
+            data_type: array.data_type().clone(),
+        });
     }
     match build_bins(array, rows, bins, context)? {
         Domain::Bins(histogram) => return Ok(histogram),
         Domain::Empty => {}
         Domain::InfiniteOnly => {
-            return Err(Error::InvalidArgument(
-                "histogram needs at least one finite value".into(),
-            ));
+            return Err(crate::AnalysisError::NoFiniteValues);
         }
         Domain::Unsupported => {
-            return Err(Error::InvalidArgument(
-                "column has no representable histogram domain".into(),
-            ));
+            return Err(crate::AnalysisError::UnrepresentableDomain {
+                data_type: array.data_type().clone(),
+            });
         }
     }
     context.check()?;
@@ -225,7 +223,12 @@ fn build_bins<H: Output>(
 ) -> Result<Domain<H>> {
     context.check()?;
     if bins == 0 {
-        return Err(Error::InvalidArgument("bins must be at least 1".into()));
+        return Err(crate::AnalysisError::InvalidBinCount {
+            operation: crate::AnalysisOperation::Distribution,
+            value: bins,
+            min: 1,
+            max: u32::MAX,
+        });
     }
     let bins = bins as usize;
     match array.data_type() {
@@ -356,9 +359,9 @@ where
         .collect::<Result<Vec<_>>>()?;
     let bound = |value: i128| {
         if array.data_type().is_unsigned_integer() {
-            Bound::from_u64(array.data_type(), value as u64)
+            Ok(Bound::from_u64(array.data_type(), value as u64)?)
         } else {
-            Bound::from_i64(array.data_type(), value as i64)
+            Ok(Bound::from_i64(array.data_type(), value as i64)?)
         }
     };
     let mut lo = min as f64;
@@ -421,7 +424,7 @@ where
                 + i256::from_i128((remainder * i as i128 + n as i128 - 1) / n as i128))
         })
         .collect::<Result<Vec<_>>>()?;
-    let bound = |coefficient| Bound::from_decimal(array.data_type(), coefficient, scale);
+    let bound = |coefficient| Ok(Bound::from_decimal(array.data_type(), coefficient, scale)?);
     let (lower, upper) = (bound(min)?, bound(max)?);
     let (lo, hi) = (lower.axis_value(), upper.axis_value());
     let native_cuts = cuts
@@ -493,7 +496,7 @@ where
             }
         }
     }
-    let bound = |value| Bound::from_f64(array.data_type(), value);
+    let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let n = cuts.len() + 1;
     let mut histogram = count(array, rows, n, false, axis(min, max, n), context, |value| {
         let value: f64 = value.into();
@@ -608,7 +611,7 @@ mod tests {
             context.cancel();
             Some(0)
         });
-        assert!(matches!(result, Err(Error::Cancelled)));
+        assert!(matches!(result, Err(crate::AnalysisError::Cancelled(_))));
         assert!(
             visited.get() < array.len(),
             "cancellation must stop the scan"
@@ -618,7 +621,7 @@ mod tests {
         let all = Fixture::all(&array);
         assert!(matches!(
             counts(all.view(), 1, &context),
-            Err(Error::Cancelled)
+            Err(crate::AnalysisError::Cancelled(_))
         ));
         assert_eq!(
             counts(all.view(), 1, &Cancellation::default())
@@ -777,7 +780,7 @@ mod tests {
             let all = Fixture::all(&array);
             assert!(matches!(
                 counts(all.view(), 40, &Cancellation::default()),
-                Err(Error::InvalidArgument(_))
+                Err(crate::AnalysisError::NoFiniteValues)
             ));
 
             assert!(

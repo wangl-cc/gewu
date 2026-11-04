@@ -6,7 +6,7 @@ use arrow::{
 };
 
 use super::{IntegerColumn, RealColumn, RealType};
-use crate::{Cancellation, Result};
+use crate::{stats::Result, Cancellation};
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where

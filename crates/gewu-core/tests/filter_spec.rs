@@ -123,7 +123,9 @@ fn invalid_text_leaves_the_applied_view_intact() {
             &QuerySpec::single(0, Filter::range(Some("invalid".into()), None, false)),
             &gewu_core::Cancellation::default()
         ),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Filter(gewu_core::FilterError::Bound(
+            gewu_core::BoundError::InvalidValue { .. }
+        )))
     ));
     assert_eq!(
         doc.view().rows(0, 10, &[0]).unwrap().cells,

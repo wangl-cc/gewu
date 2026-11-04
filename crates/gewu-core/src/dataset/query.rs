@@ -11,20 +11,22 @@ use crate::{
 };
 
 impl Dataset {
-    fn validate_query(&self, spec: &QuerySpec) -> Result<()> {
+    fn validate_query(&self, spec: &QuerySpec) -> Result<(), crate::QueryError> {
         let mut columns = std::collections::HashSet::new();
         let mut priorities = std::collections::HashSet::new();
         for c in &spec.columns {
             self.column(c.column)?;
             if !columns.insert(c.column) {
-                return Err(crate::Error::InvalidArgument(
-                    "duplicate query column".into(),
-                ));
+                return Err(crate::ColumnError::Duplicate {
+                    operation: crate::ColumnOperation::Query,
+                    column: c.column,
+                }
+                .into());
             }
             if c.sort.is_some_and(|sort| !priorities.insert(sort.priority)) {
-                return Err(crate::Error::InvalidArgument(
-                    "duplicate sort priority".into(),
-                ));
+                return Err(crate::QueryError::DuplicateSortPriority {
+                    priority: c.sort.unwrap().priority,
+                });
             }
         }
         Ok(())
@@ -51,7 +53,11 @@ impl Dataset {
     /// Compile column predicates once, then intersect their matches in bounded batches.
     /// Masks are reused across columns and batches, not retained per column.
     /// Filters are reordered by estimated cost to maximize batch-level short-circuiting.
-    fn select(&self, spec: &QuerySpec, token: &Cancellation) -> Result<Vec<u32>> {
+    fn select(
+        &self,
+        spec: &QuerySpec,
+        token: &Cancellation,
+    ) -> Result<Vec<u32>, crate::QueryError> {
         token.check()?;
         let total_rows = self.n_rows;
         let mut active_filters: Vec<(u32, &Filter)> = Vec::new();
@@ -79,7 +85,7 @@ impl Dataset {
         let predicates = active_filters
             .iter()
             .map(|&(col, f)| self.column(col)?.compile_filter(f, token))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let batch_len = total_rows.min(CHUNK);
         let mut selected = vec![true; batch_len];
@@ -108,7 +114,12 @@ impl Dataset {
         Ok(rows)
     }
 
-    fn sort(&self, rows: Vec<u32>, spec: &QuerySpec, token: &Cancellation) -> Result<Vec<u32>> {
+    fn sort(
+        &self,
+        rows: Vec<u32>,
+        spec: &QuerySpec,
+        token: &Cancellation,
+    ) -> Result<Vec<u32>, crate::QueryError> {
         let sorts = spec.sorts();
         let mut comparators = Vec::with_capacity(sorts.len());
         for key in &sorts {
@@ -137,7 +148,7 @@ impl Dataset {
         } else {
             None
         };
-        sort_rows(rows, &comparators, primitive, || token.check())
+        Ok(sort_rows(rows, &comparators, primitive, || token.check())?)
     }
 }
 

@@ -127,13 +127,17 @@ Poll `progress()`, but wait for successful return before declaring completion: a
 
 | Error | Handling |
 | --- | --- |
-| `Io { message }` | Report file/I/O failure. |
-| `Unsupported { message }` | Explain unsupported format/operation. |
-| `InvalidArgument { message }` | Show typed validation feedback. |
+| `Io { operation, message }` | Report file-system failure with its operation. |
+| `File { kind, message }` | Report unknown/disabled formats, decoding failures and workbook/content errors. |
+| `Filter { kind, message }` | Show invalid user values, reversed ranges and text-compilation failures. |
+| `Find { kind, message }` | Report failures possible for ordinary Find input. |
+| `Analysis { kind, message }` | Report data-dependent analysis failures. |
+| `Export { kind, message }` | Report destination conflicts, incompatible columns and encoding failures. |
+| `Limit { kind, message }` | Report Dataset/XLSX limits with typed actual and allowed values. |
 | `Cancelled` | Normal control flow for obsolete/explicitly cancelled work. |
-| `Internal { message }` | Report remaining Core failures with context. |
+| `Internal { message }` | Report implementation defects and calls that violate the frontend/backend contract. |
 
-Use structured cases rather than parsing debug descriptions. Swift `CancellationError` is separate from Rust `Cancelled`.
+Core retains concrete module errors and source chains. FFI projects only the semantics a correctly implemented UI can encounter during normal use; invalid column IDs, duplicate priorities, invalid UI-controlled sizes, unsupported direct analysis calls and repeated single-use export calls become `Internal`. Messages retain diagnostic context, but Swift uses structured `kind` fields rather than parsing messages. Swift `CancellationError` is separate from Rust `Cancelled`.
 
 ## Bindings and implementation
 

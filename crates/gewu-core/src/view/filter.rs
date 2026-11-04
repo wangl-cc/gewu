@@ -4,7 +4,7 @@ use super::View;
 use crate::{
     col_view::ColView,
     column::{predicate, value_text, Dictionary, FilterChoices, ValueChoice},
-    stats, Cancellation, Error, RangeHistogram, Result,
+    stats, Cancellation, RangeHistogram, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,9 +39,13 @@ impl View {
     ) -> Result<Option<RangeHistogram>> {
         cancel.check()?;
         if !(1..=60).contains(&bins) {
-            return Err(Error::InvalidArgument(
-                "filter histogram bins must be between 1 and 60".into(),
-            ));
+            return Err(crate::AnalysisError::InvalidBinCount {
+                operation: crate::AnalysisOperation::FilterDistribution,
+                value: bins,
+                min: 1,
+                max: 60,
+            }
+            .into());
         }
         let view = self.col(column)?;
         let result = stats::build_scaled(view, bins, scale, cancel)?;

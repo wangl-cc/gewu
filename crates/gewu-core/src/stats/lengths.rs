@@ -5,7 +5,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use crate::{col_view::ColView, Cancellation, Error, Histogram, Result};
+use crate::{col_view::ColView, stats::Result, Cancellation, Histogram};
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
@@ -45,9 +45,11 @@ pub(crate) fn analyze(
     context.check()?;
     let array = view.array();
     let rows = view.rows();
-    let unit = unit(array.data_type()).ok_or_else(|| {
-        Error::InvalidArgument(format!("{} has no length analysis", array.data_type()))
-    })?;
+    let unit =
+        unit(array.data_type()).ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Lengths,
+            data_type: array.data_type().clone(),
+        })?;
     // Dispatch once per column. The closures borrow native storage, including
     // sliced offsets, and never construct child arrays or formatted strings.
     macro_rules! scan {

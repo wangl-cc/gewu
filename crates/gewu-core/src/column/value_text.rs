@@ -7,16 +7,18 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{Error, Result};
+type Result<T> = std::result::Result<T, crate::InternalError>;
 
 pub(crate) fn encode(array: &ArrayRef, row: usize) -> Result<String> {
     use DataType::*;
     if array.is_null(row) {
-        return Err(Error::InvalidArgument("null has no value text".into()));
+        return Err(crate::InternalError::Invariant(
+            "null has no exact filter representation".into(),
+        ));
     }
     match array.data_type() {
         Dictionary(..) => downcast_dictionary_array!(array => {
-            let key = array.key(row).ok_or_else(|| Error::InvalidArgument("null has no value text".into()))?;
+            let key = array.key(row).ok_or_else(|| crate::InternalError::Invariant("null dictionary key has no exact filter representation".into()))?;
             encode(array.values(), key)
         }, _ => unreachable!()),
         Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => {
@@ -62,13 +64,13 @@ pub(crate) fn encode(array: &ArrayRef, row: usize) -> Result<String> {
             .value(row)
             .to_string()),
         Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) => {
-            downcast_temporal_array!(array => Ok(format!("@{}", array.value(row))), _ => Err(Error::InvalidArgument("unsupported temporal value".into())))
+            downcast_temporal_array!(array => Ok(format!("@{}", array.value(row))), _ => Err(crate::InternalError::Invariant("unsupported temporal value".into())))
         }
         Boolean => Ok(array.as_boolean().value(row).to_string()),
         Utf8 => Ok(array.as_string::<i32>().value(row).into()),
         LargeUtf8 => Ok(array.as_string::<i64>().value(row).into()),
         Utf8View => Ok(array.as_string_view().value(row).into()),
-        _ => Err(Error::InvalidArgument(format!(
+        _ => Err(crate::InternalError::Invariant(format!(
             "{} has no exact filter representation",
             array.data_type()
         ))),

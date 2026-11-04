@@ -85,7 +85,7 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
-                    Err(Error::InvalidArgument(_))
+                    Err(Error::Filter(_))
                 ));
             }
         }};
@@ -127,7 +127,7 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
                         &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
                         &Cancellation::default()
                     ),
-                    Err(Error::InvalidArgument(_))
+                    Err(Error::Filter(_))
                 ));
             }
         }};
@@ -222,7 +222,7 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
             &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
             &Cancellation::default()
         ),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Filter(_))
     ));
 }
 
@@ -247,7 +247,7 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
             ),
             &Cancellation::default()
         ),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Filter(_))
     ));
     assert!(integers
         .query(

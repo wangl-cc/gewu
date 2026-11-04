@@ -165,7 +165,7 @@ fn unknown_column_is_an_argument_error() {
     let (path, doc) = sample("unknown");
     assert!(matches!(
         doc.view().filter_choices(9, &Cancellation::default()),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_))
     ));
     assert!(matches!(
         doc.view()
@@ -176,10 +176,10 @@ fn unknown_column_is_an_argument_error() {
                 &Cancellation::default()
             )
             .map(|result| result.expect("histogram domain").histogram),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_))
     ));
     let v = doc.view();
-    assert!(matches!(v.rows(0, 1, &[9]), Err(Error::InvalidArgument(_))));
+    assert!(matches!(v.rows(0, 1, &[9]), Err(Error::Column(_))));
     std::fs::remove_file(path).ok();
 }
 

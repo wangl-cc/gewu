@@ -32,8 +32,10 @@ use rapidhash::RapidHashMap;
 
 use crate::{
     execution::{predicate::Predicate, selection::RowSelection},
-    Cancellation, Result,
+    Cancellation,
 };
+
+type Result<T> = std::result::Result<T, crate::ColumnError>;
 
 mod primitive;
 

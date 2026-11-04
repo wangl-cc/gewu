@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{numeric::Numeric, AxisScale};
-use crate::{format, Cancellation, Error, Result};
+use crate::{format, stats::Result, Cancellation};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -68,25 +68,34 @@ pub(crate) fn analyze(
 ) -> Result<ScatterResult> {
     context.check()?;
     if !(1..=MAX_SCATTER_POINTS).contains(&limit) {
-        return Err(Error::InvalidArgument(format!(
-            "scatter limit must be between 1 and {MAX_SCATTER_POINTS}"
-        )));
+        return Err(crate::AnalysisError::InvalidScatterLimit {
+            value: limit,
+            min: 1,
+            max: MAX_SCATTER_POINTS,
+        });
     }
     for (_, array) in x.iter().chain(std::iter::once(&y)) {
         if Numeric::new(array).is_none() {
-            return Err(Error::InvalidArgument(format!(
-                "{} does not support scatter coordinates",
-                array.data_type()
-            )));
+            return Err(crate::AnalysisError::UnsupportedOperation {
+                operation: crate::AnalysisOperation::Scatter,
+                data_type: array.data_type().clone(),
+            });
         }
     }
     for (scale, array) in [(x_scale, x.as_ref().map(|(_, a)| *a)), (y_scale, Some(y.1))] {
         if scale == AxisScale::Log10
             && !array.is_some_and(|array| super::supports_logarithmic(array.data_type()))
         {
-            return Err(Error::InvalidArgument(
-                "logarithmic scatter axes require a numeric column".into(),
-            ));
+            return Err(match array {
+                Some(array) => crate::AnalysisError::UnsupportedOperation {
+                    operation: crate::AnalysisOperation::Scatter,
+                    data_type: array.data_type().clone(),
+                },
+                None => crate::AnalysisError::UnsupportedAxisScale {
+                    operation: crate::AnalysisOperation::Scatter,
+                    scale,
+                },
+            });
         }
     }
     let limit = limit as usize;
@@ -210,7 +219,8 @@ mod tests {
         ] {
             assert!(matches!(
                 analyze(None, (0, &dates), &[0], 8, x, y, &c),
-                Err(Error::InvalidArgument(_))
+                Err(crate::AnalysisError::UnsupportedOperation { .. }
+                    | crate::AnalysisError::UnsupportedAxisScale { .. })
             ));
         }
     }
@@ -367,7 +377,7 @@ mod tests {
                     AxisScale::Linear,
                     &c
                 ),
-                Err(Error::InvalidArgument(_))
+                Err(crate::AnalysisError::InvalidScatterLimit { .. })
             ));
         }
         let text: ArrayRef = Arc::new(StringArray::from(vec!["bad"]));
@@ -381,7 +391,7 @@ mod tests {
                 AxisScale::Linear,
                 &c
             ),
-            Err(Error::InvalidArgument(_))
+            Err(crate::AnalysisError::UnsupportedOperation { .. })
         ));
         let many: ArrayRef = Arc::new(Int64Array::from_iter_values(0..20000));
         let sample = |rows: Vec<u32>, cancel: &Cancellation| {
@@ -413,7 +423,7 @@ mod tests {
         );
         assert!(matches!(
             sample((0..20000).collect(), &Cancellation::after_checks(5)),
-            Err(Error::Cancelled)
+            Err(crate::AnalysisError::Cancelled(_))
         ));
     }
 }

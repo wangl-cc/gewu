@@ -14,7 +14,7 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::{col_view::ColView, format, Cancellation, Error, Result};
+use crate::{col_view::ColView, format, stats::Result, Cancellation};
 
 /// A displayed non-null value and its frequency in the captured view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,16 +142,17 @@ fn hasher(array: &dyn Array) -> Result<HashValue<'_>> {
             Ok(primitive(array.as_primitive::<DurationNanosecondType>()))
         }
         Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) => {
-            downcast_temporal_array!(array => Ok(primitive(array)), _ => Err(Error::Unsupported("unsupported temporal values".into())))
+            downcast_temporal_array!(array => Ok(primitive(array)), _ => Err(crate::InternalError::Invariant("unsupported temporal values".into()).into()))
         }
         Boolean => bytes!(array.as_boolean()),
         Utf8 => bytes!(array.as_string::<i32>()),
         LargeUtf8 => bytes!(array.as_string::<i64>()),
         Utf8View => bytes!(array.as_string_view()),
-        _ => Err(Error::Unsupported(format!(
-            "{} does not support value analysis",
+        _ => Err(crate::InternalError::Invariant(format!(
+            "{} passed value-analysis support checking but cannot be hashed",
             array.data_type()
-        ))),
+        ))
+        .into()),
     }
 }
 
@@ -227,10 +228,10 @@ impl Sketch {
 pub(crate) fn analyze(view: ColView<'_>, context: &Cancellation) -> Result<ValueSummary> {
     context.check()?;
     if !supports(view.data_type()) {
-        return Err(Error::InvalidArgument(format!(
-            "{} does not support value analysis",
-            view.data_type()
-        )));
+        return Err(crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Values,
+            data_type: view.data_type().clone(),
+        });
     }
     let value = hasher(view.array().as_ref())?;
     let mut sketch = Sketch::default();
@@ -349,7 +350,7 @@ mod tests {
         let all = crate::col_view::test::Fixture::all(&dictionary);
         assert!(matches!(
             analyze(all.view(), &context),
-            Err(Error::Cancelled)
+            Err(crate::AnalysisError::Cancelled(_))
         ));
     }
 }

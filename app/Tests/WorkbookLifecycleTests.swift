@@ -190,7 +190,7 @@ struct WorkbookLifecycleTests {
         }
         document.selectedSourceRow = nil
         let message = "Invalid numeric bound"
-        let error: Error = GewuError.InvalidArgument(message: message)
+        let error: Error = GewuError.Internal(message: message)
         #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
         document.reportError(error)
         #expect(document.errorMessage == message)

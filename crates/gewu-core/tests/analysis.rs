@@ -70,6 +70,6 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
     );
     assert!(matches!(
         current.analyze_statistics(1, &Cancellation::default()),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Analysis(_))
     ));
 }

@@ -13,7 +13,7 @@ use arrow::{
 };
 
 use super::numeric::Numeric;
-use crate::{col_view::ColView, format, Cancellation, Error, Result};
+use crate::{col_view::ColView, format, stats::Result, Cancellation};
 
 pub(crate) fn label(view: ColView<'_>, context: &Cancellation) -> Result<Option<String>> {
     let value = Numeric::new(view.array())
@@ -35,7 +35,7 @@ pub(crate) fn label(view: ColView<'_>, context: &Cancellation) -> Result<Option<
         SortOptions::default(),
     )?;
     let middle = ids.len() / 2;
-    select(&mut ids, middle, &compare, &mut || context.check())?;
+    select(&mut ids, middle, &compare, &mut || Ok(context.check()?))?;
     let high = ids[middle] as usize;
     if ids.len() % 2 == 1 {
         return Ok(format::cell(
@@ -125,7 +125,7 @@ fn select(
 
 fn midpoint(array: &ArrayRef, low: usize, high: usize) -> Result<Option<String>> {
     use DataType::*;
-    let decimal = |a, b, scale| scaled_midpoint(a, b, scale).map(Some);
+    let decimal = |a, b, scale| scaled_midpoint(a, b, scale, array.data_type()).map(Some);
     let label = match array.data_type() {
         Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => {
             return downcast_integer_array!(array => {
@@ -163,10 +163,13 @@ fn midpoint(array: &ArrayRef, low: usize, high: usize) -> Result<Option<String>>
 }
 
 /// Decimal text of (a+b)/2 * 10^-scale; preserves the extra midpoint digit.
-fn scaled_midpoint(a: i256, b: i256, mut scale: i32) -> Result<String> {
-    let sum = a.checked_add(b).ok_or_else(|| {
-        Error::InvalidArgument("decimal midpoint exceeds coefficient range".into())
-    })?;
+fn scaled_midpoint(a: i256, b: i256, mut scale: i32, data_type: &DataType) -> Result<String> {
+    let sum = a
+        .checked_add(b)
+        .ok_or_else(|| crate::AnalysisError::ValueOutOfRange {
+            operation: crate::AnalysisOperation::Statistics,
+            data_type: data_type.clone(),
+        })?;
     let two = i256::from(2);
     let half = sum / two;
     let mut digits = half.to_string().trim_start_matches('-').to_owned();
@@ -226,7 +229,7 @@ fn temporal_midpoint(data_type: &DataType, a: i128, b: i128) -> Result<String> {
         TimeUnit::Nanosecond => 9,
     };
     if let DataType::Duration(unit) = data_type {
-        return Ok(scaled_midpoint(a.into(), b.into(), scale(unit))? + " s");
+        return Ok(scaled_midpoint(a.into(), b.into(), scale(unit), data_type)? + " s");
     }
     let ticks_per_second = match data_type {
         DataType::Date32 => 1,
@@ -245,11 +248,13 @@ fn temporal_midpoint(data_type: &DataType, a: i128, b: i128) -> Result<String> {
     let denominator = ticks_per_second * 2;
     let seconds = sum.div_euclid(denominator);
     let fraction = sum.rem_euclid(denominator) * (10_000_000_000 / denominator);
-    let seconds = i64::try_from(seconds)
-        .map_err(|_| Error::InvalidArgument("temporal midpoint exceeds seconds range".into()))?;
+    let out_of_range = || crate::AnalysisError::ValueOutOfRange {
+        operation: crate::AnalysisOperation::Statistics,
+        data_type: data_type.clone(),
+    };
+    let seconds = i64::try_from(seconds).map_err(|_| out_of_range())?;
     let scalar: ArrayRef = if matches!(data_type, DataType::Time32(_) | DataType::Time64(_)) {
-        let seconds = i32::try_from(seconds)
-            .map_err(|_| Error::InvalidArgument("time midpoint exceeds seconds range".into()))?;
+        let seconds = i32::try_from(seconds).map_err(|_| out_of_range())?;
         std::sync::Arc::new(Time32SecondArray::from(vec![seconds]))
     } else {
         let timezone = if let DataType::Timestamp(_, timezone) = data_type {
@@ -423,12 +428,12 @@ mod tests {
                 select(&mut ids, values.len() / 2, &cmp, &mut || {
                     checks += 1;
                     if checks == 3 {
-                        Err(Error::Cancelled)
+                        Err(crate::AnalysisError::Cancelled(crate::CancellationError))
                     } else {
                         Ok(())
                     }
                 }),
-                Err(Error::Cancelled)
+                Err(crate::AnalysisError::Cancelled(_))
             ));
         }
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
@@ -442,6 +447,9 @@ mod tests {
         let context = Cancellation::default();
         context.cancel();
         let all = crate::col_view::test::Fixture::all(&array);
-        assert!(matches!(label(all.view(), &context), Err(Error::Cancelled)));
+        assert!(matches!(
+            label(all.view(), &context),
+            Err(crate::AnalysisError::Cancelled(_))
+        ));
     }
 }

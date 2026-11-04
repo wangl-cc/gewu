@@ -26,7 +26,7 @@ enum ViewSmoke {
         do {
             _ = try dataset!.query(spec: spec, cancellation: Cancellation())
             preconditionFailure("invalid filter returned a View")
-        } catch GewuError.InvalidArgument(let message) {
+        } catch GewuError.Filter(_, let message) {
             check(!message.isEmpty)
         }
         check(original.rowCount() == 3)
@@ -37,7 +37,7 @@ enum ViewSmoke {
         do {
             _ = try dataset!.query(spec: spec, cancellation: Cancellation())
             preconditionFailure("non-text text match returned a View")
-        } catch GewuError.InvalidArgument {}
+        } catch GewuError.Internal {}
         var textSpec = full
         textSpec.columns[1].filter = Filter(
             condition: .text(text: "T", mode: .contains, caseSensitive: false), includeNulls: false)

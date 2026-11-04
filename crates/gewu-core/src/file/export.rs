@@ -12,7 +12,7 @@ use std::{
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use super::{ExportData, WriteProgress};
-use crate::{Cancellation, Error, ExportOptions, FileType, Result};
+use crate::{Cancellation, ExportOptions, FileType, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -74,7 +74,7 @@ impl Export {
     }
 
     fn check_cancelled(&self) -> Result<()> {
-        self.cancellation.check()
+        Ok(self.cancellation.check()?)
     }
 
     /// Write on a background thread. Headers are included for CSV/TSV, nulls
@@ -99,9 +99,7 @@ impl Export {
         options: &ExportOptions,
     ) -> Result<()> {
         if self.started.swap(true, Ordering::Relaxed) {
-            return Err(Error::InvalidArgument(
-                "this export has already been started".into(),
-            ));
+            return Err(crate::ExportError::AlreadyStarted.into());
         }
         self.check_cancelled()?;
         let path = path.as_ref();
@@ -112,7 +110,10 @@ impl Export {
             .unwrap_or(Path::new("."));
         let mut temporary = tempfile::Builder::new()
             .prefix(".gewu-export-")
-            .tempfile_in(parent)?;
+            .tempfile_in(parent)
+            .map_err(|error| {
+                crate::IoError::new(crate::IoOperation::CreateTemporaryFile, parent, error)
+            })?;
         super::write(
             temporary.as_file_mut(),
             self.format,
@@ -121,11 +122,16 @@ impl Export {
             self.write_progress(),
         )?;
         self.check_cancelled()?;
-        temporary.as_file().sync_all()?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| crate::IoError::new(crate::IoOperation::Sync, path, error))?;
         let mut committed = self.committed.lock().unwrap();
         self.check_cancelled()?;
         self.check_destination(path)?;
-        temporary.persist(path).map_err(|error| error.error)?;
+        temporary
+            .persist(path)
+            .map_err(|error| crate::IoError::new(crate::IoOperation::Commit, path, error.error))?;
         *committed = true;
         Ok(())
     }
@@ -145,7 +151,7 @@ impl Export {
         }
     }
 
-    fn check_destination(&self, path: &Path) -> Result<()> {
+    fn check_destination(&self, path: &Path) -> Result<(), crate::ExportError> {
         let same_path = match (self.source.canonicalize(), path.canonicalize()) {
             (Ok(source), Ok(destination)) => source == destination,
             _ => false,
@@ -164,9 +170,10 @@ impl Export {
         #[cfg(not(unix))]
         let same_file = false;
         if same_path || same_file {
-            return Err(Error::InvalidArgument(
-                "choose a different path from the open source file".into(),
-            ));
+            return Err(crate::ExportError::SourceIsDestination {
+                source_path: self.source.clone(),
+                destination: path.to_owned(),
+            });
         }
         Ok(())
     }

@@ -8,7 +8,9 @@ use arrow::{
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 
 use super::decimal::{native_range, Endpoint, Literal};
-use crate::{execution::predicate::Predicate, scalar::temporal::parse_physical, Result};
+use crate::{
+    column::predicate::Result, execution::predicate::Predicate, scalar::temporal::parse_physical,
+};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let data_type = array.data_type();
@@ -136,7 +138,10 @@ fn physical(data_type: &DataType, at: &NaiveDateTime) -> Result<Option<i64>> {
         }
         _ => at.format("%Y-%m-%dT%H:%M:%S").to_string(),
     };
-    parse_physical(data_type, &text)
+    match parse_physical(data_type, &text) {
+        Err(crate::BoundError::InvalidValue { .. }) => Ok(None),
+        result => result.map_err(Into::into),
+    }
 }
 
 fn day_length(data_type: &DataType) -> Option<i64> {

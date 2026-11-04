@@ -6,3 +6,4 @@ pub(crate) mod float;
 pub(crate) mod temporal;
 
 pub(crate) use bound::Bound;
+pub use bound::BoundError;

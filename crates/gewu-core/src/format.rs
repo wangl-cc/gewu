@@ -6,12 +6,12 @@ use arrow::{
     util::display::{ArrayFormatter, FormatOptions},
 };
 
-use crate::Result;
-
 const FORMAT_OPTIONS: FormatOptions<'static> = FormatOptions::new().with_display_error(true);
 
-pub(crate) fn formatter(array: &dyn Array) -> Result<ArrayFormatter<'_>> {
-    Ok(ArrayFormatter::try_new(array, &FORMAT_OPTIONS)?)
+pub(crate) fn formatter(
+    array: &dyn Array,
+) -> std::result::Result<ArrayFormatter<'_>, arrow::error::ArrowError> {
+    ArrayFormatter::try_new(array, &FORMAT_OPTIONS)
 }
 
 /// Format one cell, `None` for null.

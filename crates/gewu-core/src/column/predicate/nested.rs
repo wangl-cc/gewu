@@ -8,11 +8,8 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType},
 };
 
-use super::compile_find;
-use crate::{
-    execution::predicate::{Predicate, CHUNK},
-    Result,
-};
+use super::{compile_find, Result};
+use crate::execution::predicate::{Predicate, CHUNK};
 
 pub(super) fn search<'a>(
     array: &'a ArrayRef,
@@ -209,7 +206,7 @@ fn elements<'a>(
                      owners: &mut Vec<(usize, usize, usize)>,
                      hits: &mut [bool],
                      matched: &mut Vec<bool>|
-         -> Result<()> {
+         -> std::result::Result<(), crate::CancellationError> {
             if children.is_empty() {
                 return Ok(());
             }

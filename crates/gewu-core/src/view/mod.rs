@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 
-use crate::{col_view::ColView, column::Column, Dataset, Error, Result};
+use crate::{col_view::ColView, column::Column, Dataset, Result};
 
 mod analysis;
 mod export;
@@ -57,9 +57,11 @@ impl View {
         expected.sort_unstable();
         actual.sort_unstable();
         if actual != expected {
-            return Err(Error::InvalidArgument(
-                "column order must be a permutation of the view's columns".into(),
-            ));
+            return Err(crate::ColumnError::InvalidOrder {
+                expected: self.columns.to_vec(),
+                actual: order.to_vec(),
+            }
+            .into());
         }
         Ok(Arc::new(Self {
             dataset: self.dataset.clone(),
@@ -68,15 +70,15 @@ impl View {
         }))
     }
 
-    pub(crate) fn column(&self, column: u32) -> Result<&Column> {
+    pub(crate) fn column(&self, column: u32) -> Result<&Column, crate::ColumnError> {
         self.dataset.column(column)
     }
 
-    pub(crate) fn column_array(&self, column: u32) -> Result<&ArrayRef> {
+    pub(crate) fn column_array(&self, column: u32) -> Result<&ArrayRef, crate::ColumnError> {
         Ok(self.column(column)?.array())
     }
 
-    pub(crate) fn col(&self, column: u32) -> Result<ColView<'_>> {
+    pub(crate) fn col(&self, column: u32) -> Result<ColView<'_>, crate::ColumnError> {
         Ok(ColView::new(self.column(column)?, &self.rows))
     }
 }
@@ -86,7 +88,7 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch, StringArray};
 
     use super::*;
-    use crate::{Cancellation, ColSpec, Filter, QuerySpec};
+    use crate::{Cancellation, ColSpec, Error, Filter, QuerySpec};
 
     fn dataset() -> Arc<Dataset> {
         let numbers: ArrayRef = Arc::new(Int32Array::from_iter_values(0..12_000));
@@ -136,7 +138,7 @@ mod tests {
         for order in [&[][..], &[0], &[0, 0], &[0, 1, 2], &[1, 2]] {
             assert!(matches!(
                 sorted.reorder_columns(order),
-                Err(Error::InvalidArgument(_))
+                Err(Error::Column(crate::ColumnError::InvalidOrder { .. }))
             ));
         }
         assert_eq!(initial.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
@@ -223,7 +225,7 @@ mod tests {
         ] {
             assert!(matches!(
                 dataset.query(&bad, &Cancellation::default()),
-                Err(Error::InvalidArgument(_))
+                Err(Error::Column(_) | Error::Query(_) | Error::Filter(_))
             ));
         }
         assert_eq!(initial.rows(0, 1, &[0]).unwrap().source_rows, [0]);

@@ -9,7 +9,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{Cancellation, Result};
+use crate::{stats::Result, Cancellation};
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -124,11 +124,9 @@ pub(crate) fn analyze(
 ) -> Result<NumericStatistics> {
     context.check()?;
     let summary = Numeric::new(view.array())
-        .ok_or_else(|| {
-            crate::Error::InvalidArgument(format!(
-                "{} does not support numeric statistics",
-                view.data_type()
-            ))
+        .ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Statistics,
+            data_type: view.data_type().clone(),
         })?
         .summarize(view.iter(), context)?;
     let formatter = crate::format::formatter(view.array().as_ref())?;

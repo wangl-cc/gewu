@@ -3,7 +3,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use super::View;
-use crate::{Error, Export, FileType, Result};
+use crate::{Export, FileType, Result};
 
 impl View {
     /// Capture a view and column order for export without copying its cells or
@@ -11,29 +11,43 @@ impl View {
     pub fn export(&self, columns: &[u32], format: FileType) -> Result<Export> {
         format.require_enabled()?;
         if columns.is_empty() {
-            return Err(Error::InvalidArgument(
-                "select at least one column to export".into(),
-            ));
+            return Err(crate::ColumnError::EmptySelection {
+                operation: crate::ColumnOperation::Export,
+            }
+            .into());
         }
         let mut seen = BTreeSet::new();
         let arrays = columns
             .iter()
             .map(|&column| {
                 if !seen.insert(column) {
-                    return Err(Error::InvalidArgument("duplicate export column".into()));
+                    return Err(crate::ColumnError::Duplicate {
+                        operation: crate::ColumnOperation::Export,
+                        column,
+                    });
                 }
                 self.column_array(column).cloned()
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
         let schema = Arc::new(self.dataset.schema.project(&indices)?);
         if format != FileType::Parquet {
-            let nested = self.nested_export_columns(columns)?;
+            let nested: Vec<u32> = columns
+                .iter()
+                .copied()
+                .filter(|&column| {
+                    self.dataset.columns[column as usize]
+                        .array()
+                        .data_type()
+                        .is_nested()
+                })
+                .collect();
             if !nested.is_empty() {
-                return Err(Error::Unsupported(format!(
-                    "{format} cannot export nested columns ({}); use Parquet to preserve them",
-                    nested.join(", ")
-                )));
+                return Err(crate::ExportError::NestedColumns {
+                    format,
+                    columns: nested,
+                }
+                .into());
             }
         }
         Ok(Export::new(

@@ -3,6 +3,7 @@
 use std::{
     fs::File,
     io::{Seek, Write},
+    path::Path,
     sync::Arc,
 };
 
@@ -14,15 +15,22 @@ use arrow::{
 use super::{collect_batches, ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
 use crate::{FileMetadata, OpenOptions, Result};
 
-pub(super) fn read(mut file: File, delimiter: u8, options: &OpenOptions) -> Result<LoadedFile> {
+pub(super) fn read(
+    mut file: File,
+    path: &Path,
+    delimiter: u8,
+    options: &OpenOptions,
+) -> Result<LoadedFile, crate::FileError> {
     let format = arrow_csv::reader::Format::default()
         .with_header(options.has_header)
         .with_delimiter(delimiter);
     // Scan the complete input for a stable schema: later mixed values must
     // not turn into nulls or fail solely because they were outside a sample.
     let (schema, _) = format.infer_schema(&mut file, None)?;
-    file.rewind()?;
-    let schema = preserve_integer_precision(&mut file, schema, delimiter, options.has_header)?;
+    file.rewind()
+        .map_err(|error| crate::IoError::new(crate::IoOperation::Seek, path, error))?;
+    let schema =
+        preserve_integer_precision(&mut file, path, schema, delimiter, options.has_header)?;
     let schema = Arc::new(schema);
     let reader = arrow_csv::ReaderBuilder::new(schema.clone())
         .with_format(format)
@@ -40,10 +48,11 @@ pub(super) fn read(mut file: File, delimiter: u8, options: &OpenOptions) -> Resu
 /// so quoted records and embedded newlines obey the same syntax as Arrow.
 fn preserve_integer_precision(
     file: &mut File,
+    path: &Path,
     schema: Schema,
     delimiter: u8,
     has_header: bool,
-) -> Result<Schema> {
+) -> Result<Schema, crate::FileError> {
     let floating: Vec<usize> = schema
         .fields()
         .iter()
@@ -68,7 +77,8 @@ fn preserve_integer_precision(
             }
         }
     }
-    file.rewind()?;
+    file.rewind()
+        .map_err(|error| crate::IoError::new(crate::IoOperation::Seek, path, error))?;
     let fields = schema
         .fields()
         .iter()
@@ -89,7 +99,7 @@ pub(super) fn write(
     delimiter: u8,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
-) -> Result<()> {
+) -> Result<(), crate::ExportError> {
     progress.check()?;
     let mut writer = arrow_csv::WriterBuilder::new()
         .with_delimiter(delimiter)
@@ -103,7 +113,7 @@ pub(super) fn write(
         writer.write(&data.batch(rows)?)?;
         progress.advance(rows.len());
     }
-    progress.check()
+    Ok(progress.check()?)
 }
 
 #[cfg(test)]
@@ -158,7 +168,7 @@ mod tests {
         }
         assert!(matches!(
             write(CancellingWriter(&cancelled), b',', data, progress),
-            Err(crate::Error::Cancelled)
+            Err(crate::ExportError::Cancelled(_))
         ));
         assert!(written.load(Ordering::Relaxed) > 0);
         assert!(written.load(Ordering::Relaxed) < rows.len() as u64);

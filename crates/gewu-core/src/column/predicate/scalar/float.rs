@@ -6,8 +6,8 @@ use arrow::{
 };
 
 use crate::{
+    column::predicate::Result,
     execution::{predicate::Predicate, selection::RowSelection},
-    Error, Result,
 };
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
@@ -139,7 +139,7 @@ pub(super) fn nan(array: &ArrayRef) -> Predicate<'_> {
 }
 
 pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a>> {
-    let target = parse(text)?;
+    let target = parse(array.data_type(), text)?;
     if target.is_infinite()
         && !matches!(
             text.to_ascii_lowercase().as_str(),
@@ -157,15 +157,24 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
     let target = match array.data_type() {
         DataType::Float16 => {
             use arrow::compute::kernels::cast_utils::Parser;
-            let value = Float16Type::parse(text).ok_or_else(|| {
-                Error::InvalidArgument(format!("cannot read {text:?} as Float16"))
-            })?;
+            let value =
+                Float16Type::parse(text).ok_or_else(|| crate::FilterError::InvalidValue {
+                    value: text.into(),
+                    expected: DataType::Float16,
+                    reason: crate::ValueParseError::InvalidSyntax,
+                })?;
             f64::from(value)
         }
-        DataType::Float32 => f64::from(
-            text.parse::<f32>()
-                .map_err(|_| Error::InvalidArgument(format!("cannot read {text:?} as Float32")))?,
-        ),
+        DataType::Float32 => {
+            f64::from(
+                text.parse::<f32>()
+                    .map_err(|_| crate::FilterError::InvalidValue {
+                        value: text.into(),
+                        expected: DataType::Float32,
+                        reason: crate::ValueParseError::InvalidSyntax,
+                    })?,
+            )
+        }
         DataType::Float64 => target,
         _ => unreachable!("float dispatch"),
     };
@@ -175,9 +184,11 @@ pub(super) fn equals<'a>(array: &'a ArrayRef, text: &str) -> Result<Predicate<'a
     Ok(bound_range(array, target, target))
 }
 
-fn parse(text: &str) -> Result<f64> {
-    text.parse().map_err(|_| {
-        Error::InvalidArgument(format!("cannot read {text:?} as a floating-point number"))
+fn parse(data_type: &DataType, text: &str) -> Result<f64> {
+    text.parse().map_err(|_| crate::FilterError::InvalidValue {
+        value: text.into(),
+        expected: data_type.clone(),
+        reason: crate::ValueParseError::InvalidSyntax,
     })
 }
 

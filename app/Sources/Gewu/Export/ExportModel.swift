@@ -65,7 +65,7 @@ final class ExportModel: ObservableObject {
             self.panel = nil
             guard let destination else { return }
             guard let format else {
-                self.reportError(GewuError.InvalidArgument(message: "Select a supported export format."), "")
+                self.reportError(GewuError.Internal(message: "Select a supported export format."), "")
                 return
             }
             do {

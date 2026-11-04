@@ -16,9 +16,9 @@ use arrow::{
     datatypes::DataType,
 };
 
-use crate::{
-    execution::predicate::Predicate, scalar::Bound, types, Cancellation, Error, Filter, Result,
-};
+use crate::{execution::predicate::Predicate, scalar::Bound, types, Cancellation, Filter};
+
+pub(crate) type Result<T> = std::result::Result<T, crate::FilterError>;
 
 /// Text matching is defined only for text values, including dictionaries.
 pub(crate) fn supports_text_match(data_type: &DataType) -> bool {
@@ -114,8 +114,9 @@ fn compile_condition<'a>(
         return nested::dictionary(array, |values| {
             compile_condition(values, condition, cancel).map(Some)
         })?
-        .ok_or_else(|| {
-            Error::InvalidArgument("filter cannot be applied to dictionary values".into())
+        .ok_or_else(|| crate::FilterError::UnsupportedType {
+            condition: condition.into(),
+            data_type: array.data_type().clone(),
         });
     }
     match condition {
@@ -167,9 +168,9 @@ fn compile_condition<'a>(
                 },
             )))
         }
-        _ => Err(Error::InvalidArgument(format!(
-            "filter is not supported for {}",
-            array.data_type()
-        ))),
+        _ => Err(crate::FilterError::UnsupportedType {
+            condition: condition.into(),
+            data_type: array.data_type().clone(),
+        }),
     }
 }

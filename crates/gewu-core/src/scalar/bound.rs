@@ -15,7 +15,25 @@ use super::{
     decimal::{Endpoint, Literal},
     float, temporal,
 };
-use crate::{format, Error, Result};
+use crate::format;
+
+pub(crate) type Result<T> = std::result::Result<T, BoundError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BoundError {
+    #[error("cannot read {value:?} as {expected}: {reason:?}")]
+    InvalidValue {
+        value: String,
+        expected: DataType,
+        reason: crate::ValueParseError,
+    },
+    #[error("range endpoint does not support {data_type}")]
+    UnsupportedType { data_type: DataType },
+    #[error("range endpoint exceeds the representable range of {data_type}")]
+    OutOfRange { data_type: DataType },
+    #[error(transparent)]
+    Arrow(#[from] arrow::error::ArrowError),
+}
 
 /// A parsed endpoint for one column's logical type. Construct through [`Self::parse`]
 /// for text inputs or a native constructor for numerical controls. Bounds are
@@ -107,7 +125,11 @@ impl Bound {
                     .parse::<f64>()
                     .map_err(|_| invalid_text(data_type, text))?;
                 if value.is_nan() {
-                    return Err(invalid_text(data_type, text));
+                    return Err(crate::BoundError::InvalidValue {
+                        value: text.into(),
+                        expected: data_type.clone(),
+                        reason: crate::ValueParseError::NaNNotAllowed,
+                    });
                 }
                 Ok(Self::new(BoundData {
                     data_type: data_type.clone(),
@@ -486,16 +508,18 @@ pub(crate) fn compare(left: &Value, right: &Value) -> Ordering {
     }
 }
 
-pub(crate) fn invalid_type(data_type: &DataType) -> Error {
-    Error::InvalidArgument(format!(
-        "value is not a valid range endpoint for {data_type}"
-    ))
+pub(crate) fn invalid_type(data_type: &DataType) -> crate::BoundError {
+    crate::BoundError::UnsupportedType {
+        data_type: data_type.clone(),
+    }
 }
 
-pub(crate) fn invalid_text(data_type: &DataType, text: &str) -> Error {
-    Error::InvalidArgument(format!(
-        "cannot read {text:?} as a range endpoint for {data_type}"
-    ))
+pub(crate) fn invalid_text(data_type: &DataType, text: &str) -> crate::BoundError {
+    crate::BoundError::InvalidValue {
+        value: text.into(),
+        expected: data_type.clone(),
+        reason: crate::ValueParseError::InvalidSyntax,
+    }
 }
 
 fn format_temporal(data_type: &DataType, value: i64) -> Result<String> {

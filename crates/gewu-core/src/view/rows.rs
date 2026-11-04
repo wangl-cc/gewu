@@ -42,7 +42,7 @@ impl View {
         let formatters = columns
             .iter()
             .map(|&c| format::formatter(self.dataset.columns[c as usize].array().as_ref()))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let mut cells = Vec::with_capacity(source_rows.len() * columns.len());
         for &r in source_rows {

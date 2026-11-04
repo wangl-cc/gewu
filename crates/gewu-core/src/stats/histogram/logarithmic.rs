@@ -8,20 +8,25 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use super::{Cancellation, Histogram, Output, RangeBounds};
-use crate::{col_view::ColView, scalar::Bound, AxisScale, Error, Result};
+use crate::{col_view::ColView, scalar::Bound, stats::Result, AxisScale};
 
 pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellation) -> Result<H> {
     let array = view.array();
     let rows = view.rows();
     context.check()?;
     if bins == 0 {
-        return Err(Error::InvalidArgument("bins must be at least 1".into()));
+        return Err(crate::AnalysisError::InvalidBinCount {
+            operation: crate::AnalysisOperation::Distribution,
+            value: bins,
+            min: 1,
+            max: u32::MAX,
+        });
     }
     if !crate::stats::supports_logarithmic(array.data_type()) {
-        return Err(Error::InvalidArgument(format!(
-            "{} does not support logarithmic histograms",
-            array.data_type()
-        )));
+        return Err(crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Distribution,
+            data_type: array.data_type().clone(),
+        });
     }
     let bins = bins as usize;
     match array.data_type() {
@@ -147,9 +152,9 @@ where
     })?;
     let bound = |value: T::Native| {
         if array.data_type().is_unsigned_integer() {
-            Bound::from_u64(array.data_type(), value.into() as u64)
+            Ok(Bound::from_u64(array.data_type(), value.into() as u64)?)
         } else {
-            Bound::from_i64(array.data_type(), value.into() as i64)
+            Ok(Bound::from_i64(array.data_type(), value.into() as i64)?)
         }
     };
     let lower = bound(min)?;
@@ -218,7 +223,7 @@ where
         (coefficient > min_coefficient && coefficient <= max_coefficient)
             .then(|| narrow(coefficient))
     })?;
-    let bound = |value| Bound::from_decimal(array.data_type(), widen(value), scale);
+    let bound = |value| Ok(Bound::from_decimal(array.data_type(), widen(value), scale)?);
     let lower = bound(min)?;
     let upper = bound(max)?;
     let log_value = |coefficient: i256| {
@@ -253,7 +258,11 @@ where
     )?;
     H::finish(histogram, || {
         finite_ranges(&cuts, lower, upper, context, bound, |value| {
-            Bound::from_decimal(array.data_type(), widen(value) - i256::ONE, scale)
+            Ok(Bound::from_decimal(
+                array.data_type(),
+                widen(value) - i256::ONE,
+                scale,
+            )?)
         })
     })
 }
@@ -282,7 +291,7 @@ where
     let (min, max) = (min.into(), max.into());
     let (lo, hi) = (min.log10(), max.log10());
     let cuts = cuts(min, max, lo, hi, bins, context, Some)?;
-    let bound = |value| Bound::from_f64(array.data_type(), value);
+    let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let lower = bound(min)?;
     let upper = bound(max)?;
     // Include a final cut that rounds to max without giving its singleton bin
@@ -664,7 +673,7 @@ mod tests {
         context.cancel();
         assert!(matches!(
             build::<Histogram>(all.view(), 5, &context),
-            Err(Error::Cancelled)
+            Err(crate::AnalysisError::Cancelled(_))
         ));
     }
 }

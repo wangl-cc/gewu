@@ -7,7 +7,7 @@ use std::{
 
 use arrow::datatypes::SchemaRef;
 
-use crate::{column::Column, file, Error, FileMetadata, FileType, OpenOptions, Result};
+use crate::{column::Column, file, FileMetadata, FileType, OpenOptions, Result};
 
 mod info;
 mod query;
@@ -38,7 +38,9 @@ impl Dataset {
     }
 
     pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>> {
-        crate::stats::analysis::structure(self.column(column)?.array().data_type())
+        Ok(crate::stats::analysis::structure(
+            self.column(column)?.array().data_type(),
+        )?)
     }
 
     /// Open a supported file using its format's default options.
@@ -50,18 +52,23 @@ impl Dataset {
     /// Open a file with an explicit format, header policy or XLSX sheet name.
     pub fn open_with_options(path: impl AsRef<Path>, options: &OpenOptions) -> Result<Self> {
         let path = path.as_ref();
-        let source_path = path.canonicalize()?;
-        let file_size = std::fs::metadata(path)?.len();
+        let source_path = path
+            .canonicalize()
+            .map_err(|error| crate::IoError::new(crate::IoOperation::Canonicalize, path, error))?;
+        let file_size = std::fs::metadata(path)
+            .map_err(|error| crate::IoError::new(crate::IoOperation::ReadMetadata, path, error))?
+            .len();
         let (format, loaded) = file::read(path, options)?;
         let batch = loaded.batch;
         let schema = batch.schema();
 
         let n_rows = batch.num_rows();
         if n_rows > u32::MAX as usize {
-            return Err(Error::Unsupported(format!(
-                "{n_rows} rows is more than the supported {}",
-                u32::MAX
-            )));
+            return Err(crate::FileError::DatasetRows {
+                actual: n_rows as u64,
+                limit: u32::MAX as u64,
+            }
+            .into());
         }
 
         let columns = (0..batch.num_columns())
@@ -69,7 +76,7 @@ impl Dataset {
                 let field = schema.field(i);
                 Column::new(field.name(), batch.column(i).clone())
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(Self {
             source_path,
@@ -114,9 +121,12 @@ impl Dataset {
             .map(|i| i as u32)
     }
 
-    pub(crate) fn column(&self, c: u32) -> Result<&Column> {
+    pub(crate) fn column(&self, c: u32) -> Result<&Column, crate::ColumnError> {
         self.columns
             .get(c as usize)
-            .ok_or_else(|| Error::InvalidArgument(format!("no column {c}")))
+            .ok_or_else(|| crate::ColumnError::NotFound {
+                column: c,
+                column_count: self.columns.len() as u32,
+            })
     }
 }

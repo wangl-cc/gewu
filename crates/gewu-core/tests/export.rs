@@ -139,11 +139,16 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
         .filter(|format| format.is_enabled())
     {
         let result = doc.export(&[0, 2], format);
-        assert!(matches!(result, Err(Error::Unsupported(message))
-            if message.contains("profile") && message.contains("Parquet")));
+        assert!(matches!(
+            result,
+            Err(Error::Export(gewu_core::ExportError::NestedColumns {
+                columns,
+                ..
+            })) if columns == [2]
+        ));
         assert!(matches!(
             doc.export(&[1], format),
-            Err(Error::Unsupported(_))
+            Err(Error::Export(gewu_core::ExportError::NestedColumns { .. }))
         ));
         assert!(doc.export(&[0], format).is_ok());
     }
@@ -338,7 +343,7 @@ fn old_views_remain_exportable_and_invalid_columns_are_rejected() {
     for columns in [vec![], vec![0, 0], vec![99]] {
         assert!(matches!(
             doc.export(&columns, FileType::Csv),
-            Err(Error::InvalidArgument(_))
+            Err(Error::Column(_) | Error::Export(_))
         ));
     }
 }
@@ -355,13 +360,16 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
     assert_eq!(fs::read_to_string(&path).unwrap(), "keep me");
     assert!(matches!(
         export.write(&path),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_) | Error::Export(_))
     ));
     // A rename failure also discards the complete temporary output.
     let target_directory = directory.path().join("directory.csv");
     fs::create_dir(&target_directory).unwrap();
     let export = doc.export(&[0], FileType::Csv).unwrap();
-    assert!(matches!(export.write(&target_directory), Err(Error::Io(_))));
+    assert!(matches!(
+        export.write(&target_directory),
+        Err(Error::Io { .. })
+    ));
     assert!(target_directory.is_dir());
     assert!(fs::read_dir(directory.path()).unwrap().all(|entry| !entry
         .unwrap()
@@ -376,7 +384,7 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
         .starts_with("id\r\n3\r\n1\r\n"));
     assert!(matches!(
         export.write(&path),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_) | Error::Export(_))
     ));
 }
 
@@ -399,7 +407,13 @@ fn formatting_failure_does_not_publish_a_partial_file() {
     let destination = directory.path().join("result.csv");
     fs::write(&destination, "existing data").unwrap();
     let export = doc.export(&[0], FileType::Csv).unwrap();
-    assert!(matches!(export.write(&destination), Err(Error::Arrow(_))));
+    assert!(matches!(
+        export.write(&destination),
+        Err(Error::Export(gewu_core::ExportError::Encode {
+            format: FileType::Csv,
+            ..
+        }))
+    ));
     assert_eq!(fs::read_to_string(destination).unwrap(), "existing data");
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
 }
@@ -425,7 +439,12 @@ fn source_file_and_aliases_cannot_be_overwritten() {
     }
     for path in paths {
         let export = doc.export(&[0], FileType::Parquet).unwrap();
-        assert!(matches!(export.write(path), Err(Error::InvalidArgument(_))));
+        assert!(matches!(
+            export.write(path),
+            Err(Error::Export(
+                gewu_core::ExportError::SourceIsDestination { .. }
+            ))
+        ));
     }
     assert_eq!(fs::read(source).unwrap(), original);
 }

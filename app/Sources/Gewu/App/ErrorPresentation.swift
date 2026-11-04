@@ -5,7 +5,9 @@ extension Error {
     var userMessage: String {
         guard let error = self as? GewuError else { return localizedDescription }
         switch error {
-        case .Io(let message), .Unsupported(let message), .InvalidArgument(let message), .Internal(let message):
+        case .Io(_, let message), .File(_, let message), .Filter(_, let message),
+            .Find(_, let message), .Analysis(_, let message), .Export(_, let message),
+            .Limit(_, let message), .Internal(let message):
             return message
         case .Cancelled:
             return "The operation was cancelled."

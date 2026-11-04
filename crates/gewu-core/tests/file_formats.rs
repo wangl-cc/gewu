@@ -17,12 +17,12 @@ fn feature_availability_matches_open_errors() {
             fs::write(&path, []).unwrap();
             assert!(matches!(
                 gewu_core::Dataset::open(&path).map(std::sync::Arc::new),
-                Err(Error::Unsupported(_))
+                Err(Error::File(gewu_core::FileError::FormatDisabled { .. }))
             ));
             if format == FileType::Xlsx {
                 assert!(matches!(
                     gewu_core::xlsx_sheet_names(&path),
-                    Err(Error::Unsupported(_))
+                    Err(Error::File(gewu_core::FileError::FormatDisabled { .. }))
                 ));
             }
             assert!(matches!(
@@ -31,7 +31,7 @@ fn feature_availability_matches_open_errors() {
                     ..Default::default()
                 })
                 .map(std::sync::Arc::new),
-                Err(Error::Unsupported(_))
+                Err(Error::File(gewu_core::FileError::FormatDisabled { .. }))
             ));
         }
     }
@@ -48,7 +48,7 @@ fn assert_disabled_exports(doc: &std::sync::Arc<gewu_core::Dataset>) {
         if !format.is_enabled() {
             assert!(matches!(
                 doc.view().export(&[0], format),
-                Err(Error::Unsupported(_))
+                Err(Error::File(gewu_core::FileError::FormatDisabled { .. }))
             ));
         }
     }
@@ -152,7 +152,7 @@ mod delimited {
         fs::write(&path, "id\tlabel\n1\t雪\n").unwrap();
         assert!(matches!(
             gewu_core::Dataset::open(&path).map(std::sync::Arc::new),
-            Err(Error::Unsupported(_))
+            Err(Error::File(gewu_core::FileError::UnknownFormat))
         ));
         let options = OpenOptions {
             format: Some(FileType::Tsv),
@@ -170,13 +170,17 @@ mod delimited {
                 ..options.clone()
             })
             .map(std::sync::Arc::new),
-            Err(Error::InvalidArgument(_))
+            Err(Error::File(_))
         ));
         for contents in ["a\tb\n1\t2\t3\n", "a\tb\n1\n"] {
             fs::write(&path, contents).unwrap();
-            assert!(gewu_core::Dataset::open_with_options(&path, &options)
-                .map(std::sync::Arc::new)
-                .is_err());
+            assert!(matches!(
+                gewu_core::Dataset::open_with_options(&path, &options).map(std::sync::Arc::new),
+                Err(Error::File(gewu_core::FileError::Decode {
+                    format: FileType::Tsv,
+                    ..
+                }))
+            ));
         }
     }
 
@@ -347,7 +351,7 @@ mod xlsx {
                 ..Default::default()
             })
             .map(std::sync::Arc::new),
-            Err(Error::InvalidArgument(_))
+            Err(Error::File(gewu_core::FileError::SheetNotFound { .. }))
         ));
     }
 
@@ -415,7 +419,7 @@ mod xlsx {
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("keep"), "existing data").unwrap();
         let export = doc.export(&[0], FileType::Xlsx).unwrap();
-        assert!(matches!(export.write(&destination), Err(Error::Io(_))));
+        assert!(matches!(export.write(&destination), Err(Error::Io { .. })));
         assert_eq!(
             fs::read_to_string(destination.join("keep")).unwrap(),
             "existing data"

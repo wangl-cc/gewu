@@ -2,8 +2,8 @@
 
 use super::View;
 use crate::{
-    col_view::ColView, stats, AxisScale, Cancellation, Error, Histogram, LengthSummary,
-    NumericStatistics, Result, ValueSummary,
+    col_view::ColView, stats, AxisScale, Cancellation, Histogram, LengthSummary, NumericStatistics,
+    Result, ValueSummary,
 };
 
 impl View {
@@ -22,7 +22,15 @@ impl View {
             .map(|column| self.column_array(column).map(|array| (column, array)))
             .transpose()?;
         let y = (y_column, self.column_array(y_column)?);
-        stats::scatter::analyze(x, y, &self.rows, limit, x_scale, y_scale, cancellation)
+        Ok(stats::scatter::analyze(
+            x,
+            y,
+            &self.rows,
+            limit,
+            x_scale,
+            y_scale,
+            cancellation,
+        )?)
     }
 
     /// Logical missing-value count in the requested view.
@@ -39,9 +47,9 @@ impl View {
         column: u32,
         cancellation: &Cancellation,
     ) -> Result<NumericStatistics> {
-        self.with_analysis_view(column, cancellation, |view| {
+        Ok(self.with_analysis_view(column, cancellation, |view| {
             stats::analyze_statistics(view, cancellation)
-        })
+        })?)
     }
 
     /// Numeric distribution; bins must be positive and the scale supported by the column.
@@ -52,22 +60,23 @@ impl View {
         scale: AxisScale,
         cancellation: &Cancellation,
     ) -> Result<Histogram> {
-        self.with_analysis_view(column, cancellation, |view| {
+        Ok(self.with_analysis_view(column, cancellation, |view| {
             validate_bins(bins)?;
             if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {
-                return Err(Error::InvalidArgument(
-                    "logarithmic binning requires a numeric distribution".into(),
-                ));
+                return Err(crate::AnalysisError::UnsupportedOperation {
+                    operation: crate::AnalysisOperation::Distribution,
+                    data_type: view.data_type().clone(),
+                });
             }
             stats::counts_scaled(view, bins, scale, cancellation)
-        })
+        })?)
     }
 
     /// Estimated non-null cardinality and recounted candidate frequencies.
     pub fn analyze_values(&self, column: u32, cancellation: &Cancellation) -> Result<ValueSummary> {
-        self.with_analysis_view(column, cancellation, |view| {
+        Ok(self.with_analysis_view(column, cancellation, |view| {
             stats::analyze_values(view, cancellation)
-        })
+        })?)
     }
 
     /// Length statistics and a linear histogram; bins must be positive.
@@ -77,18 +86,18 @@ impl View {
         bins: u32,
         cancellation: &Cancellation,
     ) -> Result<LengthSummary> {
-        self.with_analysis_view(column, cancellation, |view| {
+        Ok(self.with_analysis_view(column, cancellation, |view| {
             validate_bins(bins)?;
             stats::analyze_lengths(view, bins, cancellation)
-        })
+        })?)
     }
 
     fn with_analysis_view<T>(
         &self,
         column: u32,
         cancellation: &Cancellation,
-        compute: impl FnOnce(ColView<'_>) -> Result<T>,
-    ) -> Result<T> {
+        compute: impl FnOnce(ColView<'_>) -> stats::Result<T>,
+    ) -> stats::Result<T> {
         cancellation.check()?;
         let result = compute(self.col(column)?)?;
         cancellation.check()?;
@@ -96,9 +105,14 @@ impl View {
     }
 }
 
-fn validate_bins(bins: u32) -> Result<()> {
+fn validate_bins(bins: u32) -> stats::Result<()> {
     if bins == 0 {
-        return Err(Error::InvalidArgument("bins must be at least 1".into()));
+        return Err(crate::AnalysisError::InvalidBinCount {
+            operation: crate::AnalysisOperation::Distribution,
+            value: bins,
+            min: 1,
+            max: u32::MAX,
+        });
     }
     Ok(())
 }

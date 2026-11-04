@@ -5,7 +5,9 @@ use std::sync::{
     Arc,
 };
 
-use crate::{Error, Result};
+#[derive(Debug, thiserror::Error)]
+#[error("cancelled")]
+pub struct CancellationError;
 
 #[derive(Clone, Default)]
 pub struct Cancellation {
@@ -20,7 +22,7 @@ impl Cancellation {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 
-    pub fn check(&self) -> Result<()> {
+    pub fn check(&self) -> std::result::Result<(), CancellationError> {
         #[cfg(test)]
         if let Some(left) = &self.checks_left {
             if left
@@ -34,7 +36,7 @@ impl Cancellation {
             }
         }
         if self.cancelled.load(Ordering::Relaxed) {
-            return Err(Error::Cancelled);
+            return Err(CancellationError);
         }
         for parent in &self.parents {
             parent.check()?;
@@ -42,7 +44,7 @@ impl Cancellation {
         Ok(())
     }
 
-    pub(crate) fn check_at(&self, index: usize) -> Result<()> {
+    pub(crate) fn check_at(&self, index: usize) -> std::result::Result<(), CancellationError> {
         if index.is_multiple_of(4096) {
             self.check()?;
         }
@@ -80,7 +82,7 @@ mod tests {
             let combined = first.combined_with(&second).combined_with(&third);
             assert!(combined.check().is_ok());
             [first, second, third][cancelled].cancel();
-            assert!(matches!(combined.check(), Err(Error::Cancelled)));
+            assert!(matches!(combined.check(), Err(CancellationError)));
         }
     }
 
@@ -91,7 +93,7 @@ mod tests {
         let child = session.combined_with(&page);
         page.cancel();
         page.cancel();
-        assert!(matches!(child.check(), Err(Error::Cancelled)));
+        assert!(matches!(child.check(), Err(CancellationError)));
         session.check().unwrap();
         session
             .combined_with(&Cancellation::default())
@@ -100,7 +102,7 @@ mod tests {
         session.cancel();
         assert!(matches!(
             session.combined_with(&Cancellation::default()).check(),
-            Err(Error::Cancelled)
+            Err(CancellationError)
         ));
     }
 }
