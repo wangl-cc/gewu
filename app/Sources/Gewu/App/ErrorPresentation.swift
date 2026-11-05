@@ -5,12 +5,19 @@ extension Error {
     var userMessage: String {
         guard let error = self as? GewuError else { return localizedDescription }
         switch error {
-        case .Io(let message), .Unsupported(let message), .InvalidArgument(let message), .Internal(let message):
+        case .Io(_, let message), .File(_, let message), .Filter(_, let message),
+            .Find(_, let message), .Analysis(_, let message), .Export(_, let message),
+            .Limit(_, let message), .Internal(let message):
             return message
         case .Cancelled:
             return "The operation was cancelled."
-        case .StaleVersion:
-            return "The results changed. Please try again."
         }
+    }
+
+    /// Cancellation from Swift or from Core; never shown to the user.
+    var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if let error = self as? GewuError, case .Cancelled = error { return true }
+        return false
     }
 }

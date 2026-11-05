@@ -1,73 +1,65 @@
 import SwiftUI
 
-struct ChoiceFilterView: View {
-    let column: UInt32
-    let values: [DistinctValue]
-    let onApply: ([Filter]) -> Void
+/// Arrow text equality compares UTF-8, unlike Swift's canonical-equivalence equality.
+struct LiteralTextValue: Hashable {
+    let value: String
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.value.utf8.elementsEqual(rhs.value.utf8) }
+    func hash(into hasher: inout Hasher) { for byte in value.utf8 { hasher.combine(byte) } }
+    var label: String { value.isEmpty ? "(empty string)" : value }
+}
 
-    @State private var query = ""
-    @State private var checked: Set<UInt64>
-
-    init(column: UInt32, values: [DistinctValue], current: [Filter], onApply: @escaping ([Filter]) -> Void) {
-        self.column = column
-        self.values = values
-        self.onApply = onApply
-        var checked = Set(values.map(\.key))
-        for filter in current {
-            switch filter {
-            case .inValues(_, let keys): checked.formIntersection(keys)
-            case .isNull(_, let negate):
-                checked.formIntersection(values.filter { ($0.label == nil) != negate }.map(\.key))
-            default: break
-            }
+struct ExactFilterDraft {
+    var exclude = true
+    var values: Set<LiteralTextValue> = []
+    init(_ filter: Filter?) {
+        if let filter, case .exact(let values, let exclude) = filter.condition {
+            self.values = Set(values.map { LiteralTextValue(value: $0) })
+            self.exclude = exclude
         }
-        _checked = State(initialValue: checked)
     }
+    func contains(_ value: LiteralTextValue) -> Bool { values.contains(value) != exclude }
+    mutating func set(_ value: LiteralTextValue, selected: Bool) {
+        if selected != exclude { values.insert(value) } else { values.remove(value) }
+    }
+    mutating func all(_ selected: Bool) {
+        exclude = selected
+        values.removeAll()
+    }
+    var condition: FilterCondition {
+        .exact(values: values.map(\.value).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }, exclude: exclude)
+    }
+}
 
-    private var shown: [DistinctValue] {
-        values.filter { query.isEmpty || ($0.label ?? "(null)").localizedCaseInsensitiveContains(query) }
-    }
+struct ChoiceFilterView: View {
+    let values: [ValueChoice]
+    @Binding var draft: ExactFilterDraft
+    @State private var query = ""
     var body: some View {
-        let mostCount = max(values.lazy.map(\.count).max() ?? 0, 1)
-        // Read here so selection changes invalidate the list, not only its deferred bindings.
-        let selectedKeys = checked
-        VStack(alignment: .leading, spacing: 10) {
+        let selected = draft
+        VStack {
             TextField("Find value", text: $query).textFieldStyle(.roundedBorder)
             List {
-                ForEach(shown, id: \.key) { value in
-                    HStack {
-                        Toggle(
-                            value.label ?? "(null)",
-                            isOn: Binding(
-                                get: { selectedKeys.contains(value.key) },
-                                set: { selected in
-                                    if selected { checked.insert(value.key) } else { checked.remove(value.key) }
-                                }
-                            )
-                        )
-                        .toggleStyle(.checkbox)
-                        .lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(formatCount(value.count)).monospacedDigit().foregroundStyle(.secondary)
-                        ProgressView(value: Double(value.count), total: Double(mostCount)).frame(width: 42)
-                    }
-                    .help(value.label ?? "(null)")
+                ForEach(
+                    values.filter { query.isEmpty || $0.label.localizedCaseInsensitiveContains(query) },
+                    id: \.literalIdentity
+                ) { item in
+                    Toggle(
+                        isOn: Binding(
+                            get: { selected.contains(item.literalIdentity) },
+                            set: { draft.set(item.literalIdentity, selected: $0) })
+                    ) {
+                        HStack {
+                            Text(item.label.isEmpty ? "(empty string)" : item.label).lineLimit(1)
+                            Spacer()
+                            Text(formatCount(item.count)).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }.toggleStyle(.checkbox).help(item.label)
                 }
-            }
-            .listStyle(.bordered)
-            .frame(height: 230)
-            Text("\(formatCount(UInt64(values.count))) values").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Select All") { checked.formUnion(shown.map(\.key)) }
-                Button("Clear") { checked.subtract(shown.map(\.key)) }
-                Spacer()
-                Button("Apply", action: apply).keyboardShortcut(.defaultAction)
-            }
+            }.listStyle(.bordered).frame(height: 230)
         }
     }
+}
 
-    private func apply() {
-        let everything = Set(values.map(\.key)).isSubset(of: checked)
-        onApply(everything ? [] : [.inValues(column: column, keys: checked.sorted())])
-    }
+extension ValueChoice {
+    var literalIdentity: LiteralTextValue { LiteralTextValue(value: value) }
 }

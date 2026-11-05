@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// SwiftUI updates this bridge frequently. The controller reloads rows only
-/// when Rust publishes a new view version, preserving the live NSTableView.
+/// when the window publishes a new immutable View, preserving the live NSTableView.
 struct DataTable: NSViewControllerRepresentable {
     @ObservedObject var model: DocumentModel
     // Observed only so SwiftUI calls `update` when Find state or highlights change.
@@ -50,12 +50,18 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var fitTask: Task<Void, Never>?
     private var findRevision: UInt64?
     private var highlightRevision: UInt64?
-    private var failedVersion: UInt64?
-    private var initialFitsRemaining = 32
-    private var initiallyFitted: Set<Int> = []
+    private var currentFindMatch: CellMatch?
+    private var failedView: ObjectIdentifier?
+    private var widths = ColumnWidths()
+    private var automaticFitTask: Task<Void, Never>?
+    private var fittingAutomatically = false
+    private var applyingWidths = false
+    private var firstWidthsPending = true
+    private let widthWorker = DispatchQueue(label: "gewu.table.widths", qos: .userInitiated)
     private var popover: NSPopover?
     private var builtColumns = false
-    private var version: UInt64?
+    private var applyingColumns = false
+    private var displayedView: GewuView?
     private var showsNumbers: Bool?
     private var reloading = false
     private var textSize: CGFloat = 12
@@ -76,8 +82,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let root = NSView()
         let header = FilterHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 32))
         header.onFilterClick = { [weak self] in self?.showFilter(at: $0) }
-        header.onColumnClick = { [weak self] in self?.selectColumn(at: $0) }
+        header.columnMenu = { [weak self] in self?.columnMenu(at: $0) }
+
         table.headerView = header
+        table.alphaValue = 0
         table.target = self
         table.action = #selector(tableClicked(_:))
         table.usesAlternatingRowBackgroundColors = false
@@ -99,6 +107,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         NotificationCenter.default.addObserver(
             self, selector: #selector(visibleRectChanged), name: NSView.boundsDidChangeNotification,
             object: scroll.contentView)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowActivityChanged), name: name, object: nil)
+        }
         // SwiftUI positions this view below its toolbar; no second titlebar inset.
         scroll.automaticallyAdjustsContentInsets = false
         for child in [scroll, gutter] {
@@ -120,13 +132,17 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: Int = 0) {
         loadViewIfNeeded()
         let info = model.info
-        let findChanged = findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
+        let findChanged =
+            findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
+            || currentFindMatch != model.find.currentMatch
         findRevision = model.find.revision
         highlightRevision = model.find.highlightRevision
+        currentFindMatch = model.find.currentMatch
         let effectiveHeight = max(rowHeight, fontSize + 8)
         let presentationChanged =
             textSize != fontSize || table.rowHeight != effectiveHeight || self.rowNumberBase != rowNumberBase
         if presentationChanged {
+            widths.fontChanged()
             textSize = fontSize
             fonts = CellFonts(size: fontSize)
             self.rowNumberBase = rowNumberBase
@@ -144,11 +160,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             gutter.setShown(showsRowNumbers)
             table.tableColumn(withIdentifier: rowHeaderID)?.isHidden = !showsRowNumbers
         }
-        if version != model.current.version {
-            version = model.current.version
+        if displayedView !== model.view {
+            displayedView = model.view
+            closePopover()
             stopLoading()
             cache.clear()
-            failedVersion = nil
+            failedView = nil
             reloading = true
             table.deselectAll(nil)
             table.reloadData()
@@ -165,21 +182,54 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             fitGutter(info)
             gutter.needsDisplay = true
         }
+        applyingColumns = true
+        let visible = model.appliedSpec.columns.map(\.column)
+        for column in table.tableColumns {
+            if let i = columnIndex(column) { column.isHidden = !visible.contains(UInt32(i)) }
+        }
+        for (offset, column) in visible.enumerated() {
+            let from = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
+            if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
+        }
+        applyingColumns = false
         for column in table.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.textSize = textSize
             header.filtered = model.appliedFilterColumns.contains(UInt32(i))
-            let sort = model.appliedState.sort.first { $0.column == UInt32(i) }
+            header.inspected = model.inspectorVisible && model.inspectedColumn == i
+            let sort = model.appliedSpec.columns.first { $0.column == UInt32(i) }?.sort
             header.sorted = sort != nil
+            header.sortPriority = sort.map { Int($0.priority) + 1 } ?? 0
             header.sortAscending = !(sort?.descending ?? false)
         }
         table.headerView?.needsDisplay = true
         requestHighlights()
+        fitVisibleColumns()
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
-    @objc private func visibleRectChanged() { requestHighlights() }
+    @objc private func windowActivityChanged(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === view.window else { return }
+        table.enumerateAvailableRowViews { row, _ in
+            for cell in row.subviews.compactMap({ $0 as? MatchCellView }) { cell.refreshAppearance() }
+        }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        fitVisibleColumns()
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        fitVisibleColumns()
+    }
+
+    @objc private func visibleRectChanged() {
+        requestHighlights()
+        fitVisibleColumns()
+    }
 
     private func requestHighlights() {
         let rows = table.rows(in: table.visibleRect)
@@ -187,7 +237,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         model.find.requestHighlight(start: UInt64(rows.location), count: UInt32(rows.length))
     }
 
-    private func buildColumns(_ info: FileInfo) {
+    private func buildColumns(_ info: DatasetInfo) {
         gutter.label = { [weak self] row in
             guard let self, let block = self.block(for: row, column: nil) else { return nil }
             let r = row - Int(block.start)
@@ -209,15 +259,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             header.showsFunnel = true
             c.headerCell = header
             c.headerToolTip =
-                "\(column.name): \(column.technicalType)\nClick to sort; use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
-            c.width = fittedWidth(column: i, texts: [], maxWidth: 320)
+                "\(column.name): \(column.technicalType)\nClick to cycle sorting; Shift-click for multiple keys. Use the funnel to filter.\nDrag to reorder; double-click a divider to fit the column."
+            c.width = 140
             c.minWidth = 50
-            c.sortDescriptorPrototype = NSSortDescriptor(key: "c\(i)", ascending: true)
             table.addTableColumn(c)
         }
     }
 
-    private func fitGutter(_ info: FileInfo) {
+    private func fitGutter(_ info: DatasetInfo) {
         gutter.fit(largest: rowNumber(max(info.rowCount, 1) - 1, base: rowNumberBase))
         gutter.toolTip = "Row in file (\(formatRowNumber(0, base: rowNumberBase))-based)"
         if let column = table.tableColumn(withIdentifier: rowHeaderID) {
@@ -225,23 +274,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             column.maxWidth = gutter.fittedWidth
             column.width = gutter.fittedWidth
         }
-    }
-
-    private func fittedWidth(column: Int, texts: [String?], maxWidth: CGFloat) -> CGFloat {
-        let info = model.info
-        func width(_ text: String, font: NSFont) -> CGFloat {
-            ceil((text as NSString).size(withAttributes: [.font: font]).width)
-        }
-        let c = info.columns[column]
-        var result =
-            max(
-                width(c.name, font: .systemFont(ofSize: textSize, weight: .semibold)),
-                width(c.displayType, font: .systemFont(ofSize: textSize - 2))) + 50
-        for text in texts.prefix(200) {
-            result = max(
-                result, width(String((text ?? "null").prefix(200)), font: fonts.font(for: model.kinds[column])) + 20)
-        }
-        return min(max(result, 60), maxWidth)
     }
 
     private func columnIndex(_ column: NSTableColumn) -> Int? {
@@ -252,7 +284,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private func block(for row: Int, column: UInt32?) -> RowBlock? {
         let key = RowCache.Key(start: row / RowCache.blockSize * RowCache.blockSize, column: column)
         if let block = cache.block(for: key) { return block }
-        guard failedVersion != version, loading != key, !pending.contains(key) else { return nil }
+        guard failedView != displayedView.map(ObjectIdentifier.init), loading != key, !pending.contains(key) else {
+            return nil
+        }
         // Bound queued work as well as cached data. Completion revisits visible
         // placeholders, so a full queue never permanently drops a visible cell.
         if pending.count < 128 { pending.append(key) }
@@ -261,28 +295,26 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func loadNext() {
-        guard loading == nil, !pending.isEmpty, let version else { return }
-        let doc = model.doc
+        guard loading == nil, !pending.isEmpty, let view = displayedView else { return }
         let key = pending.removeFirst()
         loading = key
         let reader = reader
         loadTask = Task { [weak self] in
             do {
                 let block = try await reader.read(
-                    doc, version: version, start: UInt64(key.start),
+                    view, start: UInt64(key.start),
                     count: UInt32(RowCache.blockSize), columns: key.column.map { [$0] } ?? [])
-                guard !Task.isCancelled, let self, self.version == version else { return }
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
                 self.cache.insert(block, for: key)
                 self.display(block, column: key.column)
                 self.loading = nil
                 self.fillVisiblePlaceholders()
                 self.loadNext()
             } catch {
-                guard !Task.isCancelled, let self, self.version == version else { return }
+                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
                 self.loading = nil
                 self.pending.removeAll()
-                self.failedVersion = version
-                if case GewuError.StaleVersion = error { return }
+                self.failedView = ObjectIdentifier(view)
                 self.model.reportError(error, prefix: "Could not load rows: ")
             }
         }
@@ -298,13 +330,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                     render(cell, column: Int(column), row: row, block: block)
                 }
             }
-            // At most 32 * 32 cells contribute to automatic width sampling.
-            if initialFitsRemaining > 0, !initiallyFitted.contains(Int(column)) {
-                initiallyFitted.insert(Int(column))
-                initialFitsRemaining -= 1
-                table.tableColumns[index].width = fittedWidth(
-                    column: Int(column), texts: Array(block.cells.prefix(32)), maxWidth: 320)
-            }
+
         }
         gutter.needsDisplay = true
         if let row = model.selectedDisplayRow, row >= Int(block.start), row < Int(block.start) + Int(block.nRows) {
@@ -331,11 +357,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func stopLoading() {
         loadTask?.cancel()
         fitTask?.cancel()
+        automaticFitTask?.cancel()
         pending.removeAll()
         loading = nil
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { Int(model.current.rowCount) }
+    func numberOfRows(in tableView: NSTableView) -> Int { Int(model.view.rowCount()) }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let result = (table.makeView(withIdentifier: rowViewID, owner: self) as? StripedRowView) ?? StripedRowView()
@@ -350,41 +377,27 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let cell =
             (table.makeView(withIdentifier: tableColumn.identifier, owner: self) as? MatchCellView)
             ?? makeCell(identifier: tableColumn.identifier)
-        guard let field = cell.textField else { return cell }
         let kind = model.kinds[col]
-        cell.wholeCellMatch = false
         cell.isLoading = true
-        field.stringValue = "…"
-        field.font = fonts.font(for: kind)
-        field.alignment = kind.alignment
-        field.textColor = .tertiaryLabelColor
+        cell.configure(text: "…", font: fonts.font(for: kind), alignment: kind.alignment, muted: true)
         if let block = block(for: row, column: UInt32(col)) { render(cell, column: col, row: row, block: block) }
         return cell
     }
 
     private func render(_ cell: MatchCellView, column: Int, row: Int, block: RowBlock) {
-        guard let field = cell.textField, row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
+        guard row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
             return
         }
         let kind = model.kinds[column]
         let index = row - Int(block.start)
         let hit = model.find.isMatch(row: row, column: column)
+        let current = model.find.currentMatch
         cell.isLoading = false
-        cell.wholeCellMatch = hit && kind != .text
-        if let text = block.cells[index] {
-            if hit, kind == .text, let query = model.find.activeQuery {
-                field.attributedStringValue = highlighted(text, query: query, font: fonts.font(for: kind))
-            } else {
-                field.stringValue = text
-                field.textColor = hit ? .black : .labelColor
-            }
-            field.font = fonts.font(for: kind)
-        } else {
-            field.stringValue = "null"
-            field.font = fonts.null
-            field.textColor = .tertiaryLabelColor
-        }
-        field.alignment = kind.alignment
+        let text = block.cells[index]
+        cell.configure(
+            text: text ?? "null", font: text == nil ? fonts.null : fonts.font(for: kind), alignment: kind.alignment,
+            query: hit && kind == .text ? model.find.activeQuery : nil, wholeMatch: hit && kind != .text,
+            current: current?.displayRow == UInt64(row) && current?.column == UInt32(column), muted: text == nil)
     }
 
     private func makeCell(identifier: NSUserInterfaceItemIdentifier) -> MatchCellView {
@@ -408,55 +421,184 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableView(_ tableView: NSTableView, shouldReorderColumn column: Int, toColumn newColumn: Int) -> Bool {
-        table.tableColumns[column].identifier != rowHeaderID && newColumn > 0
+        // AppKit first asks with -1 whether dragging may begin, before proposing a destination.
+        tableView.tableColumns[column].identifier != rowHeaderID && (newColumn == -1 || newColumn > 0)
     }
 
     func tableViewColumnDidMove(_ notification: Notification) {
-        model.findColumnsChanged()
+        guard !applyingColumns else { return }
+        model.reorderColumns(displayedColumns)
         requestHighlights()
     }
 
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
-        guard let i = columnIndex(table.tableColumns[column]) else { return table.tableColumns[column].width }
-        let visible = table.rows(in: table.visibleRect)
-        guard visible.location != NSNotFound else { return table.tableColumns[column].width }
-        let doc = model.doc
-        let version = model.current.version
-        let start = visible.location
-        let count = min(200, visible.length)
-        fitTask?.cancel()
-        let reader = reader
-        fitTask = Task { [weak self] in
-            do {
-                let block = try await reader.read(
-                    doc, version: version, start: UInt64(start),
-                    count: UInt32(count), columns: [UInt32(i)])
-                guard !Task.isCancelled, let self, self.version == version,
-                    let target = self.table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("c\(i)"))
-                else { return }
-                self.initiallyFitted.insert(i)
-                target.width = self.fittedWidth(column: i, texts: block.cells, maxWidth: 600)
-            } catch {
-                guard !Task.isCancelled, let self, self.version == version else { return }
-                self.model.reportError(error, prefix: "Could not fit column: ")
-            }
+        if let source = columnIndex(table.tableColumns[column]) {
+            // Start after AppKit finishes its divider resize notification.
+            DispatchQueue.main.async { [weak self] in self?.fitColumns([UInt32(source)], automatic: false) }
         }
         return table.tableColumns[column].width
     }
 
-    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-        guard let first = table.sortDescriptors.first, let key = first.key,
-            let column = UInt32(key.dropFirst())
-        else {
-            model.setSort([])
-            return
-        }
-        if table.sortDescriptors.count > 1 {
-            table.sortDescriptors = [first]
-            return
-        }
-        model.setSort([SortKey(column: column, descending: !first.ascending)])
+    func tableViewColumnDidResize(_ notification: Notification) {
+        guard !applyingWidths,
+            let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
+            let source = columnIndex(column)
+        else { return }
+        widths.manual(UInt32(source))
     }
+
+    private func fitVisibleColumns() {
+        guard builtColumns, !fittingAutomatically, view.window != nil, displayedView != nil else { return }
+        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> UInt32? in
+            let col = table.tableColumns[index]
+            guard !col.isHidden, let source = columnIndex(col), widths.needsAutomatic(UInt32(source)) else {
+                return nil
+            }
+            return UInt32(source)
+        }
+        if columns.isEmpty {
+            if firstWidthsPending {
+                table.alphaValue = 1
+                firstWidthsPending = false
+            }
+            return
+        }
+        fitColumns(columns, automatic: true)
+    }
+
+    private func fitColumns(_ columns: [UInt32], automatic: Bool) {
+        guard let view = displayedView, !columns.isEmpty else { return }
+        if automatic { fittingAutomatically = true } else { fitTask?.cancel() }
+        let tickets = columns.map { widths.begin($0) }
+        let rows = table.rows(in: table.visibleRect)
+        let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
+        let inputs = columns.map { column in
+            let info = model.info.columns[Int(column)]
+            let key = RowCache.Key(start: Int(start) / RowCache.blockSize * RowCache.blockSize, column: column)
+            let sample = cache.block(for: key).map { Array($0.cells.prefix(32)) }
+            return ColumnWidthMeasurement.Input(
+                column: column, name: info.name,
+                type: info.displayType, text: info.valueCategory == .text, sample: sample)
+        }
+        let fontSize = textSize
+        let worker = widthWorker
+        let cancellation = ColumnWidthMeasurement.Request()
+        let task = Task { [weak self] in
+            var continueFitting = true
+            defer {
+                if let self {
+                    if automatic { self.fittingAutomatically = false }
+                    self.table.alphaValue = 1
+                    self.firstWidthsPending = false
+                    if automatic, continueFitting { self.fitVisibleColumns() }
+                }
+            }
+            do {
+                let result: [UInt32: CGFloat] = try await withTaskCancellationHandler {
+                    try Task.checkCancellation()
+                    return try await withCheckedThrowingContinuation { continuation in
+                        worker.async {
+                            do {
+                                continuation.resume(
+                                    returning: try ColumnWidthMeasurement.measure(
+                                        view: view, columns: inputs, start: start, fontSize: fontSize,
+                                        maximum: automatic ? 420 : 600, cancellation: cancellation))
+                            } catch { continuation.resume(throwing: error) }
+                        }
+                    }
+                } onCancel: {
+                    cancellation.cancel()
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
+                guard self.displayedView === view, self.textSize == fontSize else {
+                    for ticket in tickets { self.widths.abandon(ticket) }
+                    return
+                }
+                self.applyingWidths = true
+                defer { self.applyingWidths = false }
+                for ticket in tickets where self.widths.accept(ticket) {
+                    if let column = self.table.tableColumn(withIdentifier: .init("c\(ticket.column)")),
+                        let width = result[ticket.column]
+                    {
+                        column.width = width
+                    }
+                }
+            } catch {
+                guard let self else { return }
+                for ticket in tickets { self.widths.abandon(ticket) }
+                if Task.isCancelled, self.displayedView === view { continueFitting = false }
+                if !Task.isCancelled, !(error is CancellationError), self.displayedView === view {
+                    continueFitting = false
+                    self.model.reportError(error, prefix: "Could not fit columns: ")
+                }
+            }
+        }
+        if automatic { automaticFitTask = task } else { fitTask = task }
+    }
+
+    func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        guard let column = columnIndex(tableColumn) else { return }
+        let multiple = (table.headerView as? FilterHeaderView)?.sortingMultiple ?? false
+        DispatchQueue.main.async { [weak self] in
+            self?.model.selectedColumn = column
+            self?.model.cycleSort(column: UInt32(column), multiple: multiple)
+        }
+    }
+
+    private func columnMenu(at index: Int) -> NSMenu? {
+        guard index >= 0, index < table.tableColumns.count, let column = columnIndex(table.tableColumns[index]) else {
+            return nil
+        }
+        let menu = NSMenu()
+        for (title, action) in [
+            ("Analyze Column", #selector(analyzeMenuColumn(_:))),
+            ("Filter Column…", #selector(filterMenuColumn(_:))),
+            ("Sort Ascending", #selector(sortMenuAscending(_:))),
+            ("Sort Descending", #selector(sortMenuDescending(_:))),
+            ("Fit Column Width", #selector(fitMenuColumn(_:))),
+            ("Fit All Columns", #selector(fitMenuAll(_:))),
+            ("Customize Columns…", #selector(customizeMenuColumns(_:))),
+            ("Show All Columns", #selector(showMenuColumns(_:))),
+            ("Hide Column", #selector(hideMenuColumn(_:))),
+            ("Cancel Column Sort", #selector(clearMenuColumnSort(_:))),
+            ("Clear All Sorting", #selector(clearMenuSort(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = UInt32(column)
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func analyzeMenuColumn(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.inspectColumn(Int(column)) }
+    }
+    @objc private func sortMenuAscending(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.setSortDirection(column: column, descending: false) }
+    }
+    @objc private func sortMenuDescending(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.setSortDirection(column: column, descending: true) }
+    }
+    @objc private func fitMenuColumn(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { fitColumns([column], automatic: false) }
+    }
+    @objc private func fitMenuAll(_ item: NSMenuItem) { fitColumns(displayedColumns, automatic: false) }
+    @objc private func customizeMenuColumns(_ item: NSMenuItem) { model.showsColumns = true }
+    @objc private func showMenuColumns(_ item: NSMenuItem) { model.showAllColumns() }
+
+    @objc private func filterMenuColumn(_ item: NSMenuItem) {
+        guard let column = item.representedObject as? UInt32 else { return }
+        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+    }
+    @objc private func hideMenuColumn(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.hideColumn(column) }
+    }
+    @objc private func clearMenuColumnSort(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.removeSort(column: column) }
+    }
+    @objc private func clearMenuSort(_ item: NSMenuItem) { model.clearSort() }
 
     @objc private func tableClicked(_ sender: Any?) { selectColumn(at: table.clickedColumn) }
     private func selectColumn(at index: Int) {
@@ -500,7 +642,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         showFilter(at: index)
     }
 
-    var displayedColumns: [UInt32] { table.tableColumns.compactMap(columnIndex).map(UInt32.init) }
+    func showColumnFilter(_ column: UInt32) {
+        guard model.appliedSpec.columns.contains(where: { $0.column == column }) else { return }
+        scrollToColumn(Int(column))
+        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+    }
+
+    var displayedColumns: [UInt32] {
+        table.tableColumns.filter { !$0.isHidden }.compactMap(columnIndex).map(UInt32.init)
+    }
 
     private func showFilter(at index: Int) {
         guard let header = table.headerView,
@@ -509,11 +659,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         closePopover()
         let column = UInt32(col)
         let content = ColumnFilterView(
-            doc: model.doc, column: column, info: model.info.columns[col],
-            state: model.state, current: model.columnFilters[column] ?? []
+            viewer: model.viewer, column: column, info: model.info.columns[col],
+            current: model.spec.columns.first { $0.column == column }?.filter
         ) { [weak self] filters in
             self?.closePopover()
-            self?.model.setFilters(filters, column: column)
+            self?.model.setFilter(filters, column: column)
         }
         let popover = NSPopover()
         popover.behavior = .transient
@@ -531,7 +681,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard !table.selectedRowIndexes.isEmpty else { return }
         let columns = displayedColumns
         model.copying.copy(
-            document: model.doc, version: model.current.version,
+            view: model.view,
             rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
             names: columns.map { model.info.columns[Int($0)].name })
     }

@@ -6,65 +6,67 @@ Behavior references: [data types](../../docs/data-types.md), [Find and filtering
 
 For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
-## Document and views
+## Dataset and immutable views
 
-`Document` is the public entry point. It retains immutable Arrow columns and publishes a current view containing source row numbers in display order. Sorting and filtering change the row selection, not the source values.
+`Dataset` owns decoded source data, schema and shared column caches. `Arc<Dataset>::view()` creates an initial `Arc<View>` containing all source rows and columns. Opening is available through `Dataset::open`, `open_with_options` and `OpenOptions`, including XLSX worksheet selection.
 
-- `Document::open` recognizes extensions case-insensitively, with a Parquet magic fallback for unconventional filenames.
-- `Document::open_with_options` accepts an explicit format, header policy and XLSX worksheet name through `OpenOptions`.
-- `Document::apply_view` evaluates a `ViewState` and returns a `ViewInfo`. A newer view request supersedes older pending work. Cancellation is checked during scans, sorting and before publication; a request that has already passed the final commit check may finish successfully.
-- `Document::rows(version, start, count, columns)` formats a requested block and returns source row numbers. A stale version returns `Error::StaleVersion` instead of silently reading a different view. Ordinary row reads do not depend on Find state.
-- `Document::prepare_find(version, query, columns)` captures a view and ordered visible-column scope. The resulting `Find` owns independent cancellation and returns bounded directional cell pages or visible-row match flags, without changing the view.
-- `Document::prepare_export` captures a view and selected columns. The resulting `Export` owns its snapshot, progress and cancellation, and commits the destination only after writing succeeds.
+A View owns an `Arc<Dataset>`, a `Box<[u32]>` of source columns in display order, and an `Arc<[u32]>` of source rows in display order. It does not store query conditions or window state.
 
-The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Value indexes are lazy. Explicit-filter dictionary predicates cache matches once per dictionary value; Find instead evaluates only keys referenced by its selected rows.
+- `dataset.query(spec, cancellation)` validates a complete specification, filters and sorts the **full Dataset**, and returns a new View. Relaxing a filter can therefore recover rows absent from previous Views. Queries neither change nor invalidate existing Views.
+- `view.reorder_columns(order)` accepts exactly a permutation of the existing visible columns. It creates a new column array and shares the Dataset and row array; it performs no row computation.
+- `view.rows(start, count, columns)` returns formatted cells and source row IDs from that View. Explicit column arguments are source-schema indexes in the requested order.
+- `view.find(query, columns)` captures shared row and column data for bounded navigation and highlighting.
+- `view.export(columns, format)` captures shared data for a single-use export with progress, cancellation and atomic destination replacement.
 
-## Query preparation and execution
+The caller owns the current `{ view, spec }` pair and replaces it only after a successful, still-relevant request. There is no backend current View, version, query registration, commit or query-spec getter. Independent windows can share a Dataset or View while maintaining different query states. Opening the same path again does not automatically deduplicate data.
 
-`ViewState` carries explicit column filters and sorting. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
+The whole input is decoded into memory. Query execution reads native Arrow arrays rather than formatting or widening entire columns for comparison. It reuses bounded batch masks, but matching source-row selections still allocate memory. Each column lazily builds one compact distinct-value encoding (`u8` codes, null reserved for code 255), shared by every View over the dataset; native dictionary columns reuse Arrow's encoded values instead of re-detecting them, and high-cardinality columns are left unencoded. Filters compare their native values. On encoded columns, Exact and Text filters evaluate each distinct value once and then match rows by code; Find instead evaluates only keys referenced by its selected rows.
 
-`Bound` is an immutable endpoint tied to the column's complete logical Arrow type. Text fields call `Document::parse_bound` once; numeric controls can use native bound constructors. Callers should preserve the supplied bounds instead of reconstructing them from approximate plotting coordinates.
+## Query execution
 
-`Document::column_capabilities` reports supported operations. `Document::validate_filter` validates and prepares a filter without applying a view. Preparation parses scalar inputs and binds borrowed arrays; value-list filters may build a lazy index. String matching prepares one reusable Unicode matcher per query, without recompiling it for every batch.
+`QuerySpec.columns` lists visible source columns in display order, with at most one filter and one optional priority-bearing sort per column. Omitted columns do not filter or sort. Ordinary queries recompute row IDs; only explicit column reordering reuses them. Duplicate column IDs and sort priorities are rejected. `Filter` describes those conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
-Prepared predicates evaluate in bounded batches with cancellation checks. Native row predicates can skip rows already rejected by another filter. Sorting compares source row IDs in bounded runs and merges, with cancellation checkpoints between units of work. Sort-key columns are not widened or copied in full. Nulls remain last in both directions; equal keys retain source-row order. Comparator preparation and individual value comparisons are not interruptible, so checkpoints do not imply a fixed wall-clock deadline. `ViewEngine` publishes the completed view at its final cancellation check.
+`Filter` carries one `FilterCondition` and an orthogonal null policy. Range and exact values arrive as text and are bound once against the column's Arrow type. `Bound` remains internal to execution and histogram construction. Public histogram endpoints are `RangeBound { value, label, coordinate }` projections; submit their lossless `value` text directly to a filter. Display labels and approximate plot coordinates must not be used as filter inputs.
+
+`Dataset::info().columns[*].capabilities` reports supported operations. `Dataset::query` compiles each filter once and executes the resulting predicates; invalid typed input returns an error without producing a new View. Compilation parses scalar inputs and binds borrowed arrays; value-list filters may build the column's compact encoding. Case-sensitive Text filters compare strings directly. Case-insensitive filters compile one reusable Unicode case-folding matcher per query, without recompiling it for every batch; Equals compares ASCII values with ASCII folding and uses the matcher only when either side is non-ASCII.
+
+Compiled predicates evaluate in bounded batches with cancellation checks. Native row predicates can skip rows already rejected by another filter. Sorting compares source row IDs in bounded runs and merges, with cancellation checkpoints between units of work. Sort-key columns are not widened or copied in full. Nulls remain last in both directions; equal keys retain source-row order. Comparator preparation and individual value comparisons are not interruptible, so checkpoints do not imply a fixed wall-clock deadline. The query returns its new View after a final cancellation check; publication belongs to the caller.
 
 ### Cell Find
 
 `Find::next` and `Find::previous` return at most 256 ordered cell cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight` covers at most 256 display rows. Neither API computes or estimates a total hit count.
 
-Scans prepare typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time. The literal text matcher is parsed once per session, so pages and highlights reuse it instead of recompiling per column. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell. `Find::operation` creates independent cancellation for one page or highlight, so obsolete same-query work can stop without closing the session; `Find::cancel` permanently closes the captured session. Both scopes reach nested predicate checkpoints, but individual comparisons and formatting steps do not have a fixed wall-clock deadline.
+Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time. The literal text matcher is compiled and retained when the Find object is created; typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell. Pass an independent `Cancellation` to each page or highlight request, so obsolete same-query work can stop without closing the session; `Find::cancel` permanently closes the captured session. Both scopes reach nested predicate checkpoints, but individual comparisons and formatting steps do not have a fixed wall-clock deadline.
 
 ### Filter editors and candidate sessions
 
-`Document::filter_spec` returns the editor contract and facet data. Core owns the recommendation; frontends should use it rather than duplicate the [selection rules](../../docs/search-and-filter.md#editor-selection).
+`Dataset::info().columns[*].capabilities` reports static supported operations; frontends choose their editors. `view.filter_choices(column, cancellation)` returns bounded non-null `ValueChoice { label, value, count }` records and a separate null count. `None` for the values list means no complete bounded list is available. Dictionary construction stops at the first value beyond its fixed limit. The dictionary projects each candidate directly to `ValueChoice { label, value, count }`; codes stay internal and never pass through statistical reports. The protocol carries exact text, never dictionary codes; predicate compilation uses codes when available and native comparison otherwise.
 
-The editor recommendation is cached. A bounded cardinality probe avoids building full row-code indexes solely to classify high-cardinality columns. Non-text choice keys remain stable for the document's lifetime, and values with zero matching rows remain available.
+Value lists exist only for columns with a compact dictionary; high-cardinality columns are filtered with Text or Range conditions instead. Complete dictionary choices omit zero-count values; all candidate and null counts describe the bound View. Filter editors pass the column's facet View, so the column's own filter does not hide its alternatives.
 
-For string choices, `prepare_text_choices(column, state)` captures a facet snapshot; run preparation off the UI thread. Its `page(query, after, limit)` returns up to 200 values in UTF-8 lexical order, with null first, plus an exclusive cursor for the next page. Candidate search is a Unicode case-insensitive literal substring; selection uses exact, case-sensitive string identities. Each page scans the source but retains only a bounded page of candidates, including values with zero facet counts. No complete distinct index is built. `invalidate_pages()` cancels obsolete page scans without discarding the facet and returns a generation for `page_for_generation(query, after, limit, generation)`. Capture it when accepting a new request; a queued stale request must never advance it. `cancel()` independently and permanently closes the session; preparation itself has no cancellation handle.
+`Cancellation` is the shared terminal signal for queries, filter compilation, dictionary construction, analysis, Find and export. Filter choices and distributions require an explicit cancellation signal, which reaches selected-row scans and native kernels. Dictionary construction publishes only a complete encoding or a confirmed unsupported/high-cardinality result. Cancellation and errors leave the cache uninitialized; waiting requests check their own cancellation and can retry after an interrupted builder. Checkpoints bound scan work, not wall-clock time inside a third-party kernel or a single value comparison. File decoding still requires completion of the underlying reader; UI cancellation suppresses obsolete publication rather than interrupting that reader.
 
-Range editors receive optional distributions with exact typed bounds for each bin. Geometry may use bin indexes, while filtering submits those bounds directly. Dictionary columns can support range filtering without a histogram.
+`view.filter_distribution(column, bins, scale, cancellation)` returns optional distributions with exact bounds for each bin, with 1–60 requested bins. Geometry may use bin indexes, while filtering submits those bounds directly. Dictionary columns can support range filtering without a histogram.
 
 ## Statistics and histograms
 
 Inspector Statistics includes `median_label`. It selects the central native values using one source-row-ID buffer, without widening columns or fully sorting them; partition scans check cancellation. Nulls and NaNs are excluded. An even-sized median averages the two central values, retaining exact integer/decimal precision and one extra decimal place when necessary. Floating-point midpoints avoid overflow; infinities participate in ordering, and an opposite-infinity midpoint is undefined (`None`). Temporal midpoints retain fractional source units: a date midpoint can include a time, and timestamp/time results can show a half nanosecond. Duration midpoints use decimal seconds with an explicit `s` suffix. Mean and standard deviation remain floating-point estimates. Computing an exact median adds O(selected rows) temporary row-ID memory when Statistics is requested.
 
-Analysis has two reporting contracts. `prepare_analysis(version, column, section)` captures an independently cancellable job for one inspector section; callers request only expanded sections. Its Values section uses fixed-capacity estimated counting: 4,096 smallest hashes for distinct cardinality and 256 Misra–Gries counters for candidate selection, retaining source row IDs rather than owned values. A second full scan recounts the selected candidates; displayed counts are not scaled sample counts or candidate-counter estimates. Candidate selection may omit globally top-ranked values, and 64-bit hash collisions may merge groups, so results remain marked estimated. Native scalar hashing follows dictionary keys without encoding the complete dictionary. The final eight formatted labels still consume space proportional to their lengths. `column_summary(column, top)` is the compact aggregate report: it collects exact native numeric distinct counts and up to `top` non-numeric values. Both share the native numeric implementation under `analysis/numeric`; they intentionally differ in cost and result shape.
+`View::count_nulls`, `analyze_statistics`, `analyze_distribution`, `analyze_values` and `analyze_lengths` return concrete result types (null counting returns `u64`). Each accepts a source column and caller-owned `Cancellation`; distributions additionally accept `bins` and `scale`, and lengths accept `bins`. The View itself binds the data snapshot. Callers create cancellation before queueing, execute scans off the UI thread, and check their View/column/request context before publishing results. A different View never cancels or invalidates this computation. `Dataset::analysis_capabilities` returns boolean `AnalysisCapabilities` fields for statistics, distribution, values, lengths and structure; Overview is always available. `column_structure` reads nested type metadata. Neither scans rows. Callers can request analyses directly without capability discovery: each computation validates its own input. Section identities, order and expansion state belong to the frontend.
 
-`prepare_scatter(version, x_column, y_column, limit)` captures an independently cancellable `ScatterAnalysis`. `None` for X means the zero-based source row ID. Axes must have the `scatter` column capability (direct numeric/temporal arrays), and `limit` must be 1–4,096. `run()` scans only the captured view, omits null/NaN/infinite coordinate pairs, counts eligible rows, and retains the lowest deterministic source-row hash priorities in O(limit) working memory. Sorting the same view does not change the sample; filtering does. Returned points include source IDs, approximate f64 coordinates and exact native display labels. Temporal coordinates use physical Arrow units, as histograms do. `sampled` indicates truncation; the bounded sample is not a complete plot and can omit outliers. Buffers are shared with the snapshot, and returned label memory depends on label lengths.
+`analyze_values` uses fixed-capacity estimated counting: 4,096 smallest hashes for distinct cardinality and 256 Misra–Gries counters for candidate selection, retaining source row IDs rather than owned values. A second full scan recounts the selected candidates; displayed counts are not scaled sample counts or candidate-counter estimates. Candidate selection may omit globally top-ranked values, and 64-bit hash collisions may merge groups, so the interface always represents estimated values. Native scalar hashing follows dictionary keys without encoding the complete dictionary. The final eight formatted labels still consume space proportional to their lengths. Results contain `ValueFrequency { label, count }` for non-null values; they carry no dictionary codes or persistent identities. Numeric analysis keeps its private extrema and moment state in `stats/numeric`. `NumericStatistics.mean_label` projects approximate temporal means in their native units; ordinary numeric means remain available as `mean` for frontend precision settings.
 
-- `Document::column_summary` describes the current view, including its explicit column filters but not Find. It returns counts, numeric statistics where supported, and top values for non-numeric columns. Use `min_label` and `max_label` for exact displayed extrema; numeric `min`, `max` and other floating-point statistics can be approximate.
-- `Document::view_histogram(version, column, bins)` counts the specified current view. Its axis still spans the source column.
-- `Document::histogram(column, state, bins)` uses facet scope and returns counts and approximate axis coordinates without allocating filter bounds.
-- `Document::histogram_ranges(column, state, bins)` uses the same facet scope and returns exact inclusive bin bounds. Unlike editor charts, it preserves the requested bin count.
+`view.analyze_scatter(x_column, y_column, limit, x_scale, y_scale, cancellation)` computes a bounded sample using caller-owned cancellation. `None` for X means the zero-based source row ID. Axes must have the `scatter` column capability (direct numeric/temporal arrays), and `limit` must be 1–4,096. The function scans only the bound View, omits null/NaN/infinite coordinate pairs, counts eligible rows, and retains the lowest deterministic source-row hash priorities in O(limit) working memory. Sorting the same view does not change the sample; filtering does. Returned points include source IDs, approximate f64 coordinates and exact native display labels. Temporal coordinates use physical Arrow units, as histograms do. `eligible_rows > points.len()` indicates truncation; the bounded sample is not a complete plot and can omit outliers. Buffers are shared with the snapshot, and returned label memory depends on label lengths.
 
-Histograms use native values for bin membership. Null and NaN counts are separate; infinities belong to the outer bins. Exact range results expose source extrema as text. Unbounded outer edges preserve infinity handling, and empty/all-NaN inputs have no ranges.
+Distribution and filter distributions both derive their domain and counts from the bound View, including all active filters. Filter distributions additionally return selectable exact bounds and allow 1–60 bins. Empty Views do not fall back to the source domain.
 
-Numeric distributions support `ColumnAnalysis::with_histogram_scale(AxisScale::Log10)`; range editors use `filter_spec_with_scale`. Geometric cuts are converted to native bounds once, then the same cuts drive counting and range filtering without widening the source array. Logarithmic bins include only positive finite values, expose `non_positive_count` and `infinite_count` omissions, and have finite outer bounds. Their `lo`/`hi` and `bin_edges` are log10 display coordinates; labels and typed bounds remain original values. Nonempty logarithmic histograms supply `counts.len() + 1` strictly increasing display edges matching the rounded native cuts; linear histograms leave `bin_edges` empty and use uniform spacing. Empty positive domains retain omission counts with no bins. The domain spans positive finite source values so filtering does not move it.
+Histograms use native values for bin membership. Null and NaN values are excluded; obtain their counts with `count_nulls` and `analyze_statistics`. Infinities belong to the outer linear bins. Exact range results expose selected-value extrema as text. Unbounded outer edges preserve infinity handling, and empty/all-NaN inputs have no ranges.
 
-Scatter jobs support `with_scales(x_scale, y_scale)` with independent `AxisScale::Linear` or `Log10` domains. Logarithmic axes require `ColumnCapabilities.logarithmic`; temporal columns and the source-row axis remain linear. Missing/non-finite pairs are excluded first, followed by pairs with nonpositive coordinates on logarithmic axes. `non_positive_rows` reports the latter separately. Sampling considers only eligible pairs, while returned coordinates and labels stay in original units for the UI's scale and tooltip rendering.
+Numeric distributions support `analyze_distribution(column, bins, AxisScale::Log10, cancellation)`; range editors use `filter_distribution`. Geometric cuts are converted to native bounds once, then the same cuts drive counting and range filtering without widening the source array. Logarithmic bins include only positive finite values, expose `non_positive_count` and `infinite_count` omissions, and have finite outer bounds. Their `lo`/`hi` and `bin_edges` are log10 display coordinates; labels and typed bounds remain original values. Nonempty logarithmic histograms supply `counts.len() + 1` strictly increasing display edges matching the rounded native cuts; linear histograms leave `bin_edges` empty and use uniform spacing. Empty positive domains retain omission counts with no bins. The domain spans positive finite values in the bound View, so filtering may change it.
 
-`histogram_ranges(column, state, bins)` exposes inclusive `min`/`max` text bounds per bin, with `null` meaning an unbounded edge. Top-level `min`/`max` labels describe finite source extrema. These bounds can be passed to typed range filters; plotting coordinates must not be used to reconstruct them.
+Scatter analysis accepts `x_scale` and `y_scale` with independent `AxisScale::Linear` or `Log10` domains. Logarithmic axes require `ColumnCapabilities.logarithmic`; temporal columns and the source-row axis remain linear. Missing/non-finite pairs are excluded first, followed by pairs with nonpositive coordinates on logarithmic axes. `non_positive_rows` reports the latter separately. Sampling considers only eligible pairs, while returned coordinates and labels stay in original units for the UI's scale and tooltip rendering.
+
+`view.filter_distribution(column, bins, scale, cancellation)` exposes inclusive `min`/`max` text bounds per bin, with `null` meaning an unbounded edge. Top-level `min`/`max` labels describe finite source extrema. These bounds can be passed to typed range filters; plotting coordinates must not be used to reconstruct them.
 
 ## File adapters
 
@@ -72,7 +74,9 @@ Scatter jobs support `with_scales(x_scale, y_scale)` with independent `AxisScale
 
 `OpenOptions` supplies an explicit format, header policy (`has_header`) and XLSX worksheet name (`sheet`). The delimited adapter uses `arrow-csv` for decoding and writing, with the `csv` crate for the integer-precision check. XLSX uses Calamine for reading and `rust_xlsxwriter` for writing.
 
-`xlsx_sheet_names(path)` lists worksheets in workbook order without decoding their cells, including hidden and empty sheets but excluding chart sheets. This allows choosing a valid sheet even if another contains error cells. It still reads workbook metadata, styles and shared strings and requires background I/O. Listing retains no workbook snapshot; a subsequent open reads the file again. Without the `xlsx` feature it returns `Unsupported`.
+Errors belong to the module that owns the failed operation: file decoding uses `FileError`, export uses `ExportError`, filters use `FilterError`, and analysis kernels use `AnalysisError`. Scalar bounds and sorting have their own errors for shared lower-level operations. Public Dataset/View APIs aggregate these through `Error`, normalizing cancellation, I/O and internal failures across module boundaries. File adapters wrap Arrow and codec sources with the format and Decode/Encode operation, so the same external failure does not change category when its internal library path changes.
+
+`xlsx_sheet_names(path)` lists worksheets in workbook order without decoding their cells, including hidden and empty sheets but excluding chart sheets. This allows choosing a valid sheet even if another contains error cells. It still reads workbook metadata, styles and shared strings and requires background I/O. Listing retains no workbook snapshot; a subsequent open reads the file again. Without the `xlsx` feature it returns `FileError::FormatDisabled`.
 
 ### Cargo features
 
@@ -90,32 +94,44 @@ For an embedded core with only delimited-text support, use a dependency such as 
 gewu-core = { path = "crates/gewu-core", default-features = false, features = ["csv"] }
 ```
 
-`FileType` variants remain available in every build; disabled formats return `Error::Unsupported`. The app uses the default codec set.
+`FileType` variants remain available in every build; disabled formats return `FileError::FormatDisabled`. The app uses the default codec set.
+
+## Type projections
+
+[types/](src/types) contains shared Arrow structure helpers and display-type projection. Arrow `DataType` remains the source of truth; `Column` does not store a second logical type. [Column metadata](src/column/metadata.rs) uses that projection plus a coarse `ValueCategory` directly from Arrow. Scatter results carry their own axis presentation kinds. Nested-analysis fields use the same direct display-type projection and retain the full Arrow type as technical text; no intermediate logical-type enum is transmitted. Schema-description validation preserves rejection of unsupported nested types when a column is loaded; it does not decide which operations are available.
+
+Each operation owns its type support and execution rules by matching Arrow `DataType` directly. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `column/metadata` aggregates these queries for the frontend without scanning data. Analysis capabilities and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
+
+[scalar/](src/scalar) owns validated scalar bounds, exact decimal endpoints and shared text-to-native parsing. It is independent of Column and Predicate execution, so both filter compilation and histogram range projection can use it without reversing their dependency direction. [execution/](src/execution) owns native row selections and bounded Predicate evaluation shared by query, Column and stats.
+
+[column/dictionary/](src/column/dictionary) owns the compact distinct-value dictionary: native dictionaries reuse their keys and values, primitive arrays scan their native values directly, floats scan a normalized key, and only text, binary and nested arrays use Arrow's row format. Filter candidates are projected by `filter_choices` directly from native values and selected-row counts. Predicate compilation uses `values` and `matching_codes`; the code space remains internal to the engine. Float identity groups signed zeros and NaN payloads consistently in dictionary encoding and Values analysis.
 
 ## Code map
 
 | Path | Responsibility |
 | --- | --- |
-| [document.rs](src/document.rs) | Source data, metadata and lazy index ownership; public operations are grouped under [document/](src/document). |
-| [document/query.rs](src/document/query.rs) | Explicit filter execution, sorting, view publication and visible row formatting. |
-| [document/find.rs](src/document/find.rs) and [find.rs](src/find.rs) | Find snapshots, bounded directional pages, highlights and per-operation cancellation. |
-| [document/filter.rs](src/document/filter.rs) | Typed inputs, editor recommendations, candidate sessions and facet counts. |
-| [document/analysis.rs](src/document/analysis.rs) | Capture analysis snapshots and assemble aggregate summaries. |
-| [document/export.rs](src/document/export.rs) | Validate columns and capture export snapshots. |
-| [view.rs](src/view.rs) | Query state, sort keys and formatted row blocks. |
-| [filter.rs](src/filter.rs) | Explicit filter inputs and filter-editor contracts. |
-| [engine.rs](src/engine.rs) | View snapshots, versions, cancellation and publication. |
-| [column/](src/column) | Per-type capabilities, formatting and search/filter preparation; scalar, text and nested behavior. |
-| [column/bound.rs](src/column/bound.rs) | Exact typed endpoints and range preparation. |
-| [column/histogram.rs](src/column/histogram.rs) | Native bin membership, counts and exact filter bounds. |
-| [predicate.rs](src/predicate.rs) | Prepared predicates, batch evaluation and intersection. |
-| [scope.rs](src/scope.rs) | Source, current-view and facet row selections. |
-| [value_index.rs](src/value_index.rs) | Stable value keys and distinct-value indexing. |
-| [analysis.rs](src/analysis.rs) and [analysis/](src/analysis) | Independent analysis jobs, result types, length analysis and shared native numeric statistics. |
-| [scatter.rs](src/scatter.rs) | Bounded, deterministic scatter sampling with independent cancellation. |
-| [text_choices.rs](src/text_choices.rs) | Bounded string candidate sessions, page results and cursors. |
-| [file/](src/file) | Read/write adapters and format-specific metadata. |
-| [export.rs](src/export.rs) | Export snapshots, progress, cancellation and destination commit. |
+| [dataset/](src/dataset) | Decoded data, metadata, query execution and shared column cache ownership. |
+| [dataset/query.rs](src/dataset/query.rs) | Complete query validation and execution over the full Dataset. |
+| [view/](src/view) | Immutable row/column mappings and operations over a bound View. |
+| [col_view.rs](src/col_view.rs) | Borrowed Column and View-row projections used by analysis and filter candidates. |
+| [view/rows.rs](src/view/rows.rs) | RowBlock and formatted reads from a bound View. |
+| [view/analysis.rs](src/view/analysis.rs) | Typed analyses and direct scatter calculation. |
+| [view/filter.rs](src/view/filter.rs) | Visible candidate counts and distributions. |
+| [query/spec.rs](src/query/spec.rs) | QuerySpec and column settings. |
+| [query/filter.rs](src/query/filter.rs) | Explicit filter inputs. |
+| [find.rs](src/find.rs) | Captured Find sessions, directional pages and highlights. |
+| [column/](src/column) | Type capabilities, native predicates and compact dictionaries. |
+| [column/predicate/](src/column/predicate) | Column-bound filter and Find predicate compilation. |
+| [types/](src/types) | Arrow structure helpers and display-type projection. |
+| [scalar/](src/scalar) | Validated bounds, exact endpoints and scalar text parsing. |
+| [execution/](src/execution) | Native row selections, bounded Predicate evaluation and sorting. |
+| [execution/sort.rs](src/execution/sort.rs) | Cancellable native sorting and merging. |
+| [stats/](src/stats) | Analysis organization and result exports. |
+| [stats/histogram/](src/stats/histogram) | Linear/logarithmic binning, range projections and bin tests. |
+| [stats/numeric/](src/stats/numeric), [stats/lengths.rs](src/stats/lengths.rs), [stats/values.rs](src/stats/values.rs) | Analysis kernels and their result records. |
+| [file/](src/file) | Codecs, export progress and destination commit. |
+| [error.rs](src/error.rs) and module `error.rs` files | Public error aggregation and module-owned failure semantics. |
+| [cancellation.rs](src/cancellation.rs) | Terminal cancellation signals and composed request scopes. |
 
 ## Benchmarks
 

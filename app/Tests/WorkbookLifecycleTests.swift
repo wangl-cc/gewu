@@ -38,7 +38,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == decomposed)
         let decomposedDocument = try #require(model.document)
-        let decomposedRows = try decomposedDocument.doc.rows(version: 0, start: 0, count: 1, columns: [0])
+        let decomposedRows = try decomposedDocument.view.rows(start: 0, count: 1, columns: [0])
         #expect(decomposedRows.cells == ["decomposed"])
 
         model.selectSheet(composed)
@@ -47,7 +47,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == composed)
         let composedDocument = try #require(model.document)
-        let composedRows = try composedDocument.doc.rows(version: 0, start: 0, count: 1, columns: [0])
+        let composedRows = try composedDocument.view.rows(start: 0, count: 1, columns: [0])
         #expect(composedRows.cells == ["composed"])
     }
 
@@ -107,7 +107,7 @@ struct WorkbookLifecycleTests {
         #expect(model.document?.info.columns.first?.name == "column_3")
         #expect(model.document?.find.query == "" && model.document?.chartY == nil)
         #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
-        #expect(model.document?.current.version == 0 && original.current.version == 0)
+        #expect(model.document?.view !== original.view)
 
         let last = model.document
         model.selectSheet(.init(rawValue: "Slow"))
@@ -148,13 +148,13 @@ struct WorkbookLifecycleTests {
         let model = WorkbookModel(url: csv, hasHeader: false, didOpen: { _ in })
         model.open()
         await settled(model)
-        #expect(model.document?.current.rowCount == 2 && !model.hasHeader)
-        let first = try model.document?.doc.rows(version: 0, start: 0, count: 1, columns: [0])
+        #expect(model.document?.view.rowCount() == 2 && !model.hasHeader)
+        let first = try model.document?.view.rows(start: 0, count: 1, columns: [0])
         #expect(first?.cells == ["1"])
         try await presentationContracts(#require(model.document))
         model.reopen(hasHeader: true)
         await settled(model)
-        #expect(model.document?.current.rowCount == 1 && model.hasHeader)
+        #expect(model.document?.view.rowCount() == 1 && model.hasHeader)
         #expect(model.document?.info.columns.first?.name == "1")
         let retained = model.document
         try FileManager.default.removeItem(at: csv)
@@ -170,7 +170,7 @@ struct WorkbookLifecycleTests {
         workbook.selectSheet(.init(rawValue: "Last"))
         await settled(workbook)
         #expect(!workbook.hasHeader && workbook.selectedSheet?.rawValue == "Last")
-        let rows = try #require(workbook.document).doc.rows(version: 0, start: 0, count: 1, columns: [0])
+        let rows = try #require(workbook.document).view.rows(start: 0, count: 1, columns: [0])
         #expect(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
     }
 
@@ -180,25 +180,21 @@ struct WorkbookLifecycleTests {
         document.selectedSourceRow = 0
         for base in [0, 1] {
             await chart.load(
-                document: document.doc, version: document.current.version,
-                x: nil, y: 0, xKind: nil, yKind: .integer(bits: 64, signed: true), rowNumberBase: base)
+                viewer: document.viewer,
+                x: nil, y: 0, rowNumberBase: base)
             let point = try #require(chart.result).points[0]
             #expect(point.sourceRow == 0, "Presentation must not change source row identity")
             let label = formatRowNumber(point.sourceRow, base: base)
             #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
-            #expect(document.status(rowNumberBase: base).contains("row \(label) in file"))
+            #expect(!document.status.contains("in file"), "Keep source row labels in the gutter, not the status bar")
         }
         document.selectedSourceRow = nil
-        do {
-            _ = try document.doc.parseBound(column: 0, text: "not a number")
-            Issue.record("Invalid numeric bounds must fail")
-        } catch GewuError.InvalidArgument(let message) {
-            let error: Error = GewuError.InvalidArgument(message: message)
-            #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
-            document.reportError(error)
-            #expect(document.errorMessage == message)
-            document.isErrorPresented = false
-        }
+        let message = "Invalid numeric bound"
+        let error: Error = GewuError.Internal(message: message)
+        #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
+        document.reportError(error)
+        #expect(document.errorMessage == message)
+        document.isErrorPresented = false
     }
 
     @MainActor
@@ -230,7 +226,7 @@ private final class OpenProbe: @unchecked Sendable {
         return opened
     }
 
-    func open(path: String, sheet: String?) throws -> GewuDocument {
+    func open(path: String, sheet: String?) throws -> GewuDataset {
         lock.lock()
         opened.append(sheet ?? "First")
         lock.unlock()
@@ -238,10 +234,10 @@ private final class OpenProbe: @unchecked Sendable {
             slowStarted.signal()
             slowReleased.wait()
             defer { slowFinished.signal() }
-            return try GewuDocument.openSheet(path: path, sheet: sheet)
+            return try GewuDataset.openSheet(path: path, sheet: sheet)
         }
-        if let sheet { return try GewuDocument.openSheet(path: path, sheet: sheet) }
-        return try GewuDocument.open(path: path)
+        if let sheet { return try GewuDataset.openSheet(path: path, sheet: sheet) }
+        return try GewuDataset.open(path: path)
     }
 
     func waitForSlowStart() async {

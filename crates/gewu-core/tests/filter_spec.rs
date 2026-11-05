@@ -1,27 +1,24 @@
 #![cfg(feature = "parquet")]
-
 use std::sync::Arc;
 
-use arrow::{
-    array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt64Array},
-    datatypes::DataType,
+use arrow::array::{
+    ArrayRef, Decimal128Array, Float64Array, Int32Array, RecordBatch, StringArray,
+    TimestampNanosecondArray, UInt64Array,
 };
-use gewu_core::{
-    Bound, Document, Error, Filter, FilterEditor, LogicalType, TextFilterMode, ViewState,
-};
+use gewu_core::{AxisScale, Cancellation, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> Document {
+fn document(columns: Vec<(&str, ArrayRef)>) -> Arc<gewu_core::Dataset> {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Arc::new(gewu_core::Dataset::open(file.path()).unwrap())
 }
 
 #[test]
-fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
+fn capabilities_are_static_and_choices_keep_only_visible_values() {
     let doc = document(vec![
         (
             "category",
@@ -35,72 +32,55 @@ fn source_cardinality_selects_editors_and_facet_counts_preserve_choices() {
             )),
         ),
     ]);
-    let FilterEditor::Choices { values: original } = doc.filter_spec(0, None).unwrap().editor
-    else {
-        panic!("low-cardinality numeric editor")
-    };
+    let original = doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .unwrap();
     assert_eq!(original.iter().map(|v| v.count).collect::<Vec<_>>(), [
         200, 200, 200
     ]);
-    assert!(matches!(
-        doc.filter_spec(1, None).unwrap().editor,
-        FilterEditor::Range {
-            logical_type: LogicalType::Integer {
-                bits: 32,
-                signed: true,
-            },
-            distribution: Some(_)
-        }
-    ));
-    assert_eq!(
-        doc.filter_spec(2, None).unwrap().editor,
-        FilterEditor::Text {
-            modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
-            recommended: TextFilterMode::Contains
-        }
-    );
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 1,
-            min: None,
-            max: Some(doc.make_bound_i64(1, 0).unwrap()),
-        }],
-        ..Default::default()
-    };
-    let FilterEditor::Choices { values } = doc.filter_spec(0, Some(&state)).unwrap().editor else {
-        panic!("stable choices")
-    };
-    assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
-        1, 0, 0
+    assert!(doc
+        .view()
+        .filter_choices(1, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
+    assert!(doc.info().columns[1].capabilities.range);
+    assert!(doc.info().columns[1].capabilities.exact);
+    assert!(doc.info().columns[2].capabilities.text_match);
+    assert!(doc.info().columns[2].capabilities.exact);
+    let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
+    let values = doc
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .unwrap();
+    assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [1]);
+    assert_eq!(values.iter().map(|v| &v.value).collect::<Vec<_>>(), vec![
+        &original[0].value
     ]);
-    assert_eq!(
-        values.iter().map(|v| v.key).collect::<Vec<_>>(),
-        original.iter().map(|v| v.key).collect::<Vec<_>>()
+    let chosen = QuerySpec::single(
+        0,
+        Filter::exact(vec![values[0].value.clone()], false, false),
     );
     assert_eq!(
-        doc.filter_spec(2, Some(&state)).unwrap().editor,
-        FilterEditor::Text {
-            modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
-            recommended: TextFilterMode::Contains
-        }
+        doc.query(&chosen, &gewu_core::Cancellation::default())
+            .unwrap()
+            .row_count(),
+        200
     );
-    let chosen = ViewState {
-        filters: vec![Filter::InValues {
-            column: 0,
-            keys: vec![values[1].key],
-        }],
-        ..Default::default()
-    };
-    assert_eq!(doc.apply_view(&chosen).unwrap().row_count, 200);
-    let FilterEditor::Choices { values: own_facet } =
-        doc.filter_spec(0, Some(&chosen)).unwrap().editor
-    else {
-        panic!("choices")
-    };
     assert_eq!(
-        own_facet, original,
-        "the column's own filter does not hide its options"
+        doc.query(&chosen, &gewu_core::Cancellation::default())
+            .unwrap()
+            .filter_choices(0, &Cancellation::default())
+            .unwrap()
+            .values
+            .unwrap(),
+        vec![original[0].clone()]
     );
 }
 
@@ -111,130 +91,135 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
         "id",
         Arc::new(UInt64Array::from_iter_values(base..=u64::MAX)),
     )]);
-    let FilterEditor::Range {
-        distribution: Some(distribution),
-        ..
-    } = doc.filter_spec(0, None).unwrap().editor
-    else {
-        panic!("range chart")
-    };
-    // The unit tests cover all cuts; here exercise the editor -> view -> rows path.
-    let bin = distribution.ranges.len() / 2;
-    let bounds = &distribution.ranges[bin];
-    let view = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 0,
-                min: bounds.min.clone(),
-                max: bounds.max.clone(),
-            }],
-            ..Default::default()
-        })
+    let distribution = doc
+        .view()
+        .filter_distribution(0, 60, AxisScale::Linear, &Cancellation::default())
+        .unwrap()
         .unwrap();
-    assert_eq!(view.row_count, distribution.histogram.counts[bin]);
-    let rows = doc.rows(view.version, 0, 600, &[0]).unwrap();
-    let first = bounds
-        .min
-        .as_ref()
-        .unwrap()
-        .display()
-        .parse::<u64>()
-        .unwrap()
-        - base;
-    let last = bounds
-        .max
-        .as_ref()
-        .unwrap()
-        .display()
-        .parse::<u64>()
-        .unwrap()
-        - base;
-    assert_eq!(rows.source_rows, (first..=last).collect::<Vec<_>>());
+    for (bin, bounds) in distribution.ranges.iter().enumerate() {
+        let view = doc
+            .query(
+                &QuerySpec::single(
+                    0,
+                    Filter::range(
+                        bounds.min.as_ref().map(|b| b.value.clone()),
+                        bounds.max.as_ref().map(|b| b.value.clone()),
+                        false,
+                    ),
+                ),
+                &gewu_core::Cancellation::default(),
+            )
+            .unwrap();
+        assert_eq!(view.row_count(), distribution.histogram.counts[bin]);
+    }
 }
 
 #[test]
-fn typed_bounds_reject_mismatched_columns_without_replacing_view() {
+fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
-    let before = doc.current_view();
-    let wrong = Bound::from_i64(&DataType::Int64, 2).unwrap();
+    let before = doc.view();
     assert!(matches!(
-        doc.apply_view(&ViewState {
-            filters: vec![Filter::Range {
-                include_nulls: false,
-                column: 0,
-                min: Some(wrong),
-                max: None
-            }],
-            ..Default::default()
-        }),
-        Err(Error::InvalidArgument(_))
+        doc.query(
+            &QuerySpec::single(0, Filter::range(Some("invalid".into()), None, false)),
+            &gewu_core::Cancellation::default()
+        ),
+        Err(Error::Filter(gewu_core::FilterError::Bound(
+            gewu_core::BoundError::InvalidValue { .. }
+        )))
     ));
-    assert_eq!(doc.current_view(), before);
+    assert_eq!(
+        doc.view().rows(0, 10, &[0]).unwrap().cells,
+        before.rows(0, 10, &[0]).unwrap().cells
+    );
 }
 
 #[test]
-fn choice_limit_counts_null_and_empty_columns_remain_valid() {
-    for (count, choices) in [(499, true), (500, false)] {
-        let array = Int32Array::from_iter((0..count).map(Some).chain([None]));
-        let doc = document(vec![("value", Arc::new(array))]);
-        let spec = doc.filter_spec(0, None).unwrap();
-        assert!(spec.nullable);
-        assert_eq!(matches!(spec.editor, FilterEditor::Choices { .. }), choices);
-        let text = StringArray::from_iter((0..count).map(|i| Some(i.to_string())).chain([None]));
-        let doc = document(vec![("text", Arc::new(text))]);
+fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
+    let doc = document(vec![(
+        "score",
+        Arc::new(Float64Array::from(vec![
+            Some(-0.0),
+            Some(0.0),
+            Some(f64::NAN),
+            Some(f64::from_bits(0x7ff8_1000_0000_0000)),
+            Some(1.0),
+            None,
+        ])),
+    )]);
+    let choices = doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap();
+    assert_eq!(choices.null_count, 1);
+    let values = choices.values.unwrap();
+    assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
+        2, 1, 2
+    ]);
+    for value in values {
         assert_eq!(
-            doc.filter_spec(0, None).unwrap().editor,
-            FilterEditor::Text {
-                modes: vec![TextFilterMode::Choices, TextFilterMode::Contains],
-                recommended: if choices {
-                    TextFilterMode::Choices
-                } else {
-                    TextFilterMode::Contains
-                },
-            }
+            doc.query(
+                &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
+                &gewu_core::Cancellation::default()
+            )
+            .unwrap()
+            .row_count(),
+            value.count
         );
+    }
+}
+
+#[test]
+fn bounded_choices_and_empty_columns_have_explicit_results() {
+    for (count, bounded) in [(255, true), (256, false)] {
+        let doc = document(vec![(
+            "value",
+            Arc::new(Int32Array::from_iter((0..count).map(Some).chain([None]))),
+        )]);
+        let choices = doc
+            .view()
+            .filter_choices(0, &Cancellation::default())
+            .unwrap();
+        assert_eq!(choices.null_count, 1);
+        assert_eq!(choices.values.is_some(), bounded);
     }
     let doc = document(vec![(
         "value",
         Arc::new(Int32Array::from(Vec::<i32>::new())),
     )]);
-    assert!(
-        matches!(doc.filter_spec(0, None).unwrap().editor, FilterEditor::Choices { values } if values.is_empty())
-    );
+    assert!(doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
-fn high_cardinality_text_choices_do_not_require_a_value_index() {
+fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
     let doc = document(vec![(
         "text",
         Arc::new(StringArray::from_iter_values(
             (0..100_001).map(|i| format!("value-{i:06}")),
         )),
     )]);
-    let choices = doc
-        .prepare_text_choices(0, Some(&ViewState::default()))
-        .unwrap();
-    let page = choices.page("value-100000", None, 100).unwrap();
-    assert_eq!(page.values.len(), 1);
-    assert_eq!(page.values[0].count, 1);
+    assert!(doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
     let view = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::TextValues {
-                column: 0,
-                values: vec![page.values[0].value.clone()],
-                exclude: false,
-            }],
-            ..Default::default()
-        })
+        .query(
+            &QuerySpec::single(0, Filter::exact(vec!["value-100000".into()], false, false)),
+            &gewu_core::Cancellation::default(),
+        )
         .unwrap();
-    assert_eq!(doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows, [
-        100_000
-    ]);
+    assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, [100_000]);
 }
 
 #[test]
-fn text_selection_and_captured_facets_keep_exact_value_semantics() {
+fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
     let doc = document(vec![
         (
             "text",
@@ -248,87 +233,125 @@ fn text_selection_and_captured_facets_keep_exact_value_semantics() {
         ),
         ("group", Arc::new(Int32Array::from(vec![1, 1, 1, 1, 2]))),
     ]);
-    let state = ViewState {
-        filters: vec![
-            Filter::TextValues {
-                column: 0,
-                values: vec![Some("Cat".into())],
-                exclude: false,
-            },
-            Filter::Equals {
-                column: 1,
-                value: "1".into(),
-            },
-        ],
-        ..Default::default()
-    };
-    let choices = doc.prepare_text_choices(0, Some(&state)).unwrap();
-    doc.apply_view(&ViewState::default()).unwrap();
+    let spec = QuerySpec::all(2)
+        .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
+        .with_filter(1, Filter::exact(vec!["1".into()], false, false));
+    let choices = doc
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap();
     assert_eq!(
         choices
-            .page("", None, 10)
-            .unwrap()
             .values
+            .unwrap()
             .iter()
-            .map(|v| (v.value.as_deref(), v.count))
+            .map(|v| (v.value.as_str(), v.count))
             .collect::<Vec<_>>(),
-        [(None, 1), (Some(""), 1), (Some("Cat"), 1), (Some("cat"), 1)]
+        [("Cat", 1)]
     );
-    for (values, exclude, expected) in [
-        (vec![None, Some("cat".into())], false, vec![0, 2, 4]),
-        (vec![None, Some("cat".into())], true, vec![1, 3]),
-        (vec![], false, vec![]),
-        (vec![], true, vec![0, 1, 2, 3, 4]),
+    assert_eq!(
+        doc.query(&spec, &gewu_core::Cancellation::default())
+            .unwrap()
+            .filter_choices(0, &Cancellation::default())
+            .unwrap()
+            .null_count,
+        0
+    );
+    for (values, exclude, include_nulls, expected) in [
+        (vec!["cat".into()], false, true, vec![0, 2, 4]),
+        (vec!["cat".into()], true, false, vec![1, 3]),
+        (vec![], false, false, vec![]),
+        (vec![], false, true, vec![0]),
+        (vec![], true, false, vec![1, 2, 3, 4]),
+        (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .apply_view(&ViewState {
-                filters: vec![Filter::TextValues {
-                    column: 0,
-                    values,
-                    exclude,
-                }],
-                ..Default::default()
-            })
+            .query(
+                &QuerySpec::single(0, Filter::exact(values, exclude, include_nulls)),
+                &gewu_core::Cancellation::default(),
+            )
             .unwrap();
-        assert_eq!(
-            doc.rows(view.version, 0, 10, &[0]).unwrap().source_rows,
-            expected
-        );
+        assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, expected);
     }
-    choices.cancel();
-    assert!(matches!(choices.page("", None, 10), Err(Error::Cancelled)));
-    assert_eq!(
-        doc.prepare_text_choices(0, None)
-            .unwrap()
-            .page("", None, 10)
-            .unwrap()
-            .values
-            .len(),
-        4
-    );
-    assert!(matches!(
-        doc.prepare_text_choices(1, None),
-        Err(Error::InvalidArgument(_))
-    ));
-    assert!(matches!(
-        doc.validate_filter(&Filter::TextValues {
-            column: 1,
-            values: vec![],
-            exclude: false
-        }),
-        Err(Error::InvalidArgument(_))
-    ));
 }
 
 #[test]
-fn bounds_can_restore_exact_bins_independently_of_text_and_axis_spelling() {
-    let ty = DataType::UInt64;
-    let first = Bound::from_u64(&ty, u64::MAX - 1).unwrap();
-    let last = Bound::from_u64(&ty, u64::MAX).unwrap();
-    assert_eq!(first.axis_value(), last.axis_value());
-    assert!(!first.same_value(&last));
-    let text = Bound::parse(&ty, "18446744073709551615.0").unwrap();
-    assert_ne!(last.display(), text.display());
-    assert!(last.same_value(&text));
-    assert!(!last.same_value(&Bound::from_i64(&DataType::Int64, 0).unwrap()));
+fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
+    let doc = document(vec![
+        (
+            "id",
+            Arc::new(UInt64Array::from(vec![u64::MAX - 1, u64::MAX])),
+        ),
+        (
+            "decimal",
+            Arc::new(
+                Decimal128Array::from(vec![123456789012345678901_i128, 123456789012345678902])
+                    .with_precision_and_scale(30, 12)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "time",
+            Arc::new(
+                TimestampNanosecondArray::from(vec![1735689600000000001_i64, 1735689600000000002])
+                    .with_timezone("Europe/London"),
+            ),
+        ),
+    ]);
+    for column in 0..3 {
+        for (row, value) in doc
+            .view()
+            .filter_choices(column, &Cancellation::default())
+            .unwrap()
+            .values
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let view = doc
+                .query(
+                    &QuerySpec::single(
+                        column,
+                        Filter::exact(vec![value.value.clone()], false, false),
+                    ),
+                    &gewu_core::Cancellation::default(),
+                )
+                .unwrap();
+            assert_eq!(view.rows(0, 10, &[column]).unwrap().source_rows, [
+                row as u64
+            ]);
+        }
+    }
+}
+
+#[test]
+fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
+    let doc = document(vec![(
+        "value",
+        Arc::new(Int32Array::from_iter((0..300).map(Some).chain([None]))),
+    )]);
+    assert!(doc
+        .view()
+        .filter_choices(0, &Cancellation::default())
+        .unwrap()
+        .values
+        .is_none());
+    for (exclude, include_nulls, count) in [
+        (false, false, 2),
+        (false, true, 3),
+        (true, false, 298),
+        (true, true, 299),
+    ] {
+        let view = doc
+            .query(
+                &QuerySpec::single(
+                    0,
+                    Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
+                ),
+                &gewu_core::Cancellation::default(),
+            )
+            .unwrap();
+        assert_eq!(view.row_count(), count);
+    }
 }

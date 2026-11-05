@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-/// A copy captures row ranges, display order and a version, independent of the
+/// A copy captures row ranges, display order and an immutable View, independent of the
 /// viewport cache. Only the final pasteboard commit runs on the main actor.
 @MainActor
 final class CopyModel: ObservableObject {
@@ -13,7 +13,7 @@ final class CopyModel: ObservableObject {
 
     init(reportError: @escaping (Error, String) -> Void) { self.reportError = reportError }
 
-    func copy(document: GewuDocument, version: UInt64, rows: [Range<Int>], columns: [UInt32], names: [String]) {
+    func copy(view: GewuView, rows: [Range<Int>], columns: [UInt32], names: [String]) {
         cancel()
         request &+= 1
         let mine = request
@@ -23,7 +23,7 @@ final class CopyModel: ObservableObject {
         let work = Task.detached(priority: .userInitiated) {
             try CopyText.format(rows: rows, columns: columns, names: names, includeHeaders: includeHeaders) {
                 start, count, columns in
-                try document.rows(version: version, start: UInt64(start), count: UInt32(count), columns: columns)
+                try view.rows(start: UInt64(start), count: UInt32(count), columns: columns)
             }
         }
         task = work
@@ -31,8 +31,6 @@ final class CopyModel: ObservableObject {
             do {
                 let text = try await work.value
                 guard let self, self.request == mine else { return }
-                let current = document.currentView().version
-                guard current == version else { throw GewuError.StaleVersion(requested: version, current: current) }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
                 self.message = "Copied selection"

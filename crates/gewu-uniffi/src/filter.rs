@@ -1,209 +1,132 @@
-//! Typed filters, bounds and editor descriptions.
-
-use std::sync::Arc;
-
+//! Text-only filter inputs and exact data projections for editors.
 use gewu_core as core;
 
-use crate::{DistinctValue, Histogram, LogicalType};
-
-#[derive(uniffi::Enum)]
-pub enum Filter {
-    TextValues {
-        column: u32,
-        values: Vec<Option<String>>,
-        exclude: bool,
-    },
-    InValues {
-        column: u32,
-        keys: Vec<u64>,
-    },
-    IsNull {
-        column: u32,
-        negate: bool,
-    },
-    Contains {
-        column: u32,
-        text: String,
-        case_sensitive: bool,
-        include_nulls: bool,
-    },
-    /// Exact typed equality; parsing is owned by the column's type.
-    Equals {
-        column: u32,
-        value: String,
-    },
-    /// Any exact typed equality, without a distinct-value index.
-    EqualsAny {
-        column: u32,
-        values: Vec<String>,
-    },
-    /// Inclusive typed bounds. A missing endpoint is open.
-    Range {
-        column: u32,
-        min: Option<Arc<Bound>>,
-        max: Option<Arc<Bound>>,
-        include_nulls: bool,
-    },
-}
-
-/// An immutable, type-checked range endpoint owned by the core.
-#[derive(uniffi::Object)]
-pub struct Bound {
-    inner: core::Bound,
-}
-
-impl From<core::Bound> for Bound {
-    fn from(inner: core::Bound) -> Self {
-        Self { inner }
-    }
-}
-
-#[uniffi::export]
-impl Bound {
-    pub fn display(&self) -> String {
-        self.inner.display().to_owned()
-    }
-
-    /// Approximate coordinate for a chart; never use it to rebuild a filter.
-    pub fn axis_value(&self) -> f64 {
-        self.inner.axis_value()
-    }
-
-    /// Compare typed endpoints exactly, independently of their display text.
-    pub fn same_value(&self, other: Arc<Bound>) -> bool {
-        self.inner.same_value(&other.inner)
-    }
-}
+use crate::Histogram;
 
 #[derive(uniffi::Record)]
-pub struct RangeBounds {
-    pub min: Option<Arc<Bound>>,
-    pub max: Option<Arc<Bound>>,
+pub struct Filter {
+    pub condition: FilterCondition,
+    pub include_nulls: bool,
+}
+#[derive(uniffi::Enum)]
+pub enum FilterCondition {
+    Range {
+        min: Option<String>,
+        max: Option<String>,
+    },
+    /// Match text values. Case-insensitive matching uses Unicode simple case folding.
+    Text {
+        text: String,
+        mode: TextMatch,
+        case_sensitive: bool,
+    },
+    Exact {
+        values: Vec<String>,
+        exclude: bool,
+    },
+}
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum TextMatch {
+    Contains,
+    Equals,
+}
+impl From<TextMatch> for core::TextMatch {
+    fn from(value: TextMatch) -> Self {
+        match value {
+            TextMatch::Contains => Self::Contains,
+            TextMatch::Equals => Self::Equals,
+        }
+    }
+}
+impl From<Filter> for core::Filter {
+    fn from(value: Filter) -> Self {
+        Self {
+            include_nulls: value.include_nulls,
+            condition: match value.condition {
+                FilterCondition::Range { min, max } => core::FilterCondition::Range { min, max },
+                FilterCondition::Text {
+                    text,
+                    mode,
+                    case_sensitive,
+                } => core::FilterCondition::Text {
+                    text,
+                    mode: mode.into(),
+                    case_sensitive,
+                },
+                FilterCondition::Exact { values, exclude } => {
+                    core::FilterCondition::Exact { values, exclude }
+                }
+            },
+        }
+    }
 }
 
+/// Display and lossless wire text are separate; coordinates are only geometry.
+#[derive(uniffi::Record)]
+pub struct RangeBound {
+    pub value: String,
+    pub label: String,
+    pub coordinate: f64,
+}
+impl From<core::RangeBound> for RangeBound {
+    fn from(bound: core::RangeBound) -> Self {
+        Self {
+            value: bound.value,
+            label: bound.label,
+            coordinate: bound.coordinate,
+        }
+    }
+}
+#[derive(uniffi::Record)]
+pub struct RangeBounds {
+    pub min: Option<RangeBound>,
+    pub max: Option<RangeBound>,
+}
 #[derive(uniffi::Record)]
 pub struct RangeHistogram {
     pub histogram: Histogram,
     pub ranges: Vec<RangeBounds>,
 }
-
-#[derive(uniffi::Enum)]
-pub enum TextFilterMode {
-    Choices,
-    Contains,
-}
-
-impl From<core::TextFilterMode> for TextFilterMode {
-    fn from(mode: core::TextFilterMode) -> Self {
-        match mode {
-            core::TextFilterMode::Choices => Self::Choices,
-            core::TextFilterMode::Contains => Self::Contains,
-        }
-    }
-}
-
-#[derive(uniffi::Enum)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "FilterEditor is created on demand for UI filter popovers and never stored in collections"
-)]
-pub enum FilterEditor {
-    Text {
-        modes: Vec<TextFilterMode>,
-        recommended: TextFilterMode,
-    },
-    Range {
-        logical_type: LogicalType,
-        distribution: Option<RangeHistogram>,
-    },
-    Choices {
-        values: Vec<DistinctValue>,
-    },
-    Contains,
-    NullOnly,
-}
-
-#[derive(uniffi::Record)]
-pub struct FilterSpec {
-    pub nullable: bool,
-    pub editor: FilterEditor,
-}
-
-impl From<core::FilterSpec> for FilterSpec {
-    fn from(spec: core::FilterSpec) -> Self {
-        let editor = match spec.editor {
-            core::FilterEditor::Text { modes, recommended } => FilterEditor::Text {
-                modes: modes.into_iter().map(Into::into).collect(),
-                recommended: recommended.into(),
-            },
-            core::FilterEditor::Range {
-                logical_type,
-                distribution,
-            } => FilterEditor::Range {
-                logical_type: logical_type.into(),
-                distribution: distribution.map(|distribution| RangeHistogram {
-                    histogram: distribution.histogram.into(),
-                    ranges: distribution
-                        .ranges
-                        .into_iter()
-                        .map(|bounds| RangeBounds {
-                            min: bounds.min.map(|bound| Arc::new(bound.into())),
-                            max: bounds.max.map(|bound| Arc::new(bound.into())),
-                        })
-                        .collect(),
-                }),
-            },
-            core::FilterEditor::Choices { values } => FilterEditor::Choices {
-                values: values.into_iter().map(Into::into).collect(),
-            },
-            core::FilterEditor::Contains => FilterEditor::Contains,
-            core::FilterEditor::NullOnly => FilterEditor::NullOnly,
-        };
+impl From<core::RangeHistogram> for RangeHistogram {
+    fn from(value: core::RangeHistogram) -> Self {
         Self {
-            nullable: spec.nullable,
-            editor,
+            histogram: value.histogram.into(),
+            ranges: value
+                .ranges
+                .into_iter()
+                .map(|b| RangeBounds {
+                    min: b.min.map(Into::into),
+                    max: b.max.map(Into::into),
+                })
+                .collect(),
         }
     }
 }
-
-impl From<Filter> for core::Filter {
-    fn from(filter: Filter) -> Self {
-        match filter {
-            Filter::TextValues {
-                column,
-                values,
-                exclude,
-            } => Self::TextValues {
-                column,
-                values,
-                exclude,
-            },
-            Filter::InValues { column, keys } => Self::InValues { column, keys },
-            Filter::IsNull { column, negate } => Self::IsNull { column, negate },
-            Filter::Contains {
-                column,
-                text,
-                case_sensitive,
-                include_nulls,
-            } => Self::Contains {
-                column,
-                text,
-                case_sensitive,
-                include_nulls,
-            },
-            Filter::Equals { column, value } => Self::Equals { column, value },
-            Filter::EqualsAny { column, values } => Self::EqualsAny { column, values },
-            Filter::Range {
-                column,
-                min,
-                max,
-                include_nulls,
-            } => Self::Range {
-                column,
-                min: min.map(|bound| bound.inner.clone()),
-                max: max.map(|bound| bound.inner.clone()),
-                include_nulls,
-            },
+#[derive(uniffi::Record)]
+pub struct ValueChoice {
+    pub label: String,
+    pub value: String,
+    pub count: u64,
+}
+#[derive(uniffi::Record)]
+pub struct FilterChoices {
+    pub values: Option<Vec<ValueChoice>>,
+    pub null_count: u64,
+}
+impl From<core::FilterChoices> for FilterChoices {
+    fn from(value: core::FilterChoices) -> Self {
+        Self {
+            null_count: value.null_count,
+            values: value.values.map(|values| {
+                values
+                    .into_iter()
+                    .map(|v| ValueChoice {
+                        label: v.label,
+                        value: v.value,
+                        count: v.count,
+                    })
+                    .collect()
+            }),
         }
     }
 }

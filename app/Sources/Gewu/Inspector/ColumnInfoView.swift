@@ -41,7 +41,6 @@ struct InspectorSidebar: View {
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                     if let column = model.inspectedColumn, info.columns.indices.contains(column) {
                         ColumnAnalysisView(model: model, column: column)
-                            .id(column)
                     }
                 } else {
                     ContentUnavailableView("No Columns", systemImage: "tablecells")
@@ -65,23 +64,27 @@ struct ColumnAnalysisView: View {
     @ObservedObject var model: DocumentModel
     let column: Int
     @StateObject private var analysis = InspectorModel()
-    @State private var expanded: Int
+    @ObservedObject private var settings: InspectorSettings
     @State private var retry = 0
-    @State private var histogramBins: UInt32 = 40
-    @State private var histogramScale: AxisScale = .linear
-    @State private var frequencyScale: AxisScale = .linear
     @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
 
     init(model: DocumentModel, column: Int) {
         self.model = model
         self.column = column
-        let numeric = model.info.columns[column].capabilities.histogram
-        _expanded = State(initialValue: numeric ? 7 : 9)
+        _settings = ObservedObject(wrappedValue: model.inspectorSettings)
+    }
+
+    private var expanded: Int {
+        let distribution = (try? model.dataset.analysisCapabilities(column: UInt32(column)).distribution) ?? false
+        return settings.expanded(distribution: distribution)
+    }
+
+    private var histogramScale: AxisScale {
+        settings.binningScale(logarithmic: model.info.columns[column].capabilities.logarithmic)
     }
 
     private struct Request: Equatable {
-        let document: ObjectIdentifier
-        let version: UInt64
+        let view: ObjectIdentifier
         let column: Int
         let expanded: Int
         let retry: Int
@@ -91,18 +94,18 @@ struct ColumnAnalysisView: View {
 
     private var request: Request {
         Request(
-            document: ObjectIdentifier(model.doc), version: model.current.version,
-            column: column, expanded: expanded, retry: retry, histogramBins: histogramBins,
+            view: ObjectIdentifier(model.view),
+            column: column, expanded: expanded, retry: retry, histogramBins: settings.histogramBins,
             histogramScale: histogramScale)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if analysis.matches(document: model.doc, version: model.current.version, column: UInt32(column)) {
+                if analysis.matches(view: model.view, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
-                    if case .overview(let rows, let nulls) = analysis.results[.overview] {
-                        Text("Missing \(countWithPercent(nulls, total: rows))")
+                    if let nullCount = analysis.nullCount {
+                        Text("Missing \(countWithPercent(nullCount, total: analysis.rowCount))")
                             .font(.caption).foregroundStyle(.secondary)
                             .help(
                                 "Missing values in the current results. Column type: \(model.info.columns[column].technicalType)"
@@ -114,13 +117,13 @@ struct ColumnAnalysisView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 if section == .distribution || section == .lengths {
                                     if section == .distribution, model.info.columns[column].capabilities.logarithmic {
-                                        ScalePicker(title: "Binning", selection: $histogramScale)
+                                        ScalePicker(title: "Binning", selection: $settings.histogramScale)
                                             .help(
                                                 "Log10 bins include only finite positive values. Source values remain unchanged."
                                             )
                                     }
-                                    ScalePicker(title: "Frequency", selection: $frequencyScale)
-                                    Picker("Maximum bins", selection: $histogramBins) {
+                                    ScalePicker(title: "Frequency", selection: $settings.frequencyScale)
+                                    Picker("Maximum bins", selection: $settings.histogramBins) {
                                         ForEach([10, 20, 40, 60, 100] as [UInt32], id: \.self) { bins in
                                             Text(bins.formatted()).tag(bins)
                                         }
@@ -132,7 +135,7 @@ struct ColumnAnalysisView: View {
                                 }
                                 if analysis.loading == section { ProgressView().controlSize(.small) }
                                 if let error = analysis.errors[section] { failure(error) }
-                                if let result = analysis.results[section] { content(result) }
+                                content(section)
                             }
                             .padding(.top, 6).frame(maxWidth: .infinity, alignment: .leading)
                         } label: {
@@ -149,17 +152,18 @@ struct ColumnAnalysisView: View {
         }
         .task(id: request) {
             await analysis.load(
-                document: model.doc, version: model.current.version,
-                column: UInt32(column), expanded: expanded, bins: histogramBins, scale: histogramScale)
+                dataset: model.dataset, viewer: model.viewer,
+                column: UInt32(column), expanded: expanded, bins: settings.histogramBins,
+                scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
     }
 
-    private func expansion(_ section: AnalysisSection) -> Binding<Bool> {
+    private func expansion(_ section: InspectorSection) -> Binding<Bool> {
         Binding(
             get: { expanded & section.mask != 0 },
             set: { open in
-                if open { expanded |= section.mask } else { expanded &= ~section.mask }
+                settings.setExpanded(section, open)
             })
     }
 
@@ -170,55 +174,69 @@ struct ColumnAnalysisView: View {
         }
     }
 
-    @ViewBuilder private func content(_ data: AnalysisData) -> some View {
-        switch data {
+    @ViewBuilder private func content(_ section: InspectorSection) -> some View {
+        switch section {
         case .overview:
             EmptyView()
-        case .statistics(let statistics):
-            if let min = statistics.minLabel { detail("Min", min) }
-            if let max = statistics.maxLabel { detail("Max", max) }
-            if let median = statistics.medianLabel { detail("Median", median) }
-            if let mean = statistics.mean { detail("Mean", value(mean)) }
-            if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
-                detail("Std dev", decimal(sd))
+        case .statistics:
+            if let statistics = analysis.statistics {
+                if let min = statistics.minLabel { detail("Min", min) }
+                if let max = statistics.maxLabel { detail("Max", max) }
+                if let median = statistics.medianLabel { detail("Median", median) }
+                if let label = statistics.meanLabel {
+                    detail("Mean", "≈ " + label)
+                } else if let mean = statistics.mean {
+                    detail("Mean", decimal(mean))
+                }
+                if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
+                    detail("Std dev", decimal(sd))
+                }
+                if statistics.nanCount > 0 { detail("NaN", formatCount(statistics.nanCount)) }
+                if statistics.infiniteCount > 0 { detail("Infinite", formatCount(statistics.infiniteCount)) }
+                if statistics.minLabel == nil && statistics.maxLabel == nil {
+                    Text("No numeric values").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            if statistics.nanCount > 0 { detail("NaN", formatCount(statistics.nanCount)) }
-            if statistics.infiniteCount > 0 { detail("Infinite", formatCount(statistics.infiniteCount)) }
-            if statistics.minLabel == nil && statistics.maxLabel == nil {
-                Text("No numeric values").font(.caption).foregroundStyle(.secondary)
+        case .distribution:
+            if let histogram = analysis.distribution {
+                distribution(histogram)
             }
-        case .distribution(let histogram):
-            distribution(histogram)
-        case .values(let summary):
-            detail("Distinct", (summary.estimated ? "≈ " : "") + formatCount(summary.distinctCount))
-            if !summary.values.isEmpty {
-                Text(summary.estimated ? "Common values · estimated" : "Values")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .help(
-                        "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
-                    )
-                ForEach(summary.values, id: \.key) { item in
-                    VStack(alignment: .leading, spacing: 3) {
-                        detail(item.label ?? "(null)", countWithPercent(item.count, total: model.current.rowCount))
-                        ProgressView(value: Double(item.count), total: Double(max(model.current.rowCount, 1)))
-                            .tint(.accentColor)
+        case .values:
+            if let summary = analysis.values {
+                detail("Distinct", "≈ " + formatCount(summary.distinctCount))
+                if !summary.values.isEmpty {
+                    Text("Common values · estimated")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .help(
+                            "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
+                        )
+                    ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            detail(item.label, countWithPercent(item.count, total: analysis.rowCount))
+                            ProgressView(value: Double(item.count), total: Double(max(analysis.rowCount, 1)))
+                                .tint(.accentColor)
+                        }
                     }
                 }
             }
-        case .lengths(let summary):
-            detail("Unit", summary.unit.label)
-            detail("Empty", formatCount(summary.emptyCount))
-            if let min = summary.min { detail("Min", formatCount(min)) }
-            if let max = summary.max { detail("Max", formatCount(max)) }
-            if let mean = summary.mean { detail("Mean", decimal(mean)) }
-            distribution(summary.histogram)
-        case .structure(let fields):
-            ForEach(Array(fields.enumerated()), id: \.offset) { _, field in
-                detail(
-                    field.name,
-                    field.displayType + (field.nullable ? " · nullable" : ""),
-                    help: field.technicalType
-                )
+        case .lengths:
+            if let summary = analysis.lengths {
+                detail("Unit", summary.unit.label)
+                detail("Empty", formatCount(summary.emptyCount))
+                if let min = summary.min { detail("Min", formatCount(min)) }
+                if let max = summary.max { detail("Max", formatCount(max)) }
+                if let mean = summary.mean { detail("Mean", decimal(mean)) }
+                distribution(summary.histogram)
+            }
+        case .structure:
+            if let fields = analysis.structure {
+                ForEach(Array(fields.enumerated()), id: \.offset) { _, field in
+                    detail(
+                        field.name,
+                        field.displayType + (field.nullable ? " · nullable" : ""),
+                        help: field.technicalType
+                    )
+                }
             }
         }
     }
@@ -228,7 +246,7 @@ struct ColumnAnalysisView: View {
             HistogramChart(
                 histogram: histogram,
                 selection: .constant(.init(lower: lo, upper: hi)), interactive: false,
-                frequencyScale: frequencyScale
+                frequencyScale: settings.frequencyScale
             )
             .frame(height: 110).accessibilityLabel("Distribution")
             if let min = histogram.minLabel, let max = histogram.maxLabel,
@@ -249,16 +267,6 @@ struct ColumnAnalysisView: View {
 
     private func countWithPercent(_ count: UInt64, total: UInt64) -> String {
         formatCount(count) + (total == 0 ? "" : String(format: " (%.1f%%)", Double(count) / Double(total) * 100))
-    }
-
-    private func value(_ value: Double) -> String {
-        if model.kinds.indices.contains(column), model.kinds[column] == .temporal,
-            let integer = Int64(exactly: value.rounded()),
-            let text = try? model.doc.formatValue(column: UInt32(column), value: integer)
-        {
-            return "≈ " + text
-        }
-        return decimal(value)
     }
 
     private func decimal(_ value: Double) -> String {

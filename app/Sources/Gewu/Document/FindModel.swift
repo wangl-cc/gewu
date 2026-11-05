@@ -31,8 +31,8 @@ final class FindModel: ObservableObject {
     private let worker = DispatchQueue(label: "gewu.document.find", qos: .userInitiated)
     private var navigationTask: Task<Void, Never>?
     private var highlightTask: Task<Void, Never>?
-    private var navigationOperation: FindOperation?
-    private var highlightOperation: FindOperation?
+    private var navigationOperation: Cancellation?
+    private var highlightOperation: Cancellation?
     private var pendingHighlight: (start: UInt64, count: UInt32)?
     private var completedHighlight: (start: UInt64, count: UInt32)?
     /// The last directional page, ascending in display order, and the current
@@ -65,7 +65,7 @@ final class FindModel: ObservableObject {
     /// old session; an obsolete delayed task never calls cancel on the new one.
     /// `cursor` keeps the current cell when only the captured column order changed.
     func update(
-        document: GewuDocument, version: UInt64, columns: [UInt32], cursor: CellMatch? = nil,
+        view: GewuView, columns: [UInt32], cursor: CellMatch? = nil,
         debounce: Bool = false
     ) {
         invalidate()
@@ -73,7 +73,7 @@ final class FindModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let session: FindSession
         do {
-            session = try document.prepareFind(version: version, query: trimmed, columns: columns)
+            session = try view.find(query: trimmed, columns: columns)
         } catch {
             onError?(error, "Find error: ")
             return
@@ -153,7 +153,7 @@ final class FindModel: ObservableObject {
         let gate = gate
         let highlightGate = highlightGate
         highlightOperation?.cancel()
-        let operation = session.operation()
+        let operation = Cancellation()
         highlightOperation = operation
         highlightTask?.cancel()
         highlightTask = Task { [weak self] in
@@ -169,8 +169,8 @@ final class FindModel: ObservableObject {
                         }
                         do {
                             continuation.resume(
-                                returning: try session.highlightWithOperation(
-                                    start: start, count: count, operation: operation))
+                                returning: try session.highlight(
+                                    start: start, count: count, cancellation: operation))
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -237,7 +237,7 @@ final class FindModel: ObservableObject {
         let gate = gate
         let navigationGate = navigationGate
         navigationOperation?.cancel()
-        let operation = session.operation()
+        let operation = Cancellation()
         navigationOperation = operation
         navigationTask?.cancel()
         let limit = Self.pageSize
@@ -316,9 +316,9 @@ final class FindModel: ObservableObject {
 
 /// Read one directional page on the Find worker queue.
 private func readFindPage(
-    session: FindSession, cursor: CellMatch?, backwards: Bool, limit: UInt32, operation: FindOperation
+    session: FindSession, cursor: CellMatch?, backwards: Bool, limit: UInt32, operation: Cancellation
 ) throws -> [CellMatch] {
     backwards
-        ? try session.previousWithOperation(before: cursor, limit: limit, operation: operation)
-        : try session.nextWithOperation(after: cursor, limit: limit, operation: operation)
+        ? try session.previous(before: cursor, limit: limit, cancellation: operation)
+        : try session.next(after: cursor, limit: limit, cancellation: operation)
 }

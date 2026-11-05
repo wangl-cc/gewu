@@ -1,53 +1,43 @@
 //! Data engine for gewu, a read-only table viewer.
 //!
-//! The Mac app talks to a [`Document`] through UniFFI. A document owns the
-//! decoded data and a current view: the list of source rows to show, in
-//! display order. Sorting and filtering never move data; they only produce a
-//! new list of row numbers.
+//! The Mac app shares immutable [`Dataset`] and [`View`] objects through UniFFI.
+//! Callers own query conditions and choose which result to display. Sorting and
+//! filtering never move data; they only produce a new list of row numbers.
 
-mod analysis;
+mod cancellation;
+pub use cancellation::{Cancellation, CancellationError};
+mod col_view;
 mod column;
-mod document;
-mod engine;
+mod dataset;
 mod error;
-mod export;
+mod execution;
 mod file;
-mod filter;
 mod find;
-mod format;
-mod kind;
-mod predicate;
-mod scale;
-mod scatter;
-mod scope;
-mod text_choices;
-mod value_index;
+pub(crate) mod format;
+pub(crate) mod query;
+mod scalar;
+mod stats;
+mod types;
 mod view;
 
-pub use analysis::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
-    LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
-};
-pub use arrow::datatypes::TimeUnit;
 pub use column::{
-    bound::Bound,
-    histogram::{Histogram, RangeBounds, RangeHistogram},
-    ColumnCapabilities, ColumnInfo,
+    ColumnCapabilities, ColumnError, ColumnInfo, ColumnOperation, FilterChoices, FilterError,
+    FilterKind, ValueCategory, ValueChoice, ValueParseError,
 };
-pub use document::Document;
-pub use error::{Error, Result};
-pub use export::{Export, ExportProgress};
+pub use dataset::{Dataset, DatasetInfo};
+pub use error::{Error, InternalError, IoError, IoOperation, Result};
 pub use file::{
-    xlsx_sheet_names, ExportOptions, FileInfo, FileMetadata, FileType, OpenOptions,
-    ParquetCompression,
+    xlsx_sheet_names, CodecError, Export, ExportError, ExportOptions, ExportProgress, FileError,
+    FileMetadata, FileOperation, FileType, OpenOptions, ParquetCompression,
 };
-pub use filter::{Filter, FilterEditor, FilterSpec, TextFilterMode};
 pub use find::{
-    CellMatch, Find, FindHighlight, FindOperation, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    CellMatch, Find, FindError, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
-pub use kind::LogicalType;
-pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
-pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use value_index::{DistinctResult, DistinctValue};
-pub use view::{RowBlock, SortKey, ViewInfo, ViewState};
+pub use query::{ColSort, ColSpec, Filter, FilterCondition, QueryError, QuerySpec, TextMatch};
+pub use scalar::BoundError;
+pub use stats::{
+    AnalysisCapabilities, AnalysisError, AnalysisField, AnalysisOperation, AxisScale, Histogram,
+    LengthSummary, LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram,
+    ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+};
+pub use view::{RowBlock, View};

@@ -10,7 +10,7 @@ use arrow::{
     compute::cast,
     datatypes::{DataType, TimeUnit},
 };
-use gewu_core::Document;
+use gewu_core::Cancellation;
 use parquet::arrow::ArrowWriter;
 
 /// Find each query and check matching source/display rows in the initial view.
@@ -20,11 +20,13 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(file.path()).unwrap();
+    let doc = gewu_core::Dataset::open(file.path())
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
 
     for (query, expected) in queries {
-        let find = doc.prepare_find(0, query, &[0]).unwrap();
-        let hits = find.next(None, 256).unwrap();
+        let find = doc.find(query, &[0]).unwrap();
+        let hits = find.next(None, 256, &Cancellation::default()).unwrap();
         assert_eq!(
             hits.iter().map(|hit| hit.display_row).collect::<Vec<_>>(),
             *expected,

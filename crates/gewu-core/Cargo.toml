@@ -17,16 +17,18 @@ arrow.workspace = true
 parquet = { workspace = true, optional = true }
 arrow-csv = { version = "60", optional = true }
 csv = { version = "1", optional = true }
-calamine = { version = "0.37", features = ["chrono"], optional = true }
-rust_xlsxwriter = { version = "0.100", features = ["constant_memory"], optional = true }
+calamine = { version = "0.38", features = ["chrono"], optional = true }
+rust_xlsxwriter = { version = "0.102", features = ["constant_memory"], optional = true }
 thiserror.workspace = true
 chrono.workspace = true
 tempfile = "3"
 num-traits = "0.2"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+rapidhash = "4.5.1"
+half = "2.7.1"
 
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false }
+criterion = { version = "0.8", default-features = false }
 
 [[bench]]
 name = "engine"

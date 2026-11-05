@@ -1,40 +1,47 @@
 //! UniFFI bindings for gewu-core.
 //!
-//! All methods are synchronous. The app calls scans and I/O from background
-//! tasks. A newer `apply_view` cancels an older view request inside the core;
-//! analysis and export jobs have independent cancellation handles. Snapshot
-//! preparation, capability metadata and visible row blocks are UI-thread APIs.
+//! All methods are synchronous. Callers schedule scans off the UI thread and
+//! own cancellation signals. Dataset and View handles share immutable data.
 
 mod analysis;
-mod document;
+mod cancellation;
+mod column;
+mod dataset;
 mod error;
 mod export;
 mod file;
 mod filter;
 mod find;
+mod query;
 mod scale;
 mod scatter;
-mod text_choices;
+#[cfg(test)]
+mod tests;
 mod view;
+mod view_handle;
 
 pub use analysis::{
-    AnalysisData, AnalysisField, AnalysisResult, AnalysisSection, ColumnAnalysis, ColumnSummary,
-    DistinctValue, Histogram, LengthSummary, LengthUnit, NumericStatistics, ValueSummary,
+    AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
+    ValueFrequency, ValueSummary,
 };
-pub use document::GewuDocument;
-pub use error::GewuError;
+pub use cancellation::Cancellation;
+pub use column::{ColumnCapabilities, ColumnInfo, ValueCategory};
+pub use dataset::{DatasetInfo, GewuDataset};
+pub use error::{
+    AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
+    FindErrorKind, GewuError, IoOperation, LimitErrorKind, ValueParseError,
+};
 pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
-pub use file::{
-    xlsx_sheet_names, ColumnCapabilities, ColumnInfo, FileInfo, FileType, KeyValue, LogicalType,
-    TimeUnit,
-};
+pub use file::{xlsx_sheet_names, FileMetadata, FileType, KeyValue};
 pub use filter::{
-    Bound, Filter, FilterEditor, FilterSpec, RangeBounds, RangeHistogram, TextFilterMode,
+    Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, TextMatch,
+    ValueChoice,
 };
-pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindOperation, FindSession};
+pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
+pub use query::{ColSort, ColSpec, QuerySpec};
 pub use scale::AxisScale;
-pub use scatter::{ScatterAnalysis, ScatterPoint, ScatterResult};
-pub use text_choices::{TextChoice, TextChoiceCursor, TextChoicePage, TextChoices};
-pub use view::{RowBlock, SortKey, ViewInfo, ViewState};
+pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
+pub use view::RowBlock;
+pub use view_handle::GewuView;
 
 uniffi::setup_scaffolding!();

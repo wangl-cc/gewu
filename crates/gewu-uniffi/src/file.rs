@@ -1,4 +1,4 @@
-//! File and column metadata exposed to the app.
+//! File format and source metadata exposed to the app.
 
 use gewu_core as core;
 
@@ -11,140 +11,13 @@ pub fn xlsx_sheet_names(path: String) -> Result<Vec<String>, crate::GewuError> {
     Ok(core::xlsx_sheet_names(path)?)
 }
 
-/// Time unit for timestamps and durations; mirrors `arrow::datatypes::TimeUnit`.
-#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
-pub enum TimeUnit {
-    Second,
-    Millisecond,
-    Microsecond,
-    Nanosecond,
-}
-
-impl From<core::TimeUnit> for TimeUnit {
-    fn from(u: core::TimeUnit) -> Self {
-        match u {
-            core::TimeUnit::Second => Self::Second,
-            core::TimeUnit::Millisecond => Self::Millisecond,
-            core::TimeUnit::Microsecond => Self::Microsecond,
-            core::TimeUnit::Nanosecond => Self::Nanosecond,
-        }
-    }
-}
-
-/// A logical data type with semantic parameters; mirrors `gewu_core::LogicalType`.
-#[derive(uniffi::Enum, Clone, PartialEq, Eq)]
-pub enum LogicalType {
-    Text,
-    Integer {
-        bits: u8,
-        signed: bool,
-    },
-    Float {
-        bits: u8,
-    },
-    Decimal {
-        precision: u8,
-        scale: i8,
-    },
-    Boolean,
-    Date,
-    Time,
-    Timestamp {
-        unit: TimeUnit,
-        timezone: Option<String>,
-    },
-    Duration {
-        unit: TimeUnit,
-    },
-    Interval,
-    Binary,
-    List,
-    Struct,
-    Other {
-        raw_name: String,
-    },
-}
-
-impl From<core::LogicalType> for LogicalType {
-    fn from(t: core::LogicalType) -> Self {
-        match t {
-            core::LogicalType::Text => Self::Text,
-            core::LogicalType::Integer { bits, signed } => Self::Integer { bits, signed },
-            core::LogicalType::Float { bits } => Self::Float { bits },
-            core::LogicalType::Decimal { precision, scale } => Self::Decimal { precision, scale },
-            core::LogicalType::Boolean => Self::Boolean,
-            core::LogicalType::Date => Self::Date,
-            core::LogicalType::Time => Self::Time,
-            core::LogicalType::Timestamp { unit, timezone } => Self::Timestamp {
-                unit: unit.into(),
-                timezone,
-            },
-            core::LogicalType::Duration { unit } => Self::Duration { unit: unit.into() },
-            core::LogicalType::Interval => Self::Interval,
-            core::LogicalType::Binary => Self::Binary,
-            core::LogicalType::List => Self::List,
-            core::LogicalType::Struct => Self::Struct,
-            core::LogicalType::Other { raw_name } => Self::Other { raw_name },
-        }
-    }
-}
-
-#[derive(uniffi::Record)]
-pub struct ColumnCapabilities {
-    pub contains: bool,
-    pub range: bool,
-    pub equals: bool,
-    pub histogram: bool,
-    pub scatter: bool,
-    pub logarithmic: bool,
-}
-
-impl From<core::ColumnCapabilities> for ColumnCapabilities {
-    fn from(capabilities: core::ColumnCapabilities) -> Self {
-        Self {
-            contains: capabilities.contains,
-            range: capabilities.range,
-            equals: capabilities.equals,
-            histogram: capabilities.histogram,
-            scatter: capabilities.scatter,
-            logarithmic: capabilities.logarithmic,
-        }
-    }
-}
-
-#[derive(uniffi::Record)]
-pub struct ColumnInfo {
-    pub name: String,
-    pub logical_type: LogicalType,
-    pub display_type: String,
-    pub technical_type: String,
-    pub capabilities: ColumnCapabilities,
-    pub nullable: bool,
-}
-
-#[derive(uniffi::Record)]
-pub struct FileInfo {
-    pub path: String,
-    pub row_count: u64,
-    pub columns: Vec<ColumnInfo>,
-    pub format: String,
-    pub row_groups: Option<u32>,
-    pub file_size: u64,
-    pub compression: Vec<String>,
-    pub created_by: Option<String>,
-    /// Footer key-value metadata (Arrow's own schema left out).
-    pub metadata: Vec<KeyValue>,
-    pub sheet: Option<String>,
-    pub sheets: Vec<String>,
-}
-
 #[derive(uniffi::Record)]
 pub struct KeyValue {
     pub key: String,
     pub value: String,
 }
 
-#[derive(uniffi::Enum)]
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Csv,
     Tsv,
@@ -163,63 +36,52 @@ impl From<FileType> for core::FileType {
     }
 }
 
-impl From<&core::Document> for FileInfo {
-    fn from(document: &core::Document) -> Self {
-        let i = document.info();
-        let mut info = FileInfo {
-            path: i.path.clone(),
-            row_count: i.row_count,
-            columns: i
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(column, c)| {
-                    let capabilities = document
-                        .column_capabilities(column as u32)
-                        .expect("column came from this document's schema");
-                    ColumnInfo {
-                        name: c.name.clone(),
-                        logical_type: c.logical_type.clone().into(),
-                        display_type: c.display_type.clone(),
-                        technical_type: c.technical_type.clone(),
-                        capabilities: capabilities.into(),
-                        nullable: c.nullable,
-                    }
-                })
-                .collect(),
-            format: i.format.to_string(),
-            row_groups: None,
-            file_size: i.file_size,
-            compression: Vec::new(),
-            created_by: None,
-            metadata: Vec::new(),
-            sheet: None,
-            sheets: Vec::new(),
-        };
-        match &i.metadata {
+impl From<core::FileType> for FileType {
+    fn from(value: core::FileType) -> Self {
+        match value {
+            core::FileType::Csv => Self::Csv,
+            core::FileType::Tsv => Self::Tsv,
+            core::FileType::Parquet => Self::Parquet,
+            core::FileType::Xlsx => Self::Xlsx,
+        }
+    }
+}
+
+#[derive(uniffi::Enum)]
+pub enum FileMetadata {
+    Parquet {
+        row_groups: u32,
+        compression: Vec<String>,
+        created_by: Option<String>,
+        /// Footer key-value metadata (Arrow's own schema left out).
+        key_values: Vec<KeyValue>,
+    },
+    Delimited,
+    Xlsx {
+        sheet: String,
+        sheets: Vec<String>,
+    },
+}
+
+impl From<core::FileMetadata> for FileMetadata {
+    fn from(value: core::FileMetadata) -> Self {
+        match value {
             core::FileMetadata::Parquet {
                 row_groups,
                 compression,
                 created_by,
                 key_values,
-            } => {
-                info.row_groups = Some(*row_groups);
-                info.compression = compression.clone();
-                info.created_by = created_by.clone();
-                info.metadata = key_values
-                    .iter()
-                    .map(|(key, value)| KeyValue {
-                        key: key.clone(),
-                        value: value.clone(),
-                    })
-                    .collect();
-            }
-            core::FileMetadata::Delimited => {}
-            core::FileMetadata::Xlsx { sheet, sheets } => {
-                info.sheet = Some(sheet.clone());
-                info.sheets = sheets.clone();
-            }
+            } => Self::Parquet {
+                row_groups,
+                compression,
+                created_by,
+                key_values: key_values
+                    .into_iter()
+                    .map(|(key, value)| KeyValue { key, value })
+                    .collect(),
+            },
+            core::FileMetadata::Delimited => Self::Delimited,
+            core::FileMetadata::Xlsx { sheet, sheets } => Self::Xlsx { sheet, sheets },
         }
-        info
     }
 }

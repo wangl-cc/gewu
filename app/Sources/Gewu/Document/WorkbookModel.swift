@@ -12,7 +12,11 @@ final class WorkbookModel: ObservableObject {
     @Published private(set) var isOpening = false
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
-    @Published var showsInspector = UserDefaults.standard.bool(forKey: "ShowColumnInspector")
+    @Published var showsInspector: Bool {
+        didSet { preferences.set(showsInspector, forKey: Self.inspectorPreference) }
+    }
+    static let inspectorPreference = "ShowColumnInspector"
+    private let preferences: UserDefaults
     @Published var showsImportOptions = false
     @Published private(set) var hasHeader: Bool
 
@@ -23,26 +27,32 @@ final class WorkbookModel: ObservableObject {
     private var listedSheets = false
     private var attemptedSheet: WorksheetName?
     private let sheetNames: @Sendable (String) throws -> [String]
-    private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDocument
+    private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDataset
     private let didOpen: @MainActor (URL) -> Void
 
     init(
         url: URL,
         hasHeader: Bool = true,
+        preferences: UserDefaults = .standard,
         sheetNames: @escaping @Sendable (String) throws -> [String] = { try xlsxSheetNames(path: $0) },
-        openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDocument = { path, sheet, header in
-            try GewuDocument.openWithOptions(path: path, sheet: sheet, hasHeader: header)
+        openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDataset = { path, sheet, header in
+            try GewuDataset.openWithOptions(path: path, sheet: sheet, hasHeader: header)
         },
         didOpen: @escaping @MainActor (URL) -> Void = { FileCoordinator.shared.recordRecent($0) }
     ) {
         self.url = url
+        self.preferences = preferences
+        showsInspector = preferences.object(forKey: Self.inspectorPreference) as? Bool ?? true
         self.hasHeader = hasHeader
         self.sheetNames = sheetNames
         self.openDocument = openDocument
         self.didOpen = didOpen
     }
 
-    var selectedSheet: WorksheetName? { document?.info.sheet.map(WorksheetName.init) }
+    var selectedSheet: WorksheetName? {
+        guard case .xlsx(let sheet, _)? = document?.info.metadata else { return nil }
+        return WorksheetName(rawValue: sheet)
+    }
 
     var supportsHeaderOption: Bool { ["csv", "tsv", "xlsx"].contains(url.pathExtension.lowercased()) }
 
@@ -124,11 +134,15 @@ final class WorkbookModel: ObservableObject {
                 }
                 self.attemptedSheet = loaded.sheet
                 let opened = try loaded.document.get()
-                let next = DocumentModel(url: self.url, document: opened)
+                let next = DocumentModel(url: self.url, dataset: opened)
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
-                self.sheets = next.info.sheets.map(WorksheetName.init)
+                if case .xlsx(_, let sheets) = next.info.metadata {
+                    self.sheets = sheets.map(WorksheetName.init)
+                } else {
+                    self.sheets = []
+                }
                 self.pendingSheet = nil
                 self.isOpening = false
                 self.task = nil
@@ -150,5 +164,5 @@ final class WorkbookModel: ObservableObject {
 private struct WorkbookRead: Sendable {
     let sheets: [WorksheetName]?
     let sheet: WorksheetName?
-    let document: Result<GewuDocument, Error>
+    let document: Result<GewuDataset, Error>
 }

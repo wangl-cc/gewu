@@ -18,7 +18,7 @@ use calamine::{Data, Reader, SheetType, Xlsx};
 use rust_xlsxwriter::{Format, Workbook};
 
 use super::{ExportData, LoadedFile, WriteProgress, CHUNK_ROWS};
-use crate::{Error, FileMetadata, OpenOptions, Result};
+use crate::{FileMetadata, OpenOptions, Result};
 
 fn worksheet_names(workbook: &Xlsx<File>) -> Vec<String> {
     workbook
@@ -29,23 +29,21 @@ fn worksheet_names(workbook: &Xlsx<File>) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn sheet_names(file: File) -> Result<Vec<String>> {
+pub(super) fn sheet_names(file: File) -> Result<Vec<String>, crate::FileError> {
     Ok(worksheet_names(&Xlsx::new(file)?))
 }
 
-pub(super) fn read(file: File, options: &OpenOptions) -> Result<LoadedFile> {
+pub(super) fn read(file: File, options: &OpenOptions) -> Result<LoadedFile, crate::FileError> {
     let mut workbook = Xlsx::new(file)?;
     let sheets = worksheet_names(&workbook);
     let sheet = options
         .sheet
         .as_ref()
         .or_else(|| sheets.first())
-        .ok_or_else(|| Error::InvalidArgument("XLSX workbook contains no worksheets".into()))?
+        .ok_or(crate::FileError::NoWorksheets)?
         .clone();
     if !sheets.contains(&sheet) {
-        return Err(Error::InvalidArgument(format!(
-            "XLSX worksheet {sheet:?} does not exist"
-        )));
+        return Err(crate::FileError::SheetNotFound { sheet });
     }
     let range = workbook.worksheet_range(&sheet)?;
     // Excel error values are data errors, including errors used as headers.
@@ -54,11 +52,12 @@ pub(super) fn read(file: File, options: &OpenOptions) -> Result<LoadedFile> {
     for (row, values) in range.rows().enumerate() {
         for (column, value) in values.iter().enumerate() {
             if let Data::Error(error) = value {
-                return Err(Error::InvalidArgument(format!(
-                    "XLSX worksheet {sheet:?}, row {}, column {} contains {error}",
-                    origin.0 as usize + row + 1,
-                    origin.1 as usize + column + 1,
-                )));
+                return Err(crate::FileError::ErrorCell {
+                    sheet: sheet.clone(),
+                    row: origin.0 + row as u32 + 1,
+                    column: origin.1 + column as u32 + 1,
+                    error: error.to_string(),
+                });
             }
         }
     }
@@ -225,25 +224,28 @@ pub(super) fn write(
     file: &mut File,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
-) -> Result<()> {
+) -> Result<(), crate::ExportError> {
     if data.rows.len() > 1_048_575 {
-        return Err(Error::InvalidArgument(
-            "XLSX supports at most 1048575 data rows plus a header".into(),
-        ));
+        return Err(crate::ExportError::XlsxRows {
+            actual: data.rows.len() as u64,
+            limit: 1_048_575,
+        });
     }
     if data.columns.len() > 16_384 {
-        return Err(Error::InvalidArgument(
-            "XLSX supports at most 16384 columns".into(),
-        ));
+        return Err(crate::ExportError::XlsxColumns {
+            actual: data.columns.len() as u32,
+            limit: 16_384,
+        });
     }
     if data
         .columns
         .iter()
         .any(|column| column.data_type().is_nested())
     {
-        return Err(Error::Unsupported(
-            "XLSX cannot export nested columns".into(),
-        ));
+        return Err(crate::InternalError::Invariant(
+            "nested columns reached the XLSX writer despite export validation".into(),
+        )
+        .into());
     }
     progress.check()?;
     let options = FormatOptions::default();
@@ -296,7 +298,7 @@ pub(super) fn write(
     }
     progress.check()?;
     workbook.save_to_writer(file)?;
-    progress.check()
+    Ok(progress.check()?)
 }
 
 fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {
@@ -317,12 +319,13 @@ fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use arrow::array::{Decimal128Array, UInt64Array};
     use calamine::{ExcelDateTime, ExcelDateTimeType};
 
     use super::*;
+    use crate::Cancellation;
 
     #[test]
     fn inference_uses_all_values_and_preserves_mixed_values() {
@@ -442,7 +445,7 @@ mod tests {
         };
         assert!(matches!(
             read(file.reopen().unwrap(), &options),
-            Err(Error::InvalidArgument(_))
+            Err(crate::FileError::SheetNotFound { .. })
         ));
     }
 
@@ -480,7 +483,7 @@ mod tests {
         ])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let rows_written = AtomicU64::new(0);
         write(
             file.as_file_mut(),
@@ -490,7 +493,7 @@ mod tests {
                 rows: &[1, 0],
             },
             WriteProgress {
-                cancelled: &cancelled,
+                cancellation: &cancelled,
                 rows_written: &rows_written,
             },
         )
@@ -572,7 +575,7 @@ mod tests {
         )])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = AtomicBool::new(false);
+        let cancelled = Cancellation::default();
         let rows_written = AtomicU64::new(0);
         let schema = batch.schema();
         let data = ExportData {
@@ -581,7 +584,7 @@ mod tests {
             rows: &[],
         };
         let progress = WriteProgress {
-            cancelled: &cancelled,
+            cancellation: &cancelled,
             rows_written: &rows_written,
         };
         write(file.as_file_mut(), data, progress).unwrap();
@@ -599,7 +602,7 @@ mod tests {
                 },
                 progress
             ),
-            Err(Error::InvalidArgument(_))
+            Err(crate::ExportError::XlsxRows { .. })
         ));
         let excessive_columns = vec![batch.column(0).clone(); 16_385];
         assert!(matches!(
@@ -611,13 +614,13 @@ mod tests {
                 },
                 progress
             ),
-            Err(Error::InvalidArgument(_))
+            Err(crate::ExportError::XlsxColumns { .. })
         ));
 
-        cancelled.store(true, Ordering::Relaxed);
+        cancelled.cancel();
         assert!(matches!(
             write(file.as_file_mut(), data, progress),
-            Err(Error::Cancelled)
+            Err(crate::ExportError::Cancelled(_))
         ));
     }
 }

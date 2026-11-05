@@ -51,6 +51,7 @@ struct HistogramChart: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: HistogramView, coordinator: Coordinator) {
+        view.isInteractive = false
         view.onChange = nil
         view.labelFormatter = nil
         view.axisLabels = nil
@@ -65,7 +66,12 @@ struct HistogramChart: NSViewRepresentable {
 final class HistogramView: NSView {
     var onChange: (() -> Void)?
     /// When false, only shows the distribution: no handles, no dragging.
-    var isInteractive = true
+    var isInteractive = true {
+        didSet {
+            if !isInteractive { drag = nil }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     var frequencyScale: AxisScale = .linear
     /// Text for axis values; numbers by default.
     var labelFormatter: ((Double) -> String)?
@@ -89,6 +95,7 @@ final class HistogramView: NSView {
     private var drag: Drag?
 
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { isInteractive }
 
     /// Start dragging on the first click, even before the popover is key.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -102,12 +109,15 @@ final class HistogramView: NSView {
         self.integer = integer
         maxCount = max(1, counts.max() ?? 1)
         selection = (lo, hi)
+        drag = nil
+        window?.invalidateCursorRects(for: self)
         needsDisplay = true
     }
 
     func setSelection(_ a: Double, _ b: Double, snapped: Bool) {
         selection = (min(max(a, lo), hi), min(max(b, lo), hi))
         isSnapped = snapped
+        window?.invalidateCursorRects(for: self)
         needsDisplay = true
     }
 
@@ -141,7 +151,7 @@ final class HistogramView: NSView {
 
     /// The bin edge nearest to `x`.
     private func snappedValue(_ x: CGFloat) -> Double {
-        guard !counts.isEmpty else { return lo }
+        guard !counts.isEmpty, plot.width > 0 else { return lo }
         let t = min(max(Double((x - plot.minX) / plot.width), 0), 1)
         let k = (t * Double(counts.count)).rounded()
         return lo + k / Double(counts.count) * (hi - lo)
@@ -277,8 +287,10 @@ final class HistogramView: NSView {
     private var moved = false
 
     override func mouseDown(with event: NSEvent) {
-        guard isInteractive else { return }
+        guard isInteractive, !counts.isEmpty, hi > lo, plot.width > 0, plot.height > 0 else { return }
         let point = convert(event.locationInWindow, from: nil)
+        guard plot.insetBy(dx: -Self.handleReach, dy: -2).contains(point) else { return }
+        window?.makeFirstResponder(self)
         // A double click resets, but only on mouse up without movement:
         // trackpad "tap then drag" also arrives as a second click.
         moved = false
@@ -290,12 +302,12 @@ final class HistogramView: NSView {
             // Outside the selection, or nothing chosen yet: draw a new range.
             drag = .create(anchor: snappedValue(point.x))
         }
+        window?.invalidateCursorRects(for: self)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let drag else { return }
         moved = true
-        if case .pan = drag { NSCursor.closedHand.set() }
         let v = snappedValue(convert(event.locationInWindow, from: nil).x)
         var (a, b) = selection
         switch drag {
@@ -315,31 +327,48 @@ final class HistogramView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard drag != nil else { return }
         drag = nil
+        window?.invalidateCursorRects(for: self)
         if !moved, event.clickCount >= 2 {
             setSelection(lo, hi, snapped: true)
             onChange?()
         }
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
-                owner: self, userInfo: nil))
+    override func cancelOperation(_ sender: Any?) {
+        guard drag != nil else {
+            super.cancelOperation(sender)
+            return
+        }
+        drag = nil
+        window?.invalidateCursorRects(for: self)
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        guard isInteractive else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        if handle(at: point) != nil {
-            NSCursor.resizeLeftRight.set()
-        } else if !isEverything, point.x > x(selection.0), point.x < x(selection.1) {
-            NSCursor.openHand.set()
-        } else {
-            NSCursor.crosshair.set()
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        drag = nil
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard isInteractive, !counts.isEmpty, hi > lo, plot.width > 0, plot.height > 0 else { return }
+        // AppKit owns exit, deactivation and teardown; no global cursor set/pop
+        // can outlive this chart or override a newly opened popover.
+        addCursorRect(plot, cursor: .crosshair)
+        if !isEverything {
+            let band = NSRect(
+                x: x(selection.0), y: plot.minY, width: x(selection.1) - x(selection.0), height: plot.height)
+            if case .pan = drag {
+                addCursorRect(band, cursor: .closedHand)
+            } else {
+                addCursorRect(band, cursor: .openHand)
+            }
+        }
+        for edge in [selection.0, selection.1] {
+            let handle = NSRect(
+                x: x(edge) - Self.handleReach, y: plot.minY - 2, width: 2 * Self.handleReach, height: plot.height + 4)
+            addCursorRect(handle.intersection(bounds), cursor: .resizeLeftRight)
         }
     }
 }

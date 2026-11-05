@@ -12,3 +12,14 @@ func formatRowNumber(_ sourceRow: UInt64, base: Int) -> String {
 func formatCount(_ n: UInt64) -> String {
     NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
 }
+
+extension FileType {
+    var displayName: String {
+        switch self {
+        case .csv: return "CSV"
+        case .tsv: return "TSV"
+        case .parquet: return "Parquet"
+        case .xlsx: return "XLSX"
+        }
+    }
+}

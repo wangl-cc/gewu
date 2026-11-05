@@ -11,12 +11,12 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use gewu_core::{
-    Document, Error, ExportOptions, FileType, Filter, ParquetCompression, SortKey, ViewState,
+    Cancellation, Error, ExportOptions, FileType, Filter, ParquetCompression, QuerySpec,
 };
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
 
-fn sample() -> (TempDir, Document) {
+fn sample() -> (TempDir, Arc<gewu_core::Dataset>) {
     let directory = tempfile::tempdir().unwrap();
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -54,17 +54,23 @@ fn sample() -> (TempDir, Document) {
         ArrowWriter::try_new(fs::File::create(&path).unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    (directory, Document::open(&path).unwrap())
+    (
+        directory,
+        Arc::new(gewu_core::Dataset::open(&path).unwrap()),
+    )
 }
 
-fn document_from_batch(batch: &RecordBatch) -> (TempDir, Document) {
+fn document_from_batch(batch: &RecordBatch) -> (TempDir, std::sync::Arc<gewu_core::View>) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("nested.parquet");
     let mut writer =
         ArrowWriter::try_new(fs::File::create(&path).unwrap(), batch.schema(), None).unwrap();
     writer.write(batch).unwrap();
     writer.close().unwrap();
-    (directory, Document::open(path).unwrap())
+    (
+        directory,
+        Arc::new(gewu_core::Dataset::open(&path).unwrap()).view(),
+    )
 }
 
 fn nested_sample() -> RecordBatch {
@@ -124,7 +130,6 @@ fn nested_sample() -> RecordBatch {
 fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     let batch = nested_sample();
     let (directory, doc) = document_from_batch(&batch);
-    let version = doc.current_view().version;
     assert_eq!(doc.nested_export_columns(&[3, 0, 1]).unwrap(), [
         "items", "tags"
     ]);
@@ -133,17 +138,22 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
         .into_iter()
         .filter(|format| format.is_enabled())
     {
-        let result = doc.prepare_export(version, &[0, 2], format);
-        assert!(matches!(result, Err(Error::Unsupported(message))
-            if message.contains("profile") && message.contains("Parquet")));
+        let result = doc.export(&[0, 2], format);
         assert!(matches!(
-            doc.prepare_export(version, &[1], format),
-            Err(Error::Unsupported(_))
+            result,
+            Err(Error::Export(gewu_core::ExportError::NestedColumns {
+                columns,
+                ..
+            })) if columns == [2]
         ));
-        assert!(doc.prepare_export(version, &[0], format).is_ok());
+        assert!(matches!(
+            doc.export(&[1], format),
+            Err(Error::Export(gewu_core::ExportError::NestedColumns { .. }))
+        ));
+        assert!(doc.export(&[0], format).is_ok());
     }
     let path = directory.path().join("native.parquet");
-    doc.prepare_export(version, &[0, 1, 2, 3], FileType::Parquet)
+    doc.export(&[0, 1, 2, 3], FileType::Parquet)
         .unwrap()
         .write(&path)
         .unwrap();
@@ -157,27 +167,18 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     assert_eq!(result, batch);
 }
 
-fn filtered(doc: &Document) -> u64 {
-    doc.apply_view(&ViewState {
-        sort: vec![SortKey {
-            column: 0,
-            descending: true,
-        }],
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.parse_bound(0, "2").unwrap()),
-            max: None,
-        }],
-    })
+fn filtered(doc: &Arc<gewu_core::Dataset>) -> Arc<gewu_core::View> {
+    doc.query(
+        &QuerySpec::single(0, Filter::range(Some("2".into()), None, false)).with_sort(0, true, 0),
+        &gewu_core::Cancellation::default(),
+    )
     .unwrap()
-    .version
 }
 
 #[test]
 fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
     let (directory, doc) = sample();
-    let version = filtered(&doc);
+    let doc = filtered(&doc);
     for (format, expected) in [
         (
             FileType::Csv,
@@ -201,7 +202,7 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
         ),
     ] {
         let path = directory.path().join(format!("result.{format:?}"));
-        let export = doc.prepare_export(version, &[1, 0, 2, 3], format).unwrap();
+        let export = doc.export(&[1, 0, 2, 3], format).unwrap();
         export.write(&path).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap(), expected);
         assert_eq!(export.progress().rows_written, 4);
@@ -211,14 +212,19 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
 
 #[test]
 fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
-    let (directory, doc) = sample();
-    let version = filtered(&doc);
-    let export = doc
-        .prepare_export(version, &[1, 0, 2, 3], FileType::Parquet)
-        .unwrap();
+    let (directory, dataset) = sample();
+    let doc = filtered(&dataset);
+    let export = doc.export(&[1, 0, 2, 3], FileType::Parquet).unwrap();
     // Query changes and cancellation in the source do not alter the snapshot.
-    doc.apply_view(&ViewState::default()).unwrap();
-    doc.cancel_pending();
+    dataset
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+        .unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    assert!(matches!(
+        dataset.query(&QuerySpec::default(), &cancellation),
+        Err(Error::Cancelled)
+    ));
     let path = directory.path().join("result.parquet");
     export.write(&path).unwrap();
     let builder = ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&path).unwrap()).unwrap();
@@ -233,7 +239,7 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
     assert_eq!(batch.num_rows(), 4);
     assert_eq!(
         batch.schema().as_ref(),
-        &doc.schema().project(&[1, 0, 2, 3]).unwrap()
+        &dataset.schema().project(&[1, 0, 2, 3]).unwrap()
     );
     let ids = batch
         .column(1)
@@ -270,44 +276,40 @@ fn parquet_roundtrip_preserves_types_nulls_and_captured_view() {
 #[test]
 fn parquet_export_honors_explicit_compression() {
     let (directory, doc) = sample();
+    let doc = doc.view();
     let path = directory.path().join("snappy.parquet");
-    doc.prepare_export(0, &[0, 1], FileType::Parquet)
+    doc.export(&[0, 1], FileType::Parquet)
         .unwrap()
         .write_with_options(&path, &ExportOptions {
             parquet_compression: ParquetCompression::Snappy,
         })
         .unwrap();
-    let reopened = Document::open(path).unwrap();
+    let reopened = gewu_core::Dataset::open(path)
+        .map(std::sync::Arc::new)
+        .unwrap();
     let info = reopened.info();
     let gewu_core::FileMetadata::Parquet { compression, .. } = &info.metadata else {
         panic!("expected Parquet metadata");
     };
     assert_eq!(compression, &["SNAPPY"]);
     assert_eq!(
-        reopened.rows(0, 0, 5, &[0, 1]).unwrap().cells,
-        doc.rows(0, 0, 5, &[0, 1]).unwrap().cells
+        reopened.view().rows(0, 5, &[0, 1]).unwrap().cells,
+        doc.rows(0, 5, &[0, 1]).unwrap().cells
     );
 }
 
 #[test]
 fn empty_results_keep_headers_and_parquet_schema() {
     let (directory, doc) = sample();
-    let version = doc
-        .apply_view(&ViewState {
-            filters: vec![Filter::Equals {
-                column: 0,
-                value: "-1".into(),
-            }],
-            ..Default::default()
-        })
-        .unwrap()
-        .version;
+    let doc = doc
+        .query(
+            &QuerySpec::single(0, Filter::exact(vec!["-1".into()], false, false)),
+            &gewu_core::Cancellation::default(),
+        )
+        .unwrap();
     for format in [FileType::Csv, FileType::Tsv, FileType::Parquet] {
         let path = directory.path().join(format!("empty.{format:?}"));
-        doc.prepare_export(version, &[0], format)
-            .unwrap()
-            .write(&path)
-            .unwrap();
+        doc.export(&[0], format).unwrap().write(&path).unwrap();
         if format == FileType::Parquet {
             let reader =
                 ParquetRecordBatchReaderBuilder::try_new(fs::File::open(path).unwrap()).unwrap();
@@ -320,18 +322,28 @@ fn empty_results_keep_headers_and_parquet_schema() {
 }
 
 #[test]
-fn stale_and_invalid_exports_are_rejected_before_writing() {
+fn old_views_remain_exportable_and_invalid_columns_are_rejected() {
     let (_directory, doc) = sample();
-    let old = doc.current_view().version;
-    let version = filtered(&doc);
-    assert!(matches!(
-        doc.prepare_export(old, &[0], FileType::Csv),
-        Err(Error::StaleVersion { .. })
-    ));
+    let old = doc.view();
+    let doc = filtered(&doc);
+    assert_eq!(
+        old.export(&[0], FileType::Csv)
+            .unwrap()
+            .progress()
+            .total_rows,
+        5
+    );
+    assert_eq!(
+        doc.export(&[0], FileType::Csv)
+            .unwrap()
+            .progress()
+            .total_rows,
+        4
+    );
     for columns in [vec![], vec![0, 0], vec![99]] {
         assert!(matches!(
-            doc.prepare_export(version, &columns, FileType::Csv),
-            Err(Error::InvalidArgument(_))
+            doc.export(&columns, FileType::Csv),
+            Err(Error::Column(_) | Error::Export(_))
         ));
     }
 }
@@ -339,22 +351,25 @@ fn stale_and_invalid_exports_are_rejected_before_writing() {
 #[test]
 fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_files() {
     let (directory, doc) = sample();
-    let version = doc.current_view().version;
+    let doc = doc.view();
     let path = directory.path().join("existing.csv");
     fs::write(&path, "keep me").unwrap();
-    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
+    let export = doc.export(&[0], FileType::Csv).unwrap();
     export.cancel();
     assert!(matches!(export.write(&path), Err(Error::Cancelled)));
     assert_eq!(fs::read_to_string(&path).unwrap(), "keep me");
     assert!(matches!(
         export.write(&path),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_) | Error::Export(_))
     ));
     // A rename failure also discards the complete temporary output.
     let target_directory = directory.path().join("directory.csv");
     fs::create_dir(&target_directory).unwrap();
-    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
-    assert!(matches!(export.write(&target_directory), Err(Error::Io(_))));
+    let export = doc.export(&[0], FileType::Csv).unwrap();
+    assert!(matches!(
+        export.write(&target_directory),
+        Err(Error::Io { .. })
+    ));
     assert!(target_directory.is_dir());
     assert!(fs::read_dir(directory.path()).unwrap().all(|entry| !entry
         .unwrap()
@@ -362,14 +377,14 @@ fn cancellation_and_failures_preserve_existing_destination_and_remove_temporary_
         .to_string_lossy()
         .starts_with(".gewu-export-")));
     // Successful export can replace a destination once, after all rows exist.
-    let export = doc.prepare_export(version, &[0], FileType::Csv).unwrap();
+    let export = doc.export(&[0], FileType::Csv).unwrap();
     export.write(&path).unwrap();
     assert!(fs::read_to_string(&path)
         .unwrap()
         .starts_with("id\r\n3\r\n1\r\n"));
     assert!(matches!(
         export.write(&path),
-        Err(Error::InvalidArgument(_))
+        Err(Error::Column(_) | Error::Export(_))
     ));
 }
 
@@ -386,13 +401,19 @@ fn formatting_failure_does_not_publish_a_partial_file() {
         ArrowWriter::try_new(fs::File::create(&source).unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    let doc = Document::open(source).unwrap();
+    let doc = gewu_core::Dataset::open(source)
+        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .unwrap();
     let destination = directory.path().join("result.csv");
     fs::write(&destination, "existing data").unwrap();
-    let export = doc
-        .prepare_export(doc.current_view().version, &[0], FileType::Csv)
-        .unwrap();
-    assert!(matches!(export.write(&destination), Err(Error::Arrow(_))));
+    let export = doc.export(&[0], FileType::Csv).unwrap();
+    assert!(matches!(
+        export.write(&destination),
+        Err(Error::Export(gewu_core::ExportError::Encode {
+            format: FileType::Csv,
+            ..
+        }))
+    ));
     assert_eq!(fs::read_to_string(destination).unwrap(), "existing data");
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
 }
@@ -400,6 +421,7 @@ fn formatting_failure_does_not_publish_a_partial_file() {
 #[test]
 fn source_file_and_aliases_cannot_be_overwritten() {
     let (directory, doc) = sample();
+    let doc = doc.view();
     let source = directory.path().join("source.parquet");
     let original = fs::read(&source).unwrap();
     let mut paths = vec![
@@ -416,35 +438,47 @@ fn source_file_and_aliases_cannot_be_overwritten() {
         paths.push(hard_link);
     }
     for path in paths {
-        let export = doc
-            .prepare_export(doc.current_view().version, &[0], FileType::Parquet)
-            .unwrap();
-        assert!(matches!(export.write(path), Err(Error::InvalidArgument(_))));
+        let export = doc.export(&[0], FileType::Parquet).unwrap();
+        assert!(matches!(
+            export.write(path),
+            Err(Error::Export(
+                gewu_core::ExportError::SourceIsDestination { .. }
+            ))
+        ));
     }
     assert_eq!(fs::read(source).unwrap(), original);
 }
 
 #[test]
-fn view_histogram_includes_the_columns_own_filter() {
+fn analysis_distribution_includes_the_columns_own_filter() {
     let (_directory, doc) = sample();
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min: Some(doc.parse_bound(0, "2").unwrap()),
-            max: Some(doc.parse_bound(0, "4").unwrap()),
-        }],
-        ..Default::default()
-    };
-    let view = doc.apply_view(&state).unwrap();
-    let filter_histogram = doc.histogram(0, Some(&state), 8).unwrap();
-    let view_histogram = doc.view_histogram(view.version, 0, 8).unwrap();
-    assert_eq!(filter_histogram.total, 5);
-    assert_eq!(view_histogram.total, 3);
+    let spec = QuerySpec::single(0, Filter::range(Some("2".into()), Some("4".into()), false));
+    let view = doc
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap();
+    let filter_histogram = doc
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap()
+        .filter_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .map(|result| result.expect("histogram domain").histogram)
+        .unwrap();
+    let view_histogram = view
+        .analyze_distribution(
+            0,
+            8,
+            gewu_core::AxisScale::Linear,
+            &gewu_core::Cancellation::default(),
+        )
+        .unwrap();
+    assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 3);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
-    doc.apply_view(&ViewState::default()).unwrap();
-    assert!(matches!(
-        doc.view_histogram(view.version, 0, 8),
-        Err(Error::StaleVersion { .. })
-    ));
+    assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
+    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+        .unwrap();
+    assert_eq!(
+        view.analyze_distribution(0, 8, gewu_core::AxisScale::Linear, &Cancellation::default())
+            .unwrap()
+            .counts,
+        view_histogram.counts
+    );
 }

@@ -7,35 +7,45 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Bound, Document, Error, Filter, ViewState};
+use gewu_core::{Cancellation, Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
 use parquet::arrow::ArrowWriter;
 
-fn document(array: ArrayRef) -> Document {
+fn statistics(doc: &std::sync::Arc<gewu_core::View>) -> NumericStatistics {
+    doc.analyze_statistics(0, &gewu_core::Cancellation::default())
+        .unwrap()
+}
+
+fn values(doc: &std::sync::Arc<gewu_core::View>) -> ValueSummary {
+    doc.analyze_values(0, &gewu_core::Cancellation::default())
+        .unwrap()
+}
+
+fn document(array: ArrayRef) -> Arc<gewu_core::Dataset> {
     let file = tempfile::NamedTempFile::new().unwrap();
     let batch = RecordBatch::try_from_iter(vec![("value", array)]).unwrap();
     let mut writer = ArrowWriter::try_new(file.reopen().unwrap(), batch.schema(), None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
-    Document::open(file.path()).unwrap()
+    Arc::new(gewu_core::Dataset::open(file.path()).unwrap())
 }
 
-fn check_range(doc: &Document, min: Option<Bound>, max: Option<Bound>, expected: &[u64]) {
-    let state = ViewState {
-        filters: vec![Filter::Range {
-            include_nulls: false,
-            column: 0,
-            min,
-            max,
-        }],
-        ..Default::default()
-    };
-    let view = doc.apply_view(&state).unwrap();
+fn check_range(
+    doc: &Arc<gewu_core::Dataset>,
+    min: Option<String>,
+    max: Option<String>,
+    expected: &[u64],
+) -> Arc<gewu_core::View> {
+    let spec = QuerySpec::single(0, Filter::range(min, max, false));
+    let view = doc
+        .query(&spec, &gewu_core::Cancellation::default())
+        .unwrap();
     assert_eq!(
-        doc.rows(view.version, 0, 100, &[0]).unwrap().source_rows,
+        view.rows(0, 100, &[0]).unwrap().source_rows,
         expected,
-        "type {:?}, state {state:?}",
+        "type {:?}, spec {spec:?}",
         doc.schema().field(0).data_type()
     );
+    view
 }
 
 #[test]
@@ -59,20 +69,23 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
                 (Some("1e30"), None, &[]),
                 (None, Some("-1e30"), &[]),
             ] {
-                let min = min.map(|text| doc.parse_bound(0, text).unwrap());
-                let max = max.map(|text| doc.parse_bound(0, text).unwrap());
+                let min = min.map(|text| (text).to_owned());
+                let max = max.map(|text| (text).to_owned());
                 check_range(&doc, min, max, expected);
             }
-            let max = doc.make_bound_i64(0, <$native>::MAX as i64).unwrap();
-            let min = doc.make_bound_i64(0, <$native>::MIN as i64).unwrap();
+            let max = (<$native>::MAX as i64).to_string();
+            let min = (<$native>::MIN as i64).to_string();
             check_range(&doc, Some(max), None, &[6]);
             check_range(&doc, None, Some(min), &[0]);
-            let outside = doc.make_bound_u64(0, u64::MAX).unwrap();
+            let outside = (u64::MAX).to_string();
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.parse_bound(0, input),
-                    Err(Error::InvalidArgument(_))
+                    doc.query(
+                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
+                        &Cancellation::default()
+                    ),
+                    Err(Error::Filter(_))
                 ));
             }
         }};
@@ -102,16 +115,19 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
                 (Some("1e30"), None, &[]),
                 (Some("-1"), None, &[0, 1, 2, 3]),
             ] {
-                let min = min.map(|text| doc.parse_bound(0, text).unwrap());
-                let max = max.map(|text| doc.parse_bound(0, text).unwrap());
+                let min = min.map(|text| (text).to_owned());
+                let max = max.map(|text| (text).to_owned());
                 check_range(&doc, min, max, expected);
             }
-            let max = doc.make_bound_u64(0, <$native>::MAX as u64).unwrap();
+            let max = (<$native>::MAX as u64).to_string();
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.parse_bound(0, input),
-                    Err(Error::InvalidArgument(_))
+                    doc.query(
+                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
+                        &Cancellation::default()
+                    ),
+                    Err(Error::Filter(_))
                 ));
             }
         }};
@@ -133,28 +149,20 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &signed,
-        Some(signed.make_bound_i64(0, large + 1).unwrap()),
-        Some(signed.make_bound_i64(0, large + 1).unwrap()),
+        Some((large + 1).to_string()),
+        Some((large + 1).to_string()),
         &[2],
     );
     check_range(
         &signed,
-        Some(signed.make_bound_i64(0, large).unwrap()),
-        Some(signed.make_bound_i64(0, large).unwrap()),
+        Some((large).to_string()),
+        Some((large).to_string()),
         &[1],
     );
-    check_range(
-        &signed,
-        Some(signed.parse_bound(0, "9223372036854775808").unwrap()),
-        None,
-        &[],
-    );
-    check_range(
-        &signed,
-        None,
-        Some(signed.parse_bound(0, "-9223372036854775808").unwrap()),
-        &[0],
-    );
+    check_range(&signed, Some(("9223372036854775808").to_owned()), None, &[]);
+    check_range(&signed, None, Some(("-9223372036854775808").to_owned()), &[
+        0,
+    ]);
 
     let unsigned = document(Arc::new(UInt64Array::from(vec![
         0,
@@ -164,27 +172,31 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
     ])));
     check_range(
         &unsigned,
-        Some(unsigned.make_bound_u64(0, large as u64 + 1).unwrap()),
-        Some(unsigned.make_bound_u64(0, large as u64 + 1).unwrap()),
+        Some((large as u64 + 1).to_string()),
+        Some((large as u64 + 1).to_string()),
         &[2],
     );
     check_range(
         &unsigned,
-        Some(unsigned.parse_bound(0, "18446744073709551616").unwrap()),
+        Some(("18446744073709551616").to_owned()),
         None,
         &[],
     );
     check_range(
         &unsigned,
         None,
-        Some(unsigned.parse_bound(0, "18446744073709551616").unwrap()),
+        Some(("18446744073709551616").to_owned()),
         &[0, 1, 2, 3],
     );
 
-    signed.apply_view(&ViewState::default()).unwrap();
-    unsigned.apply_view(&ViewState::default()).unwrap();
-    assert_eq!(signed.column_summary(0, 0).unwrap().distinct_count, 4);
-    assert_eq!(unsigned.column_summary(0, 0).unwrap().distinct_count, 4);
+    signed
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+        .unwrap();
+    unsigned
+        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
+        .unwrap();
+    assert_eq!(values(&signed.view()).distinct_count, 4);
+    assert_eq!(values(&unsigned.view()).distinct_count, 4);
 }
 
 #[test]
@@ -198,19 +210,19 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
         None,
     ])));
     // The stored f32 value is slightly greater than the f64 value 0.1.
-    check_range(&doc, None, Some(doc.parse_bound(0, "0.1").unwrap()), &[3]);
-    check_range(
-        &doc,
-        Some(doc.parse_bound(0, "0.1").unwrap()),
-        Some(doc.parse_bound(0, "1").unwrap()),
-        &[0, 1],
-    );
+    check_range(&doc, None, Some(("0.1").to_owned()), &[3]);
+    check_range(&doc, Some(("0.1").to_owned()), Some(("1").to_owned()), &[
+        0, 1,
+    ]);
     check_range(&doc, None, None, &[0, 1, 3, 4]);
-    check_range(&doc, Some(doc.parse_bound(0, "inf").unwrap()), None, &[4]);
-    check_range(&doc, None, Some(doc.parse_bound(0, "-inf").unwrap()), &[3]);
+    check_range(&doc, Some(("inf").to_owned()), None, &[4]);
+    check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.parse_bound(0, "NaN"),
-        Err(Error::InvalidArgument(_))
+        doc.query(
+            &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
+            &Cancellation::default()
+        ),
+        Err(Error::Filter(_))
     ));
 }
 
@@ -223,51 +235,39 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
         Some(i8::MAX),
         None,
     ])));
-    assert_eq!(integers.parse_bound(0, "1.2").unwrap().axis_value(), 1.2);
-    check_range(
-        &integers,
-        Some(integers.parse_bound(0, "1.2").unwrap()),
-        None,
-        &[2, 3],
-    );
-    assert_eq!(integers.parse_bound(0, "128").unwrap().axis_value(), 128.0);
-    check_range(
-        &integers,
-        Some(integers.parse_bound(0, "128").unwrap()),
-        None,
-        &[],
-    );
+
+    check_range(&integers, Some(("1.2").to_owned()), None, &[2, 3]);
+
+    check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.parse_bound(0, "not a number"),
-        Err(Error::InvalidArgument(_))
+        integers.query(
+            &QuerySpec::single(
+                0,
+                Filter::range(Some(("not a number").to_owned()), None, false)
+            ),
+            &Cancellation::default()
+        ),
+        Err(Error::Filter(_))
     ));
-    assert!(integers.parse_bound(0, "not a number").is_err());
+    assert!(integers
+        .query(
+            &QuerySpec::single(
+                0,
+                Filter::range(Some(("not a number").to_owned()), None, false)
+            ),
+            &Cancellation::default()
+        )
+        .is_err());
 
     let floats = document(Arc::new(Float32Array::from(vec![0.0, 0.1, 1.0])));
-    assert_eq!(floats.parse_bound(0, "0.1").unwrap().axis_value(), 0.1);
-    check_range(
-        &floats,
-        None,
-        Some(floats.parse_bound(0, "0.1").unwrap()),
-        &[0],
-    );
+
+    check_range(&floats, None, Some(("0.1").to_owned()), &[0]);
 
     let unsigned = document(Arc::new(UInt64Array::from(vec![u64::MAX - 1, u64::MAX])));
     // Both values have the same approximate chart coordinate, but the raw
     // filter must still select only the exact maximum.
-    assert_eq!(
-        unsigned
-            .parse_bound(0, &(u64::MAX - 1).to_string())
-            .unwrap()
-            .axis_value(),
-        unsigned.make_bound_u64(0, u64::MAX).unwrap().axis_value()
-    );
-    check_range(
-        &unsigned,
-        Some(unsigned.make_bound_u64(0, u64::MAX).unwrap()),
-        None,
-        &[1],
-    );
+
+    check_range(&unsigned, Some((u64::MAX).to_string()), None, &[1]);
 }
 
 #[test]
@@ -285,13 +285,10 @@ fn temporal_axis_projection_and_filters_use_the_columns_physical_units() {
     ];
     for (array, input) in cases {
         let doc = document(array);
-        assert_eq!(doc.parse_bound(0, input).unwrap().axis_value(), 1.0);
-        check_range(
-            &doc,
-            Some(doc.parse_bound(0, input).unwrap()),
-            Some(doc.parse_bound(0, input).unwrap()),
-            &[1],
-        );
+
+        check_range(&doc, Some((input).to_owned()), Some((input).to_owned()), &[
+            1,
+        ]);
     }
 }
 
@@ -306,42 +303,12 @@ fn float64_ranges_compare_large_integer_bounds_exactly() {
         2_f64.powi(64),
     ])));
     // The odd integer between these adjacent floats cannot be represented by f64.
-    check_range(
-        &doc,
-        Some(doc.make_bound_i64(0, large + 1).unwrap()),
-        None,
-        &[3, 4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(doc.make_bound_i64(0, large + 1).unwrap()),
-        &[0, 1, 2],
-    );
-    check_range(
-        &doc,
-        Some(doc.make_bound_i64(0, -large - 1).unwrap()),
-        None,
-        &[1, 2, 3, 4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(doc.make_bound_i64(0, -large - 1).unwrap()),
-        &[0],
-    );
-    check_range(
-        &doc,
-        Some(doc.make_bound_u64(0, u64::MAX).unwrap()),
-        None,
-        &[4],
-    );
-    check_range(
-        &doc,
-        None,
-        Some(doc.make_bound_u64(0, u64::MAX).unwrap()),
-        &[0, 1, 2, 3],
-    );
+    check_range(&doc, Some((large + 1).to_string()), None, &[3, 4]);
+    check_range(&doc, None, Some((large + 1).to_string()), &[0, 1, 2]);
+    check_range(&doc, Some((-large - 1).to_string()), None, &[1, 2, 3, 4]);
+    check_range(&doc, None, Some((-large - 1).to_string()), &[0]);
+    check_range(&doc, Some((u64::MAX).to_string()), None, &[4]);
+    check_range(&doc, None, Some((u64::MAX).to_string()), &[0, 1, 2, 3]);
 }
 
 #[test]
@@ -353,38 +320,48 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         Some(f32::NAN),
         None,
     ])));
-    let summary = doc.column_summary(0, 0).unwrap();
+    let summary = statistics(&doc.view());
+    assert_eq!(summary.nan_count, 1);
     assert_eq!(
         (
-            summary.rows,
-            summary.null_count,
-            summary.nan_count,
-            summary.distinct_count
+            summary.min_label.as_deref(),
+            summary.max_label.as_deref(),
+            summary.mean,
+            summary.std_dev
         ),
-        (5, 1, 1, 3)
+        (Some("1.0"), Some("3.0"), Some(2.0), Some(1.0))
     );
-    assert_eq!(
-        (summary.min, summary.max, summary.mean, summary.std_dev),
-        (Some(1.0), Some(3.0), Some(2.0), Some(1.0))
-    );
-    let histogram = doc.histogram(0, None, 2).unwrap();
+    let histogram = doc
+        .view()
+        .filter_distribution(0, 2, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .map(|result| result.expect("histogram domain").histogram)
+        .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
-        (histogram.null_count, histogram.nan_count, histogram.total),
+        (
+            doc.view().count_nulls(0, &Cancellation::default()).unwrap(),
+            summary.nan_count,
+            doc.view().row_count()
+        ),
         (1, 1, 5)
     );
 
-    check_range(&doc, Some(doc.parse_bound(0, "2").unwrap()), None, &[1, 2]);
-    let summary = doc.column_summary(0, 0).unwrap();
+    let doc = check_range(&doc, Some(("2").to_owned()), None, &[1, 2]);
+    let summary = statistics(&doc);
     assert_eq!(
-        (summary.rows, summary.distinct_count, summary.mean),
+        (doc.row_count(), values(&doc).distinct_count, summary.mean),
         (2, 2, Some(2.5))
     );
     let histogram = doc
-        .view_histogram(doc.current_view().version, 0, 2)
+        .analyze_distribution(
+            0,
+            2,
+            gewu_core::AxisScale::Linear,
+            &gewu_core::Cancellation::default(),
+        )
         .unwrap();
-    assert_eq!((histogram.lo, histogram.hi), (Some(1.0), Some(3.0)));
-    assert_eq!(histogram.counts, [0, 2]);
+    assert_eq!((histogram.lo, histogram.hi), (Some(2.0), Some(3.0)));
+    assert_eq!(histogram.counts, [1, 1]);
 }
 
 #[test]
@@ -404,23 +381,34 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
     ];
     for array in arrays {
         let doc = document(array);
-        let summary = doc.column_summary(0, 0).unwrap();
+        let summary = statistics(&doc.view());
         assert_eq!(
-            (summary.null_count, summary.distinct_count, summary.mean),
-            (1, 3, Some(1.0))
+            (values(&doc.view()).distinct_count, summary.mean),
+            (3, Some(1.0))
         );
-        let histogram = doc.histogram(0, None, 10).unwrap();
+        let histogram = doc
+            .view()
+            .filter_distribution(
+                0,
+                10,
+                gewu_core::AxisScale::Linear,
+                &Cancellation::default(),
+            )
+            .map(|result| result.expect("histogram domain").histogram)
+            .unwrap();
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let min = doc.format_value(0, 1).unwrap();
-        let max = doc.format_value(0, 2).unwrap();
-        check_range(
-            &doc,
-            Some(doc.parse_bound(0, &min).unwrap()),
-            Some(doc.parse_bound(0, &max).unwrap()),
-            &[1, 2],
+        let cells = doc.view().rows(1, 2, &[0]).unwrap().cells;
+        let min = cells[0].clone().unwrap();
+        let max = cells[1].clone().unwrap();
+        assert_eq!(
+            summary.mean_label.as_deref(),
+            Some(min.as_str()),
+            "{:?}: {summary:?}",
+            doc.schema().field(0).data_type()
         );
+        check_range(&doc, Some(min), Some(max), &[1, 2]);
     }
 }
 
@@ -445,24 +433,14 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
     ];
     for array in arrays {
         let doc = document(array);
-        assert_eq!(doc.column_summary(0, 0).unwrap().distinct_count, 2);
+        assert_eq!(values(&doc.view()).distinct_count, 2);
         // Chart coordinates may round, but filter endpoints remain exact.
-        assert_eq!(
-            doc.parse_bound(0, &base.to_string()).unwrap().axis_value(),
-            doc.parse_bound(0, &(base + 1).to_string())
-                .unwrap()
-                .axis_value()
-        );
+
+        check_range(&doc, Some((base + 1).to_string()), None, &[1]);
         check_range(
             &doc,
-            Some(doc.parse_bound(0, &(base + 1).to_string()).unwrap()),
-            None,
-            &[1],
-        );
-        check_range(
-            &doc,
-            Some(doc.parse_bound(0, &format!("{base}.1")).unwrap()),
-            Some(doc.parse_bound(0, &format!("{}.9", base + 1)).unwrap()),
+            Some(format!("{base}.1")),
+            Some(format!("{}.9", base + 1)),
             &[1],
         );
     }

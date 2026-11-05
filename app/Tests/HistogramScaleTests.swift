@@ -8,13 +8,16 @@ struct HistogramScaleTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
         try "value\n-1\n0\n1\n10\n100\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuDocument.open(path: url.path) }.value
+        let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
+        let view = document.view()
+        let viewer = Viewer(dataset: document, view: view, spec: QuerySpec(columns: []))
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                document: document, version: 0, column: 0, expanded: AnalysisSection.distribution.mask,
+                dataset: document, viewer: viewer, column: 0,
+                expanded: InspectorSection.distribution.mask,
                 bins: 2, scale: scale)
-            guard case .distribution(let histogram) = model.results[.distribution] else {
+            guard let histogram = model.distribution else {
                 Issue.record("Missing distribution: \(model.errors)")
                 return
             }
@@ -22,7 +25,7 @@ struct HistogramScaleTests {
             #expect(histogram.nonPositiveCount == (scale == .log10 ? 2 : 0))
             #expect(histogram.counts.reduce(0, +) == (scale == .log10 ? 3 : 5))
         }
-        #expect(document.currentView().rowCount == 5 && document.currentView().version == 0)
+        #expect(view.rowCount() == 5)
     }
 
     @Test
