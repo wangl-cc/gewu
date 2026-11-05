@@ -1,6 +1,5 @@
-import AppKit
 import Combine
-import SwiftUI
+import Foundation
 
 enum InspectorPage: String, CaseIterable {
     case column = "Column Overview"
@@ -72,12 +71,6 @@ final class DocumentModel: ObservableObject {
     }
 
     var canExport: Bool { !isBusy && export.isIdle && !appliedSpec.columns.isEmpty }
-
-    func chooseExport() {
-        guard canExport, let table, let window = table.view.window else { return }
-        export.choose(
-            view: view, columns: appliedSpec.columns.map(\.column), source: url, window: window)
-    }
 
     var subtitle: String {
         let source =
@@ -188,25 +181,6 @@ final class DocumentModel: ObservableObject {
         } else {
             refresh()
         }
-    }
-
-    func hideColumn(_ column: UInt32) {
-        guard let col = spec.columns.first(where: { $0.column == column }) else { return }
-        if col.sort != nil || col.filter != nil, !UserDefaults.standard.bool(forKey: "SkipHideColumnWarning") {
-            let alert = NSAlert()
-            alert.messageText = "Hide \(info.columns[Int(column)].name)?"
-            alert.informativeText =
-                "Hiding this column clears its sorting and filter. This may change the visible rows and their order."
-            alert.addButton(withTitle: "Hide Column")
-            alert.addButton(withTitle: "Cancel")
-            alert.showsSuppressionButton = true
-            alert.suppressionButton?.title = "Do not ask again"
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            if alert.suppressionButton?.state == .on {
-                UserDefaults.standard.set(true, forKey: "SkipHideColumnWarning")
-            }
-        }
-        removeColumn(column)
     }
 
     /// Apply a hide operation after any required confirmation.

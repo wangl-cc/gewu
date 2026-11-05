@@ -42,16 +42,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private let table = NSTableView()
     private let scroll = NSScrollView()
     private lazy var gutter = RowGutterView(table: table)
-    private let cache = RowCache()
-    private let reader = TableRowReader()
-    private var pending: [RowCache.Key] = []
-    private var loading: RowCache.Key?
-    private var loadTask: Task<Void, Never>?
+    private let rows = TableRowLoader()
     private var fitTask: Task<Void, Never>?
     private var findRevision: UInt64?
     private var highlightRevision: UInt64?
     private var currentFindMatch: CellMatch?
-    private var failedView: ObjectIdentifier?
     private var widths = ColumnWidths()
     private var automaticFitTask: Task<Void, Never>?
     private var fittingAutomatically = false
@@ -73,6 +68,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     init(model: DocumentModel) {
         self.model = model
         super.init(nibName: nil, bundle: nil)
+        rows.onLoad = { [weak self] view, block, column in
+            guard let self, self.displayedView === view, self.model.view === view else { return }
+            self.display(block, column: column)
+            self.fillVisiblePlaceholders()
+        }
+        rows.onError = { [weak self] view, error in
+            guard let self, self.displayedView === view, self.model.view === view else { return }
+            self.model.reportError(error, prefix: "Could not load rows: ")
+        }
     }
 
     @available(*, unavailable)
@@ -163,9 +167,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         if displayedView !== model.view {
             displayedView = model.view
             closePopover()
-            stopLoading()
-            cache.clear()
-            failedView = nil
+            stopFitting()
+            rows.reset(to: model.view)
             reloading = true
             table.deselectAll(nil)
             table.reloadData()
@@ -239,7 +242,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func buildColumns(_ info: DatasetInfo) {
         gutter.label = { [weak self] row in
-            guard let self, let block = self.block(for: row, column: nil) else { return nil }
+            guard let self, let block = self.rows.block(for: row, column: nil) else { return nil }
             let r = row - Int(block.start)
             return r >= 0 && r < Int(block.nRows) ? formatRowNumber(block.sourceRows[r], base: self.rowNumberBase) : nil
         }
@@ -281,45 +284,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         return id.hasPrefix("c") ? Int(id.dropFirst()) : nil
     }
 
-    private func block(for row: Int, column: UInt32?) -> RowBlock? {
-        let key = RowCache.Key(start: row / RowCache.blockSize * RowCache.blockSize, column: column)
-        if let block = cache.block(for: key) { return block }
-        guard failedView != displayedView.map(ObjectIdentifier.init), loading != key, !pending.contains(key) else {
-            return nil
-        }
-        // Bound queued work as well as cached data. Completion revisits visible
-        // placeholders, so a full queue never permanently drops a visible cell.
-        if pending.count < 128 { pending.append(key) }
-        loadNext()
-        return nil
-    }
-
-    private func loadNext() {
-        guard loading == nil, !pending.isEmpty, let view = displayedView else { return }
-        let key = pending.removeFirst()
-        loading = key
-        let reader = reader
-        loadTask = Task { [weak self] in
-            do {
-                let block = try await reader.read(
-                    view, start: UInt64(key.start),
-                    count: UInt32(RowCache.blockSize), columns: key.column.map { [$0] } ?? [])
-                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
-                self.cache.insert(block, for: key)
-                self.display(block, column: key.column)
-                self.loading = nil
-                self.fillVisiblePlaceholders()
-                self.loadNext()
-            } catch {
-                guard !Task.isCancelled, let self, self.displayedView === view, self.model.view === view else { return }
-                self.loading = nil
-                self.pending.removeAll()
-                self.failedView = ObjectIdentifier(view)
-                self.model.reportError(error, prefix: "Could not load rows: ")
-            }
-        }
-    }
-
     private func display(_ block: RowBlock, column: UInt32?) {
         if let column {
             let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
@@ -347,7 +311,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView,
                     cell.isLoading
                 else { continue }
-                if let block = block(for: row, column: UInt32(column)) {
+                if let block = self.rows.block(for: row, column: UInt32(column)) {
                     render(cell, column: column, row: row, block: block)
                 }
             }
@@ -355,11 +319,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func stopLoading() {
-        loadTask?.cancel()
+        rows.stop()
+        stopFitting()
+    }
+
+    private func stopFitting() {
         fitTask?.cancel()
         automaticFitTask?.cancel()
-        pending.removeAll()
-        loading = nil
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { Int(model.view.rowCount()) }
@@ -380,7 +346,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let kind = model.kinds[col]
         cell.isLoading = true
         cell.configure(text: "…", font: fonts.font(for: kind), alignment: kind.alignment, muted: true)
-        if let block = block(for: row, column: UInt32(col)) { render(cell, column: col, row: row, block: block) }
+        if let block = rows.block(for: row, column: UInt32(col)) { render(cell, column: col, row: row, block: block) }
         return cell
     }
 
@@ -475,7 +441,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let inputs = columns.map { column in
             let info = model.info.columns[Int(column)]
             let key = RowCache.Key(start: Int(start) / RowCache.blockSize * RowCache.blockSize, column: column)
-            let sample = cache.block(for: key).map { Array($0.cells.prefix(32)) }
+            let sample = self.rows.cachedBlock(for: key).map { Array($0.cells.prefix(32)) }
             return ColumnWidthMeasurement.Input(
                 column: column, name: info.name,
                 type: info.displayType, text: info.valueCategory == .text, sample: sample)
@@ -593,7 +559,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
     }
     @objc private func hideMenuColumn(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.hideColumn(column) }
+        if let column = item.representedObject as? UInt32 { hideColumn(column, in: model) }
     }
     @objc private func clearMenuColumnSort(_ item: NSMenuItem) {
         if let column = item.representedObject as? UInt32 { model.removeSort(column: column) }
@@ -620,7 +586,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         gutter.needsDisplay = true
         let row = table.selectedRow
         model.selectedDisplayRow = row >= 0 ? row : nil
-        if row >= 0, let block = block(for: row, column: nil), row - Int(block.start) < block.sourceRows.count {
+        if row >= 0, let block = rows.block(for: row, column: nil), row - Int(block.start) < block.sourceRows.count {
             model.selectedSourceRow = block.sourceRows[row - Int(block.start)]
         } else {
             model.selectedSourceRow = nil

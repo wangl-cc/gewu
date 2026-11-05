@@ -69,14 +69,3 @@ final class RowCache {
             + block.sourceRows.count * MemoryLayout<UInt64>.stride
     }
 }
-
-/// Serializes table row reads off the main actor. Cancelled requests stop before
-/// entering the synchronous FFI call; width measurement has its own serial worker.
-actor TableRowReader {
-    func read(_ view: GewuView, start: UInt64, count: UInt32, columns: [UInt32]) throws
-        -> RowBlock
-    {
-        try Task.checkCancellation()
-        return try view.rows(start: start, count: count, columns: columns)
-    }
-}

@@ -4,6 +4,85 @@ import Testing
 /// Tests App table and copy behavior through the real Core bindings.
 @Suite
 struct TableExecutionTests {
+    private static func dataset() throws -> GewuDataset {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-loader-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try "number,label\n1,first\n2,second\n3,third\n".write(to: path, atomically: true, encoding: .utf8)
+        return try GewuDataset.open(path: path.path)
+    }
+
+    @Test @MainActor
+    static func loaderCoalescesReadsAndDeliversUncachedBlocks() async throws {
+        let view = try dataset().view()
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let delivered = AsyncStream<RowBlock>.makeStream()
+        let loader = TableRowLoader(cache: RowCache(cellLimit: 1)) { view, key in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(PendingTableRead(view: view, key: key, continuation: continuation))
+            }
+        }
+        defer {
+            loader.stop()
+            reads.continuation.finish()
+            delivered.continuation.finish()
+        }
+        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onError = { _, error in Issue.record(error) }
+        loader.reset(to: view)
+        var requests = reads.stream.makeAsyncIterator()
+        var blocks = delivered.stream.makeAsyncIterator()
+        #expect(loader.block(for: 0, column: 0) == nil)
+        #expect(loader.block(for: 1, column: 0) == nil)
+        #expect(loader.block(for: 0, column: 1) == nil)
+        let first = try #require(await requests.next())
+        #expect(first.key == RowCache.Key(start: 0, column: 0))
+        first.finish()
+        #expect(try #require(await blocks.next()).cells == ["1", "2", "3"])
+        #expect(loader.cachedBlock(for: first.key) == nil, "Oversized data is delivered without retaining it")
+        let second = try #require(await requests.next())
+        #expect(second.key == RowCache.Key(start: 0, column: 1), "Rows in the same block share a request")
+        second.finish()
+        #expect(try #require(await blocks.next()).cells == ["first", "second", "third"])
+    }
+
+    @Test @MainActor
+    static func loaderDiscardsLateReadsAfterReplacingItsView() async throws {
+        let dataset = try dataset()
+        let original = dataset.view()
+        let replacement = try dataset.query(
+            spec: QuerySpec(columns: [ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)]),
+            cancellation: Cancellation())
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let delivered = AsyncStream<RowBlock>.makeStream()
+        let loader = TableRowLoader { view, key in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(PendingTableRead(view: view, key: key, continuation: continuation))
+            }
+        }
+        defer {
+            loader.stop()
+            reads.continuation.finish()
+            delivered.continuation.finish()
+        }
+        loader.onLoad = { view, block, _ in
+            #expect(view === replacement, "Old reads must not update the new table")
+            delivered.continuation.yield(block)
+        }
+        loader.onError = { _, error in Issue.record(error) }
+        var requests = reads.stream.makeAsyncIterator()
+        var blocks = delivered.stream.makeAsyncIterator()
+        loader.reset(to: original)
+        _ = loader.block(for: 0, column: 0)
+        let oldRead = try #require(await requests.next())
+        loader.reset(to: replacement)
+        _ = loader.block(for: 0, column: 0)
+        let newRead = try #require(await requests.next())
+        oldRead.finish()  // Simulate an FFI read completing after cancellation.
+        newRead.finish()
+        #expect(try #require(await blocks.next()).cells == ["3", "2", "1"])
+        #expect(loader.block(for: 0, column: 0)?.sourceRows == [2, 1, 0])
+    }
+
     static func block(_ values: [String?], start: Int = 0, columns: Int = 1) -> RowBlock {
         RowBlock(
             start: UInt64(start), nRows: UInt32(values.count / columns), nCols: UInt32(columns),
@@ -112,5 +191,19 @@ struct TableExecutionTests {
             _ = try await work.value
             Issue.record("Expected cancelled table read")
         } catch is CancellationError {}
+    }
+}
+
+private struct PendingTableRead: Sendable {
+    let view: GewuView
+    let key: RowCache.Key
+    let continuation: CheckedContinuation<RowBlock, Error>
+
+    func finish() {
+        continuation.resume(
+            with: Result {
+                try view.rows(
+                    start: UInt64(key.start), count: UInt32(RowCache.blockSize), columns: key.column.map { [$0] } ?? [])
+            })
     }
 }

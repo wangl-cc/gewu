@@ -18,7 +18,11 @@ struct ColumnsView: View {
                         isOn: Binding(
                             get: { model.spec.columns.contains { $0.column == UInt32(index) } },
                             set: { visible in
-                                if visible { model.showColumn(UInt32(index)) } else { model.hideColumn(UInt32(index)) }
+                                if visible {
+                                    model.showColumn(UInt32(index))
+                                } else {
+                                    hideColumn(UInt32(index), in: model)
+                                }
                             })
                     ) {
                         HStack {
@@ -37,4 +41,25 @@ struct ColumnsView: View {
             }
         }.padding(14).frame(width: 330, height: 350)
     }
+}
+
+/// Shared by the column picker and the AppKit header menu. The model only applies the confirmed change.
+@MainActor
+func hideColumn(_ column: UInt32, in model: DocumentModel) {
+    guard let col = model.spec.columns.first(where: { $0.column == column }) else { return }
+    if col.sort != nil || col.filter != nil, !UserDefaults.standard.bool(forKey: "SkipHideColumnWarning") {
+        let alert = NSAlert()
+        alert.messageText = "Hide \(model.info.columns[Int(column)].name)?"
+        alert.informativeText =
+            "Hiding this column clears its sorting and filter. This may change the visible rows and their order."
+        alert.addButton(withTitle: "Hide Column")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Do not ask again"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if alert.suppressionButton?.state == .on {
+            UserDefaults.standard.set(true, forKey: "SkipHideColumnWarning")
+        }
+    }
+    model.removeColumn(column)
 }

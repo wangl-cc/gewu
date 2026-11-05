@@ -98,8 +98,8 @@ private struct ExportCommand: View {
     @ObservedObject var export: ExportModel
 
     var body: some View {
-        Button("Export…") { model.chooseExport() }
+        Button("Export…") { chooseExport(for: model) }
             .keyboardShortcut("e", modifiers: [.command, .shift])
-            .disabled(model.isBusy || !export.isIdle || model.appliedSpec.columns.isEmpty)
+            .disabled(!model.canExport)
     }
 }
