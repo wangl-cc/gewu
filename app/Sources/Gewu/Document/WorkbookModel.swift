@@ -28,6 +28,7 @@ final class WorkbookModel: ObservableObject {
     private var attemptedSheet: WorksheetName?
     private let sheetNames: @Sendable (String) throws -> [String]
     private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDataset
+    private let makeView: @Sendable (GewuDataset) -> GewuView
     private let didOpen: @MainActor (URL) -> Void
 
     init(
@@ -38,6 +39,7 @@ final class WorkbookModel: ObservableObject {
         openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDataset = { path, sheet, header in
             try GewuDataset.openWithOptions(path: path, sheet: sheet, hasHeader: header)
         },
+        makeView: @escaping @Sendable (GewuDataset) -> GewuView = { $0.view() },
         didOpen: @escaping @MainActor (URL) -> Void = { FileCoordinator.shared.recordRecent($0) }
     ) {
         self.url = url
@@ -46,6 +48,7 @@ final class WorkbookModel: ObservableObject {
         self.hasHeader = hasHeader
         self.sheetNames = sheetNames
         self.openDocument = openDocument
+        self.makeView = makeView
         self.didOpen = didOpen
     }
 
@@ -104,6 +107,7 @@ final class WorkbookModel: ObservableObject {
         let worker = worker
         let sheetNames = sheetNames
         let openDocument = openDocument
+        let makeView = makeView
         let header = hasHeader ?? self.hasHeader
         task = Task { [weak self] in
             do {
@@ -119,7 +123,12 @@ final class WorkbookModel: ObservableObject {
                             guard gate.isCurrent(mine) else { throw CancellationError() }
                             // Keep the successful catalog even when the selected sheet
                             // contains an Excel error. Other sheets remain selectable.
-                            let document = Result { try openDocument(path, selected?.rawValue, header) }
+                            let document = Result {
+                                let dataset = try openDocument(path, selected?.rawValue, header)
+                                guard gate.isCurrent(mine) else { throw CancellationError() }
+                                // The initial View allocates every row ID; keep it on the loading worker.
+                                return (dataset: dataset, view: makeView(dataset))
+                            }
                             continuation.resume(
                                 returning: WorkbookRead(sheets: names, sheet: selected, document: document))
                         } catch {
@@ -134,7 +143,7 @@ final class WorkbookModel: ObservableObject {
                 }
                 self.attemptedSheet = loaded.sheet
                 let opened = try loaded.document.get()
-                let next = DocumentModel(url: self.url, dataset: opened)
+                let next = DocumentModel(url: self.url, dataset: opened.dataset, view: opened.view)
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
@@ -164,5 +173,5 @@ final class WorkbookModel: ObservableObject {
 private struct WorkbookRead: Sendable {
     let sheets: [WorksheetName]?
     let sheet: WorksheetName?
-    let document: Result<GewuDataset, Error>
+    let document: Result<(dataset: GewuDataset, view: GewuView), Error>
 }

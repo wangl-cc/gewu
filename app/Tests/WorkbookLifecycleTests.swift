@@ -13,6 +13,46 @@ struct WorkbookLifecycleTests {
                 forResource: name, withExtension: "xlsx", subdirectory: "Fixtures"))
     }
 
+    @Test(arguments: [false, true])
+    @MainActor
+    static func initialViewIsBuiltOffMainAndObsoleteResultsAreDiscarded(cancelBeforePublish: Bool) async throws {
+        let created = AsyncStream<GewuView>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer {
+            release.signal()
+            created.continuation.finish()
+        }
+        let model = WorkbookModel(
+            url: try fixture(),
+            makeView: { dataset in
+                let offMain = !Thread.isMainThread
+                #expect(offMain, "Initial row-array allocation must run off the UI thread")
+                let view = dataset.view()
+                created.continuation.yield(view)
+                // Avoid deadlocking the test if allocation regresses to the main thread.
+                if offMain { release.wait() }
+                return view
+            },
+            didOpen: { _ in })
+        defer { model.stop() }
+        var views = created.stream.makeAsyncIterator()
+        model.open()
+        var expected = try #require(await views.next())
+        #expect(model.isOpening && model.document == nil, "The main actor remains available during View creation")
+        if cancelBeforePublish {
+            model.stop()
+            model.open()
+            release.signal()
+            let replacement = try #require(await views.next())
+            #expect(replacement !== expected)
+            #expect(model.document == nil, "The obsolete View must not be published while its replacement loads")
+            expected = replacement
+        }
+        release.signal()
+        await settled(model)
+        #expect(model.document?.view === expected, "DocumentModel must use the worker's View, not allocate another")
+    }
+
     @Test
     @MainActor
     static func unicodeWorksheetNamesRemainDistinct() async throws {
@@ -81,6 +121,7 @@ struct WorkbookLifecycleTests {
         let probe = OpenProbe()
         let model = WorkbookModel(
             url: fixture, openDocument: { path, sheet, _ in try probe.open(path: path, sheet: sheet) },
+            makeView: { probe.makeView($0) },
             didOpen: { _ in })
         model.open()
         await settled(model)
@@ -107,6 +148,7 @@ struct WorkbookLifecycleTests {
         #expect(model.document?.info.columns.first?.name == "column_3")
         #expect(model.document?.find.query == "" && model.document?.chartY == nil)
         #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
+        #expect(!probe.viewSheets.contains("Slow"), "A decode superseded before completion must not allocate row IDs")
         #expect(model.document?.view !== original.view)
 
         let last = model.document
@@ -211,6 +253,7 @@ struct WorkbookLifecycleTests {
 private final class OpenProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var opened: [String] = []
+    private var views: [String] = []
     private let slowStarted = DispatchSemaphore(value: 0)
     private let slowReleased = DispatchSemaphore(value: 0)
     private let slowFinished = DispatchSemaphore(value: 0)
@@ -224,6 +267,21 @@ private final class OpenProbe: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return opened
+    }
+
+    var viewSheets: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return views
+    }
+
+    func makeView(_ dataset: GewuDataset) -> GewuView {
+        if case .xlsx(let sheet, _) = dataset.info().metadata {
+            lock.lock()
+            views.append(sheet)
+            lock.unlock()
+        }
+        return dataset.view()
     }
 
     func open(path: String, sheet: String?) throws -> GewuDataset {

@@ -50,7 +50,8 @@ final class DocumentModel: ObservableObject {
     weak var table: DataTableController?
     private var viewTask: Task<Void, Never>?
 
-    init(url: URL, dataset: GewuDataset) {
+    /// Receives the initial View already allocated by the background loading worker.
+    init(url: URL, dataset: GewuDataset, view: GewuView) {
         self.url = url
         self.dataset = dataset
         let metadata = dataset.info()
@@ -61,7 +62,7 @@ final class DocumentModel: ObservableObject {
             columns: metadata.columns.indices.map {
                 ColSpec(column: UInt32($0), sort: nil, filter: nil)
             })
-        viewer = Viewer(dataset: dataset, view: dataset.view(), spec: initial)
+        viewer = Viewer(dataset: dataset, view: view, spec: initial)
         spec = initial
         selectedColumn = metadata.columns.isEmpty ? nil : 0
         inspectedColumn = selectedColumn

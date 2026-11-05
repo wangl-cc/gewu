@@ -67,7 +67,8 @@ struct QuerySpecTests {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-query-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "a,b,c\n1,2,x\n1,1,y\n2,0,z\n".write(to: path, atomically: true, encoding: .utf8)
-        return DocumentModel(url: path, dataset: try GewuDataset.open(path: path.path))
+        let dataset = try GewuDataset.open(path: path.path)
+        return DocumentModel(url: path, dataset: dataset, view: dataset.view())
     }
 
     private func settled(_ model: DocumentModel) async throws {
@@ -170,7 +171,7 @@ struct QuerySpecTests {
 
     @Test func windowsSharingDatasetOwnIndependentQueriesAndCancellation() async throws {
         let first = try model()
-        let second = DocumentModel(url: first.url, dataset: first.dataset)
+        let second = DocumentModel(url: first.url, dataset: first.dataset, view: first.dataset.view())
         defer {
             first.stop()
             second.stop()
