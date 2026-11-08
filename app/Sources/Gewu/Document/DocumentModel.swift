@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 enum InspectorPage: String, CaseIterable {
-    case column = "Column Overview"
+    case column = "Column"
     case chart = "Chart"
 }
 
@@ -26,6 +26,7 @@ final class DocumentModel: ObservableObject {
     @Published var selectedColumn: Int?
     @Published var inspectedColumn: Int?
     @Published var inspectorPage = InspectorPage.column
+    @Published var showsSorting = false
     @Published var inspectorRequest = 0
     @Published var showsColumns = false
     @Published var inspectorVisible = true
@@ -83,14 +84,11 @@ final class DocumentModel: ObservableObject {
     }
 
     var status: String {
-        var text =
-            view.rowCount() == info.rowCount
+        let text =
+            appliedFilterColumns.isEmpty && view.rowCount() == info.rowCount
             ? "\(formatCount(view.rowCount())) rows"
-            : "\(formatCount(view.rowCount())) of \(formatCount(info.rowCount)) rows"
-        text += " · \(appliedSpec.columns.count) columns"
-        if !appliedFilterColumns.isEmpty { text += " · \(appliedFilterColumns.count) filtered" }
-        if let findStatus = find.status { text += " · \(findStatus)" }
-        return text
+            : "\(formatCount(view.rowCount())) / \(formatCount(info.rowCount)) rows"
+        return text + " · \(appliedSpec.columns.count) columns"
     }
 
     var sortedColumns: [ColSpec] {
@@ -127,6 +125,18 @@ final class DocumentModel: ObservableObject {
 
     func clearSort() {
         for i in spec.columns.indices { spec.columns[i].sort = nil }
+        refresh()
+    }
+
+    func replaceSortColumn(_ column: UInt32, with replacement: UInt32) {
+        guard column != replacement,
+            let source = spec.columns.firstIndex(where: { $0.column == column }),
+            let destination = spec.columns.firstIndex(where: { $0.column == replacement }),
+            let sort = spec.columns[source].sort,
+            spec.columns[destination].sort == nil
+        else { return }
+        spec.columns[destination].sort = sort
+        spec.columns[source].sort = nil
         refresh()
     }
 
@@ -185,23 +195,32 @@ final class DocumentModel: ObservableObject {
 
     /// Apply a hide operation after any required confirmation.
     func removeColumn(_ column: UInt32) {
-        spec.columns.removeAll { $0.column == column }
-        normalizeSort()
-        if selectedColumn == Int(column) { selectedColumn = spec.columns.first.map { Int($0.column) } }
-        refresh()
+        setColumnsVisible([column], visible: false)
     }
 
     func showColumn(_ column: UInt32) {
-        guard Int(column) < info.columns.count, !spec.columns.contains(where: { $0.column == column }) else { return }
-        spec.columns.append(ColSpec(column: column, sort: nil, filter: nil))
-        refresh()
+        setColumnsVisible([column], visible: true)
     }
 
     func showAllColumns() {
-        let visible = Set(spec.columns.map(\.column))
-        let missing = info.columns.indices.map(UInt32.init).filter { !visible.contains($0) }
-        guard !missing.isEmpty else { return }
-        spec.columns += missing.map { ColSpec(column: $0, sort: nil, filter: nil) }
+        setColumnsVisible(info.columns.indices.map(UInt32.init), visible: true)
+    }
+
+    /// Applies a confirmed bulk visibility edit as one query, preserving surviving display order.
+    func setColumnsVisible(_ columns: [UInt32], visible: Bool) {
+        let targets = Set(columns.filter { Int($0) < info.columns.count })
+        let before = spec
+        if visible {
+            let shown = Set(spec.columns.map(\.column))
+            spec.columns += targets.subtracting(shown).sorted().map { ColSpec(column: $0, sort: nil, filter: nil) }
+        } else {
+            spec.columns.removeAll { targets.contains($0.column) }
+            normalizeSort()
+            if let selectedColumn, targets.contains(UInt32(selectedColumn)) {
+                self.selectedColumn = spec.columns.first.map { Int($0.column) }
+            }
+        }
+        guard spec != before else { return }
         refresh()
     }
 
@@ -266,8 +285,12 @@ final class DocumentModel: ObservableObject {
         table?.stopLoading()
     }
 
-    func findNext(backwards: Bool = false) { find.next(backwards: backwards) }
-    func focusSearch() { searchFocusRequest &+= 1 }
+    func findNext(backwards: Bool = false) {
+        find.next(backwards: backwards)
+    }
+    func focusSearch() {
+        searchFocusRequest &+= 1
+    }
 
     private func reportError(_ message: String) {
         errorMessage = message

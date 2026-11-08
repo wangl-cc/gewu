@@ -9,7 +9,6 @@ private func funnel(filled: Bool, color: NSColor) -> NSImage? {
 
 /// The funnel shown on filtered columns.
 let filterSymbol = funnel(filled: true, color: .controlAccentColor)
-private let idleFilterSymbol = funnel(filled: false, color: .tertiaryLabelColor)
 private let hoverFilterSymbol = funnel(filled: false, color: .secondaryLabelColor)
 
 /// Table header cell with the column name on top and its type below,
@@ -19,6 +18,7 @@ final class ColumnHeaderCell: NSTableHeaderCell {
     var subtitle = ""
     var filtered = false
     var inspected = false
+    var active = false
     var rightAligned = false
     var sorted = false
     var sortAscending = true
@@ -28,7 +28,6 @@ final class ColumnHeaderCell: NSTableHeaderCell {
     var funnelHovered = false
 
     private static let funnelSize: CGFloat = 14
-    private static let sortIndicatorWidth: CGFloat = 14
 
     /// Where the funnel button sits inside a header cell's frame.
     static func funnelRect(in frame: NSRect) -> NSRect {
@@ -55,16 +54,6 @@ final class ColumnHeaderCell: NSTableHeaderCell {
         ascending: Bool, priority: Int
     ) {}
 
-    private static let ascendingArrow = sortArrow("chevron.up")
-    private static let descendingArrow = sortArrow("chevron.down")
-
-    private static func sortArrow(_ name: String) -> NSImage? {
-        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(
-                .init(pointSize: 9, weight: .bold)
-                    .applying(.init(hierarchicalColor: .secondaryLabelColor)))
-    }
-
     override func draw(withFrame frame: NSRect, in controlView: NSView) {
         // NSTableHeaderCell's bezel adds two bottom edges. The header view
         // owns the single separator; cells draw only their fill and contents.
@@ -75,6 +64,10 @@ final class ColumnHeaderCell: NSTableHeaderCell {
             frame.fill()
             NSColor.controlAccentColor.setFill()
             NSRect(x: frame.minX, y: frame.maxY - 2, width: frame.width, height: 2).fill()
+        }
+        if active, !stringValue.isEmpty {
+            NSColor.labelColor.withAlphaComponent(0.035).setFill()
+            frame.fill()
         }
         drawInterior(withFrame: frame, in: controlView)
 
@@ -97,15 +90,18 @@ final class ColumnHeaderCell: NSTableHeaderCell {
         var rect = frame.insetBy(dx: 10, dy: 0)
 
         if showsFunnel {
-            let image = filtered ? filterSymbol : (funnelHovered ? hoverFilterSymbol : idleFilterSymbol)
-            image?.draw(
-                in: Self.funnelRect(in: frame), from: .zero, operation: .sourceOver, fraction: 1,
-                respectFlipped: true, hints: nil)
+            if filtered || funnelHovered || active {
+                let image = filtered ? filterSymbol : hoverFilterSymbol
+                image?.draw(
+                    in: Self.funnelRect(in: frame), from: .zero, operation: .sourceOver, fraction: 1,
+                    respectFlipped: true, hints: nil)
+            }
+            // Reserve the affordance's space so hovering never shifts the title or sort marker.
             rect.size.width = Self.funnelRect(in: frame).minX - 4 - rect.minX
         }
         if sorted {
             let badge = NSAttributedString(
-                string: "\(sortAscending ? "↑" : "↓")\(sortPriority)",
+                string: (sortAscending ? "↑" : "↓") + (sortPriority > 0 ? String(sortPriority) : ""),
                 attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
                     .foregroundColor: NSColor.secondaryLabelColor,
@@ -123,8 +119,8 @@ final class ColumnHeaderCell: NSTableHeaderCell {
         let name = NSAttributedString(
             string: stringValue,
             attributes: [
-                .font: NSFont.systemFont(ofSize: textSize, weight: .semibold),
-                .foregroundColor: filtered ? NSColor.controlAccentColor : NSColor.labelColor,
+                .font: NSFont.systemFont(ofSize: textSize, weight: .medium),
+                .foregroundColor: NSColor.labelColor,
                 .paragraphStyle: paragraph,
             ])
         let nameHeight = ceil(textSize * 1.25)
@@ -221,7 +217,8 @@ final class FilterHeaderView: NSTableHeaderView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        setHovered(funnelCell(at: event)?.1)
+        let index = column(at: convert(event.locationInWindow, from: nil))
+        setHovered(index >= 0 ? tableView?.tableColumns[index].headerCell as? ColumnHeaderCell : nil)
     }
 
     override func mouseExited(with event: NSEvent) {

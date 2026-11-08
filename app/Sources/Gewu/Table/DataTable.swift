@@ -39,7 +39,7 @@ struct DataTable: NSViewControllerRepresentable {
 @MainActor
 final class DataTableController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     private let model: DocumentModel
-    private let table = NSTableView()
+    private let table = ContextTableView()
     private let scroll = NSScrollView()
     private lazy var gutter = RowGutterView(table: table)
     private let rows = TableRowLoader()
@@ -92,6 +92,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         table.alphaValue = 0
         table.target = self
         table.action = #selector(tableClicked(_:))
+        table.cellMenu = { [weak self] row, column in self?.cellMenu(row: row, index: column) }
+        table.doubleAction = #selector(inspectClickedCell(_:))
         table.usesAlternatingRowBackgroundColors = false
         table.allowsMultipleSelection = true
         table.allowsColumnReordering = true
@@ -195,14 +197,23 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
         }
         applyingColumns = false
+        let multipleSortKeys = model.appliedSpec.columns.filter { $0.sort != nil }.count > 1
         for column in table.tableColumns {
             guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
             header.textSize = textSize
-            header.filtered = model.appliedFilterColumns.contains(UInt32(i))
+            let filter = model.appliedSpec.columns.first { $0.column == UInt32(i) }?.filter
+            header.filtered = filter != nil
+            header.subtitle = info.columns[i].displayType
+            column.headerToolTip =
+                "\(info.columns[i].name): \(info.columns[i].technicalType)"
+                + (filter.map { "\n\($0.detailSummary)" } ?? "")
+                + "\nClick to cycle sorting; Shift-click for multiple keys. Use the funnel to filter."
+                + "\nDrag to reorder; double-click a divider to fit the column."
             header.inspected = model.inspectorVisible && model.inspectedColumn == i
+            header.active = model.selectedColumn == i
             let sort = model.appliedSpec.columns.first { $0.column == UInt32(i) }?.sort
             header.sorted = sort != nil
-            header.sortPriority = sort.map { Int($0.priority) + 1 } ?? 0
+            header.sortPriority = multipleSortKeys ? (sort.map { Int($0.priority) + 1 } ?? 0) : 0
             header.sortAscending = !(sort?.descending ?? false)
         }
         table.headerView?.needsDisplay = true
@@ -386,6 +397,84 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         return cell
     }
 
+    private struct CellContent {
+        let row: Int
+        let column: Int
+        let text: String?
+    }
+
+    private func cellContent(row: Int, index: Int) -> CellContent? {
+        guard row >= 0, index >= 0, index < table.tableColumns.count,
+            let column = columnIndex(table.tableColumns[index]),
+            let block = rows.block(for: row, column: UInt32(column)),
+            row >= Int(block.start), row < Int(block.start) + Int(block.nRows)
+        else { return nil }
+        return CellContent(row: row, column: column, text: block.cells[row - Int(block.start)])
+    }
+
+    private func cellMenu(row: Int, index: Int) -> NSMenu? {
+        guard let content = cellContent(row: row, index: index) else { return nil }
+        selectColumn(at: index)
+        if !table.selectedRowIndexes.contains(row) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        let menu = NSMenu()
+        for (title, action) in [
+            ("Copy Cell", #selector(copyCell(_:))),
+            ("Copy Selected Rows", #selector(copy(_:))),
+            ("View Cell…", #selector(inspectCell(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = content
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        for (title, action) in [
+            ("Filter Column…", #selector(filterMenuColumn(_:))),
+            ("Clear Column Filter", #selector(clearMenuColumnFilter(_:))),
+            ("Analyze Column", #selector(analyzeMenuColumn(_:))),
+        ] {
+            if action == #selector(clearMenuColumnFilter(_:)),
+                !model.appliedFilterColumns.contains(UInt32(content.column))
+            {
+                continue
+            }
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = UInt32(content.column)
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func copyCell(_ item: NSMenuItem) {
+        guard let content = item.representedObject as? CellContent else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content.text ?? "", forType: .string)
+    }
+
+    @objc private func inspectCell(_ item: NSMenuItem) {
+        if let content = item.representedObject as? CellContent { showCell(content) }
+    }
+
+    @objc private func inspectClickedCell(_ sender: Any?) {
+        if let content = cellContent(row: table.clickedRow, index: table.clickedColumn) { showCell(content) }
+    }
+
+    private func showCell(_ content: CellContent) {
+        closePopover()
+        let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(content.column)"))
+        guard index >= 0 else { return }
+        let panel = NSPopover()
+        panel.behavior = .transient
+        panel.contentViewController = NSHostingController(
+            rootView: CellPreview(
+                name: model.info.columns[content.column].name, text: content.text))
+        panel.show(relativeTo: table.frameOfCell(atColumn: index, row: content.row), of: table, preferredEdge: .maxY)
+        popover = panel
+    }
+
     func tableView(_ tableView: NSTableView, shouldReorderColumn column: Int, toColumn newColumn: Int) -> Bool {
         // AppKit first asks with -1 whether dragging may begin, before proposing a destination.
         tableView.tableColumns[column].identifier != rowHeaderID && (newColumn == -1 || newColumn > 0)
@@ -517,22 +606,39 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             return nil
         }
         let menu = NSMenu()
+        let sort = model.spec.columns.first { $0.column == UInt32(column) }?.sort
         for (title, action) in [
             ("Analyze Column", #selector(analyzeMenuColumn(_:))),
             ("Filter Column…", #selector(filterMenuColumn(_:))),
+            ("Clear Column Filter", #selector(clearMenuColumnFilter(_:))),
+            ("", #selector(filterMenuColumn(_:))),
             ("Sort Ascending", #selector(sortMenuAscending(_:))),
             ("Sort Descending", #selector(sortMenuDescending(_:))),
+            ("Clear Column Sort", #selector(clearMenuColumnSort(_:))),
+            ("Clear All Sorting", #selector(clearMenuAllSorting(_:))),
+            ("", #selector(filterMenuColumn(_:))),
             ("Fit Column Width", #selector(fitMenuColumn(_:))),
             ("Fit All Columns", #selector(fitMenuAll(_:))),
+            ("", #selector(filterMenuColumn(_:))),
             ("Customize Columns…", #selector(customizeMenuColumns(_:))),
-            ("Show All Columns", #selector(showMenuColumns(_:))),
             ("Hide Column", #selector(hideMenuColumn(_:))),
-            ("Cancel Column Sort", #selector(clearMenuColumnSort(_:))),
-            ("Clear All Sorting", #selector(clearMenuSort(_:))),
         ] {
+            if title.isEmpty {
+                menu.addItem(.separator())
+                continue
+            }
+            if action == #selector(clearMenuColumnSort(_:)), sort == nil { continue }
+            if action == #selector(clearMenuAllSorting(_:)), model.sortedColumns.isEmpty { continue }
+            if action == #selector(clearMenuColumnFilter(_:)),
+                !model.appliedFilterColumns.contains(UInt32(column))
+            {
+                continue
+            }
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = UInt32(column)
+            if action == #selector(sortMenuAscending(_:)), sort?.descending == false { item.state = .on }
+            if action == #selector(sortMenuDescending(_:)), sort?.descending == true { item.state = .on }
             menu.addItem(item)
         }
         return menu
@@ -552,7 +658,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
     @objc private func fitMenuAll(_ item: NSMenuItem) { fitColumns(displayedColumns, automatic: false) }
     @objc private func customizeMenuColumns(_ item: NSMenuItem) { model.showsColumns = true }
-    @objc private func showMenuColumns(_ item: NSMenuItem) { model.showAllColumns() }
 
     @objc private func filterMenuColumn(_ item: NSMenuItem) {
         guard let column = item.representedObject as? UInt32 else { return }
@@ -564,7 +669,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     @objc private func clearMenuColumnSort(_ item: NSMenuItem) {
         if let column = item.representedObject as? UInt32 { model.removeSort(column: column) }
     }
-    @objc private func clearMenuSort(_ item: NSMenuItem) { model.clearSort() }
+    @objc private func clearMenuAllSorting(_ item: NSMenuItem) { model.clearSort() }
+    @objc private func clearMenuColumnFilter(_ item: NSMenuItem) {
+        if let column = item.representedObject as? UInt32 { model.setFilter(nil, column: column) }
+    }
 
     @objc private func tableClicked(_ sender: Any?) { selectColumn(at: table.clickedColumn) }
     private func selectColumn(at index: Int) {
@@ -580,6 +688,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         table.scrollColumnToVisible(index)
         if focus { table.window?.makeFirstResponder(table) }
     }
+
+    func focusTable() { table.window?.makeFirstResponder(table) }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading else { return }
@@ -650,5 +760,45 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             view: model.view,
             rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
             names: columns.map { model.info.columns[Int($0)].name })
+    }
+}
+
+private final class ContextTableView: NSTableView {
+    var cellMenu: ((Int, Int) -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        return cellMenu?(row(at: point), column(at: point))
+    }
+}
+
+struct CellPreview: View {
+    let name: String
+    let text: String?
+
+    private var textHeight: CGFloat {
+        let bounds = ((text ?? "null") as NSString).boundingRect(
+            with: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)])
+        return min(260, max(24, ceil(bounds.height) + 4))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(name).font(.headline).lineLimit(1)
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text ?? "", forType: .string)
+                }.buttonStyle(.borderless)
+            }
+            ScrollView {
+                Text(text ?? "null").textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(.body, design: .monospaced))
+            }.frame(height: textHeight)
+        }.padding(20).frame(width: 440)
     }
 }

@@ -31,6 +31,6 @@ struct NullModePicker: View {
             Text("Include nulls").tag(NullMode.include)
             Text("Hide nulls").tag(NullMode.exclude)
             Text("Only nulls" + (nullCount.map { " (\(formatCount($0)))" } ?? "")).tag(NullMode.only)
-        }.labelsHidden().fixedSize()
+        }.labelsHidden().fixedSize().controlSize(.small)
     }
 }

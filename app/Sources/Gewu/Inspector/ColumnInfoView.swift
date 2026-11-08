@@ -4,58 +4,59 @@ struct InspectorSidebar: View {
     @ObservedObject var model: DocumentModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Sidebar Content", selection: $model.inspectorPage) {
-                Text("Overview").tag(InspectorPage.column)
-                Text("Chart").tag(InspectorPage.chart)
-            }
-            .pickerStyle(.segmented).controlSize(.small).labelsHidden()
-            .padding(.horizontal, 12).padding(.vertical, 8)
+        VStack(alignment: .leading, spacing: 0) {
+            InspectorPageControl(selection: $model.inspectorPage)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
-            if model.inspectorPage == .column {
-                if !model.info.columns.isEmpty {
-                    let info = model.info
-                    VStack(alignment: .leading, spacing: 4) {
-                        Menu {
-                            Picker("Column", selection: $model.inspectedColumn) {
-                                ForEach(info.columns.indices, id: \.self) { index in
-                                    Text(info.columns[index].name).tag(Optional(index))
-                                }
-                            }
-                            .pickerStyle(.inline).labelsHidden()
-                        } label: {
-                            Text(selectedColumnName)
-                                .font(.headline).lineLimit(1).truncationMode(.middle)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.visible)
-                        .accessibilityLabel("Column")
-                        .accessibilityValue(selectedColumnName)
-                        .help("Choose the column to analyze")
-                        if let column = model.inspectedColumn, info.columns.indices.contains(column) {
-                            Text(info.columns[column].displayType)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .help(info.columns[column].technicalType)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                    if let column = model.inspectedColumn, info.columns.indices.contains(column) {
-                        ColumnAnalysisView(model: model, column: column)
-                    }
-                } else {
-                    ContentUnavailableView("No Columns", systemImage: "tablecells")
-                }
-            } else {
+            if model.inspectorPage == .chart {
                 ScatterPanel(model: model)
+            } else if let column = model.inspectedColumn, model.info.columns.indices.contains(column) {
+                ColumnAnalysisView(model: model, column: column)
+            } else {
+                ContentUnavailableView("No Columns", systemImage: "tablecells")
             }
-            Spacer(minLength: 0)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+/// SwiftUI's macOS segmented Picker keeps intrinsic segment widths. AppKit's
+/// fill distribution makes these two native tabs share the available sidebar width.
+private struct InspectorPageControl: NSViewRepresentable {
+    @Binding var selection: InspectorPage
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(
+            labels: InspectorPage.allCases.map(\.rawValue), trackingMode: .selectOne,
+            target: context.coordinator, action: #selector(Coordinator.selectPage(_:)))
+        control.segmentDistribution = .fill
+        control.segmentStyle = .rounded
+        control.controlSize = .small
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setAccessibilityLabel("Inspector")
+        return control
     }
 
-    private var selectedColumnName: String {
-        guard let column = model.inspectedColumn, model.info.columns.indices.contains(column)
-        else { return "Choose Column" }
-        return model.info.columns[column].name
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.selection = $selection
+        control.selectedSegment = InspectorPage.allCases.firstIndex(of: selection) ?? 0
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
+    }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<InspectorPage>
+        init(selection: Binding<InspectorPage>) { self.selection = selection }
+
+        @objc func selectPage(_ sender: NSSegmentedControl) {
+            guard InspectorPage.allCases.indices.contains(sender.selectedSegment) else { return }
+            selection.wrappedValue = InspectorPage.allCases[sender.selectedSegment]
+        }
     }
 }
 
@@ -101,37 +102,46 @@ struct ColumnAnalysisView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Menu {
+                        Picker("Analyzed column", selection: $model.inspectedColumn) {
+                            ForEach(model.info.columns.indices, id: \.self) { index in
+                                Text(model.info.columns[index].name).tag(Optional(index))
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(model.info.columns[column].name).font(.headline).lineLimit(1)
+                            Spacer(minLength: 8)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.menuStyle(.borderlessButton).accessibilityLabel("Analyzed column")
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(model.info.columns[column].displayType)
+                            .help(model.info.columns[column].technicalType)
+                        Spacer(minLength: 4)
+                        if analysis.matches(view: model.view, column: UInt32(column)), let values = analysis.values {
+                            Text("≈ \(formatCount(values.distinctCount)) distinct").monospacedDigit()
+                                .help("Estimated distinct values in the current results")
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
+                    if analysis.matches(view: model.view, column: UInt32(column)) {
+                        HStack(alignment: .top, spacing: 16) {
+                            summary("Rows", formatCount(analysis.rowCount))
+                            if let nullCount = analysis.nullCount {
+                                summary("Missing", countWithPercent(nullCount, total: analysis.rowCount))
+                            }
+                        }
+                    }
+                }.padding(.bottom, 4)
                 if analysis.matches(view: model.view, column: UInt32(column)) {
                     if let error = analysis.error { failure(error) }
-                    if let nullCount = analysis.nullCount {
-                        Text("Missing \(countWithPercent(nullCount, total: analysis.rowCount))")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .help(
-                                "Missing values in the current results. Column type: \(model.info.columns[column].technicalType)"
-                            )
-                    }
                     if let error = analysis.errors[.overview] { failure(error) }
                     ForEach(analysis.sections.filter { $0 != .overview }, id: \.self) { section in
                         DisclosureGroup(isExpanded: expansion(section)) {
                             VStack(alignment: .leading, spacing: 8) {
                                 if section == .distribution || section == .lengths {
-                                    if section == .distribution, model.info.columns[column].capabilities.logarithmic {
-                                        ScalePicker(title: "Binning", selection: $settings.histogramScale)
-                                            .help(
-                                                "Log10 bins include only finite positive values. Source values remain unchanged."
-                                            )
-                                    }
-                                    ScalePicker(title: "Frequency", selection: $settings.frequencyScale)
-                                    Picker("Maximum bins", selection: $settings.histogramBins) {
-                                        ForEach([10, 20, 40, 60, 100] as [UInt32], id: \.self) { bins in
-                                            Text(bins.formatted()).tag(bins)
-                                        }
-                                    }
-                                    .controlSize(.small)
-                                    .help(
-                                        "Discrete data may use fewer bins when there are fewer distinct integer positions."
-                                    )
+                                    chartOptions(section)
                                 }
                                 if analysis.loading == section { ProgressView().controlSize(.small) }
                                 if let error = analysis.errors[section] { failure(error) }
@@ -141,13 +151,13 @@ struct ColumnAnalysisView: View {
                         } label: {
                             Text(section.title).font(.subheadline.weight(.semibold))
                         }
-                        Divider()
+                        .padding(.vertical, 4)
                     }
                 } else {
                     ProgressView().controlSize(.small)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 6)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task(id: request) {
@@ -157,6 +167,13 @@ struct ColumnAnalysisView: View {
                 scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
+    }
+
+    private func summary(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).foregroundStyle(.secondary)
+            Text(value).monospacedDigit().textSelection(.enabled)
+        }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func expansion(_ section: InspectorSection) -> Binding<Bool> {
@@ -203,7 +220,6 @@ struct ColumnAnalysisView: View {
             }
         case .values:
             if let summary = analysis.values {
-                detail("Distinct", "≈ " + formatCount(summary.distinctCount))
                 if !summary.values.isEmpty {
                     Text("Common values · estimated")
                         .font(.caption).foregroundStyle(.secondary)
@@ -211,11 +227,7 @@ struct ColumnAnalysisView: View {
                             "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
                         )
                     ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
-                        VStack(alignment: .leading, spacing: 3) {
-                            detail(item.label, countWithPercent(item.count, total: analysis.rowCount))
-                            ProgressView(value: Double(item.count), total: Double(max(analysis.rowCount, 1)))
-                                .tint(.accentColor)
-                        }
+                        FrequencyRow(label: item.label, count: item.count, total: analysis.rowCount)
                     }
                 }
             }
@@ -239,6 +251,32 @@ struct ColumnAnalysisView: View {
                 }
             }
         }
+    }
+
+    private func chartOptions(_ section: InspectorSection) -> some View {
+        HStack {
+            Text(section == .distribution && histogramScale == .log10 ? "Logarithmic bins" : "Linear bins")
+            if settings.frequencyScale == .log10 { Text("· Log frequency") }
+            Spacer(minLength: 0)
+            Menu {
+                if section == .distribution, model.info.columns[column].capabilities.logarithmic {
+                    Picker("Bin spacing", selection: $settings.histogramScale) {
+                        Text("Linear").tag(AxisScale.linear)
+                        Text("Logarithmic").tag(AxisScale.log10)
+                    }
+                }
+                Picker("Frequency", selection: $settings.frequencyScale) {
+                    Text("Linear").tag(AxisScale.linear)
+                    Text("Logarithmic").tag(AxisScale.log10)
+                }
+                Picker("Maximum bins", selection: $settings.histogramBins) {
+                    ForEach([10, 20, 40, 60, 100] as [UInt32], id: \.self) { Text($0.formatted()).tag($0) }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Chart display options")
+        }.font(.caption2).foregroundStyle(.secondary)
     }
 
     @ViewBuilder private func distribution(_ histogram: Histogram) -> some View {
@@ -271,6 +309,29 @@ struct ColumnAnalysisView: View {
 
     private func decimal(_ value: Double) -> String {
         value.formatted(.number.precision(.significantDigits(1...min(max(significantDigits, 1), 17))))
+    }
+}
+
+private struct FrequencyRow: View {
+    let label: String
+    let count: UInt64
+    let total: UInt64
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label.isEmpty ? "(empty string)" : label).lineLimit(1).help(label)
+                Spacer(minLength: 8)
+                Text(formatCount(count)).monospacedDigit()
+                Text(total == 0 ? "0%" : String(format: "%.1f%%", Double(count) / Double(total) * 100))
+                    .foregroundStyle(.secondary).monospacedDigit().frame(width: 44, alignment: .trailing)
+            }.font(.caption).textSelection(.enabled)
+            GeometryReader { geometry in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.accentColor.opacity(0.5))
+                    .frame(width: geometry.size.width * min(1, Double(count) / Double(max(total, 1))))
+            }.frame(height: 3)
+        }.padding(.vertical, 3)
     }
 }
 

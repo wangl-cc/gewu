@@ -6,6 +6,9 @@ final class InspectorSettings: ObservableObject {
     @Published var histogramBins: UInt32 = 40
     @Published var histogramScale: AxisScale = .linear
     @Published var frequencyScale: AxisScale = .linear
+    @Published var scatterPointLimit: UInt32 = 2048
+    @Published var scatterXScale: AxisScale = .linear
+    @Published var scatterYScale: AxisScale = .linear
     @Published private var expansionOverrides: [InspectorSection: Bool] = [:]
 
     func expanded(distribution: Bool) -> Int {

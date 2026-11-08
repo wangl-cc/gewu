@@ -170,13 +170,13 @@ final class HistogramView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let p = plot
-        NSColor.quaternarySystemFill.setFill()
-        NSBezierPath(roundedRect: p.insetBy(dx: -1, dy: -2), xRadius: 4, yRadius: 4).fill()
+        NSColor.separatorColor.withAlphaComponent(0.4).setFill()
+        NSRect(x: p.minX, y: p.maxY, width: p.width, height: 1).fill()
         guard !counts.isEmpty else { return }
 
-        // Until a range is chosen, show the distribution in neutral grey.
+        // Emphasize selected bins while keeping the full distribution visible.
         let everything = isEverything
-        let selected = everything ? NSColor.secondaryLabelColor : NSColor.controlAccentColor
+        let selected = NSColor.controlAccentColor.withAlphaComponent(everything ? 0.55 : 0.85)
         let unselected = NSColor.tertiaryLabelColor
         for (i, c) in counts.enumerated() where c > 0 {
             let left = x(binEdge(i))

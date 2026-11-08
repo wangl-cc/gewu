@@ -44,7 +44,7 @@ final class ExportModel: ObservableObject {
         panel.title = "Export"
         panel.prompt = "Export"
         panel.message =
-            "Export all \(formatCount(view.rowCount())) rows in the current results, in the displayed row and column order."
+            "Export \(formatCount(view.rowCount())) rows · visible columns in display order"
         panel.nameFieldStringValue =
             source.deletingPathExtension().lastPathComponent + "-export.\(defaultFormat.rawValue)"
         panel.allowedContentTypes = formats.map(\.contentType)
@@ -149,14 +149,15 @@ private struct ExportAccessory: View {
     @ObservedObject var selection: ExportSelection
 
     var body: some View {
-        Form {
+        HStack(spacing: 8) {
+            Text("Compression:")
             Picker("Compression", selection: $selection.compression) {
                 ForEach(ExportCompression.allCases, id: \.self) { compression in
                     Text(compression.title).tag(compression)
                 }
             }
+            .labelsHidden().frame(width: 160)
         }
-        .padding()
-        .frame(width: 320)
+        .fixedSize().padding(.vertical, 12).padding(.horizontal, 16)
     }
 }

@@ -56,9 +56,9 @@ final class FindModel: ObservableObject {
         guard session != nil else { return nil }
         if hasMatches == false { return "0 matches" }
         if let match = currentMatch {
-            return "match at view row \(formatCount(match.displayRow + 1))"
+            return "Row \(formatCount(match.displayRow + 1))"
         }
-        return isFinding ? "Finding…" : "⏎ next match · ⇧⏎ previous"
+        return isFinding ? "Finding…" : "Press Return"
     }
 
     /// Capture identity before queueing work. Replacing a query cancels only the

@@ -5,10 +5,13 @@ struct ScatterPanel: View {
     @StateObject private var chart = ScatterModel()
     @State private var hovered: ScatterPoint?
     @State private var retry = 0
-    @State private var pointLimit: UInt32 = 2048
-    @State private var xScale: AxisScale = .linear
-    @State private var yScale: AxisScale = .linear
+    @ObservedObject private var settings: InspectorSettings
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
+
+    init(model: DocumentModel) {
+        self.model = model
+        _settings = ObservedObject(wrappedValue: model.inspectorSettings)
+    }
 
     private var columns: [Int] {
         model.info.columns.indices.filter { model.info.columns[$0].capabilities.scatter }
@@ -28,37 +31,60 @@ struct ScatterPanel: View {
     private var request: Request {
         Request(
             view: ObjectIdentifier(model.view),
-            x: model.chartX, y: model.chartY, retry: retry, pointLimit: pointLimit, rowNumberBase: rowNumberBase,
-            xScale: supportsLog(model.chartX) ? xScale : .linear,
-            yScale: supportsLog(model.chartY) ? yScale : .linear)
+            x: model.chartX, y: model.chartY, retry: retry, pointLimit: settings.scatterPointLimit,
+            rowNumberBase: rowNumberBase,
+            xScale: supportsLog(model.chartX) ? settings.scatterXScale : .linear,
+            yScale: supportsLog(model.chartY) ? settings.scatterYScale : .linear)
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 if columns.isEmpty {
                     ContentUnavailableView("No Plottable Columns", systemImage: "chart.dots.scatter")
                 } else {
-                    Picker("X", selection: $model.chartX) {
-                        Text("Source row").tag(Optional<Int>.none)
-                        columnOptions
-                    }
-                    if supportsLog(model.chartX) {
-                        ScalePicker(title: "X scale", selection: $xScale)
-                    }
-                    Picker("Y", selection: $model.chartY) {
-                        if model.chartY == nil { Text("Select column").tag(Optional<Int>.none) }
-                        columnOptions
-                    }
-                    if supportsLog(model.chartY) {
-                        ScalePicker(title: "Y scale", selection: $yScale)
-                    }
-                    Picker("Maximum points", selection: $pointLimit) {
-                        ForEach([512, 1024, 2048, 4096] as [UInt32], id: \.self) { limit in
-                            Text(limit.formatted()).tag(limit)
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                        GridRow {
+                            Text("X").font(.caption).foregroundStyle(.secondary)
+                            axisPicker("X", selection: $model.chartX, allowsSourceRow: true)
                         }
+                        GridRow {
+                            Text("Y").font(.caption).foregroundStyle(.secondary)
+                            axisPicker("Y", selection: $model.chartY, allowsSourceRow: false)
+                        }
+                    }.controlSize(.small).frame(maxWidth: .infinity)
+                    HStack {
+                        Text("Scatter plot").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Menu {
+                            if supportsLog(model.chartX) {
+                                Picker("X axis", selection: $settings.scatterXScale) {
+                                    Text("Linear").tag(AxisScale.linear)
+                                    Text("Logarithmic").tag(AxisScale.log10)
+                                }
+                            }
+                            if supportsLog(model.chartY) {
+                                Picker("Y axis", selection: $settings.scatterYScale) {
+                                    Text("Linear").tag(AxisScale.linear)
+                                    Text("Logarithmic").tag(AxisScale.log10)
+                                }
+                            }
+                            Picker("Maximum points", selection: $settings.scatterPointLimit) {
+                                ForEach([512, 1024, 2048, 4096] as [UInt32], id: \.self) { limit in
+                                    Text(limit.formatted()).tag(limit)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Plot display options")
+                    }.controlSize(.small)
+                    if request.xScale == .log10 || request.yScale == .log10 {
+                        Text(
+                            "Logarithmic: \([request.xScale == .log10 ? "X" : nil, request.yScale == .log10 ? "Y" : nil].compactMap { $0 }.joined(separator: ", "))"
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
                     }
-                    .help("Samples the current results when there are more valid pairs than this limit.")
                     if chart.loading { ProgressView().controlSize(.small) }
                     if let error = chart.error {
                         Text(error).font(.caption).foregroundStyle(.red)
@@ -78,6 +104,25 @@ struct ScatterPanel: View {
                             )
                             .frame(height: 220)
                             .accessibilityLabel("Scatter plot, \(result.points.count) points")
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !result.points.isEmpty {
+                                Text(
+                                    result.eligibleRows > UInt64(result.points.count)
+                                        ? "\(formatCount(UInt64(result.points.count))) sampled of \(formatCount(result.eligibleRows)) pairs"
+                                        : "\(formatCount(result.eligibleRows)) pairs")
+                            }
+                            let invalidRows = chart.totalRows - result.eligibleRows - result.nonPositiveRows
+                            if invalidRows > 0 {
+                                Text("\(formatCount(invalidRows)) rows omitted: missing or non-finite values")
+                            }
+                            if result.nonPositiveRows > 0 {
+                                Text(
+                                    "\(formatCount(result.nonPositiveRows)) rows omitted: zero or negative on a log axis"
+                                )
+                            }
+                        }.font(.caption).foregroundStyle(.secondary)
+                        if !result.points.isEmpty {
                             if let dates = chart.xDates {
                                 Text("X: \(ScatterDates.context(dates))")
                                     .font(.caption2).foregroundStyle(.secondary)
@@ -88,45 +133,32 @@ struct ScatterPanel: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                                     .help("Hover details retain the original date/time text and precision.")
                             }
-                            Text(
-                                result.eligibleRows > UInt64(result.points.count)
-                                    ? "\(formatCount(UInt64(result.points.count))) sampled of \(formatCount(result.eligibleRows)) pairs"
-                                    : "\(formatCount(result.eligibleRows)) pairs"
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
-                            if let point = hovered {
-                                StatisticRow(
-                                    title: "Source row",
-                                    value: formatRowNumber(point.sourceRow, base: rowNumberBase))
-                                StatisticRow(title: "X", value: point.xLabel)
-                                StatisticRow(title: "Y", value: point.yLabel)
-                            } else {
-                                Text("Point to a dot to see its values")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        let invalidRows = chart.totalRows - result.eligibleRows - result.nonPositiveRows
-                        if invalidRows > 0 {
-                            Text("\(formatCount(invalidRows)) rows omitted: missing or non-finite values")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                        if result.nonPositiveRows > 0 {
-                            Text("\(formatCount(result.nonPositiveRows)) rows omitted: zero or negative on a log axis")
-                                .font(.caption2).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 4) {
+                                if let point = hovered {
+                                    StatisticRow(
+                                        title: "Source row",
+                                        value: formatRowNumber(point.sourceRow, base: rowNumberBase))
+                                    StatisticRow(title: "X", value: point.xLabel)
+                                    StatisticRow(title: "Y", value: point.yLabel)
+                                } else {
+                                    Text("Point to a dot to see its values")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }.frame(minHeight: 54, alignment: .topLeading)
                         }
                     }
                 }
             }
-            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16).frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .onAppear {
             if model.chartY == nil { model.chartY = columns.first }
         }
         .onChange(of: model.chartX) { _, column in
-            if !supportsLog(column) { xScale = .linear }
+            if !supportsLog(column) { settings.scatterXScale = .linear }
         }
         .onChange(of: model.chartY) { _, column in
-            if !supportsLog(column) { yScale = .linear }
+            if !supportsLog(column) { settings.scatterYScale = .linear }
         }
         .task(id: request) {
             hovered = nil
@@ -134,16 +166,17 @@ struct ScatterPanel: View {
             await chart.load(
                 viewer: model.viewer, x: model.chartX,
                 y: y,
-                limit: pointLimit, rowNumberBase: rowNumberBase,
+                limit: settings.scatterPointLimit, rowNumberBase: rowNumberBase,
                 xScale: request.xScale, yScale: request.yScale)
         }
         .onDisappear { chart.cancel() }
     }
 
-    private var columnOptions: some View {
-        ForEach(columns, id: \.self) { index in
-            Text(model.info.columns[index].name).tag(Optional(index))
-        }
+    private func axisPicker(_ axis: String, selection: Binding<Int?>, allowsSourceRow: Bool) -> some View {
+        ScatterAxisPicker(
+            axis: axis, columns: columns.map { ($0, model.info.columns[$0].name) },
+            allowsSourceRow: allowsSourceRow, selection: selection
+        ).frame(maxWidth: .infinity)
     }
 
     private func supportsLog(_ column: Int?) -> Bool {
@@ -151,6 +184,60 @@ struct ScatterPanel: View {
         return model.info.columns[column].capabilities.logarithmic
     }
 
+}
+
+/// A native pop-up button whose bezel fills the axis grid's column.
+private struct ScatterAxisPicker: NSViewRepresentable {
+    let axis: String
+    let columns: [(Int, String)]
+    let allowsSourceRow: Bool
+    @Binding var selection: Int?
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.selectColumn(_:))
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.selection = $selection
+        var items = columns
+        if allowsSourceRow || selection == nil {
+            items.insert((-1, allowsSourceRow ? "Source row" : "Select column"), at: 0)
+        }
+        if button.itemArray.map({ $0.tag }) != items.map({ $0.0 })
+            || button.itemTitles != items.map({ $0.1 })
+        {
+            button.removeAllItems()
+            for (column, name) in items {
+                let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+                item.tag = column
+                button.menu?.addItem(item)
+            }
+        }
+        button.selectItem(withTag: selection ?? -1)
+        button.setAccessibilityLabel("\(axis) axis")
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
+    }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<Int?>
+        init(selection: Binding<Int?>) { self.selection = selection }
+
+        @objc func selectColumn(_ sender: NSPopUpButton) {
+            guard let column = sender.selectedItem?.tag else { return }
+            selection.wrappedValue = column < 0 ? nil : column
+        }
+    }
 }
 
 @MainActor

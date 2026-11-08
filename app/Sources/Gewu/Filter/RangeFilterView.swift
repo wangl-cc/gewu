@@ -44,7 +44,6 @@ extension String {
 
 struct RangeFilterView: View {
     let distribution: RangeHistogram?
-    @Binding var bins: UInt32
     @Binding var scale: AxisScale
     let supportsLog: Bool
     @Binding var draft: RangeDraft
@@ -72,68 +71,90 @@ struct RangeFilterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if supportsLog {
-                ScalePicker(title: "Binning", selection: $scale)
-                    .help("Log10 bins include only finite positive values; typed bounds still use original values.")
-            }
-            if let chart {
-                ScalePicker(title: "Frequency", selection: $frequencyScale)
-                Picker("Maximum bins", selection: $bins) {
-                    ForEach([10, 20, 40, 60] as [UInt32], id: \.self) { count in
-                        Text(count.formatted()).tag(count)
-                    }
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Minimum").font(.caption).foregroundStyle(.secondary)
+                    TextField(
+                        "No minimum",
+                        text: Binding(
+                            get: { draft.minimum },
+                            set: {
+                                draft.minimum = $0
+                                draft.lowerEdited = true
+                                selectedBins = nil
+                                selection.snapped = false
+                            })
+                    ).accessibilityLabel("Minimum")
                 }
-                .controlSize(.small)
-                HistogramChart(
-                    histogram: plotHistogram(chart),
-                    selection: Binding(
-                        get: { selection }, set: selectBins
-                    ), frequencyScale: frequencyScale
-                )
-                .frame(height: 140)
-                .accessibilityLabel("Distribution; edit the draft.minimum and draft.maximum fields to select a range")
-                Text("Drag to select a range · Double-click to select all plotted values")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if distribution?.histogram.scale == .log10 {
-                Text("No positive finite values to plot").font(.caption).foregroundStyle(.secondary)
-            }
-            if let distribution { HistogramOmissions(histogram: distribution.histogram) }
-            HStack {
-                TextField(
-                    "Min",
-                    text: Binding(
-                        get: { draft.minimum },
-                        set: {
-                            draft.minimum = $0
-                            draft.lowerEdited = true
-                            selectedBins = nil
-                            selection.snapped = false
-                        })
-                ).accessibilityLabel("Minimum")
-                Text("–").foregroundStyle(.secondary)
-                TextField(
-                    "Max",
-                    text: Binding(
-                        get: { draft.maximum },
-                        set: {
-                            draft.maximum = $0
-                            draft.upperEdited = true
-                            selectedBins = nil
-                            selection.snapped = false
-                        })
-                ).accessibilityLabel("Maximum")
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Maximum").font(.caption).foregroundStyle(.secondary)
+                    TextField(
+                        "No maximum",
+                        text: Binding(
+                            get: { draft.maximum },
+                            set: {
+                                draft.maximum = $0
+                                draft.upperEdited = true
+                                selectedBins = nil
+                                selection.snapped = false
+                            })
+                    ).accessibilityLabel("Maximum")
+                }
             }
             .textFieldStyle(.roundedBorder)
             .monospacedDigit()
-            if let chart, !draft.lowerEdited, !draft.upperEdited {
-                Text(selectionSummary(chart.histogram)).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text(rangeSummary).font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                if scale == .log10 { Text("Log bins").font(.caption2).foregroundStyle(.secondary) }
+                if frequencyScale == .log10 { Text("Log frequency").font(.caption2).foregroundStyle(.secondary) }
+                Menu {
+                    if supportsLog {
+                        Picker("Bin spacing", selection: $scale) {
+                            Text("Linear").tag(AxisScale.linear)
+                            Text("Logarithmic").tag(AxisScale.log10)
+                        }
+                    }
+                    Picker("Frequency", selection: $frequencyScale) {
+                        Text("Linear").tag(AxisScale.linear)
+                        Text("Logarithmic").tag(AxisScale.log10)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Chart display options")
             }
+            if let chart {
+                HistogramChart(
+                    histogram: plotHistogram(chart),
+                    selection: Binding(get: { selection }, set: selectBins), frequencyScale: frequencyScale
+                )
+                .frame(height: 145)
+                .accessibilityLabel("Distribution; use Minimum and Maximum to enter exact bounds")
+                .help("Drag to select a range. Double-click to select all plotted values.")
+            } else {
+                Text(
+                    distribution == nil
+                        ? "Loading distribution…"
+                        : (distribution?.histogram.scale == .log10
+                            ? "No positive finite values to plot" : "No finite values to plot")
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 145)
+            }
+            if let distribution { HistogramOmissions(histogram: distribution.histogram) }
         }
         .onAppear { projectSelection() }
         .onChange(of: distribution?.histogram) { _, _ in
             projectSelection()
         }
         .onChange(of: draft.condition) { _, _ in projectSelection() }
+    }
+
+    private var rangeSummary: String {
+        guard let chart else { return "" }
+        if draft.lowerEdited || draft.upperEdited { return "Distribution" }
+        return selectionSummary(chart.histogram)
     }
 
     // Rebinning changes only the chart geometry, never the exact drafted bounds.

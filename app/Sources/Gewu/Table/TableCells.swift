@@ -37,8 +37,8 @@ final class StripedRowView: NSTableRowView {
 
     private func updateStripe() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let colors = NSColor.alternatingContentBackgroundColors
-            layer?.backgroundColor = (odd && colors.count > 1 ? colors[1] : colors[0]).cgColor
+            let base = NSColor.controlBackgroundColor
+            layer?.backgroundColor = (odd ? base.blended(withFraction: 0.025, of: .labelColor) ?? base : base).cgColor
         }
     }
 }
@@ -95,7 +95,8 @@ final class MatchCellView: NSTableCellView {
 
     override func draw(_ dirtyRect: NSRect) {
         if currentMatch {
-            NSColor.controlAccentColor.setStroke()
+            (backgroundStyle == .emphasized ? NSColor.alternateSelectedControlTextColor : NSColor.controlAccentColor)
+                .setStroke()
             let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3)
             outline.lineWidth = 2
             outline.stroke()

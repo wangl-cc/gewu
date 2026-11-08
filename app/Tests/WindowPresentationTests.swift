@@ -1,9 +1,37 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @Suite @MainActor
 struct WindowPresentationTests {
+    @Test func filterDescriptionsKeepNullLiteralAndExactBoundsDistinct() {
+        let missing = Filter(condition: .exact(values: [], exclude: false), includeNulls: true)
+        let literal = Filter(condition: .exact(values: ["Missing"], exclude: false), includeNulls: false)
+        #expect(missing.conditionSummary == "Only missing")
+        #expect(literal.conditionSummary == "= “Missing”")
+        #expect(
+            Filter(condition: .exact(values: [""], exclude: false), includeNulls: false).conditionSummary
+                == "= (empty string)")
+        let range = Filter(condition: .range(min: "9007199254740993", max: nil), includeNulls: true)
+        #expect(range.conditionSummary == "≥ 9007199254740993 · + missing")
+        let text = Filter(
+            condition: .text(text: "line\nbreak", mode: .equals, caseSensitive: true), includeNulls: false)
+        #expect(!text.conditionSummary.contains("\n"))
+        #expect(text.detailSummary.contains("Case sensitive"))
+    }
+
+    @Test func cellPreviewHasBoundedLayoutForShortAndLongValues() {
+        for text in ["short value", String(repeating: "a long value that wraps\n", count: 100)] {
+            let host = NSHostingController(rootView: CellPreview(name: "value", text: text))
+            let size = host.view.fittingSize
+            #expect(size.width == 440)
+            #expect(size.height > 0 && size.height < 400)
+            host.view.frame.size = size
+            host.view.layoutSubtreeIfNeeded()
+        }
+    }
+
     @Test func filterFacetIgnoresOnlyTheEditedColumnsFilter() throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-facet-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
@@ -155,13 +183,4 @@ struct WindowPresentationTests {
         #expect(WorkbookModel(url: url, preferences: preferences).showsInspector)
     }
 
-    @Test func filterSummariesDistinguishNullAndEmptyStringSelections() {
-        #expect(Filter(condition: .exact(values: [], exclude: false), includeNulls: true).summary == "Only nulls")
-        #expect(Filter(condition: .exact(values: [], exclude: true), includeNulls: false).summary == "Not null")
-        #expect(
-            Filter(condition: .exact(values: [""], exclude: false), includeNulls: false).summary == "“” · hide nulls")
-        #expect(
-            Filter(condition: .range(min: "9007199254740993", max: nil), includeNulls: false).summary.contains(
-                "9007199254740993"))
-    }
 }

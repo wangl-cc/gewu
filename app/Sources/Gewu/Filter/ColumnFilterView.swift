@@ -26,6 +26,58 @@ enum FilterMode: String, CaseIterable {
     }
 }
 
+/// Editing state is private to the popover; only Apply publishes a filter.
+struct ColumnFilterDraft {
+    var exact: ExactFilterDraft
+    var text: TextMatchDraft
+    var range: RangeDraft
+    var nullMode: NullMode
+
+    init(_ filter: Filter?) {
+        exact = ExactFilterDraft(filter)
+        text = TextMatchDraft(filter)
+        range = RangeDraft(filter)
+        nullMode = NullMode(filter)
+    }
+
+    var includesMissing: Bool {
+        get { nullMode != .exclude }
+        set { nullMode = newValue ? .include : .exclude }
+    }
+
+    mutating func setValue(_ value: LiteralTextValue, selected: Bool) {
+        if nullMode == .only {
+            exact.all(false)
+            nullMode = .include
+        }
+        exact.set(value, selected: selected)
+    }
+
+    mutating func selectAllValues(_ selected: Bool) {
+        exact.all(selected)
+        includesMissing = selected
+    }
+
+    mutating func reset() { self = Self(nil) }
+
+    mutating func enterValues() {
+        if nullMode == .only {
+            exact.all(false)
+            nullMode = .include
+        }
+    }
+
+    func filter(mode: FilterMode, hasContent: Bool = true) -> Filter? {
+        let condition: FilterCondition? =
+            switch mode {
+            case .exact: exact.condition
+            case .text: text.condition
+            case .range: range.condition
+            }
+        return nullMode.applying(to: hasContent ? condition : nil)
+    }
+}
+
 struct ColumnFilterView: View {
     let viewer: Viewer
     let column: UInt32
@@ -33,14 +85,12 @@ struct ColumnFilterView: View {
     let current: Filter?
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode?
-    @State private var exact: ExactFilterDraft
-    @State private var textMatch: TextMatchDraft
-    @State private var range: RangeDraft
-    @State private var nullMode: NullMode
+    @State private var draft: ColumnFilterDraft
     @State private var choices: FilterChoices?
     @State private var distribution: RangeHistogram?
     @State private var error: String?
-    @State private var histogramBins: UInt32 = 60
+    // The fixed-width filter plot needs a useful preview, not a bin-count editor.
+    private let histogramBins: UInt32 = 40
     @State private var histogramScale: AxisScale = .linear
     @State private var loading = false
     @State private var retry = 0
@@ -55,10 +105,7 @@ struct ColumnFilterView: View {
         self.current = current
         self.onApply = onApply
         _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
-        _exact = State(initialValue: ExactFilterDraft(current))
-        _textMatch = State(initialValue: TextMatchDraft(current))
-        _range = State(initialValue: RangeDraft(current))
-        _nullMode = State(initialValue: NullMode(current))
+        _draft = State(initialValue: ColumnFilterDraft(current))
     }
 
     private var modes: [FilterMode] {
@@ -72,56 +119,74 @@ struct ColumnFilterView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(info.name).font(.headline)
+                Spacer()
+                if loading { ProgressView().controlSize(.small) }
                 Text(info.displayType).font(.caption).foregroundStyle(.secondary)
             }
             if let mode, !modes.isEmpty {
-                Picker("Filter mode", selection: $mode) {
-                    ForEach(modes, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
-                }.pickerStyle(.segmented)
+                if modes.count > 1 {
+                    Picker("Filter mode", selection: $mode) {
+                        ForEach(modes, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
+                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: .infinity)
+                }
                 Group {
                     switch mode {
                     case .range:
                         RangeFilterView(
-                            distribution: distribution, bins: $histogramBins,
-                            scale: $histogramScale, supportsLog: info.capabilities.logarithmic, draft: $range)
-                    case .text: TextMatchEditor(draft: $textMatch)
+                            distribution: distribution,
+                            scale: $histogramScale, supportsLog: info.capabilities.logarithmic, draft: $draft.range
+                        )
+                        .disabled(draft.nullMode == .only)
+                    case .text: TextMatchEditor(draft: $draft.text).disabled(draft.nullMode == .only)
                     case .exact: exactEditor
                     }
-                }.disabled(nullMode == .only)
+                }
             }
             if mode == nil && error == nil {
-                ProgressView("Loading filter…").frame(maxWidth: .infinity, minHeight: 120)
-            } else if loading {
-                ProgressView().controlSize(.small)
+                loadingEditor
             }
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if mode == nil && error != nil {
                 Button("Retry") { retry += 1 }
             }
-            HStack {
-                NullModePicker(selection: $nullMode, nullCount: choices?.nullCount)
+            Divider()
+            HStack(spacing: 12) {
+                if mode != .exact || modes.isEmpty {
+                    NullModePicker(selection: $draft.nullMode, nullCount: choices?.nullCount)
+                }
+                Button("Reset") { draft.reset() }
+                    .buttonStyle(.borderless).help("Reset all draft conditions; Apply to update the table")
                 Spacer()
-                Button("Reset", action: reset)
-                Button("Apply", action: apply).keyboardShortcut(.defaultAction)
-            }.disabled(mode == nil)
-        }.padding(14).frame(width: 440)
+                Button("Apply", action: apply).keyboardShortcut(.defaultAction).disabled(mode == nil)
+            }
+        }.padding(16).frame(width: 380)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .onChange(of: mode) { _, mode in
+                if mode == .exact { draft.enterValues() }
+            }
             .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)) { await load() }
     }
 
     @ViewBuilder private var exactEditor: some View {
         if let values = choices?.values {
-            ChoiceFilterView(values: values, draft: $exact)
-            HStack {
-                Button("All Values") { exact.all(true) }
-                Button("No Values") { exact.all(false) }
-                Spacer()
-                Text(exact.exclude ? "All except \(exact.values.count)" : "\(exact.values.count) selected")
-                    .font(.caption)
-            }
+            ChoiceFilterView(values: values, nullCount: choices?.nullCount ?? 0, draft: $draft)
         }
+    }
+
+    private var loadingEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Loading values…").font(.caption).foregroundStyle(.secondary)
+            }
+            // Reserve a bounded editor body while complete choices decide the initial mode.
+            ForEach(0..<4, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 3).fill(.quaternary.opacity(0.5)).frame(height: 20)
+            }
+        }.frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
     }
 
     private struct Request: Equatable {
@@ -149,7 +214,7 @@ struct ColumnFilterView: View {
                 let result = try await viewer.filterDistribution(column, bins: histogramBins, scale: histogramScale)
                 guard !Task.isCancelled else { return }
                 distribution = result
-                range.restoreLabels(from: result)
+                draft.range.restoreLabels(from: result)
             }
         } catch {
             guard !Task.isCancelled else { return }
@@ -164,23 +229,8 @@ struct ColumnFilterView: View {
         if !Task.isCancelled { loading = false }
     }
 
-    private func reset() {
-        exact = ExactFilterDraft(nil)
-        textMatch = TextMatchDraft(nil)
-        range = RangeDraft(nil)
-        nullMode = .include
-        error = nil
-    }
-
     private func apply() {
         guard let mode else { return }
-        let activeCondition: FilterCondition? =
-            switch mode {
-            case .range: range.condition
-            case .text: textMatch.condition
-            case .exact: exact.condition
-            }
-        let filter = nullMode.applying(to: modes.isEmpty ? nil : activeCondition)
-        onApply(filter)
+        onApply(draft.filter(mode: mode, hasContent: !modes.isEmpty))
     }
 }

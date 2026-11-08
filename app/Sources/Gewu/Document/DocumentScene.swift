@@ -42,16 +42,7 @@ struct DocumentScene: View {
                         description: Text("Open a table to inspect its columns."))
                 }
             }
-            .inspectorColumnWidth(min: 240, ideal: 300, max: 460)
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    workbook.showsInspector.toggle()
-                } label: {
-                    Label("Inspector", systemImage: "sidebar.right")
-                }.help("Show or hide Inspector")
-            }
+            .inspectorColumnWidth(min: 260, ideal: 300, max: 460)
         }
         .frame(minWidth: 620, minHeight: 400)
         .focusedSceneObject(workbook)
@@ -115,8 +106,6 @@ private struct LoadedDocumentView: View {
     @ObservedObject var workbook: WorkbookModel
     @ObservedObject private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
-    @FocusState private var searchFocused: Bool
-    @State private var showsSorting = false
 
     init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
@@ -126,41 +115,53 @@ private struct LoadedDocumentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AppliedFiltersView(model: model)
             DataTable(model: model, showsRowNumbers: showsRowNumbers)
             Divider()
             DocumentStatus(model: model, workbook: workbook)
         }
         .toolbar {
-            ToolbarItem {
-                Button {
-                    model.showsColumns.toggle()
-                } label: {
-                    Label("Columns", systemImage: "tablecells")
+            if !find.query.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    findNavigation
                 }
-                .popover(isPresented: $model.showsColumns) { ColumnsView(model: model) }
             }
-            ToolbarItem {
-                ExportToolbarButton(model: model, export: model.export)
+            if #available(macOS 26.0, *) {
+                searchItem.sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            } else {
+                searchItem
             }
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showsSorting = true
+                    workbook.showsInspector.toggle()
                 } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
-                }
+                    Label("Inspector", systemImage: "sidebar.right")
+                }.help("Show or hide column Inspector")
             }
         }
         .onChange(of: model.inspectorRequest) { _, _ in workbook.showsInspector = true }
         .onChange(of: workbook.showsInspector, initial: true) { _, visible in
             model.inspectorVisible = visible
         }
-        .sheet(isPresented: $showsSorting) { SortingView(model: model) }
-        .searchable(text: $find.query, placement: .toolbar, prompt: "Find in visible columns")
-        .searchFocused($searchFocused)
-        .onSubmit(of: .search) { model.findNext(backwards: NSEvent.modifierFlags.contains(.shift)) }
         .onChange(of: find.query) { _, _ in model.updateFind(debounce: true) }
-        .onChange(of: model.searchFocusRequest) { _, _ in searchFocused = true }
+        .sheet(isPresented: $model.showsColumns) {
+            VStack(spacing: 0) {
+                ColumnsView(model: model)
+                HStack {
+                    Spacer()
+                    Button("Done") { model.showsColumns = false }.keyboardShortcut(.cancelAction)
+                }.padding([.horizontal, .bottom], 16)
+            }
+        }
+        .sheet(isPresented: $model.showsSorting) {
+            VStack(spacing: 0) {
+                SortingView(model: model)
+                HStack {
+                    Spacer()
+                    Button("Done") { model.showsSorting = false }.keyboardShortcut(.cancelAction)
+                }.padding([.horizontal, .bottom], 20)
+            }
+        }
         .focusedSceneObject(model)
         .alert("Gewu", isPresented: $model.isErrorPresented) {
             Button("OK", role: .cancel) { model.isErrorPresented = false }
@@ -168,17 +169,52 @@ private struct LoadedDocumentView: View {
             Text(model.errorMessage ?? "")
         }
     }
+
+    private var searchItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            FindSearchField(
+                text: $find.query, focusRequest: model.searchFocusRequest,
+                next: { model.findNext(backwards: $0) },
+                cancel: {
+                    find.query = ""
+                    model.table?.focusTable()
+                }
+            ).frame(width: 200)
+        }
+    }
+
+    private var findNavigation: some View {
+        HStack(spacing: 6) {
+            if let status = find.status {
+                Text(status).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .lineLimit(1).frame(maxWidth: 90).help(status)
+            }
+            Button {
+                model.findNext(backwards: true)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(!find.canNavigate).accessibilityLabel("Previous match").help("Previous match (⇧⌘G)")
+            Button {
+                model.findNext()
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(!find.canNavigate).accessibilityLabel("Next match").help("Next match (⌘G)")
+        }
+        .buttonStyle(.borderless).controlSize(.small)
+    }
 }
 
 private struct DocumentStatus: View {
     @ObservedObject var model: DocumentModel
     @ObservedObject var workbook: WorkbookModel
-    @ObservedObject private var find: FindModel
+    @State private var showsFilters = false
+    @State private var showsSorting = false
 
     init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
         self.workbook = workbook
-        _find = ObservedObject(wrappedValue: model.find)
     }
 
     var body: some View {
@@ -206,6 +242,38 @@ private struct DocumentStatus: View {
                     .help(workbook.pendingSheet.map { "Opening \($0.rawValue)…" } ?? "Opening…")
             }
             Text(model.status).monospacedDigit().lineLimit(1).textSelection(.enabled)
+            if !model.appliedFilterColumns.isEmpty {
+                Text("·")
+                Button {
+                    showsFilters.toggle()
+                } label: {
+                    Text("\(model.appliedFilterColumns.count) filtered")
+                        .monospacedDigit().fixedSize()
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("\(model.appliedFilterColumns.count) filtered columns")
+                .help("Review active column filters")
+                .popover(isPresented: $showsFilters, arrowEdge: .bottom) {
+                    ActiveFiltersView(model: model) { column in
+                        showsFilters = false
+                        model.selectedColumn = Int(column)
+                        model.table?.scrollToColumn(Int(column), focus: true)
+                    }
+                }
+            }
+            let sortCount = model.appliedSpec.columns.filter { $0.sort != nil }.count
+            if sortCount > 0 {
+                Text("·")
+                Button {
+                    showsSorting.toggle()
+                } label: {
+                    Text("\(sortCount) sorted").monospacedDigit().fixedSize()
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("\(sortCount) sorted columns")
+                .help("Review sort order and priority")
+                .popover(isPresented: $showsSorting, arrowEdge: .bottom) { SortingView(model: model) }
+            }
             Spacer(minLength: 0)
             CopyStatus(copying: model.copying)
             ExportStatus(export: model.export)
@@ -213,6 +281,59 @@ private struct DocumentStatus: View {
         }
         .font(.caption).foregroundStyle(.secondary)
         .padding(.horizontal, 12).frame(height: 28)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.appliedFilterColumns.isEmpty) { _, empty in
+            if empty { showsFilters = false }
+        }
+    }
+}
+
+private struct ActiveFiltersView: View {
+    @ObservedObject var model: DocumentModel
+    let locate: (UInt32) -> Void
+
+    var body: some View {
+        let columns = model.appliedSpec.columns.filter { $0.filter != nil }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Active Filters").font(.headline)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(columns, id: \.column) { column in
+                        let name = model.info.columns[Int(column.column)].name
+                        HStack(spacing: 12) {
+                            Button {
+                                locate(column.column)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(name).fontWeight(.medium).foregroundStyle(.primary)
+                                    Text(column.filter?.detailSummary ?? "")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Show \(name) in the table\n\(column.filter?.detailSummary ?? "")")
+                            Button {
+                                model.setFilter(nil, column: column.column)
+                            } label: {
+                                Image(systemName: "xmark").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Clear filter on \(name)")
+                            .help("Clear filter on \(name)")
+                            .disabled(model.isBusy)
+                        }.padding(.vertical, 8)
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+            .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Button("Clear All Filters") { model.clearFilters() }
+                .buttonStyle(.borderless).disabled(model.isBusy)
+        }
+        .controlSize(.small).padding(16).frame(width: 340)
     }
 }
 

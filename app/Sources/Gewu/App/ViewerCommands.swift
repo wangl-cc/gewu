@@ -44,18 +44,13 @@ struct ViewerCommands: Commands {
         }
         InspectorCommands()
         CommandGroup(after: .sidebar) {
-            if let workbook, let model {
-                ForEach(InspectorPage.allCases, id: \.self) { page in
-                    Toggle(
-                        page.rawValue,
-                        isOn: Binding(
-                            get: { workbook.showsInspector && model.inspectorPage == page },
-                            set: { selected in
-                                guard selected else { return }
-                                model.inspectorPage = page
-                                workbook.showsInspector = true
-                            })
-                    )
+            Button("Columns…") { model?.showsColumns = true }.disabled(model == nil)
+            Button("Sort…") { model?.showsSorting = true }.disabled(model == nil)
+            Divider()
+            if let model {
+                Button("Show Chart Inspector") {
+                    model.inspectorPage = .chart
+                    workbook?.showsInspector = true
                 }
             }
             Divider()
@@ -98,8 +93,12 @@ private struct ExportCommand: View {
     @ObservedObject var export: ExportModel
 
     var body: some View {
-        Button("Export…") { chooseExport(for: model) }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
-            .disabled(!model.canExport)
+        Button("Export…") {
+            guard model.canExport, let window = model.table?.view.window else { return }
+            export.choose(
+                view: model.view, columns: model.appliedSpec.columns.map(\.column), source: model.url, window: window)
+        }
+        .keyboardShortcut("e", modifiers: [.command, .shift])
+        .disabled(!model.canExport)
     }
 }
