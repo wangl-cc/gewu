@@ -8,9 +8,7 @@ case "$ARCHS" in
   x86_64) target=x86_64-apple-darwin ;;
   *) echo "Unsupported build architecture: $ARCHS" >&2; exit 1 ;;
 esac
-release_config=(--config profile.release.lto=false --config profile.release.codegen-units=16)
-cargo build --locked --profile "$RUST_PROFILE" --lib -p gewu-uniffi --target "$target" \
-  "${release_config[@]}"
+cargo build --locked --profile "$RUST_PROFILE" --lib -p gewu-uniffi --target "$target"
 target_dir="$(cargo metadata --locked --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)"
 library="$target_dir/$target/${RUST_PROFILE/dev/debug}/libgewu"
 generated="$DERIVED_FILE_DIR/uniffi"

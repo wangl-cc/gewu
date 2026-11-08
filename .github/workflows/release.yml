@@ -92,9 +92,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Generate Xcode project
         run: xcodegen generate --use-cache
-      - name: Archive app (Release-LTO)
+      - name: Archive app (Release)
         run: |
-          xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Release-LTO \
+          xcodebuild -quiet -project Gewu.xcodeproj -scheme Gewu -configuration Release \
             -destination 'generic/platform=macOS' -derivedDataPath build/xcode \
             -archivePath build/Gewu.xcarchive CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY" archive

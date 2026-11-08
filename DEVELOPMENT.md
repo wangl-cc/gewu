@@ -54,6 +54,8 @@ These commands use `build/xcode` for DerivedData so the launch path is predictab
 
 The App's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings and supplies `libgewu.a` for linking. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
 
+Both App configurations use Rust's `release` profile with optimization level 3, fat LTO, one codegen unit and debug information stripped. Debug keeps Swift unoptimized; Release also optimizes Swift and is used for profiling and archives. Cargo reuses unchanged Rust artifacts during frontend development. Debug Rust directly with Cargo tests; for cross-language debugging, append `RUST_PROFILE=dev` to the `xcodebuild` command.
+
 For UI source navigation and icon assets, see the [App README](app/README.md).
 
 ### Test and format the UI

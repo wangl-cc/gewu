@@ -10,20 +10,13 @@ options:
 configs:
   Debug: debug
   Release: release
-  Release-LTO: release
 settings:
   base:
     MACOSX_DEPLOYMENT_TARGET: '15.0'
     ARCHS: $(NATIVE_ARCH_ACTUAL)
     ONLY_ACTIVE_ARCH: YES
     SWIFT_VERSION: '5.0'
-  configs:
-    Debug:
-      RUST_PROFILE: dev
-    Release:
-      RUST_PROFILE: release
-    Release-LTO:
-      RUST_PROFILE: release-lto
+    RUST_PROFILE: release
 targets:
   Gewu:
     type: application
@@ -117,6 +110,6 @@ schemes:
       targets:
         - GewuTests
     profile:
-      config: Release-LTO
+      config: Release
     archive:
-      config: Release-LTO
+      config: Release
