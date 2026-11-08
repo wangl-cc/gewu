@@ -125,11 +125,9 @@ private struct LoadedDocumentView: View {
                     findNavigation
                 }
             }
+            searchItem
             if #available(macOS 26.0, *) {
-                searchItem.sharedBackgroundVisibility(.hidden)
                 ToolbarSpacer(.fixed, placement: .primaryAction)
-            } else {
-                searchItem
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
