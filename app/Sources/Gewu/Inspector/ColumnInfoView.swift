@@ -6,9 +6,9 @@ struct InspectorSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             InspectorPageControl(selection: $model.inspectorPage)
+                .frame(width: 180)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16).padding(.vertical, 10)
-            Divider()
             if model.inspectorPage == .chart {
                 ScatterPanel(model: model)
             } else if let column = model.inspectedColumn, model.info.columns.indices.contains(column) {
@@ -21,8 +21,7 @@ struct InspectorSidebar: View {
     }
 }
 
-/// SwiftUI's macOS segmented Picker keeps intrinsic segment widths. AppKit's
-/// fill distribution makes these two native tabs share the available sidebar width.
+/// Two equal native segments, kept compact independently of sidebar width.
 private struct InspectorPageControl: NSViewRepresentable {
     @Binding var selection: InspectorPage
 
@@ -101,64 +100,52 @@ struct ColumnAnalysisView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Menu {
-                        Picker("Analyzed column", selection: $model.inspectedColumn) {
-                            ForEach(model.info.columns.indices, id: \.self) { index in
-                                Text(model.info.columns[index].name).tag(Optional(index))
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(model.info.columns[column].name).font(.headline).lineLimit(1)
-                            Spacer(minLength: 8)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.menuStyle(.borderlessButton).accessibilityLabel("Analyzed column")
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(model.info.columns[column].displayType)
-                            .help(model.info.columns[column].technicalType)
-                        Spacer(minLength: 4)
-                        if analysis.matches(view: model.view, column: UInt32(column)), let values = analysis.values {
-                            Text("≈ \(formatCount(values.distinctCount)) distinct").monospacedDigit()
-                                .help("Estimated distinct values in the current results")
-                        }
-                    }.font(.caption).foregroundStyle(.secondary)
-                    if analysis.matches(view: model.view, column: UInt32(column)) {
-                        HStack(alignment: .top, spacing: 16) {
-                            summary("Rows", formatCount(analysis.rowCount))
-                            if let nullCount = analysis.nullCount {
-                                summary("Missing", countWithPercent(nullCount, total: analysis.rowCount))
-                            }
-                        }
-                    }
-                }.padding(.bottom, 4)
-                if analysis.matches(view: model.view, column: UInt32(column)) {
-                    if let error = analysis.error { failure(error) }
-                    if let error = analysis.errors[.overview] { failure(error) }
-                    ForEach(analysis.sections.filter { $0 != .overview }, id: \.self) { section in
-                        DisclosureGroup(isExpanded: expansion(section)) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                if section == .distribution || section == .lengths {
-                                    chartOptions(section)
-                                }
-                                if analysis.loading == section { ProgressView().controlSize(.small) }
-                                if let error = analysis.errors[section] { failure(error) }
-                                content(section)
-                            }
-                            .padding(.top, 6).frame(maxWidth: .infinity, alignment: .leading)
-                        } label: {
-                            Text(section.title).font(.subheadline.weight(.semibold))
-                        }
-                        .padding(.vertical, 4)
-                    }
-                } else {
-                    ProgressView().controlSize(.small)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                InspectorColumnPicker(
+                    label: "Analyzed column",
+                    columns: model.info.columns.indices.map { ($0, model.info.columns[$0].name) },
+                    selection: $model.inspectedColumn
+                )
+                Text(model.info.columns[column].displayType)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .help(model.info.columns[column].technicalType)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if analysis.matches(view: model.view, column: UInt32(column)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            detail("Rows", formatCount(analysis.rowCount))
+                            if let count = analysis.nullCount {
+                                detail("Missing", countWithPercent(count, total: analysis.rowCount))
+                            }
+                        }
+                        if let error = analysis.error { failure(error) }
+                        if let error = analysis.errors[.overview] { failure(error) }
+                        ForEach(analysis.sections.filter { $0 != .overview }, id: \.self) { section in
+                            DisclosureGroup(isExpanded: expansion(section)) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    if section == .distribution || section == .lengths {
+                                        chartOptions(section)
+                                    }
+                                    if analysis.loading == section { ProgressView().controlSize(.small) }
+                                    if let error = analysis.errors[section] { failure(error) }
+                                    content(section)
+                                }
+                                .padding(.top, 6).frame(maxWidth: .infinity, alignment: .leading)
+                            } label: {
+                                Text(section.title).font(.subheadline.weight(.semibold))
+                            }
+                        }
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .task(id: request) {
             await analysis.load(
@@ -167,13 +154,6 @@ struct ColumnAnalysisView: View {
                 scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
-    }
-
-    private func summary(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).foregroundStyle(.secondary)
-            Text(value).monospacedDigit().textSelection(.enabled)
-        }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func expansion(_ section: InspectorSection) -> Binding<Bool> {
@@ -220,6 +200,8 @@ struct ColumnAnalysisView: View {
             }
         case .values:
             if let summary = analysis.values {
+                detail("Distinct", "≈ " + formatCount(summary.distinctCount))
+                    .help("Estimated distinct values in the current results")
                 if !summary.values.isEmpty {
                     Text("Common values · estimated")
                         .font(.caption).foregroundStyle(.secondary)
@@ -344,16 +326,16 @@ struct StatisticRow: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(title).foregroundStyle(.secondary).fixedSize()
-                Spacer(minLength: 0)
+                Text(title).foregroundStyle(.secondary).fixedSize().frame(minWidth: 70, alignment: .leading)
                 Text(value).fixedSize()
+                Spacer(minLength: 0)
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).foregroundStyle(.secondary)
                 Text(value).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.caption).textSelection(.enabled).help(help ?? value)
+        .font(.callout).monospacedDigit().textSelection(.enabled).help(help ?? value)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
