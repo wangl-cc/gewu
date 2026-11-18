@@ -129,32 +129,19 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         loadViewIfNeeded()
         closePopover()
         stopFitting()
-        let oldCount = displayedView?.rowCount()
+        let rowCountChanged = displayedView?.rowCount() != snapshot.view.rowCount()
+        let input = model.tablePresentation.input
+        let columnsChanged = displayedInput?.spec.columns.map(\.column) != input.spec.columns.map(\.column)
         reloading = true
         rows.install(snapshot)
-        updateColumns(model.tablePresentation.input)
+        updateColumns(input)
         table.deselectAll(nil)
-        if oldCount != snapshot.view.rowCount() { table.noteNumberOfRowsChanged() }
-        table.layoutSubtreeIfNeeded()
-
-        // Visible cells receive the prepared values directly. Retained row views
-        // outside this viewport must also lose their old-order content.
-        let visible = table.rows(in: table.visibleRect)
-        let visibleColumns = Set(
-            table.columnIndexes(in: table.visibleRect).compactMap { columnIndex(table.tableColumns[$0]) })
-        let preparedColumns = Set(snapshot.viewport.columns)
-        table.enumerateAvailableRowViews { rowView, row in
-            for case let cell as MatchCellView in rowView.subviews {
-                guard let id = cell.identifier, let column = Int(id.rawValue.dropFirst()) else { continue }
-                if NSLocationInRange(row, visible), visibleColumns.contains(column),
-                    snapshot.viewport.rows.contains(row), preparedColumns.contains(UInt32(column))
-                {
-                    continue
-                }
-                self.bind(cell, column: column, row: row)
-            }
-        }
+        if rowCountChanged { table.noteNumberOfRowsChanged() }
+        if rowCountChanged || columnsChanged { table.layoutSubtreeIfNeeded() }
+        // A retained offscreen cell binds to this View when it next enters the viewport.
         for page in snapshot.pages { display(page.block, columns: page.columns) }
+        viewportRows = NSRange(snapshot.viewport.rows)
+        viewportColumns = snapshot.viewport.columns
         gutter.needsDisplay = true
         reloading = false
         updateViewport()
@@ -448,7 +435,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView else {
                     continue
                 }
-                if cell.isLoading, let block = rows.block(for: row, column: UInt32(column)) {
+                if cell.boundView !== displayedView {
+                    bind(cell, column: column, row: row)
+                } else if cell.isLoading, let block = rows.block(for: row, column: UInt32(column)) {
                     render(cell, column: column, row: row, block: block)
                 } else {
                     let kind = model.kinds[column]
@@ -498,6 +487,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func bind(_ cell: MatchCellView, column: Int, row: Int) {
+        cell.boundView = displayedView
         if let block = rows.block(for: row, column: UInt32(column)) {
             render(cell, column: column, row: row, block: block)
         } else {
@@ -515,6 +505,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let index = (row - Int(block.start)) * Int(block.nCols) + offset
         let hit = model.find.isMatch(row: row, column: column)
         let current = model.find.currentMatch
+        cell.boundView = displayedView
         cell.isLoading = false
         let text = block.cells[index]
         cell.configure(

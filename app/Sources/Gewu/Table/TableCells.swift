@@ -46,6 +46,7 @@ final class StripedRowView: NSTableRowView {
 /// Data cell that can show a search match: a find-highlight behind the
 /// whole value (numbers, dates) or behind matched text (via attributes).
 final class MatchCellView: NSTableCellView {
+    weak var boundView: GewuView?
     var isLoading = false
     private(set) var wholeCellMatch = false
     private(set) var currentMatch = false
