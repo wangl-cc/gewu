@@ -109,6 +109,7 @@ struct ScatterPanel: View {
                                 )
                                 .frame(height: 220)
                                 .accessibilityLabel("Scatter plot, \(result.points.count) points")
+                                .accessibilityIdentifier("scatterPlot")
                             }
                             VStack(alignment: .leading, spacing: 4) {
                                 if !result.points.isEmpty {
@@ -142,7 +143,10 @@ struct ScatterPanel: View {
                                     if let point = hovered {
                                         StatisticRow(
                                             title: "Source row",
-                                            value: formatRowNumber(point.sourceRow, base: rowNumberBase))
+                                            value: formatRowNumber(point.sourceRow, base: rowNumberBase)
+                                        )
+                                        .accessibilityElement(children: .contain)
+                                        .accessibilityIdentifier("scatterHoveredRow")
                                         StatisticRow(title: "X", value: point.xLabel)
                                         StatisticRow(title: "Y", value: point.yLabel)
                                     } else {

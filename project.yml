@@ -10,6 +10,7 @@ options:
 configs:
   Debug: debug
   Release: release
+  Performance: release
 settings:
   base:
     MACOSX_DEPLOYMENT_TARGET: '15.0'
@@ -54,6 +55,9 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(DERIVED_FILE_DIR)/gewuFFI.modulemap"
         OTHER_LDFLAGS: ['$(inherited)', '-liconv']
+      configs:
+        Performance:
+          PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.performance
     preBuildScripts:
       - script: exec /bin/bash "$SRCROOT/scripts/build-rust.sh"
         name: Build Rust and generate UniFFI bindings
@@ -79,6 +83,8 @@ targets:
         buildPhase: sources
       - path: app/Tests
         includes: ['*.swift']
+      - path: app/FrameTests
+        includes: ['*.swift']
       - path: app/Tests/Fixtures
         type: folder
         buildPhase: resources
@@ -98,7 +104,41 @@ targets:
         OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(GEWU_DERIVED_SOURCES)/gewuFFI.modulemap"
         OTHER_LDFLAGS: ['$(inherited)', '-liconv']
         CODE_SIGN_IDENTITY: '-'
+  GewuUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [app/UITests]
+    postBuildScripts:
+      - name: Generate interaction fixture
+        script: |
+          set -eu
+          mkdir -p "$(dirname "$SCRIPT_OUTPUT_FILE_0")"
+          awk 'BEGIN { print "cohort,x,y"; for (i=0; i<8192; i++) printf "%s,%d,%d\n", i%16 ? "Other" : "Keep", i, i*239%8191 }' > "$SCRIPT_OUTPUT_FILE_0"
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Interaction performance.csv
+    dependencies:
+      - target: Gewu
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Gewu
+        CODE_SIGN_IDENTITY: '-'
 schemes:
+  GewuPerformance:
+    build:
+      targets:
+        Gewu: all
+    test:
+      config: Performance
+      debugEnabled: false
+      targets:
+        - name: GewuTests
+          selectedTests: [FilterFrameTests]
+          parallelizable: false
+        - name: GewuUITests
+          parallelizable: false
+
   Gewu:
     build:
       targets:
@@ -108,7 +148,8 @@ schemes:
     test:
       config: Debug
       targets:
-        - GewuTests
+        - name: GewuTests
+          skippedTests: [FilterFrameTests]
     profile:
       config: Release
     archive:

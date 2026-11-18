@@ -54,7 +54,7 @@ These commands use `build/xcode` for DerivedData so the launch path is predictab
 
 The App's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings and supplies `libgewu.a` for linking. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
 
-Both App configurations use Rust's `release` profile with optimization level 3, fat LTO, one codegen unit and debug information stripped. Debug keeps Swift unoptimized; Release also optimizes Swift and is used for profiling and archives. Cargo reuses unchanged Rust artifacts during frontend development. Debug Rust directly with Cargo tests; for cross-language debugging, append `RUST_PROFILE=dev` to the `xcodebuild` command.
+All App configurations use Rust's `release` profile with optimization level 3, fat LTO, one codegen unit and debug information stripped. Debug keeps Swift unoptimized. Release and Performance optimize Swift. Cargo reuses unchanged Rust artifacts during frontend development. Debug Rust directly with Cargo tests; for cross-language debugging, append `RUST_PROFILE=dev` to the `xcodebuild` command.
 
 For UI source navigation and icon assets, see the [App README](app/README.md).
 
@@ -65,9 +65,24 @@ After generating the project, run:
 ```sh
 xcodebuild -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
   -destination 'platform=macOS' -derivedDataPath build/xcode test
-xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
+xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests
 ```
 
-Apply formatting with `xcrun swift-format format --configuration .swift-format --in-place --recursive app/Sources/Gewu app/Tests`.
+Apply formatting with `xcrun swift-format format --configuration .swift-format --in-place --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests`.
 
-The `GewuTests` target uses Swift Testing and exercises App logic through the generated Core bindings in a hostless bundle. It does not launch the app or verify native dialogs and visual layout; check those interactions in the running app when relevant. A successful build does not establish runtime compatibility with the minimum supported macOS version.
+The default `Gewu` scheme exercises App logic through the generated Core bindings in a hostless bundle. Check native dialogs and layout in the running app when relevant.
+
+### Measure table and chart interactions
+
+Run `GewuPerformance` on an unlocked Mac. Leave the pointer and keyboard available to XCTest. The scheme launches an optimized copy of Gewu with a separate bundle identifier. Its UI test bundle includes a generated 8,192-row CSV. Use Xcode's default DerivedData location so the test runner and app can read their resources, and a fresh result bundle path for each run.
+
+```sh
+xcodebuild -project Gewu.xcodeproj -scheme GewuPerformance \
+  -destination 'platform=macOS' -parallel-testing-enabled NO \
+  -resultBundlePath build/interactions.xcresult test
+xcrun xcresulttool get test-results metrics --path build/interactions.xcresult
+```
+
+The scatter test moves the pointer across a 2,048-point plot, verifies the source rows at both ends and records Gewu's CPU time and elapsed time. Elapsed time includes XCTest event delivery and idle waits. The table test submits the same filter change as the Apply button and records the time to the first captured frame showing the new rows, using the compositor's display timestamp. Its result attachment lists each apply and clear separately. The test fails if it captures a blank or partially updated table, or a return to the old rows after the new rows appear.
+
+Use repeated runs on the same Mac, display and OS to establish a reference. To enable a local threshold, select the measurement in Xcode and choose **Set Baseline**. [Apple's guide to performance tests](https://developer.apple.com/documentation/xcode/writing-and-running-performance-tests)

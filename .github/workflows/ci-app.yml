@@ -44,7 +44,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Lint Swift sources
-        run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests
+        run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests
 
   test:
     name: Build and test (arm64)
