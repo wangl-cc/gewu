@@ -50,7 +50,7 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
             let array = array.as_primitive::<$ty>();
             let values = array.values();
             let has_nulls = array.null_count() > 0;
-            Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+            Predicate::new(Box::new(move |rows, incoming, output| {
                 match (rows, incoming) {
                     (RowSelection::Range(range), None) => {
                         let slice = &values[range.clone()];
@@ -97,7 +97,6 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
                         }
                     }
                 }
-                Ok(())
             }))
         }};
     }
@@ -113,20 +112,17 @@ pub(super) fn nan(array: &ArrayRef) -> Predicate<'_> {
     macro_rules! native {
         ($ty:ty) => {{
             let a = array.as_primitive::<$ty>();
-            Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
-                match incoming {
-                    Some(mask) => {
-                        for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
-                            output[i] = m && a.is_valid(row) && a.value(row).is_nan();
-                        }
-                    }
-                    None => {
-                        for (i, row) in rows.iter().enumerate() {
-                            output[i] = a.is_valid(row) && a.value(row).is_nan();
-                        }
+            Predicate::new(Box::new(move |rows, incoming, output| match incoming {
+                Some(mask) => {
+                    for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
+                        output[i] = m && a.is_valid(row) && a.value(row).is_nan();
                     }
                 }
-                Ok(())
+                None => {
+                    for (i, row) in rows.iter().enumerate() {
+                        output[i] = a.is_valid(row) && a.value(row).is_nan();
+                    }
+                }
             }))
         }};
     }
@@ -199,7 +195,6 @@ mod tests {
     use arrow::array::{ArrayRef, Float64Array};
 
     use super::{equals, search};
-    use crate::Cancellation;
 
     #[test]
     fn equality_parses_float32_without_double_rounding() {
@@ -212,20 +207,14 @@ mod tests {
         assert_eq!(text.parse::<f32>().unwrap(), 1.0_f32.next_up());
         let array: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 1.0_f32.next_up()]));
         let mut matched = [false; 2];
-        equals(&array, text)
-            .unwrap()
-            .evaluate(0..2, &mut matched, &Cancellation::default())
-            .unwrap();
+        equals(&array, text).unwrap().evaluate(0..2, &mut matched);
         assert_eq!(matched, [false, true]);
     }
 
     fn matches(query: &str, value: f64) -> bool {
         let array: ArrayRef = Arc::new(Float64Array::from(vec![value]));
         let mut matched = [false];
-        search(&array, query)
-            .unwrap()
-            .evaluate(0..1, &mut matched, &Cancellation::default())
-            .unwrap();
+        search(&array, query).unwrap().evaluate(0..1, &mut matched);
         matched[0]
     }
 

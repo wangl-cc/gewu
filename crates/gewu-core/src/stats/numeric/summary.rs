@@ -6,28 +6,19 @@ use arrow::{
 };
 
 use super::{IntegerColumn, RealColumn, RealType};
-use crate::{stats::Result, Cancellation};
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
     T::Native: Into<i128>,
 {
-    pub(super) fn summarize(
-        self,
-        rows: impl Iterator<Item = usize>,
-        context: &Cancellation,
-    ) -> Result<NumericSummary> {
-        summarize(self.0, rows, |v| v.into() as f64, context)
+    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>) -> NumericSummary {
+        summarize(self.0, rows, |v| v.into() as f64)
     }
 }
 
 impl<'a, T: RealType> RealColumn<'a, T> {
-    pub(super) fn summarize(
-        self,
-        rows: impl Iterator<Item = usize>,
-        context: &Cancellation,
-    ) -> Result<NumericSummary> {
-        summarize(self.array, rows, |v| T::as_float(v, self.scale), context)
+    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>) -> NumericSummary {
+        summarize(self.array, rows, |v| T::as_float(v, self.scale))
     }
 }
 
@@ -46,13 +37,11 @@ fn summarize<T, F>(
     array: &PrimitiveArray<T>,
     rows: impl Iterator<Item = usize>,
     as_float: F,
-    context: &Cancellation,
-) -> Result<NumericSummary>
+) -> NumericSummary
 where
     T: ArrowPrimitiveType,
     F: Fn(T::Native) -> f64,
 {
-    context.check()?;
     let mut summary = NumericSummary::default();
     let mut infinite_count = 0;
     let (mut n, mut mean, mut m2) = (0u64, 0.0, 0.0);
@@ -60,8 +49,7 @@ where
     // (value, row) of the smallest and largest so far.
     let mut min: Option<(T::Native, usize)> = None;
     let mut max: Option<(T::Native, usize)> = None;
-    for (i, row) in rows.enumerate() {
-        context.check_at(i)?;
+    for row in rows {
         if array.is_null(row) {
             continue;
         }
@@ -106,13 +94,12 @@ where
             0.0
         });
     }
-    context.check()?;
-    Ok(NumericSummary {
+    NumericSummary {
         min_row: min.map(|(_, r)| r),
         max_row: max.map(|(_, r)| r),
         infinite_count,
         ..summary
-    })
+    }
 }
 
 #[cfg(test)]
@@ -123,9 +110,7 @@ mod tests {
 
     fn summary(values: &[f64]) -> NumericSummary {
         let array = Float64Array::from(values.to_vec());
-        RealColumn::new(&array)
-            .summarize(0..values.len(), &Cancellation::default())
-            .unwrap()
+        RealColumn::new(&array).summarize(0..values.len())
     }
 
     #[test]

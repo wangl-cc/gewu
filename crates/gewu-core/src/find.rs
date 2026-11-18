@@ -12,7 +12,7 @@ use arrow::array::ArrayRef;
 pub use error::FindError;
 use regex::RegexBuilder;
 
-use crate::{column::predicate::compile_find, execution::predicate::Predicate, Cancellation};
+use crate::{column::predicate::compile_find, execution::predicate::Predicate};
 
 type Result<T> = std::result::Result<T, FindError>;
 
@@ -44,14 +44,12 @@ pub struct FindHighlight {
 /// A literal matcher over a captured view and ordered column scope.
 /// Typed column predicates are compiled and used by each page or highlight request.
 ///
-/// The snapshot shares Arrow buffers and row IDs with its document. Cancellation
-/// is terminal and independent of table queries and every other Find session.
+/// The snapshot shares Arrow buffers and row IDs with its document.
 pub struct Find {
     columns: Vec<(u32, ArrayRef)>,
     rows: Arc<[u32]>,
     query: String,
     matcher: regex::Regex,
-    token: Cancellation,
 }
 
 #[derive(Default)]
@@ -75,52 +73,28 @@ impl Find {
             .case_insensitive(true)
             .build()
             .map_err(|source| crate::FindError::QueryCompilationFailed { source })?;
-        let token = Cancellation::default();
         Ok(Self {
             columns,
             rows,
             query,
             matcher,
-            token,
         })
-    }
-
-    /// Permanently cancel this session without affecting any other operation.
-    pub fn cancel(&self) {
-        self.token.cancel();
     }
 
     /// Return at most `limit` matches strictly after `after`, in display order.
     /// None starts before the first cell; an empty page marks the end.
-    pub fn next(
-        &self,
-        after: Option<&CellMatch>,
-        limit: u32,
-        operation: &Cancellation,
-    ) -> Result<Vec<CellMatch>> {
-        self.scan(after, limit, Direction::Forward, operation)
+    pub fn next(&self, after: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {
+        self.scan(after, limit, Direction::Forward)
     }
 
     /// Return at most `limit` matches strictly before `before`, in display order.
     /// None starts after the last cell; use the first match as the next cursor.
-    pub fn previous(
-        &self,
-        before: Option<&CellMatch>,
-        limit: u32,
-        operation: &Cancellation,
-    ) -> Result<Vec<CellMatch>> {
-        self.scan(before, limit, Direction::Backward, operation)
+    pub fn previous(&self, before: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {
+        self.scan(before, limit, Direction::Backward)
     }
 
-    /// Evaluate a visible block in captured column order with per-request cancellation.
-    pub fn highlight(
-        &self,
-        start: u64,
-        count: u32,
-        operation: &Cancellation,
-    ) -> Result<FindHighlight> {
-        let token = self.token.combined_with(operation);
-        token.check()?;
+    /// Evaluate a visible block in captured column order.
+    pub fn highlight(&self, start: u64, count: u32) -> Result<FindHighlight> {
         if !(1..=MAX_FIND_HIGHLIGHT_ROWS).contains(&count) {
             return Err(crate::FindError::InvalidHighlightRows {
                 value: count,
@@ -133,12 +107,7 @@ impl Find {
         let start = start.min(len);
         let end = start.saturating_add(count as u64).min(len);
         let mut scratch = FindScratch::default();
-        self.evaluate_batch(
-            &predicates,
-            start as usize..end as usize,
-            &token,
-            &mut scratch,
-        )?;
+        self.evaluate_batch(&predicates, start as usize..end as usize, &mut scratch);
         Ok(FindHighlight {
             start,
             n_rows: (end - start) as u32,
@@ -152,33 +121,12 @@ impl Find {
         cursor: Option<&CellMatch>,
         limit: u32,
         direction: Direction,
-        operation: &Cancellation,
     ) -> Result<Vec<CellMatch>> {
-        self.token.check()?;
-        operation.check()?;
         check_page_limit(limit)?;
         if self.rows.is_empty() || self.columns.is_empty() {
             return Ok(Vec::new());
         }
         let predicates = self.predicates()?;
-        self.scan_compiled(cursor, limit, direction, operation, &predicates)
-    }
-
-    /// Production execution for compiled predicates. Keeping cancellation
-    /// composition here ensures custom and ordinary predicates receive both scopes.
-    fn scan_compiled(
-        &self,
-        cursor: Option<&CellMatch>,
-        limit: u32,
-        direction: Direction,
-        operation: &Cancellation,
-        predicates: &[Option<Predicate<'_>>],
-    ) -> Result<Vec<CellMatch>> {
-        let token = self.token.combined_with(operation);
-        token.check()?;
-        if self.rows.is_empty() || self.columns.is_empty() {
-            return Ok(Vec::new());
-        }
         let Some(mut position) = self.start_position(cursor, direction)? else {
             return Ok(Vec::new());
         };
@@ -187,13 +135,12 @@ impl Find {
         let mut found = Vec::with_capacity(limit as usize);
         let mut scratch = FindScratch::default();
         while position < n_cells {
-            token.check()?;
             let row = position / n_columns;
             let batch = match direction {
                 Direction::Forward => row..(row + FIND_BATCH_ROWS).min(self.rows.len()),
                 Direction::Backward => (row + 1).saturating_sub(FIND_BATCH_ROWS)..row + 1,
             };
-            self.evaluate_batch(predicates, batch.clone(), &token, &mut scratch)?;
+            self.evaluate_batch(&predicates, batch.clone(), &mut scratch);
             let batch_start = batch.start * n_columns;
             let batch_end = batch.end * n_columns;
             while position >= batch_start && position < batch_end {
@@ -203,7 +150,6 @@ impl Find {
                         column: self.columns[position % n_columns].0,
                     });
                     if found.len() == limit as usize {
-                        token.check()?;
                         if direction == Direction::Backward {
                             found.reverse();
                         }
@@ -217,7 +163,6 @@ impl Find {
                 };
             }
         }
-        token.check()?;
         if direction == Direction::Backward {
             found.reverse();
         }
@@ -239,10 +184,8 @@ impl Find {
         &self,
         predicates: &[Option<Predicate<'_>>],
         display_rows: Range<usize>,
-        token: &Cancellation,
         scratch: &mut FindScratch,
-    ) -> Result<()> {
-        token.check()?;
+    ) {
         scratch.source_rows.clear();
         scratch
             .source_rows
@@ -254,9 +197,8 @@ impl Find {
         scratch.column_hits.clear();
         scratch.column_hits.resize(n_rows, false);
         for (column, predicate) in predicates.iter().enumerate() {
-            token.check()?;
             if let Some(predicate) = predicate {
-                predicate.evaluate(&scratch.source_rows, &mut scratch.column_hits, token)?;
+                predicate.evaluate(&scratch.source_rows, &mut scratch.column_hits);
             } else {
                 scratch.column_hits.fill(false);
             }
@@ -264,7 +206,6 @@ impl Find {
                 scratch.matched[row * n_columns + column] = hit;
             }
         }
-        Ok(token.check()?)
     }
 
     fn start_position(
@@ -318,60 +259,5 @@ fn check_page_limit(limit: u32) -> Result<()> {
             min: 1,
             max: MAX_FIND_PAGE_SIZE,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use arrow::array::StringArray;
-
-    use super::*;
-
-    #[test]
-    fn session_cancellation_reaches_a_running_inner_predicate() {
-        running_inner_scan_is_cancelled(true);
-    }
-
-    #[test]
-    fn operation_cancellation_reaches_a_running_inner_predicate() {
-        running_inner_scan_is_cancelled(false);
-    }
-
-    fn running_inner_scan_is_cancelled(session: bool) {
-        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-        let array: ArrayRef = Arc::new(StringArray::from(vec!["value"]));
-        let find = Find::new(vec![(0, array)], Arc::from([0]), "value".into()).unwrap();
-        let operation = Cancellation::default();
-        let (started, start) = std::sync::mpsc::channel();
-        let (resume, resumed) = std::sync::mpsc::channel();
-        let resumed = std::sync::Mutex::new(resumed);
-        let observed = Arc::new(std::sync::Mutex::new(false));
-        let inner_observed = observed.clone();
-        let predicates = vec![Some(Predicate::new(Box::new(move |_, _, _, cancel| {
-            started.send(()).unwrap();
-            resumed.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
-            let result = cancel.check();
-            *inner_observed.lock().unwrap() = matches!(result, Err(crate::CancellationError));
-            result
-        })))];
-        std::thread::scope(|scope| {
-            let worker = scope
-                .spawn(|| find.scan_compiled(None, 1, Direction::Forward, &operation, &predicates));
-            start.recv_timeout(TIMEOUT).unwrap();
-            if session {
-                find.cancel();
-            } else {
-                operation.cancel();
-            }
-            resume.send(()).unwrap();
-            assert!(matches!(
-                worker.join().unwrap(),
-                Err(FindError::Cancelled(_))
-            ));
-        });
-        assert!(
-            *observed.lock().unwrap(),
-            "inner predicate must observe cancellation"
-        );
     }
 }

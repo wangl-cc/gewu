@@ -349,7 +349,7 @@ struct QuerySpecTests {
         #expect(try second.view.rows(start: 0, count: 3, columns: [0]).sourceRows == [1])
         first.refresh(debounce: true)
         first.stop()
-        #expect(try second.view.countNulls(column: 0, cancellation: Cancellation()) == 0)
+        #expect(try second.view.countNulls(column: 0) == 0)
         #expect(original.rowCount() == 3)
         #expect(first.appliedSpec != second.appliedSpec)
     }

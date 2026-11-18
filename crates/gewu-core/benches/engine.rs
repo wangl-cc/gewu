@@ -10,7 +10,7 @@
 use std::{hint::black_box, path::PathBuf, time::Duration};
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{Cancellation, Filter, QuerySpec};
+use gewu_core::{Filter, QuerySpec};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -58,12 +58,8 @@ fn apply_view(c: &mut Criterion) {
     );
     let (amount, uuid, country) = (col(&doc, "amount"), col(&doc, "uuid"), col(&doc, "country"));
     // Build low-cardinality dictionaries once, so value filters measure filtering only.
-    doc.view()
-        .filter_choices(label, &Cancellation::default())
-        .unwrap();
-    doc.view()
-        .filter_choices(country, &Cancellation::default())
-        .unwrap();
+    doc.view().filter_choices(label).unwrap();
+    doc.view().filter_choices(country).unwrap();
 
     let cases: Vec<(&str, QuerySpec)> = vec![
         ("no_filter", QuerySpec::default()),
@@ -141,12 +137,7 @@ fn apply_view(c: &mut Criterion) {
     let mut g = c.benchmark_group("apply_view");
     g.sample_size(20).measurement_time(Duration::from_secs(5));
     for (name, spec) in &cases {
-        g.bench_function(*name, |b| {
-            b.iter(|| {
-                doc.query(black_box(spec), &gewu_core::Cancellation::default())
-                    .unwrap()
-            })
-        });
+        g.bench_function(*name, |b| b.iter(|| doc.query(black_box(spec)).unwrap()));
     }
     g.finish();
 }
@@ -158,19 +149,14 @@ fn rows(c: &mut Criterion) {
     let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
     let mut g = c.benchmark_group("rows");
 
-    let plain = doc
-        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
-        .unwrap();
+    let plain = doc.query(&QuerySpec::default()).unwrap();
     g.bench_function("block_256_all_columns", |b| {
         b.iter(|| plain.rows(1_000_000, 256, &columns).unwrap())
     });
 
     let find = plain.find("2024-03", &columns).unwrap();
     g.bench_function("find_highlight_256_all_columns", |b| {
-        b.iter(|| {
-            find.highlight(1_000, 256, &Cancellation::default())
-                .unwrap()
-        })
+        b.iter(|| find.highlight(1_000, 256).unwrap())
     });
     g.finish();
 }
@@ -209,24 +195,18 @@ fn facets(c: &mut Criterion) {
                         .map(std::sync::Arc::new)
                         .unwrap()
                 },
-                |doc| {
-                    doc.view()
-                        .filter_choices(column, &Cancellation::default())
-                        .unwrap()
-                },
+                |doc| doc.view().filter_choices(column).unwrap(),
                 BatchSize::PerIteration,
             )
         });
     }
     // Hot: index cached; counts only rows passing the other columns' filters.
-    doc.view()
-        .filter_choices(city, &Cancellation::default())
-        .unwrap();
+    doc.view().filter_choices(city).unwrap();
     g.bench_function("choices_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.query(&other_filter, &gewu_core::Cancellation::default())
+            doc.query(&other_filter)
                 .unwrap()
-                .filter_choices(city, &Cancellation::default())
+                .filter_choices(city)
                 .unwrap()
         })
     });
@@ -234,12 +214,7 @@ fn facets(c: &mut Criterion) {
     g.bench_function("histogram_price", |b| {
         b.iter(|| {
             doc.view()
-                .filter_distribution(
-                    price,
-                    60,
-                    gewu_core::AxisScale::Linear,
-                    &Cancellation::default(),
-                )
+                .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
                 .map(|result| result.expect("histogram domain").histogram)
                 .unwrap()
         })
@@ -247,25 +222,18 @@ fn facets(c: &mut Criterion) {
     let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {
-            doc.query(&label_filter, &gewu_core::Cancellation::default())
+            doc.query(&label_filter)
                 .unwrap()
-                .filter_distribution(
-                    price,
-                    60,
-                    gewu_core::AxisScale::Linear,
-                    &Cancellation::default(),
-                )
+                .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
                 .map(|result| result.expect("histogram domain").histogram)
                 .unwrap()
         })
     });
 
-    doc.query(&QuerySpec::default(), &gewu_core::Cancellation::default())
-        .unwrap();
+    doc.query(&QuerySpec::default()).unwrap();
 
-    let cancellation = Cancellation::default();
     g.bench_function("statistics_price", |b| {
-        b.iter(|| doc.view().analyze_statistics(price, &cancellation).unwrap())
+        b.iter(|| doc.view().analyze_statistics(price).unwrap())
     });
     g.finish();
 }
@@ -278,9 +246,8 @@ fn inspector_values(c: &mut Criterion) {
     group.sample_size(10);
     for name in ["label", "id", "uuid"] {
         let column = col(&doc, name);
-        let cancellation = Cancellation::default();
         group.bench_function(name, |b| {
-            b.iter(|| doc.view().analyze_values(column, &cancellation).unwrap())
+            b.iter(|| doc.view().analyze_values(column).unwrap())
         });
     }
     group.finish();

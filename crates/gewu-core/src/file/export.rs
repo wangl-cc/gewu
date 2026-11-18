@@ -12,7 +12,7 @@ use std::{
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use super::{ExportData, WriteProgress};
-use crate::{Cancellation, ExportOptions, FileType, Result};
+use crate::{ExportOptions, FileType, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -31,7 +31,7 @@ pub struct Export {
     rows: Arc<[u32]>,
     format: FileType,
     started: AtomicBool,
-    cancellation: Cancellation,
+    cancelled: AtomicBool,
     rows_written: AtomicU64,
     /// Serializes cancellation with the final rename. Cancellation after that
     /// commit is a no-op; before it, the destination is left untouched.
@@ -53,7 +53,7 @@ impl Export {
             rows,
             format,
             started: AtomicBool::new(false),
-            cancellation: Cancellation::default(),
+            cancelled: AtomicBool::new(false),
             rows_written: AtomicU64::new(0),
             committed: Mutex::new(false),
         }
@@ -69,12 +69,16 @@ impl Export {
     pub fn cancel(&self) {
         let committed = self.committed.lock().unwrap();
         if !*committed {
-            self.cancellation.cancel();
+            self.cancelled.store(true, Ordering::Relaxed);
         }
     }
 
     fn check_cancelled(&self) -> Result<()> {
-        Ok(self.cancellation.check()?)
+        if self.cancelled.load(Ordering::Relaxed) {
+            Err(crate::ExportError::Cancelled.into())
+        } else {
+            Ok(())
+        }
     }
 
     /// Write on a background thread. Headers are included for CSV/TSV, nulls
@@ -146,7 +150,7 @@ impl Export {
 
     fn write_progress(&self) -> WriteProgress<'_> {
         WriteProgress {
-            cancellation: &self.cancellation,
+            cancelled: &self.cancelled,
             rows_written: &self.rows_written,
         }
     }

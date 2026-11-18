@@ -33,9 +33,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
             Filter::range(Some("65530.5".into()), Some("131080".into()), false),
         )
         .with_filter(2, Filter::contains("keep".into(), false, false));
-    let view = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let view = doc.query(&spec).unwrap();
     let rows = view.rows(0, len as u32, &[0, 1, 2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
@@ -48,7 +46,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         Filter::range(Some("20".into()), Some("10".into()), false),
     );
     assert!(matches!(
-        doc.query(&invalid, &gewu_core::Cancellation::default()),
+        doc.query(&invalid),
         Err(Error::Filter(gewu_core::FilterError::ReversedRange { .. }))
     ));
     assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
@@ -85,9 +83,7 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
             Filter::range(Some("100".into()), Some("200".into()), false),
         );
 
-    let view = dataset
-        .query(&expensive_first, &gewu_core::Cancellation::default())
-        .unwrap();
+    let view = dataset.query(&expensive_first).unwrap();
     let expected: Vec<u64> = (100..=200)
         .filter(|i| i % 5 == 0)
         .map(|i| i as u64)

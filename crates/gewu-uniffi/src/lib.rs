@@ -1,10 +1,9 @@
 //! UniFFI bindings for gewu-core.
 //!
-//! All methods are synchronous. Callers schedule scans off the UI thread and
-//! own cancellation signals. Dataset and View handles share immutable data.
+//! All methods are synchronous. Callers schedule scans off the UI thread.
+//! Dataset and View handles share immutable data.
 
 mod analysis;
-mod cancellation;
 mod column;
 mod dataset;
 mod error;
@@ -24,7 +23,6 @@ pub use analysis::{
     AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
     ValueFrequency, ValueSummary,
 };
-pub use cancellation::Cancellation;
 pub use column::{ColumnCapabilities, ColumnInfo, ValueCategory};
 pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::{

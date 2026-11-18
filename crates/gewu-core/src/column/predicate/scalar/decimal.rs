@@ -55,7 +55,7 @@ where
     let values = array.values();
     let has_nulls = array.null_count() > 0;
 
-    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+    Predicate::new(Box::new(move |rows, incoming, output| {
         match (rows, incoming) {
             (RowSelection::Range(range), None) => {
                 let slice = &values[range.clone()];
@@ -99,7 +99,6 @@ where
                 }
             }
         }
-        Ok(())
     }))
 }
 

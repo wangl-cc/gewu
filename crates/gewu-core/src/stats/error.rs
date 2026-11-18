@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
 use thiserror::Error;
 
-use crate::{CancellationError, InternalError};
+use crate::InternalError;
 
 pub(crate) type Result<T> = std::result::Result<T, AnalysisError>;
 
@@ -46,8 +46,6 @@ pub enum AnalysisError {
     Column(#[from] crate::ColumnError),
     #[error(transparent)]
     Filter(#[from] crate::FilterError),
-    #[error(transparent)]
-    Cancelled(#[from] CancellationError),
     #[error(transparent)]
     Internal(#[from] InternalError),
 }

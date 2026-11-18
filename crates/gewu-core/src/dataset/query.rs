@@ -7,7 +7,7 @@ use arrow::compute::SortOptions;
 use super::Dataset;
 use crate::{
     execution::{predicate::CHUNK, sort::sort_rows},
-    Cancellation, Filter, QuerySpec, Result, View,
+    Filter, QuerySpec, Result, View,
 };
 
 impl Dataset {
@@ -33,32 +33,20 @@ impl Dataset {
     }
 
     /// Compute a new View from the full dataset.
-    pub fn query(
-        self: &Arc<Self>,
-        spec: &QuerySpec,
-        cancellation: &Cancellation,
-    ) -> Result<Arc<View>> {
-        cancellation.check()?;
+    pub fn query(self: &Arc<Self>, spec: &QuerySpec) -> Result<Arc<View>> {
         self.validate_query(spec)?;
-        let mut rows = self.select(spec, cancellation)?;
+        let mut rows = self.select(spec)?;
         if !spec.sorts().is_empty() {
-            rows = self.sort(rows, spec, cancellation)?;
+            rows = self.sort(rows, spec)?;
         }
         let columns = spec.columns.iter().map(|column| column.column).collect();
-        let view = View::from_query(self.clone(), columns, rows);
-        cancellation.check()?;
-        Ok(view)
+        Ok(View::from_query(self.clone(), columns, rows))
     }
 
     /// Compile column predicates once, then intersect their matches in bounded batches.
     /// Masks are reused across columns and batches, not retained per column.
     /// Filters are reordered by estimated cost to maximize batch-level short-circuiting.
-    fn select(
-        &self,
-        spec: &QuerySpec,
-        token: &Cancellation,
-    ) -> Result<Vec<u32>, crate::QueryError> {
-        token.check()?;
+    fn select(&self, spec: &QuerySpec) -> Result<Vec<u32>, crate::QueryError> {
         let total_rows = self.n_rows;
         let mut active_filters: Vec<(u32, &Filter)> = Vec::new();
         for col in &spec.columns {
@@ -67,13 +55,7 @@ impl Dataset {
             }
         }
         if active_filters.is_empty() {
-            let mut rows = Vec::with_capacity(total_rows);
-            for row in 0..total_rows as u32 {
-                token.check_at(row as usize)?;
-                rows.push(row);
-            }
-            token.check()?;
-            return Ok(rows);
+            return Ok((0..total_rows as u32).collect());
         }
 
         // Query optimization:
@@ -84,7 +66,7 @@ impl Dataset {
 
         let predicates = active_filters
             .iter()
-            .map(|&(col, f)| self.column(col)?.compile_filter(f, token))
+            .map(|&(col, f)| self.column(col)?.compile_filter(f))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let batch_len = total_rows.min(CHUNK);
@@ -92,14 +74,13 @@ impl Dataset {
         let mut scratch = vec![false; batch_len];
         let mut rows = Vec::new();
         for start in (0..total_rows).step_by(CHUNK) {
-            token.check()?;
             let end = (start + CHUNK).min(total_rows);
             let range = start..end;
             let selected = &mut selected[..range.len()];
             let scratch = &mut scratch[..range.len()];
             selected.fill(true);
             for test in &predicates {
-                test.intersect(range.clone(), selected, scratch, token)?;
+                test.intersect(range.clone(), selected, scratch);
                 if !selected.contains(&true) {
                     break;
                 }
@@ -110,20 +91,13 @@ impl Dataset {
                     .filter_map(|(r, hit)| (*hit).then_some(r as u32)),
             );
         }
-        token.check()?;
         Ok(rows)
     }
 
-    fn sort(
-        &self,
-        rows: Vec<u32>,
-        spec: &QuerySpec,
-        token: &Cancellation,
-    ) -> Result<Vec<u32>, crate::QueryError> {
+    fn sort(&self, rows: Vec<u32>, spec: &QuerySpec) -> Result<Vec<u32>, crate::QueryError> {
         let sorts = spec.sorts();
         let mut comparators = Vec::with_capacity(sorts.len());
         for key in &sorts {
-            token.check()?;
             let array = self.column(key.column)?.array();
             comparators.push(arrow::array::make_comparator(
                 array.as_ref(),
@@ -148,7 +122,7 @@ impl Dataset {
         } else {
             None
         };
-        Ok(sort_rows(rows, &comparators, primitive, || token.check())?)
+        Ok(sort_rows(rows, &comparators, primitive)?)
     }
 }
 

@@ -93,14 +93,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::Cancellation;
 
     fn matches(array: &ArrayRef, min: Option<&Bound>, max: Option<&Bound>) -> Vec<bool> {
         let mut out = vec![false; array.len()];
         compile_range(array, min, max)
             .unwrap()
-            .evaluate(0..array.len(), &mut out, &Cancellation::default())
-            .unwrap();
+            .evaluate(0..array.len(), &mut out);
         out
     }
 

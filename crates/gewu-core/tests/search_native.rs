@@ -10,7 +10,6 @@ use arrow::{
     compute::cast,
     datatypes::{DataType, TimeUnit},
 };
-use gewu_core::Cancellation;
 use parquet::arrow::ArrowWriter;
 
 /// Find each query and check matching source/display rows in the initial view.
@@ -26,7 +25,7 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
 
     for (query, expected) in queries {
         let find = doc.find(query, &[0]).unwrap();
-        let hits = find.next(None, 256, &Cancellation::default()).unwrap();
+        let hits = find.next(None, 256).unwrap();
         assert_eq!(
             hits.iter().map(|hit| hit.display_row).collect::<Vec<_>>(),
             *expected,

@@ -1,6 +1,6 @@
 use std::fs;
 
-use gewu_core::{Cancellation, Error, FileType, OpenOptions};
+use gewu_core::{Error, FileType, OpenOptions};
 
 #[test]
 fn feature_availability_matches_open_errors() {
@@ -196,7 +196,6 @@ mod delimited {
             .query(
                 &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
                     .with_sort(0, true, 0),
-                &gewu_core::Cancellation::default(),
             )
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
@@ -216,10 +215,10 @@ mod delimited {
             );
         }
         let empty = dataset
-            .query(
-                &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(
+                1,
+                Filter::exact(vec!["absent-value".into()], false, false),
+            ))
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
@@ -264,18 +263,13 @@ mod xlsx {
         );
         let h = doc
             .view()
-            .filter_distribution(0, 3, gewu_core::AxisScale::Linear, &Cancellation::default())
+            .filter_distribution(0, 3, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
         let histogram = doc
             .view()
-            .analyze_distribution(
-                0,
-                3,
-                gewu_core::AxisScale::Linear,
-                &gewu_core::Cancellation::default(),
-            )
+            .analyze_distribution(0, 3, gewu_core::AxisScale::Linear)
             .unwrap();
         assert_eq!(histogram, h);
     }
@@ -364,10 +358,7 @@ mod xlsx {
             .map(std::sync::Arc::new)
             .unwrap();
         let doc = dataset
-            .query(
-                &QuerySpec::new().with_sort(0, false, 0),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::new().with_sort(0, false, 0))
             .unwrap();
         let destination = directory.path().join("export.xlsx");
         doc.export(&[1, 2], FileType::Xlsx)
@@ -382,10 +373,10 @@ mod xlsx {
             doc.rows(0, 2, &[1, 2]).unwrap().cells
         );
         let empty = dataset
-            .query(
-                &QuerySpec::single(1, Filter::exact(vec!["absent-value".into()], false, false)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(
+                1,
+                Filter::exact(vec!["absent-value".into()], false, false),
+            ))
             .unwrap();
         empty
             .export(&[1, 2], FileType::Xlsx)

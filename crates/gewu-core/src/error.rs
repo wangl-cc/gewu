@@ -26,7 +26,7 @@ pub enum Error {
     Export(ExportError),
     #[error(transparent)]
     Internal(#[from] InternalError),
-    /// The operation was explicitly cancelled or replaced before completion.
+    /// The export was cancelled before destination commit.
     #[error("cancelled")]
     Cancelled,
 }
@@ -44,7 +44,6 @@ impl From<FileError> for Error {
 impl From<ColumnError> for Error {
     fn from(error: ColumnError) -> Self {
         match error {
-            ColumnError::Cancelled(_) => Self::Cancelled,
             ColumnError::Internal(error) => Self::Internal(error),
             other => Self::Column(other),
         }
@@ -56,7 +55,6 @@ impl From<QueryError> for Error {
         match error {
             QueryError::Column(error) => error.into(),
             QueryError::Filter(error) => error.into(),
-            QueryError::Cancelled(_) => Self::Cancelled,
             QueryError::Internal(error) => Self::Internal(error),
             other => Self::Query(other),
         }
@@ -67,7 +65,6 @@ impl From<FilterError> for Error {
     fn from(error: FilterError) -> Self {
         match error {
             FilterError::Column(error) => error.into(),
-            FilterError::Cancelled(_) => Self::Cancelled,
             FilterError::Internal(error) => Self::Internal(error),
             other => Self::Filter(other),
         }
@@ -78,7 +75,6 @@ impl From<FindError> for Error {
     fn from(error: FindError) -> Self {
         match error {
             FindError::Filter(error) => error.into(),
-            FindError::Cancelled(_) => Self::Cancelled,
             FindError::Internal(error) => Self::Internal(error),
             other => Self::Find(other),
         }
@@ -89,7 +85,6 @@ impl From<AnalysisError> for Error {
     fn from(error: AnalysisError) -> Self {
         match error {
             AnalysisError::Column(error) => error.into(),
-            AnalysisError::Cancelled(_) => Self::Cancelled,
             AnalysisError::Internal(error) => Self::Internal(error),
             other => Self::Analysis(other),
         }
@@ -100,7 +95,7 @@ impl From<ExportError> for Error {
     fn from(error: ExportError) -> Self {
         match error {
             ExportError::Io(error) => Self::Io(error),
-            ExportError::Cancelled(_) => Self::Cancelled,
+            ExportError::Cancelled => Self::Cancelled,
             ExportError::Internal(error) => Self::Internal(error),
             other => Self::Export(other),
         }
@@ -161,12 +156,6 @@ impl From<arrow::error::ArrowError> for InternalError {
 impl From<arrow::error::ArrowError> for Error {
     fn from(source: arrow::error::ArrowError) -> Self {
         InternalError::Arrow(source).into()
-    }
-}
-
-impl From<crate::CancellationError> for Error {
-    fn from(_: crate::CancellationError) -> Self {
-        Self::Cancelled
     }
 }
 

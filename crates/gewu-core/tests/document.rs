@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Cancellation, Error, Filter, QuerySpec};
+use gewu_core::{Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price
@@ -71,15 +71,11 @@ fn opens_file() {
 fn sorts_with_nulls_last() {
     let (path, dataset) = sample();
     let spec = QuerySpec::new().with_sort(2, false, 0);
-    let doc = dataset
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let doc = dataset.query(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "a", "f", "c", "d"]);
 
     let spec = QuerySpec::new().with_sort(2, true, 0);
-    let doc = dataset
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let doc = dataset.query(&spec).unwrap();
     assert_eq!(names(&doc), ["c", "f", "a", "e", "b", "d"]);
     std::fs::remove_file(path).ok();
 }
@@ -87,10 +83,7 @@ fn sorts_with_nulls_last() {
 #[test]
 fn checkbox_filter_and_choices() {
     let (path, doc) = sample();
-    let all = doc
-        .view()
-        .filter_choices(1, &Cancellation::default())
-        .unwrap();
+    let all = doc.view().filter_choices(1).unwrap();
     assert_eq!(all.null_count, 1);
     let values = all.values.unwrap();
     let labels: Vec<_> = values.iter().map(|v| v.label.as_str()).collect();
@@ -102,18 +95,12 @@ fn checkbox_filter_and_choices() {
         Filter::exact(vec!["cat".into(), "dog".into()], false, false),
     )
     .with_sort(3, true, 0);
-    let v = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let v = doc.query(&spec).unwrap();
     assert_eq!(v.row_count(), 4);
     assert_eq!(names(&v), ["f", "d", "b", "a"]);
 
     // Distinct values of another column respect this filter.
-    let prices = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap()
-        .filter_choices(2, &Cancellation::default())
-        .unwrap();
+    let prices = doc.query(&spec).unwrap().filter_choices(2).unwrap();
     assert_eq!(prices.null_count, 1);
     assert_eq!(
         prices
@@ -125,11 +112,7 @@ fn checkbox_filter_and_choices() {
         3
     );
     // The filtered column also lists only values present in this view.
-    let labels = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap()
-        .filter_choices(1, &Cancellation::default())
-        .unwrap();
+    let labels = doc.query(&spec).unwrap().filter_choices(1).unwrap();
     assert_eq!(labels.null_count, 0);
     assert_eq!(labels.values.unwrap().len(), 2);
     std::fs::remove_file(path).ok();
@@ -139,21 +122,15 @@ fn checkbox_filter_and_choices() {
 fn null_contains_and_typed_equality() {
     let (path, dataset) = sample();
     let spec = QuerySpec::single(2, Filter::exact(vec![], false, true));
-    let doc = dataset
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let doc = dataset.query(&spec).unwrap();
     assert_eq!(names(&doc), ["d"]);
 
     let spec = QuerySpec::single(1, Filter::contains("D".into(), false, false));
-    let doc = dataset
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let doc = dataset.query(&spec).unwrap();
     assert_eq!(names(&doc), ["b", "e", "f"]);
 
     let spec = QuerySpec::single(2, Filter::exact(vec!["2.25".into()], false, false));
-    let doc = dataset
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let doc = dataset.query(&spec).unwrap();
     assert_eq!(names(&doc), ["e"]);
     std::fs::remove_file(path).ok();
 }
@@ -162,15 +139,13 @@ fn null_contains_and_typed_equality() {
 fn dataset_queries_recompute_from_the_full_source() {
     let (path, dataset) = sample();
     let filtered = dataset
-        .query(
-            &QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false)),
-            &Cancellation::default(),
-        )
+        .query(&QuerySpec::single(
+            1,
+            Filter::exact(vec!["cat".into()], false, false),
+        ))
         .unwrap();
     assert_eq!(names(&filtered), ["a", "d"]);
-    let restored = dataset
-        .query(&QuerySpec::all(4), &Cancellation::default())
-        .unwrap();
+    let restored = dataset.query(&QuerySpec::all(4)).unwrap();
     assert_eq!(names(&restored), names(&dataset.view()));
     assert_eq!(names(&filtered), ["a", "d"]);
     drop(dataset);
@@ -192,10 +167,7 @@ fn range_filter_on_floats_skips_nulls() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
-            .query(
-                &QuerySpec::single(2, Filter::range(min, max, false)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(2, Filter::range(min, max, false)))
             .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -214,10 +186,7 @@ fn range_filter_on_integers() {
         let min = min.map(|text| (text).to_owned());
         let max = max.map(|text| (text).to_owned());
         let doc = doc
-            .query(
-                &QuerySpec::single(3, Filter::range(min, max, false)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(3, Filter::range(min, max, false)))
             .unwrap();
         assert_eq!(names(&doc), expected);
     }
@@ -228,10 +197,10 @@ fn range_filter_on_integers() {
 fn range_filter_rejects_text_columns() {
     let (path, doc) = sample();
     assert!(matches!(
-        doc.query(
-            &QuerySpec::single(1, Filter::range(Some(("0").to_owned()), None, false)),
-            &Cancellation::default()
-        ),
+        doc.query(&QuerySpec::single(
+            1,
+            Filter::range(Some(("0").to_owned()), None, false)
+        )),
         Err(Error::Filter(_))
     ));
     std::fs::remove_file(path).ok();
@@ -243,29 +212,18 @@ fn histogram_counts() {
     let view = doc.view();
     // price spans 1.0..=9.0 in 4 bins of width 2: [1,3) [3,5) [5,7) [7,9].
     let h = view
-        .filter_distribution(2, 4, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(2, 4, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!((h.lo, h.hi), (Some(1.0), Some(9.0)));
     assert!(!h.integer);
     assert_eq!(h.counts, [2, 1, 0, 2]);
-    assert_eq!(
-        (
-            view.count_nulls(2, &Cancellation::default()).unwrap(),
-            view.row_count()
-        ),
-        (1, 6)
-    );
+    assert_eq!((view.count_nulls(2).unwrap(), view.row_count()), (1, 6));
 
     // Small integer span: one bin per integer would need 51 bins, so with
     // 60 bins each integer 10..=60 gets its own.
     let h = view
-        .filter_distribution(
-            3,
-            60,
-            gewu_core::AxisScale::Linear,
-            &Cancellation::default(),
-        )
+        .filter_distribution(3, 60, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert!(h.integer);
@@ -276,12 +234,7 @@ fn histogram_counts() {
     assert_eq!(h.counts[50], 1);
 
     assert!(view
-        .filter_distribution(
-            1,
-            10,
-            gewu_core::AxisScale::Linear,
-            &Cancellation::default()
-        )
+        .filter_distribution(1, 10, gewu_core::AxisScale::Linear)
         .unwrap()
         .is_none());
     std::fs::remove_file(path).ok();
@@ -337,7 +290,7 @@ fn find_names(doc: &Arc<gewu_core::View>, text: &str) -> Vec<String> {
     let hits = doc
         .find(text, &[0, 1, 2, 3, 4])
         .unwrap()
-        .next(None, 256, &Cancellation::default())
+        .next(None, 256)
         .unwrap();
     let mut rows: Vec<usize> = hits.iter().map(|hit| hit.display_row as usize).collect();
     rows.dedup();
@@ -412,10 +365,10 @@ fn contains_filter_is_for_text_only() {
     // something different for them, so it is refused.
     for column in [1, 3] {
         let err = doc
-            .query(
-                &QuerySpec::single(column, Filter::contains("1700".into(), false, false)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(
+                column,
+                Filter::contains("1700".into(), false, false),
+            ))
             .err()
             .unwrap();
         assert!(matches!(err, Error::Filter(_)), "{err}");
@@ -435,13 +388,10 @@ fn dates_format_parse_and_filter() {
     );
 
     assert!(dataset
-        .query(
-            &QuerySpec::single(
-                1,
-                Filter::range(Some(("not a date").to_owned()), None, false)
-            ),
-            &Cancellation::default()
-        )
+        .query(&QuerySpec::single(
+            1,
+            Filter::range(Some(("not a date").to_owned()), None, false)
+        ))
         .is_err());
 
     assert_eq!(
@@ -454,36 +404,25 @@ fn dates_format_parse_and_filter() {
     // Range on dates: nulls excluded, bounds inclusive.
     let min = ("2024-01-02").to_owned();
     let doc = dataset
-        .query(
-            &QuerySpec::single(1, Filter::range(Some(min), None, false)),
-            &gewu_core::Cancellation::default(),
-        )
+        .query(&QuerySpec::single(1, Filter::range(Some(min), None, false)))
         .unwrap();
     assert_eq!(names(&doc), ["beta", "delta"]);
 
     // Range on timestamps.
     let max = ("2024-01-01T10:00:00Z").to_owned();
     let doc = dataset
-        .query(
-            &QuerySpec::single(2, Filter::range(None, Some(max), false)),
-            &gewu_core::Cancellation::default(),
-        )
+        .query(&QuerySpec::single(2, Filter::range(None, Some(max), false)))
         .unwrap();
     assert_eq!(names(&doc), ["Alpha", "beta"]);
 
     // Dates are integers: the histogram ends one day past the last date.
     let h = doc
-        .filter_distribution(
-            1,
-            60,
-            gewu_core::AxisScale::Linear,
-            &Cancellation::default(),
-        )
+        .filter_distribution(1, 60, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_725.0)));
-    assert_eq!(doc.count_nulls(1, &Cancellation::default()).unwrap(), 0);
+    assert_eq!(doc.count_nulls(1).unwrap(), 0);
     std::fs::remove_file(path).ok();
 }
 
@@ -494,7 +433,7 @@ fn find_marks_matching_cells() {
     for (query, expected) in [("170", vec![(1, 3)]), ("2024-01-02", vec![(1, 1)])] {
         let find = doc.view().find(query, &[0, 1, 2, 3, 4]).unwrap();
         let hits: Vec<(u64, u32)> = find
-            .next(None, 10, &Cancellation::default())
+            .next(None, 10)
             .unwrap()
             .into_iter()
             .map(|hit| (hit.display_row, hit.column))

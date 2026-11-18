@@ -11,20 +11,13 @@
 use std::ops::Range;
 
 use super::selection::RowSelection;
-use crate::{Cancellation, CancellationError};
-
-type Result<T> = std::result::Result<T, CancellationError>;
 
 pub(crate) const CHUNK: usize = 8 * 1024;
 
 /// Chunk-level vectorized evaluator: populates the output boolean slice for a selection of rows,
 /// optionally taking an incoming mask to support short-circuiting or branchless bitwise AND.
-pub(crate) type ChunkEvaluator<'a> = Box<
-    dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool], &Cancellation) -> Result<()>
-        + Send
-        + Sync
-        + 'a,
->;
+pub(crate) type ChunkEvaluator<'a> =
+    Box<dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool]) + Send + Sync + 'a>;
 
 pub(crate) struct Predicate<'a>(ChunkEvaluator<'a>);
 
@@ -36,9 +29,8 @@ impl<'a> Predicate<'a> {
 
     /// Construct a predicate that matches nothing (all false).
     pub(crate) fn empty() -> Self {
-        Self::new(Box::new(|_rows, _incoming, output, _cancel| {
+        Self::new(Box::new(|_rows, _incoming, output| {
             output.fill(false);
-            Ok(())
         }))
     }
 
@@ -48,9 +40,8 @@ impl<'a> Predicate<'a> {
         rows: RowSelection<'_>,
         incoming: Option<&[bool]>,
         output: &mut [bool],
-        cancel: &Cancellation,
-    ) -> Result<()> {
-        (self.0)(rows, incoming, output, cancel)
+    ) {
+        (self.0)(rows, incoming, output);
     }
 
     /// Combine compiled equality alternatives without scanning the source or
@@ -62,13 +53,12 @@ impl<'a> Predicate<'a> {
         if predicates.len() == 1 {
             return predicates.into_iter().next().unwrap();
         }
-        Self::new(Box::new(move |rows, incoming, output, cancel| {
+        Self::new(Box::new(move |rows, incoming, output| {
             let mut scratch = vec![false; output.len()];
             for (i, predicate) in predicates.iter().enumerate() {
-                cancel.check()?;
                 if i == 0 {
                     // First alternative directly populates the chunk output with its matches.
-                    predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
+                    predicate.evaluate_chunk(rows.clone(), incoming, output);
                 } else {
                     // Fast circuit-break: if all active rows are already true, skip remaining
                     // predicates.
@@ -81,13 +71,12 @@ impl<'a> Predicate<'a> {
                         break;
                     }
                     scratch.fill(false);
-                    predicate.evaluate_chunk(rows.clone(), incoming, &mut scratch, cancel)?;
+                    predicate.evaluate_chunk(rows.clone(), incoming, &mut scratch);
                     for (hit, &s) in output.iter_mut().zip(&scratch) {
                         *hit |= s;
                     }
                 }
             }
-            Ok(())
         }))
     }
 
@@ -97,17 +86,13 @@ impl<'a> Predicate<'a> {
         &self,
         source_rows: impl Into<RowSelection<'r>>,
         matched: &mut [bool],
-        cancel: &Cancellation,
-    ) -> Result<()> {
+    ) {
         let source_rows = source_rows.into();
         assert_eq!(source_rows.len(), matched.len());
-        cancel.check()?;
         for (chunk_idx, out) in matched.chunks_mut(CHUNK).enumerate() {
-            cancel.check()?;
             let rows = source_rows.chunk(chunk_idx * CHUNK, out.len());
-            (self.0)(rows, None, out, cancel)?;
+            (self.0)(rows, None, out);
         }
-        cancel.check()
     }
 
     /// AND with existing matches. Leverages incoming mask and skips fully-rejected chunks.
@@ -116,17 +101,14 @@ impl<'a> Predicate<'a> {
         source_rows: Range<usize>,
         matched: &mut [bool],
         scratch: &mut [bool],
-        cancel: &Cancellation,
-    ) -> Result<()> {
+    ) {
         assert_eq!(source_rows.len(), matched.len());
         assert_eq!(matched.len(), scratch.len());
-        cancel.check()?;
         for (chunk_idx, (out, scratch_chunk)) in matched
             .chunks_mut(CHUNK)
             .zip(scratch.chunks_mut(CHUNK))
             .enumerate()
         {
-            cancel.check()?;
             // Fast chunk-level short-circuit: if all rows in this chunk are already false, skip it!
             if !out.iter().any(|&hit| hit) {
                 continue;
@@ -135,9 +117,8 @@ impl<'a> Predicate<'a> {
             let rows = RowSelection::Range(
                 source_rows.start + offset..source_rows.start + offset + out.len(),
             );
-            (self.0)(rows, Some(out), scratch_chunk, cancel)?;
+            (self.0)(rows, Some(out), scratch_chunk);
             out.copy_from_slice(scratch_chunk);
         }
-        Ok(())
     }
 }

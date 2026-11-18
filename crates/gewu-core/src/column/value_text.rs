@@ -84,7 +84,7 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
-    use crate::{column::Column, Cancellation, Filter};
+    use crate::{column::Column, Filter};
 
     #[test]
     fn physical_values_roundtrip_without_formatting_or_float_widening() {
@@ -118,10 +118,9 @@ mod tests {
                 let filter = Filter::exact(vec![text], false, false);
                 let mut matched = [false; 2];
                 column
-                    .compile_filter(&filter, &Cancellation::default())
+                    .compile_filter(&filter)
                     .unwrap()
-                    .evaluate(0..2, &mut matched, &Cancellation::default())
-                    .unwrap();
+                    .evaluate(0..2, &mut matched);
                 assert_eq!(matched, [row == 0, row == 1], "{:?}", array.data_type());
             }
         }

@@ -193,8 +193,7 @@ struct TableExecutionTests {
         let dataset = try dataset()
         let original = dataset.view()
         let replacement = try dataset.query(
-            spec: QuerySpec(columns: [ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)]),
-            cancellation: Cancellation())
+            spec: QuerySpec(columns: [ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)]))
         let reads = AsyncStream<PendingTableRead>.makeStream()
         let delivered = AsyncStream<RowBlock>.makeStream()
         let loader = TableRowLoader { view, start, columns in
@@ -318,8 +317,7 @@ struct TableExecutionTests {
                 let other = try dataset.query(
                     spec: QuerySpec(columns: [
                         ColSpec(column: 0, sort: ColSort(priority: 0, descending: true), filter: nil)
-                    ]),
-                    cancellation: Cancellation())
+                    ]))
                 #expect(try other.rows(start: 0, count: 1, columns: [0]).sourceRows == [129])
             }
             return try view.rows(start: UInt64(start), count: UInt32(count), columns: columns)

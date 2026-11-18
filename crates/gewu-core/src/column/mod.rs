@@ -11,17 +11,14 @@ mod metadata;
 pub(crate) mod predicate;
 pub(crate) mod value_text;
 
-use std::{
-    sync::{Arc, Condvar, Mutex, OnceLock},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use arrow::array::ArrayRef;
 pub(crate) use dictionary::Dictionary;
 pub use error::{ColumnError, ColumnOperation, FilterError, FilterKind, ValueParseError};
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{execution::predicate::Predicate, types, Cancellation, FileError, Filter};
+use crate::{execution::predicate::Predicate, types, FileError, Filter};
 
 pub(crate) type Result<T> = std::result::Result<T, ColumnError>;
 
@@ -62,22 +59,7 @@ pub(crate) struct Column {
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
     dictionary: OnceLock<Option<Arc<Dictionary>>>,
-    dictionary_building: Mutex<bool>,
-    dictionary_ready: Condvar,
-}
-
-/// Release waiting requests even when the builder fails or unwinds.
-struct DictionaryBuild<'a>(&'a Column);
-
-impl Drop for DictionaryBuild<'_> {
-    fn drop(&mut self) {
-        *self
-            .0
-            .dictionary_building
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = false;
-        self.0.dictionary_ready.notify_all();
-    }
+    dictionary_lock: Mutex<()>,
 }
 
 impl Column {
@@ -100,49 +82,23 @@ impl Column {
             nullable,
             array,
             dictionary: OnceLock::new(),
-            dictionary_building: Mutex::new(false),
-            dictionary_ready: Condvar::new(),
+            dictionary_lock: Mutex::new(()),
         })
     }
 
-    pub(crate) fn dictionary(&self, cancel: &Cancellation) -> Result<Option<&Arc<Dictionary>>> {
-        cancel.check()?;
+    pub(crate) fn dictionary(&self) -> Result<Option<&Arc<Dictionary>>> {
         if let Some(value) = self.dictionary.get() {
             return Ok(value.as_ref());
         }
-        let mut building = self
-            .dictionary_building
+        let _guard = self
+            .dictionary_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        loop {
-            cancel.check()?;
-            if let Some(value) = self.dictionary.get() {
-                return Ok(value.as_ref());
-            }
-            if !*building {
-                break;
-            }
-            // A different request owns construction. Cancellation must also stop
-            // waiting; the builder's cancellation does not close this request.
-            building = self
-                .dictionary_ready
-                .wait_timeout(building, Duration::from_millis(10))
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
+        if let Some(value) = self.dictionary.get() {
+            return Ok(value.as_ref());
         }
-        *building = true;
-        drop(building);
-        let _build = DictionaryBuild(self);
-        let value = Dictionary::build(&self.array, cancel)?;
-        cancel.check()?;
-        // Only completed results (including a confirmed cardinality overflow)
-        // enter the cache. Errors and cancellations leave it uninitialized.
-        let _ = self.dictionary.set(value.map(Arc::new));
-        Ok(self
-            .dictionary
-            .get()
-            .expect("completed dictionary")
-            .as_ref())
+        let value = Dictionary::build(&self.array)?.map(Arc::new);
+        Ok(self.dictionary.get_or_init(|| value).as_ref())
     }
 
     pub(crate) fn array(&self) -> &ArrayRef {
@@ -156,9 +112,8 @@ impl Column {
     pub(crate) fn compile_filter<'a>(
         &'a self,
         filter: &Filter,
-        cancel: &Cancellation,
     ) -> predicate::Result<Predicate<'a>> {
-        predicate::compile_filter(self, filter, cancel)
+        predicate::compile_filter(self, filter)
     }
 }
 
@@ -174,59 +129,14 @@ mod tests {
     };
 
     use super::*;
-    use crate::{execution::predicate::CHUNK, Cancellation, TextMatch};
+    use crate::{execution::predicate::CHUNK, TextMatch};
 
     fn col(array: ArrayRef) -> Column {
         Column::new("test", array).unwrap()
     }
 
     #[test]
-    fn interrupted_dictionary_builds_are_retryable_and_waiting_is_cancellable() {
-        for array in [
-            Arc::new(Int32Array::from(vec![7; 20_000])) as ArrayRef,
-            Arc::new(StringArray::from(vec!["same"; 20_000])),
-            Arc::new(
-                DictionaryArray::<Int8Type>::try_new(
-                    Int8Array::from(vec![0; 20_000]),
-                    Arc::new(StringArray::from(vec!["same"])),
-                )
-                .unwrap(),
-            ),
-        ] {
-            let column = col(array);
-            assert!(matches!(
-                column.dictionary(&Cancellation::after_checks(5)),
-                Err(crate::ColumnError::Cancelled(_))
-            ));
-            assert!(
-                column.dictionary.get().is_none(),
-                "interrupted construction is not a negative cache result"
-            );
-            assert!(!*column.dictionary_building.lock().unwrap());
-            let built = column
-                .dictionary(&Cancellation::default())
-                .unwrap()
-                .unwrap();
-            assert_eq!(built.values().len(), 1);
-        }
-
-        let column = col(Arc::new(Int32Array::from(vec![1, 1])));
-        *column.dictionary_building.lock().unwrap() = true;
-        let builder = DictionaryBuild(&column);
-        assert!(matches!(
-            column.dictionary(&Cancellation::after_checks(3)),
-            Err(crate::ColumnError::Cancelled(_))
-        ));
-        assert!(column.dictionary.get().is_none());
-        drop(builder);
-        assert!(column
-            .dictionary(&Cancellation::default())
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn unsupported_dictionary_sort_is_a_negative_result_not_cancellation() {
+    fn unsupported_dictionary_sort_is_cached_as_negative_result() {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let field = Arc::new(arrow::datatypes::Field::new(
             "child",
@@ -234,18 +144,14 @@ mod tests {
             false,
         ));
         let column = col(Arc::new(StructArray::from(vec![(field, values)])));
-        assert!(column
-            .dictionary(&Cancellation::default())
-            .unwrap()
-            .is_none());
+        assert!(column.dictionary().unwrap().is_none());
         assert!(matches!(column.dictionary.get(), Some(None)));
     }
 
     fn matches(array: &ArrayRef, query: &str, range: std::ops::Range<usize>) -> Vec<bool> {
         let mut hits = vec![false; range.len()];
         if let Some(test) = predicate::compile_find(array, query, None).unwrap() {
-            test.evaluate(range, &mut hits, &Cancellation::default())
-                .unwrap();
+            test.evaluate(range, &mut hits);
         }
         hits
     }
@@ -306,20 +212,17 @@ mod tests {
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
         let column = col(array);
         let test = column
-            .compile_filter(
-                &Filter::exact(Vec::new(), false, false),
-                &Cancellation::default(),
-            )
+            .compile_filter(&Filter::exact(Vec::new(), false, false))
             .unwrap();
         let mut hits = [true; 3];
-        test.evaluate(0..3, &mut hits, &Cancellation::default())
-            .unwrap();
+        test.evaluate(0..3, &mut hits);
         assert_eq!(hits, [false; 3]);
         assert!(matches!(
-            column.compile_filter(
-                &Filter::exact(vec!["1".into(), "invalid".into()], false, false),
-                &Cancellation::default()
-            ),
+            column.compile_filter(&Filter::exact(
+                vec!["1".into(), "invalid".into()],
+                false,
+                false
+            )),
             Err(crate::FilterError::Bound(
                 crate::BoundError::InvalidValue { .. }
             ))
@@ -334,14 +237,10 @@ mod tests {
         );
         let column = col(array);
         let test = column
-            .compile_filter(
-                &Filter::exact(vec!["01".into(), "2".into()], false, false),
-                &Cancellation::default(),
-            )
+            .compile_filter(&Filter::exact(vec!["01".into(), "2".into()], false, false))
             .unwrap();
         let mut hits = [false; 4];
-        test.evaluate(0..4, &mut hits, &Cancellation::default())
-            .unwrap();
+        test.evaluate(0..4, &mut hits);
         assert_eq!(hits, [true, false, false, true]);
     }
 
@@ -356,14 +255,10 @@ mod tests {
         assert_eq!(matches(&array, "%_\\z", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .compile_filter(
-                &Filter::exact(vec!["A%_\\z".into()], false, false),
-                &Cancellation::default(),
-            )
+            .compile_filter(&Filter::exact(vec!["A%_\\z".into()], false, false))
             .unwrap();
         let mut hits = vec![false; 3];
-        test.evaluate(1..4, &mut hits, &Cancellation::default())
-            .unwrap();
+        test.evaluate(1..4, &mut hits);
         assert_eq!(hits, [true, false, false]);
     }
 
@@ -382,14 +277,10 @@ mod tests {
             (true, [true, true, false, true]),
         ] {
             let test = column
-                .compile_filter(
-                    &Filter::contains("keep".into(), true, include_nulls),
-                    &Cancellation::default(),
-                )
+                .compile_filter(&Filter::contains("keep".into(), true, include_nulls))
                 .unwrap();
             let mut hits = [false; 4];
-            test.evaluate(1..5, &mut hits, &Cancellation::default())
-                .unwrap();
+            test.evaluate(1..5, &mut hits);
             assert_eq!(hits, expected);
         }
     }
@@ -429,9 +320,8 @@ mod tests {
         for kind in 0..4 {
             let encoded = col(build(false, kind));
             let plain = col(build(true, kind));
-            let cancel = Cancellation::default();
-            assert!(encoded.dictionary(&cancel).unwrap().is_some());
-            assert!(plain.dictionary(&cancel).unwrap().is_none());
+            assert!(encoded.dictionary().unwrap().is_some());
+            assert!(plain.dictionary().unwrap().is_none());
             for (text, mode) in ["", "élan", "ÉLAN", "a", "zz", "Élan", "abc"]
                 .into_iter()
                 .flat_map(|text| [(text, TextMatch::Contains), (text, TextMatch::Equals)])
@@ -442,10 +332,9 @@ mod tests {
                         let hits = |column: &Column| {
                             let mut hits = vec![false; rows.len()];
                             column
-                                .compile_filter(&filter, &cancel)
+                                .compile_filter(&filter)
                                 .unwrap()
-                                .evaluate(0..rows.len(), &mut hits, &cancel)
-                                .unwrap();
+                                .evaluate(0..rows.len(), &mut hits);
                             hits
                         };
                         assert_eq!(
@@ -476,17 +365,17 @@ mod tests {
             None,
         ];
         let column = col(Arc::new(StringArray::from(values.to_vec())));
-        let cancel = Cancellation::default();
         let matching = |text: &str, case_sensitive: bool| -> Vec<usize> {
             let mut hits = vec![false; values.len()];
             column
-                .compile_filter(
-                    &Filter::text(text.into(), TextMatch::Equals, case_sensitive, false),
-                    &cancel,
-                )
+                .compile_filter(&Filter::text(
+                    text.into(),
+                    TextMatch::Equals,
+                    case_sensitive,
+                    false,
+                ))
                 .unwrap()
-                .evaluate(0..values.len(), &mut hits, &cancel)
-                .unwrap();
+                .evaluate(0..values.len(), &mut hits);
             (0..values.len()).filter(|&row| hits[row]).collect()
         };
         // Whole-value matching: A1 never matches A10.
@@ -504,10 +393,9 @@ mod tests {
         for text in ["A1", "K", "S", "σας", ""] {
             let mut contains = vec![false; values.len()];
             column
-                .compile_filter(&Filter::contains(text.into(), false, false), &cancel)
+                .compile_filter(&Filter::contains(text.into(), false, false))
                 .unwrap()
-                .evaluate(0..values.len(), &mut contains, &cancel)
-                .unwrap();
+                .evaluate(0..values.len(), &mut contains);
             assert!(
                 matching(text, false).iter().all(|&row| contains[row]),
                 "{text:?}"
@@ -556,10 +444,12 @@ mod tests {
                     for mode in [TextMatch::Contains, TextMatch::Equals] {
                         assert!(
                             matches!(
-                                column.compile_filter(
-                                    &Filter::text(text.into(), mode, false, true),
-                                    &Cancellation::default(),
-                                ),
+                                column.compile_filter(&Filter::text(
+                                    text.into(),
+                                    mode,
+                                    false,
+                                    true
+                                )),
                                 Err(crate::FilterError::UnsupportedType { .. })
                             ),
                             "{data_type}: {mode:?} {text:?}"
@@ -599,14 +489,10 @@ mod tests {
                 (false, false, [false; 4]),
             ] {
                 let test = column
-                    .compile_filter(
-                        &Filter::exact(vec![], exclude, include_nulls),
-                        &Cancellation::default(),
-                    )
+                    .compile_filter(&Filter::exact(vec![], exclude, include_nulls))
                     .unwrap();
                 let mut hits = [false; 4];
-                test.evaluate(0..4, &mut hits, &Cancellation::default())
-                    .unwrap();
+                test.evaluate(0..4, &mut hits);
                 assert_eq!(hits, expected);
             }
         }
@@ -672,17 +558,12 @@ mod tests {
         assert_eq!(matches(&array, "2", 1..4), [true, false, true]);
         let column = col(array);
         let test = column
-            .compile_filter(
-                &Filter::exact(vec!["2".into()], false, false),
-                &Cancellation::default(),
-            )
+            .compile_filter(&Filter::exact(vec!["2".into()], false, false))
             .unwrap();
         let mut first = [false; 2];
         let mut second = [false; 2];
-        test.evaluate(0..2, &mut first, &Cancellation::default())
-            .unwrap();
-        test.evaluate(2..4, &mut second, &Cancellation::default())
-            .unwrap();
+        test.evaluate(0..2, &mut first);
+        test.evaluate(2..4, &mut second);
         assert_eq!(first, [false, true]);
         assert_eq!(second, [false, true]);
     }
@@ -720,48 +601,18 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_is_checked_before_text_and_nested_execution() {
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(StringArray::from(vec!["hello"])),
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
-                vec![Some(2)],
-            )])),
-        ];
-        let token = crate::Cancellation::default();
-        token.cancel();
-        for array in arrays {
-            let test = predicate::compile_find(&array, "2", None).unwrap().unwrap();
-            assert!(matches!(
-                test.evaluate(0..1, &mut [false], &token),
-                Err(crate::CancellationError)
-            ));
-        }
-    }
-
-    #[test]
     fn dictionary_is_built_once_and_cached() {
         let column = col(Arc::new(StringArray::from(vec![
             Some("a"),
             None,
             Some("b"),
         ])));
-        let first = column
-            .dictionary(&Cancellation::default())
-            .unwrap()
-            .cloned()
-            .expect("dictionary");
-        let second = column
-            .dictionary(&Cancellation::default())
-            .unwrap()
-            .cloned()
-            .expect("dictionary");
+        let first = column.dictionary().unwrap().cloned().expect("dictionary");
+        let second = column.dictionary().unwrap().cloned().expect("dictionary");
         assert!(Arc::ptr_eq(&first, &second));
 
         let high_cardinality: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1000));
-        assert!(col(high_cardinality)
-            .dictionary(&Cancellation::default())
-            .unwrap()
-            .is_none());
+        assert!(col(high_cardinality).dictionary().unwrap().is_none());
     }
 
     #[test]

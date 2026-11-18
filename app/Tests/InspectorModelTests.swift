@@ -103,60 +103,12 @@ struct InspectorModelTests {
                 ColSpec(
                     column: 0, sort: nil,
                     filter: Filter(condition: .range(min: "2", max: nil), includeNulls: false))
-            ]),
-            cancellation: Cancellation())
+            ]))
         await model.load(
             dataset: doc, viewer: viewer(doc, filtered), column: 0, expanded: InspectorSection.overview.mask)
         #expect(model.statistics == nil && model.nullCount == 0 && model.rowCount == 1)
         await model.load(dataset: doc, viewer: viewer(doc, view), column: 0, expanded: InspectorSection.statistics.mask)
         #expect(model.statistics?.mean == 1.5 && model.nullCount == nil && model.rowCount == 2)
         #expect(model.loading == nil && model.errors.isEmpty && model.error == nil)
-    }
-
-    @Test
-    static func taskCancellationReachesRustAndSuppressesCompletedOutput() async throws {
-        let doc = try document("number\n1\n2\n")
-        let signal = Cancellation()
-        let started = AsyncStream<Void>.makeStream()
-        let release = DispatchSemaphore(value: 0)
-        defer { release.signal() }
-        let task = Task {
-            try await runCancellable(cancellation: signal) {
-                let result = try doc.view().countNulls(column: 0, cancellation: signal)
-                // Hold a successful result until the owning Task has been cancelled.
-                started.continuation.yield(())
-                started.continuation.finish()
-                release.wait()
-                return result
-            }
-        }
-        for await _ in started.stream { break }
-        task.cancel()
-        release.signal()
-        do {
-            _ = try await task.value
-            Issue.record("Cancelled Task must not publish a successful background result")
-        } catch is CancellationError {}
-        do {
-            _ = try doc.view().countNulls(column: 0, cancellation: signal)
-            Issue.record("Task cancellation must reach the Rust signal")
-        } catch GewuError.Cancelled {}
-        #expect(try doc.view().countNulls(column: 0, cancellation: Cancellation()) == 0)
-    }
-
-    @Test
-    static func alreadyCancelledTaskDoesNotDispatchWork() async throws {
-        let signal = Cancellation()
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try await runCancellable(cancellation: signal) {
-                Issue.record("Already cancelled work must not be dispatched")
-                return 1
-            }
-        }
-        do {
-            _ = try await task.value
-            Issue.record("Expected task cancellation")
-        } catch is CancellationError {}
     }
 }

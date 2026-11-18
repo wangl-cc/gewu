@@ -43,54 +43,43 @@ where
 }
 
 /// Non-null membership. The column compiler owns exclusion and null policy.
-pub(super) fn selected_values<'a>(
-    array: &'a ArrayRef,
-    values: &[String],
-    cancel: &crate::Cancellation,
-) -> Result<Predicate<'a>> {
+pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
     let read = accessor(array)?;
-    let mut selected = HashSet::with_capacity(values.len());
-    for (index, value) in values.iter().enumerate() {
-        cancel.check_at(index)?;
-        selected.insert(value.clone());
-    }
+    let selected: HashSet<String> = values.iter().cloned().collect();
     Ok(Predicate::new(Box::new(
-        move |rows, incoming, output, _cancel| {
-            match (rows, incoming) {
-                (RowSelection::Range(range), None) => {
-                    for (i, row) in range.enumerate() {
+        move |rows, incoming, output| match (rows, incoming) {
+            (RowSelection::Range(range), None) => {
+                for (i, row) in range.enumerate() {
+                    let included = read(row).is_some_and(|value| selected.contains(value));
+                    output[i] = included;
+                }
+            }
+            (RowSelection::Range(range), Some(mask)) => {
+                for (i, row) in range.enumerate() {
+                    if mask[i] {
                         let included = read(row).is_some_and(|value| selected.contains(value));
                         output[i] = included;
-                    }
-                }
-                (RowSelection::Range(range), Some(mask)) => {
-                    for (i, row) in range.enumerate() {
-                        if mask[i] {
-                            let included = read(row).is_some_and(|value| selected.contains(value));
-                            output[i] = included;
-                        } else {
-                            output[i] = false;
-                        }
-                    }
-                }
-                (RowSelection::Indices(indices), None) => {
-                    for (i, &row) in indices.iter().enumerate() {
-                        let included = read(row).is_some_and(|value| selected.contains(value));
-                        output[i] = included;
-                    }
-                }
-                (RowSelection::Indices(indices), Some(mask)) => {
-                    for (i, &row) in indices.iter().enumerate() {
-                        if mask[i] {
-                            let included = read(row).is_some_and(|value| selected.contains(value));
-                            output[i] = included;
-                        } else {
-                            output[i] = false;
-                        }
+                    } else {
+                        output[i] = false;
                     }
                 }
             }
-            Ok(())
+            (RowSelection::Indices(indices), None) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    let included = read(row).is_some_and(|value| selected.contains(value));
+                    output[i] = included;
+                }
+            }
+            (RowSelection::Indices(indices), Some(mask)) => {
+                for (i, &row) in indices.iter().enumerate() {
+                    if mask[i] {
+                        let included = read(row).is_some_and(|value| selected.contains(value));
+                        output[i] = included;
+                    } else {
+                        output[i] = false;
+                    }
+                }
+            }
         },
     )))
 }
@@ -186,20 +175,17 @@ fn bind<'a, A>(array: A, is_match: impl Fn(&str) -> bool + Send + Sync + 'a) -> 
 where
     A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
 {
-    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
-        match incoming {
-            Some(mask) => {
-                for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
-                    output[i] = m && array.is_valid(row) && is_match(array.value(row));
-                }
-            }
-            None => {
-                for (i, row) in rows.iter().enumerate() {
-                    output[i] = array.is_valid(row) && is_match(array.value(row));
-                }
+    Predicate::new(Box::new(move |rows, incoming, output| match incoming {
+        Some(mask) => {
+            for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
+                output[i] = m && array.is_valid(row) && is_match(array.value(row));
             }
         }
-        Ok(())
+        None => {
+            for (i, row) in rows.iter().enumerate() {
+                output[i] = array.is_valid(row) && is_match(array.value(row));
+            }
+        }
     }))
 }
 
@@ -214,7 +200,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, Cancellation, Filter};
+    use crate::{column::Column, Filter};
 
     #[test]
     fn dictionary_membership_combines_nulls_and_duplicate_values() {
@@ -229,12 +215,9 @@ mod tests {
         let column = Column::new("test", array.clone()).unwrap();
         for exclude in [false, true] {
             let filter = Filter::exact(vec!["a".into(), "a".into()], exclude, !exclude);
-            let test = column
-                .compile_filter(&filter, &Cancellation::default())
-                .unwrap();
+            let test = column.compile_filter(&filter).unwrap();
             let mut actual = vec![false; array.len()];
-            test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
-                .unwrap();
+            test.evaluate(0..array.len(), &mut actual);
             assert_eq!(
                 actual,
                 [true, true, true, true, false, true].map(|v| v != exclude)
@@ -256,12 +239,9 @@ mod tests {
             for exclude in [false, true] {
                 let column = Column::new("value", array.clone()).unwrap();
                 let filter = Filter::exact(vec!["a".into()], exclude, !exclude);
-                let test = column
-                    .compile_filter(&filter, &Cancellation::default())
-                    .unwrap();
+                let test = column.compile_filter(&filter).unwrap();
                 let mut actual = vec![false; array.len()];
-                test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
-                    .unwrap();
+                test.evaluate(0..array.len(), &mut actual);
                 let expected = [true, false, true, false, false].map(|value| value != exclude);
                 assert_eq!(actual, expected, "{data_type}: exclude={exclude}");
             }
@@ -293,8 +273,7 @@ mod tests {
                 let expected = ilike(&array, &Scalar::new(pattern)).unwrap();
                 let test = contains(&array, query, false, None).unwrap();
                 let mut actual = vec![false; array.len()];
-                test.evaluate(0..array.len(), &mut actual, &Cancellation::default())
-                    .unwrap();
+                test.evaluate(0..array.len(), &mut actual);
                 assert_eq!(
                     actual,
                     expected.iter().map(|v| v == Some(true)).collect::<Vec<_>>(),

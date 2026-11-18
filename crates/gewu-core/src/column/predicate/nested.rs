@@ -72,11 +72,11 @@ pub(super) fn search<'a>(
                 return Ok(None);
             }
             Ok(Some(Predicate::new(Box::new(
-                move |rows, incoming, hits, cancel| {
+                move |rows, incoming, hits| {
                     hits.fill(false);
                     let mut scratch = vec![false; rows.len()];
                     for child in &children {
-                        child.evaluate(rows.clone(), &mut scratch, cancel)?;
+                        child.evaluate(rows.clone(), &mut scratch);
                         for (hit, other) in hits.iter_mut().zip(&scratch) {
                             *hit |= *other;
                         }
@@ -89,7 +89,6 @@ pub(super) fn search<'a>(
                             *hit &= m;
                         }
                     }
-                    Ok(())
                 },
             ))))
         }
@@ -107,7 +106,7 @@ pub(super) fn dictionary_find<'a>(
     downcast_dictionary_array!(array => {
         let values = array.values();
         let Some(child) = compile(values)? else { return Ok(None) };
-        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
+        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits| {
             hits.fill(false);
             let mut keys = Vec::with_capacity(rows.len());
             let mut output_rows = Vec::with_capacity(rows.len());
@@ -123,11 +122,10 @@ pub(super) fn dictionary_find<'a>(
                 }
             }
             let mut matched = vec![false; keys.len()];
-            child.evaluate(&keys, &mut matched, cancel)?;
+            child.evaluate(&keys, &mut matched);
             for (key, output) in output_rows.into_iter().enumerate() {
                 hits[output] = matched[key];
             }
-            Ok(())
         }))))
     }, _ => unreachable!("dictionary type checked by caller"))
 }
@@ -142,15 +140,12 @@ pub(super) fn dictionary<'a>(
         let values = array.values();
         let Some(child) = compile(values)? else { return Ok(None) };
         let cached = OnceLock::<Vec<bool>>::new();
-        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
-            let matched = match cached.get() {
-                Some(matched) => matched,
-                None => {
-                    let mut matched = vec![false; values.len()];
-                    child.evaluate(0..values.len(), &mut matched, cancel)?;
-                    cached.get_or_init(|| matched)
-                }
-            };
+        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits| {
+            let matched = cached.get_or_init(|| {
+                let mut matched = vec![false; values.len()];
+                child.evaluate(0..values.len(), &mut matched);
+                matched
+            });
             match incoming {
                 Some(mask) => {
                     for (index, row) in rows.iter().enumerate() {
@@ -165,7 +160,6 @@ pub(super) fn dictionary<'a>(
                     }
                 }
             }
-            Ok(())
         }))))
     }, _ => unreachable!("dictionary type checked by caller"))
 }
@@ -193,7 +187,7 @@ fn elements<'a>(
     child: Predicate<'a>,
     offsets: impl Fn(usize) -> Range<usize> + Send + Sync + 'a,
 ) -> Predicate<'a> {
-    Predicate::new(Box::new(move |rows, incoming, hits, cancel| {
+    Predicate::new(Box::new(move |rows, incoming, hits| {
         hits.fill(false);
         // Size scratch to this batch rather than to CHUNK: the closure is reused
         // for every 1,024-row batch, so preallocating a full CHUNK per call would
@@ -205,13 +199,12 @@ fn elements<'a>(
         let flush = |children: &mut Vec<usize>,
                      owners: &mut Vec<(usize, usize, usize)>,
                      hits: &mut [bool],
-                     matched: &mut Vec<bool>|
-         -> std::result::Result<(), crate::CancellationError> {
+                     matched: &mut Vec<bool>| {
             if children.is_empty() {
-                return Ok(());
+                return;
             }
             matched.resize(children.len(), false);
-            child.evaluate(children.as_slice(), matched, cancel)?;
+            child.evaluate(children.as_slice(), matched);
             for &(output, start, end) in owners.iter() {
                 if !hits[output] && matched[start..end].contains(&true) {
                     hits[output] = true;
@@ -219,10 +212,8 @@ fn elements<'a>(
             }
             children.clear();
             owners.clear();
-            Ok(())
         };
         for (output, row) in rows.iter().enumerate() {
-            cancel.check()?;
             if let Some(mask) = incoming {
                 if !mask[output] {
                     continue;
@@ -235,7 +226,7 @@ fn elements<'a>(
             let mut next = span.start;
             while next < span.end && !hits[output] {
                 if children.len() == CHUNK {
-                    flush(&mut children, &mut owners, hits, &mut matched)?;
+                    flush(&mut children, &mut owners, hits, &mut matched);
                 }
                 let end = (next + (CHUNK - children.len())).min(span.end);
                 let start = children.len();
@@ -243,11 +234,11 @@ fn elements<'a>(
                 owners.push((output, start, children.len()));
                 next = end;
                 if children.len() == CHUNK {
-                    flush(&mut children, &mut owners, hits, &mut matched)?;
+                    flush(&mut children, &mut owners, hits, &mut matched);
                 }
             }
         }
-        flush(&mut children, &mut owners, hits, &mut matched)
+        flush(&mut children, &mut owners, hits, &mut matched);
     }))
 }
 
@@ -262,7 +253,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::Cancellation;
 
     fn dictionary(keys: Int32Array) -> ArrayRef {
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
@@ -280,21 +270,18 @@ mod tests {
             Some(9_999),
         ]));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, hits, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, hits| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
             }
-            Ok(())
         }));
         let predicate = dictionary_find(&array, |_| Ok(Some(child)))
             .unwrap()
             .unwrap();
         let rows = [3, 1, 2];
         let mut hits = [false; 3];
-        predicate
-            .evaluate(&rows[..], &mut hits, &Cancellation::default())
-            .unwrap();
+        predicate.evaluate(&rows[..], &mut hits);
         assert_eq!(*selected.lock().unwrap(), [9_999, 2]);
         assert_eq!(hits, [false, true, false]);
     }
@@ -313,21 +300,18 @@ mod tests {
             None,
         ));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, hits, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, hits| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
             }
-            Ok(())
         }));
         let child = dictionary_find(&dictionary, |_| Ok(Some(child)))
             .unwrap()
             .unwrap();
         let predicate = elements(&list, child, |_| 0..2);
         let mut hits = [false];
-        predicate
-            .evaluate(0..1, &mut hits, &Cancellation::default())
-            .unwrap();
+        predicate.evaluate(0..1, &mut hits);
         assert_eq!(*selected.lock().unwrap(), [9_999, 2]);
         assert_eq!(hits, [true]);
     }
@@ -343,16 +327,13 @@ mod tests {
             None,
         ));
         let calls = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, _hits, _| {
+        let child = Predicate::new(Box::new(|rows, _incoming, _hits| {
             let len = rows.len();
             let first = rows.iter().next().unwrap();
             calls.lock().unwrap().push((first, len));
-            Ok(())
         }));
         let predicate = elements(&list, child, move |_| 0..len);
-        predicate
-            .evaluate(0..1, &mut [false], &Cancellation::default())
-            .unwrap();
+        predicate.evaluate(0..1, &mut [false]);
         assert_eq!(*calls.lock().unwrap(), [
             (0, CHUNK),
             (CHUNK, CHUNK),

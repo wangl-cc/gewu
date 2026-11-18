@@ -1,27 +1,24 @@
 //! Exact native order statistics. Only source IDs are materialized; no widened
-//! column or full sort is needed. Selection checks cancellation during partitions.
-
-use std::cmp::Ordering;
+//! column or full sort is needed.
 
 use arrow::{
     array::{
-        downcast_integer_array, make_comparator, Array, ArrayRef, AsArray, DynComparator,
-        Time32SecondArray, TimestampSecondArray,
+        downcast_integer_array, make_comparator, Array, ArrayRef, AsArray, Time32SecondArray,
+        TimestampSecondArray,
     },
     compute::SortOptions,
     datatypes::*,
 };
 
 use super::numeric::Numeric;
-use crate::{col_view::ColView, format, stats::Result, Cancellation};
+use crate::{col_view::ColView, format, stats::Result};
 
-pub(crate) fn label(view: ColView<'_>, context: &Cancellation) -> Result<Option<String>> {
+pub(crate) fn label(view: ColView<'_>) -> Result<Option<String>> {
     let value = Numeric::new(view.array())
         .expect("validated numeric statistics")
         .accessor();
     let mut ids = Vec::with_capacity(view.len());
-    for (i, row) in view.iter().enumerate() {
-        context.check_at(i)?;
+    for row in view.iter() {
         if value(row).is_some_and(|v| !v.is_nan()) {
             ids.push(row as u32);
         }
@@ -34,8 +31,9 @@ pub(crate) fn label(view: ColView<'_>, context: &Cancellation) -> Result<Option<
         view.array().as_ref(),
         SortOptions::default(),
     )?;
+    let cmp = |a: &u32, b: &u32| compare(*a as usize, *b as usize);
     let middle = ids.len() / 2;
-    select(&mut ids, middle, &compare, &mut || Ok(context.check()?))?;
+    ids.select_nth_unstable_by(middle, cmp);
     let high = ids[middle] as usize;
     if ids.len() % 2 == 1 {
         return Ok(format::cell(
@@ -44,83 +42,11 @@ pub(crate) fn label(view: ColView<'_>, context: &Cancellation) -> Result<Option<
             high,
         ));
     }
-    let mut low = ids[0] as usize;
-    for (i, &row) in ids[..middle].iter().enumerate() {
-        context.check_at(i)?;
-        if compare(low, row as usize).is_lt() {
-            low = row as usize;
-        }
-    }
-    midpoint(view.array(), low, high)
-}
-
-// Median-of-three fast path, with a linear-work budget before switching to
-// median-of-medians pivots. The fallback prevents adversarial quadratic scans.
-fn select(
-    ids: &mut [u32],
-    nth: usize,
-    cmp: &DynComparator,
-    check: &mut impl FnMut() -> Result<()>,
-) -> Result<()> {
-    let mut range = ids;
-    let mut target = nth;
-    let mut budget = range.len().saturating_mul(3);
-    loop {
-        check()?;
-        if range.len() <= 16 {
-            range.sort_unstable_by(|a, b| cmp(*a as usize, *b as usize));
-            return Ok(());
-        }
-        let pivot = if budget >= range.len() {
-            budget -= range.len();
-            let mut candidates = [range[0], range[range.len() / 2], range[range.len() - 1]];
-            candidates.sort_unstable_by(|a, b| cmp(*a as usize, *b as usize));
-            candidates[1]
-        } else {
-            // Move the median of each bounded group into the prefix, then
-            // select that prefix's median recursively in the same ID buffer.
-            let groups = range.len().div_ceil(5);
-            for group in 0..groups {
-                if group.is_multiple_of(512) {
-                    check()?;
-                }
-                let start = group * 5;
-                let end = (start + 5).min(range.len());
-                range[start..end].sort_unstable_by(|a, b| cmp(*a as usize, *b as usize));
-                range.swap(group, start + (end - start) / 2);
-            }
-            select(&mut range[..groups], groups / 2, cmp, check)?;
-            range[groups / 2]
-        };
-        let (mut lower, mut current, mut upper) = (0, 0, range.len());
-        let mut work = 0usize;
-        while current < upper {
-            if work.is_multiple_of(4096) {
-                check()?;
-            }
-            work += 1;
-            match cmp(range[current] as usize, pivot as usize) {
-                Ordering::Less => {
-                    range.swap(lower, current);
-                    lower += 1;
-                    current += 1;
-                }
-                Ordering::Equal => current += 1,
-                Ordering::Greater => {
-                    upper -= 1;
-                    range.swap(current, upper);
-                }
-            }
-        }
-        if target < lower {
-            range = &mut range[..lower];
-        } else if target >= upper {
-            range = &mut range[upper..];
-            target -= upper;
-        } else {
-            return Ok(());
-        }
-    }
+    let low = *ids[..middle]
+        .iter()
+        .max_by(|a, b| cmp(a, b))
+        .expect("non-empty even prefix");
+    midpoint(view.array(), low as usize, high)
 }
 
 fn midpoint(array: &ArrayRef, low: usize, high: usize) -> Result<Option<String>> {
@@ -295,7 +221,7 @@ mod tests {
 
     fn median(array: ArrayRef) -> Option<String> {
         let all = crate::col_view::test::Fixture::all(&array);
-        label(all.view(), &Cancellation::default()).unwrap()
+        label(all.view()).unwrap()
     }
 
     #[test]
@@ -401,55 +327,12 @@ mod tests {
     }
 
     #[test]
-    fn selection_matches_sorted_reference_and_checks_cancellation() {
-        for values in [
-            (0..10003)
-                .map(|i| ((i * 104729) % 10003) as i64)
-                .collect::<Vec<_>>(),
-            (0..10003).rev().map(i64::from).collect(),
-            (0..10003).map(|i| i64::from(i % 7)).collect(),
-        ] {
-            let array: ArrayRef = Arc::new(Int64Array::from(values.clone()));
-            let cmp =
-                make_comparator(array.as_ref(), array.as_ref(), SortOptions::default()).unwrap();
-            let mut reference = values.clone();
-            reference.sort_unstable();
-            for target in [0, 1, values.len() / 2, values.len() - 1] {
-                let mut ids = (0..values.len() as u32).collect::<Vec<_>>();
-                select(&mut ids, target, &cmp, &mut || Ok(())).unwrap();
-                assert_eq!(values[ids[target] as usize], reference[target]);
-                assert!(ids[..target]
-                    .iter()
-                    .all(|id| values[*id as usize] <= reference[target]));
-            }
-            let mut checks = 0;
-            let mut ids = (0..values.len() as u32).collect::<Vec<_>>();
-            assert!(matches!(
-                select(&mut ids, values.len() / 2, &cmp, &mut || {
-                    checks += 1;
-                    if checks == 3 {
-                        Err(crate::AnalysisError::Cancelled(crate::CancellationError))
-                    } else {
-                        Ok(())
-                    }
-                }),
-                Err(crate::AnalysisError::Cancelled(_))
-            ));
-        }
+    fn filtered_and_reordered_selections_match_sorted_median() {
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
         let selected = crate::col_view::test::Fixture::new(&array, vec![3, 1]);
-        assert_eq!(
-            label(selected.view(), &Cancellation::default())
-                .unwrap()
-                .as_deref(),
-            Some("51.5")
-        );
-        let context = Cancellation::default();
-        context.cancel();
-        let all = crate::col_view::test::Fixture::all(&array);
-        assert!(matches!(
-            label(all.view(), &context),
-            Err(crate::AnalysisError::Cancelled(_))
-        ));
+        assert_eq!(label(selected.view()).unwrap().as_deref(), Some("51.5"));
+
+        let odd = crate::col_view::test::Fixture::new(&array, vec![3, 0, 2]);
+        assert_eq!(label(odd.view()).unwrap().as_deref(), Some("100"));
     }
 }

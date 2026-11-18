@@ -7,17 +7,15 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Cancellation, Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
+use gewu_core::{Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
 use parquet::arrow::ArrowWriter;
 
 fn statistics(doc: &std::sync::Arc<gewu_core::View>) -> NumericStatistics {
-    doc.analyze_statistics(0, &gewu_core::Cancellation::default())
-        .unwrap()
+    doc.analyze_statistics(0).unwrap()
 }
 
 fn values(doc: &std::sync::Arc<gewu_core::View>) -> ValueSummary {
-    doc.analyze_values(0, &gewu_core::Cancellation::default())
-        .unwrap()
+    doc.analyze_values(0).unwrap()
 }
 
 fn document(array: ArrayRef) -> Arc<gewu_core::Dataset> {
@@ -36,9 +34,7 @@ fn check_range(
     expected: &[u64],
 ) -> Arc<gewu_core::View> {
     let spec = QuerySpec::single(0, Filter::range(min, max, false));
-    let view = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap();
+    let view = doc.query(&spec).unwrap();
     assert_eq!(
         view.rows(0, 100, &[0]).unwrap().source_rows,
         expected,
@@ -81,10 +77,10 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(
-                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
-                        &Cancellation::default()
-                    ),
+                    doc.query(&QuerySpec::single(
+                        0,
+                        Filter::range(Some((input).to_owned()), None, false)
+                    )),
                     Err(Error::Filter(_))
                 ));
             }
@@ -123,10 +119,10 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(
-                        &QuerySpec::single(0, Filter::range(Some((input).to_owned()), None, false)),
-                        &Cancellation::default()
-                    ),
+                    doc.query(&QuerySpec::single(
+                        0,
+                        Filter::range(Some((input).to_owned()), None, false)
+                    )),
                     Err(Error::Filter(_))
                 ));
             }
@@ -189,12 +185,8 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
         &[0, 1, 2, 3],
     );
 
-    signed
-        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
-        .unwrap();
-    unsigned
-        .query(&QuerySpec::default(), &gewu_core::Cancellation::default())
-        .unwrap();
+    signed.query(&QuerySpec::default()).unwrap();
+    unsigned.query(&QuerySpec::default()).unwrap();
     assert_eq!(values(&signed.view()).distinct_count, 4);
     assert_eq!(values(&unsigned.view()).distinct_count, 4);
 }
@@ -218,10 +210,10 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
     check_range(&doc, Some(("inf").to_owned()), None, &[4]);
     check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.query(
-            &QuerySpec::single(0, Filter::range(Some(("NaN").to_owned()), None, false)),
-            &Cancellation::default()
-        ),
+        doc.query(&QuerySpec::single(
+            0,
+            Filter::range(Some(("NaN").to_owned()), None, false)
+        )),
         Err(Error::Filter(_))
     ));
 }
@@ -240,23 +232,17 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
 
     check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.query(
-            &QuerySpec::single(
-                0,
-                Filter::range(Some(("not a number").to_owned()), None, false)
-            ),
-            &Cancellation::default()
-        ),
+        integers.query(&QuerySpec::single(
+            0,
+            Filter::range(Some(("not a number").to_owned()), None, false)
+        )),
         Err(Error::Filter(_))
     ));
     assert!(integers
-        .query(
-            &QuerySpec::single(
-                0,
-                Filter::range(Some(("not a number").to_owned()), None, false)
-            ),
-            &Cancellation::default()
-        )
+        .query(&QuerySpec::single(
+            0,
+            Filter::range(Some(("not a number").to_owned()), None, false)
+        ))
         .is_err());
 
     let floats = document(Arc::new(Float32Array::from(vec![0.0, 0.1, 1.0])));
@@ -333,13 +319,13 @@ fn float32_summary_and_histogram_follow_selected_rows() {
     );
     let histogram = doc
         .view()
-        .filter_distribution(0, 2, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(0, 2, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
         (
-            doc.view().count_nulls(0, &Cancellation::default()).unwrap(),
+            doc.view().count_nulls(0).unwrap(),
             summary.nan_count,
             doc.view().row_count()
         ),
@@ -353,12 +339,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         (2, 2, Some(2.5))
     );
     let histogram = doc
-        .analyze_distribution(
-            0,
-            2,
-            gewu_core::AxisScale::Linear,
-            &gewu_core::Cancellation::default(),
-        )
+        .analyze_distribution(0, 2, gewu_core::AxisScale::Linear)
         .unwrap();
     assert_eq!((histogram.lo, histogram.hi), (Some(2.0), Some(3.0)));
     assert_eq!(histogram.counts, [1, 1]);
@@ -388,12 +369,7 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         );
         let histogram = doc
             .view()
-            .filter_distribution(
-                0,
-                10,
-                gewu_core::AxisScale::Linear,
-                &Cancellation::default(),
-            )
+            .filter_distribution(0, 10, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert!(histogram.integer);

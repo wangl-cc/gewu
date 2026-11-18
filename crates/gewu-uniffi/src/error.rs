@@ -172,7 +172,6 @@ impl From<core::Error> for GewuError {
                     message,
                 },
                 core::FindError::Filter(kind) => filter_error(kind, message),
-                core::FindError::Cancelled(_) => Self::Cancelled,
                 core::FindError::EmptyQuery
                 | core::FindError::InvalidPageSize { .. }
                 | core::FindError::InvalidHighlightRows { .. }
@@ -261,7 +260,6 @@ fn filter_error(kind: core::FilterError, message: String) -> GewuError {
         core::FilterError::PatternCompilationFailed { .. } => {
             FilterErrorKind::PatternCompilationFailed
         }
-        core::FilterError::Cancelled(_) => return GewuError::Cancelled,
         core::FilterError::Bound(_)
         | core::FilterError::UnsupportedType { .. }
         | core::FilterError::RangeTypeMismatch { .. }
@@ -293,7 +291,6 @@ fn analysis_error(kind: core::AnalysisError, message: String) -> GewuError {
             operation: operation.into(),
             data_type: data_type.to_string(),
         },
-        core::AnalysisError::Cancelled(_) => return GewuError::Cancelled,
         core::AnalysisError::InvalidBinCount { .. }
         | core::AnalysisError::InvalidScatterLimit { .. }
         | core::AnalysisError::UnsupportedOperation { .. }
@@ -349,7 +346,7 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
             operation: error.operation.into(),
             message,
         },
-        core::ExportError::Cancelled(_) => GewuError::Cancelled,
+        core::ExportError::Cancelled => GewuError::Cancelled,
         core::ExportError::AlreadyStarted | core::ExportError::Internal(_) => {
             GewuError::Internal { message }
         }

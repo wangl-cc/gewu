@@ -298,7 +298,7 @@ pub(super) fn write(
     }
     progress.check()?;
     workbook.save_to_writer(file)?;
-    Ok(progress.check()?)
+    progress.check()
 }
 
 fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {
@@ -319,13 +319,12 @@ fn excel_number(array: &dyn Array, row: usize) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     use arrow::array::{Decimal128Array, UInt64Array};
     use calamine::{ExcelDateTime, ExcelDateTimeType};
 
     use super::*;
-    use crate::Cancellation;
 
     #[test]
     fn inference_uses_all_values_and_preserves_mixed_values() {
@@ -483,7 +482,7 @@ mod tests {
         ])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = Cancellation::default();
+        let cancelled = AtomicBool::new(false);
         let rows_written = AtomicU64::new(0);
         write(
             file.as_file_mut(),
@@ -493,7 +492,7 @@ mod tests {
                 rows: &[1, 0],
             },
             WriteProgress {
-                cancellation: &cancelled,
+                cancelled: &cancelled,
                 rows_written: &rows_written,
             },
         )
@@ -575,7 +574,7 @@ mod tests {
         )])
         .unwrap();
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let cancelled = Cancellation::default();
+        let cancelled = AtomicBool::new(false);
         let rows_written = AtomicU64::new(0);
         let schema = batch.schema();
         let data = ExportData {
@@ -584,7 +583,7 @@ mod tests {
             rows: &[],
         };
         let progress = WriteProgress {
-            cancellation: &cancelled,
+            cancelled: &cancelled,
             rows_written: &rows_written,
         };
         write(file.as_file_mut(), data, progress).unwrap();
@@ -617,10 +616,10 @@ mod tests {
             Err(crate::ExportError::XlsxColumns { .. })
         ));
 
-        cancelled.cancel();
+        cancelled.store(true, Ordering::Relaxed);
         assert!(matches!(
             write(file.as_file_mut(), data, progress),
-            Err(crate::ExportError::Cancelled(_))
+            Err(crate::ExportError::Cancelled)
         ));
     }
 }

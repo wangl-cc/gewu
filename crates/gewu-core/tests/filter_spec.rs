@@ -5,7 +5,7 @@ use arrow::array::{
     ArrayRef, Decimal128Array, Float64Array, Int32Array, RecordBatch, StringArray,
     TimestampNanosecondArray, UInt64Array,
 };
-use gewu_core::{AxisScale, Cancellation, Error, Filter, QuerySpec};
+use gewu_core::{AxisScale, Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> Arc<gewu_core::Dataset> {
@@ -32,30 +32,20 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
             )),
         ),
     ]);
-    let original = doc
-        .view()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap()
-        .values
-        .unwrap();
+    let original = doc.view().filter_choices(0).unwrap().values.unwrap();
     assert_eq!(original.iter().map(|v| v.count).collect::<Vec<_>>(), [
         200, 200, 200
     ]);
-    assert!(doc
-        .view()
-        .filter_choices(1, &Cancellation::default())
-        .unwrap()
-        .values
-        .is_none());
+    assert!(doc.view().filter_choices(1).unwrap().values.is_none());
     assert!(doc.info().columns[1].capabilities.range);
     assert!(doc.info().columns[1].capabilities.exact);
     assert!(doc.info().columns[2].capabilities.text_match);
     assert!(doc.info().columns[2].capabilities.exact);
     let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc
-        .query(&spec, &gewu_core::Cancellation::default())
+        .query(&spec)
         .unwrap()
-        .filter_choices(0, &Cancellation::default())
+        .filter_choices(0)
         .unwrap()
         .values
         .unwrap();
@@ -67,16 +57,11 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         0,
         Filter::exact(vec![values[0].value.clone()], false, false),
     );
+    assert_eq!(doc.query(&chosen).unwrap().row_count(), 200);
     assert_eq!(
-        doc.query(&chosen, &gewu_core::Cancellation::default())
+        doc.query(&chosen)
             .unwrap()
-            .row_count(),
-        200
-    );
-    assert_eq!(
-        doc.query(&chosen, &gewu_core::Cancellation::default())
-            .unwrap()
-            .filter_choices(0, &Cancellation::default())
+            .filter_choices(0)
             .unwrap()
             .values
             .unwrap(),
@@ -93,22 +78,19 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
     )]);
     let distribution = doc
         .view()
-        .filter_distribution(0, 60, AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(0, 60, AxisScale::Linear)
         .unwrap()
         .unwrap();
     for (bin, bounds) in distribution.ranges.iter().enumerate() {
         let view = doc
-            .query(
-                &QuerySpec::single(
-                    0,
-                    Filter::range(
-                        bounds.min.as_ref().map(|b| b.value.clone()),
-                        bounds.max.as_ref().map(|b| b.value.clone()),
-                        false,
-                    ),
+            .query(&QuerySpec::single(
+                0,
+                Filter::range(
+                    bounds.min.as_ref().map(|b| b.value.clone()),
+                    bounds.max.as_ref().map(|b| b.value.clone()),
+                    false,
                 ),
-                &gewu_core::Cancellation::default(),
-            )
+            ))
             .unwrap();
         assert_eq!(view.row_count(), distribution.histogram.counts[bin]);
     }
@@ -119,10 +101,10 @@ fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
     let before = doc.view();
     assert!(matches!(
-        doc.query(
-            &QuerySpec::single(0, Filter::range(Some("invalid".into()), None, false)),
-            &gewu_core::Cancellation::default()
-        ),
+        doc.query(&QuerySpec::single(
+            0,
+            Filter::range(Some("invalid".into()), None, false)
+        )),
         Err(Error::Filter(gewu_core::FilterError::Bound(
             gewu_core::BoundError::InvalidValue { .. }
         )))
@@ -146,10 +128,7 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
             None,
         ])),
     )]);
-    let choices = doc
-        .view()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap();
+    let choices = doc.view().filter_choices(0).unwrap();
     assert_eq!(choices.null_count, 1);
     let values = choices.values.unwrap();
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
@@ -157,10 +136,10 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
     ]);
     for value in values {
         assert_eq!(
-            doc.query(
-                &QuerySpec::single(0, Filter::exact(vec![value.value], false, false)),
-                &gewu_core::Cancellation::default()
-            )
+            doc.query(&QuerySpec::single(
+                0,
+                Filter::exact(vec![value.value], false, false)
+            ))
             .unwrap()
             .row_count(),
             value.count
@@ -175,10 +154,7 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
             "value",
             Arc::new(Int32Array::from_iter((0..count).map(Some).chain([None]))),
         )]);
-        let choices = doc
-            .view()
-            .filter_choices(0, &Cancellation::default())
-            .unwrap();
+        let choices = doc.view().filter_choices(0).unwrap();
         assert_eq!(choices.null_count, 1);
         assert_eq!(choices.values.is_some(), bounded);
     }
@@ -188,7 +164,7 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
     )]);
     assert!(doc
         .view()
-        .filter_choices(0, &Cancellation::default())
+        .filter_choices(0)
         .unwrap()
         .values
         .unwrap()
@@ -203,17 +179,12 @@ fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
             (0..100_001).map(|i| format!("value-{i:06}")),
         )),
     )]);
-    assert!(doc
-        .view()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap()
-        .values
-        .is_none());
+    assert!(doc.view().filter_choices(0).unwrap().values.is_none());
     let view = doc
-        .query(
-            &QuerySpec::single(0, Filter::exact(vec!["value-100000".into()], false, false)),
-            &gewu_core::Cancellation::default(),
-        )
+        .query(&QuerySpec::single(
+            0,
+            Filter::exact(vec!["value-100000".into()], false, false),
+        ))
         .unwrap();
     assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, [100_000]);
 }
@@ -236,11 +207,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
     let spec = QuerySpec::all(2)
         .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
         .with_filter(1, Filter::exact(vec!["1".into()], false, false));
-    let choices = doc
-        .query(&spec, &gewu_core::Cancellation::default())
-        .unwrap()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap();
+    let choices = doc.query(&spec).unwrap().filter_choices(0).unwrap();
     assert_eq!(
         choices
             .values
@@ -251,9 +218,9 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         [("Cat", 1)]
     );
     assert_eq!(
-        doc.query(&spec, &gewu_core::Cancellation::default())
+        doc.query(&spec)
             .unwrap()
-            .filter_choices(0, &Cancellation::default())
+            .filter_choices(0)
             .unwrap()
             .null_count,
         0
@@ -267,10 +234,10 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .query(
-                &QuerySpec::single(0, Filter::exact(values, exclude, include_nulls)),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(
+                0,
+                Filter::exact(values, exclude, include_nulls),
+            ))
             .unwrap();
         assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, expected);
     }
@@ -302,7 +269,7 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
     for column in 0..3 {
         for (row, value) in doc
             .view()
-            .filter_choices(column, &Cancellation::default())
+            .filter_choices(column)
             .unwrap()
             .values
             .unwrap()
@@ -310,13 +277,10 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             .enumerate()
         {
             let view = doc
-                .query(
-                    &QuerySpec::single(
-                        column,
-                        Filter::exact(vec![value.value.clone()], false, false),
-                    ),
-                    &gewu_core::Cancellation::default(),
-                )
+                .query(&QuerySpec::single(
+                    column,
+                    Filter::exact(vec![value.value.clone()], false, false),
+                ))
                 .unwrap();
             assert_eq!(view.rows(0, 10, &[column]).unwrap().source_rows, [
                 row as u64
@@ -331,12 +295,7 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         "value",
         Arc::new(Int32Array::from_iter((0..300).map(Some).chain([None]))),
     )]);
-    assert!(doc
-        .view()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap()
-        .values
-        .is_none());
+    assert!(doc.view().filter_choices(0).unwrap().values.is_none());
     for (exclude, include_nulls, count) in [
         (false, false, 2),
         (false, true, 3),
@@ -344,13 +303,10 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         (true, true, 299),
     ] {
         let view = doc
-            .query(
-                &QuerySpec::single(
-                    0,
-                    Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
-                ),
-                &gewu_core::Cancellation::default(),
-            )
+            .query(&QuerySpec::single(
+                0,
+                Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
+            ))
             .unwrap();
         assert_eq!(view.row_count(), count);
     }

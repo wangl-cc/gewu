@@ -2,22 +2,20 @@
 
 use arrow::{array::Array, datatypes::DataType};
 
-use crate::{col_view::ColView, stats::Result, types, types::display_type, Cancellation};
+use crate::{col_view::ColView, stats::Result, types, types::display_type};
 
-pub(crate) fn count_nulls(view: ColView<'_>, cancellation: &Cancellation) -> Result<u64> {
-    let null_count = match view.array().logical_nulls() {
+pub(crate) fn count_nulls(view: ColView<'_>) -> u64 {
+    match view.array().logical_nulls() {
         None => 0,
         Some(nulls) if view.is_complete() => nulls.null_count() as u64,
         Some(nulls) => {
             let mut count = 0;
-            for (i, row) in view.iter().enumerate() {
-                cancellation.check_at(i)?;
+            for row in view.iter() {
                 count += u64::from(nulls.is_null(row));
             }
             count
         }
-    };
-    Ok(null_count)
+    }
 }
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.
@@ -115,7 +113,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AxisScale, Cancellation, Dataset, Error, View};
+    use crate::{AxisScale, Dataset, Error, View};
 
     fn dataset(array: &ArrayRef) -> Arc<Dataset> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
@@ -187,28 +185,21 @@ mod tests {
         let text = view(&array);
         let number = view(&(Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef));
         let binary = view(&(Arc::new(arrow::array::BinaryArray::from_vec(vec![b"x"])) as ArrayRef));
-        let cancel = Cancellation::default();
         assert!(matches!(
-            text.analyze_statistics(0, &cancel),
+            text.analyze_statistics(0),
             Err(Error::Analysis(_))
         ));
         assert!(matches!(
-            number.analyze_lengths(0, 10, &cancel),
+            number.analyze_lengths(0, 10),
             Err(Error::Analysis(_))
         ));
-        assert!(matches!(
-            binary.analyze_values(0, &cancel),
-            Err(Error::Analysis(_))
-        ));
+        assert!(matches!(binary.analyze_values(0), Err(Error::Analysis(_))));
         assert!(matches!(
             dataset(&array).column_structure(0),
             Err(Error::Analysis(_))
         ));
-        assert_eq!(text.count_nulls(0, &cancel).unwrap(), 0);
-        assert_eq!(
-            number.analyze_statistics(0, &cancel).unwrap().mean,
-            Some(1.0)
-        );
+        assert_eq!(text.count_nulls(0).unwrap(), 0);
+        assert_eq!(number.analyze_statistics(0).unwrap().mean, Some(1.0));
     }
 
     #[test]
@@ -219,21 +210,20 @@ mod tests {
         ));
         let numbers = view(&numbers);
         let text = view(&text);
-        let cancel = Cancellation::default();
         assert!(matches!(
-            numbers.analyze_distribution(0, 0, AxisScale::Linear, &cancel),
+            numbers.analyze_distribution(0, 0, AxisScale::Linear),
             Err(Error::Analysis(_))
         ));
         assert!(matches!(
-            text.analyze_lengths(0, 0, &cancel),
+            text.analyze_lengths(0, 0),
             Err(Error::Analysis(_))
         ));
         for bins in [10, 20] {
             for histogram in [
                 numbers
-                    .analyze_distribution(0, bins, AxisScale::Linear, &cancel)
+                    .analyze_distribution(0, bins, AxisScale::Linear)
                     .unwrap(),
-                text.analyze_lengths(0, bins, &cancel).unwrap().histogram,
+                text.analyze_lengths(0, bins).unwrap().histogram,
             ] {
                 assert_eq!(histogram.counts.len(), bins as usize);
                 assert_eq!(histogram.counts.iter().sum::<u64>(), 100);
@@ -245,18 +235,17 @@ mod tests {
     fn distribution_rejects_unsupported_types_and_logarithmic_temporal_axes() {
         let text: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
         let dates: ArrayRef = Arc::new(arrow::array::Date32Array::from(vec![1, 2]));
-        let cancellation = Cancellation::default();
         assert!(matches!(
-            view(&text).analyze_distribution(0, 2, AxisScale::Linear, &cancellation),
+            view(&text).analyze_distribution(0, 2, AxisScale::Linear),
             Err(Error::Analysis(_))
         ));
         assert!(matches!(
-            view(&dates).analyze_distribution(0, 2, AxisScale::Log10, &cancellation),
+            view(&dates).analyze_distribution(0, 2, AxisScale::Log10),
             Err(Error::Analysis(_))
         ));
         assert_eq!(
             view(&dates)
-                .analyze_distribution(0, 2, AxisScale::Linear, &cancellation)
+                .analyze_distribution(0, 2, AxisScale::Linear)
                 .unwrap()
                 .counts
                 .iter()
@@ -274,9 +263,7 @@ mod tests {
             None,
         ]] {
             let array: ArrayRef = Arc::new(Float64Array::from(values));
-            let statistics = view(&array)
-                .analyze_statistics(0, &Cancellation::default())
-                .unwrap();
+            let statistics = view(&array).analyze_statistics(0).unwrap();
             assert_eq!(statistics.infinite_count, 1);
             assert_eq!(statistics.nan_count, u64::from(array.len() > 1));
             assert_eq!((statistics.mean, statistics.std_dev), (None, None));
@@ -294,13 +281,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let null_count = view(&array)
-            .count_nulls(0, &Cancellation::default())
-            .unwrap();
+        let null_count = view(&array).count_nulls(0).unwrap();
         assert_eq!(null_count, 2);
-        let summary = view(&array)
-            .analyze_values(0, &Cancellation::default())
-            .unwrap();
+        let summary = view(&array).analyze_values(0).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
             summary

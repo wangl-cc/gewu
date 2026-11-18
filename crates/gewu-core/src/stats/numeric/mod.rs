@@ -9,7 +9,7 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use crate::{stats::Result, Cancellation};
+use crate::stats::Result;
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -104,12 +104,8 @@ impl<'a> Numeric<'a> {
     }
 
     /// Compute moments and retain source rows for exact extrema.
-    fn summarize(
-        self,
-        rows: impl Iterator<Item = usize>,
-        context: &Cancellation,
-    ) -> Result<summary::NumericSummary> {
-        dispatch!(self.0, summarize(rows, context))
+    fn summarize(self, rows: impl Iterator<Item = usize>) -> summary::NumericSummary {
+        dispatch!(self.0, summarize(rows))
     }
 
     /// One scalar conversion per access; dispatch and borrowing happen once.
@@ -118,17 +114,13 @@ impl<'a> Numeric<'a> {
     }
 }
 
-pub(crate) fn analyze(
-    view: crate::col_view::ColView<'_>,
-    context: &Cancellation,
-) -> Result<NumericStatistics> {
-    context.check()?;
+pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStatistics> {
     let summary = Numeric::new(view.array())
         .ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
             operation: crate::AnalysisOperation::Statistics,
             data_type: view.data_type().clone(),
         })?
-        .summarize(view.iter(), context)?;
+        .summarize(view.iter());
     let formatter = crate::format::formatter(view.array().as_ref())?;
     let label = |row: Option<usize>| {
         row.and_then(|row| crate::format::cell(view.array().as_ref(), &formatter, row))
@@ -136,7 +128,7 @@ pub(crate) fn analyze(
     Ok(NumericStatistics {
         min_label: label(summary.min_row),
         max_label: label(summary.max_row),
-        median_label: super::median::label(view, context)?,
+        median_label: super::median::label(view)?,
         mean: summary.mean.filter(|v| v.is_finite()),
         mean_label: temporal_mean_label(view.data_type(), summary.mean)?,
         std_dev: summary

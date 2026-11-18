@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{numeric::Numeric, AxisScale};
-use crate::{format, stats::Result, Cancellation};
+use crate::{format, stats::Result};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -56,7 +56,7 @@ pub struct ScatterResult {
     pub points: Vec<ScatterPoint>,
 }
 
-/// Scan a borrowed view with a caller-owned cancellation signal.
+/// Scan a borrowed view for a bounded scatter sample.
 pub(crate) fn analyze(
     x: Option<(u32, &ArrayRef)>,
     y: (u32, &ArrayRef),
@@ -64,9 +64,7 @@ pub(crate) fn analyze(
     limit: u32,
     x_scale: AxisScale,
     y_scale: AxisScale,
-    context: &Cancellation,
 ) -> Result<ScatterResult> {
-    context.check()?;
     if !(1..=MAX_SCATTER_POINTS).contains(&limit) {
         return Err(crate::AnalysisError::InvalidScatterLimit {
             value: limit,
@@ -100,14 +98,12 @@ pub(crate) fn analyze(
     }
     let limit = limit as usize;
 
-    context.check()?;
     let read_x = x.as_ref().map(|(_, a)| Numeric::new(a).unwrap().accessor());
     let read_y = Numeric::new(y.1).unwrap().accessor();
     let mut sample = BinaryHeap::with_capacity(limit);
     let mut eligible_rows = 0;
     let mut non_positive_rows = 0;
-    for (index, &row) in rows.iter().enumerate() {
-        context.check_at(index)?;
+    for &row in rows {
         let xv = read_x
             .as_ref()
             .map_or(Some(f64::from(row)), |get| get(row as usize));
@@ -139,7 +135,6 @@ pub(crate) fn analyze(
     let yf = format::formatter(y.1.as_ref())?;
     let mut points = Vec::with_capacity(ids.len());
     for row in ids {
-        context.check()?;
         points.push(ScatterPoint {
             source_row: u64::from(row),
             x: read_x
@@ -152,7 +147,6 @@ pub(crate) fn analyze(
             y_label: yf.value(row as usize).to_string(),
         });
     }
-    context.check()?;
     Ok(ScatterResult {
         x_axis_kind: x.as_ref().map_or(ScatterAxisKind::Number, |(_, array)| {
             ScatterAxisKind::from_arrow(array.data_type())
@@ -187,7 +181,6 @@ mod tests {
     fn axis_kinds_describe_the_snapshot_even_without_points() {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1]));
         let timestamps: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![0]));
-        let c = Cancellation::default();
         let result = analyze(
             Some((0, &dates)),
             (1, &timestamps),
@@ -195,7 +188,6 @@ mod tests {
             8,
             AxisScale::Linear,
             AxisScale::Linear,
-            &c,
         )
         .unwrap();
         assert!(result.points.is_empty());
@@ -208,7 +200,6 @@ mod tests {
             8,
             AxisScale::Linear,
             AxisScale::Linear,
-            &c,
         )
         .unwrap();
         assert_eq!(result.x_axis_kind, ScatterAxisKind::Number);
@@ -218,7 +209,7 @@ mod tests {
             (AxisScale::Linear, AxisScale::Log10),
         ] {
             assert!(matches!(
-                analyze(None, (0, &dates), &[0], 8, x, y, &c),
+                analyze(None, (0, &dates), &[0], 8, x, y),
                 Err(crate::AnalysisError::UnsupportedOperation { .. }
                     | crate::AnalysisError::UnsupportedAxisScale { .. })
             ));
@@ -260,7 +251,6 @@ mod tests {
                 8,
                 xs,
                 ys,
-                &Cancellation::default(),
             )
             .unwrap();
             assert_eq!(
@@ -290,7 +280,6 @@ mod tests {
                 5,
                 AxisScale::Linear,
                 AxisScale::Log10,
-                &Cancellation::default(),
             )
             .unwrap()
         };
@@ -330,7 +319,6 @@ mod tests {
             4.0,
             5.5,
         ]));
-        let c = Cancellation::default();
         let result = analyze(
             Some((0, &x)),
             (1, &y),
@@ -338,7 +326,6 @@ mod tests {
             8,
             AxisScale::Linear,
             AxisScale::Linear,
-            &c,
         )
         .unwrap();
         assert_eq!((result.eligible_rows, result.points.len()), (2, 2));
@@ -359,7 +346,6 @@ mod tests {
             8,
             AxisScale::Linear,
             AxisScale::Linear,
-            &c,
         )
         .unwrap();
         assert_eq!(
@@ -375,7 +361,6 @@ mod tests {
                     limit,
                     AxisScale::Linear,
                     AxisScale::Linear,
-                    &c
                 ),
                 Err(crate::AnalysisError::InvalidScatterLimit { .. })
             ));
@@ -389,12 +374,11 @@ mod tests {
                 1,
                 AxisScale::Linear,
                 AxisScale::Linear,
-                &c
             ),
             Err(crate::AnalysisError::UnsupportedOperation { .. })
         ));
         let many: ArrayRef = Arc::new(Int64Array::from_iter_values(0..20000));
-        let sample = |rows: Vec<u32>, cancel: &Cancellation| {
+        let sample = |rows: Vec<u32>| {
             analyze(
                 None,
                 (0, &many),
@@ -402,11 +386,10 @@ mod tests {
                 64,
                 AxisScale::Linear,
                 AxisScale::Linear,
-                cancel,
             )
         };
-        let first = sample((0..20000).collect(), &c).unwrap();
-        let reversed = sample((0..20000).rev().collect(), &c).unwrap();
+        let first = sample((0..20000).collect()).unwrap();
+        let reversed = sample((0..20000).rev().collect()).unwrap();
         assert!(first.eligible_rows > first.points.len() as u64);
         assert_eq!((first.eligible_rows, first.points.len()), (20000, 64));
         assert_eq!(
@@ -421,9 +404,5 @@ mod tests {
                 .map(|p| p.source_row)
                 .collect::<Vec<_>>()
         );
-        assert!(matches!(
-            sample((0..20000).collect(), &Cancellation::after_checks(5)),
-            Err(crate::AnalysisError::Cancelled(_))
-        ));
     }
 }

@@ -135,7 +135,6 @@ final class InspectorModel: ObservableObject {
                 }
             } catch {
                 guard !Task.isCancelled, request == ticket else { return }
-                if case GewuError.Cancelled = error { break }
                 if error is CancellationError { break }
                 errors[section] = error.userMessage
             }

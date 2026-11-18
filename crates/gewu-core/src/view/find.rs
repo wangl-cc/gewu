@@ -8,7 +8,7 @@ use crate::{Find, Result};
 impl View {
     /// Capture a view, query and ordered visible-column scope for cell Find.
     /// Preparation is cheap and does not scan rows. The returned session remains
-    /// valid after later view changes and owns independent cancellation.
+    /// valid after later view changes.
     pub fn find(&self, query: &str, columns: &[u32]) -> Result<Find> {
         let mut seen = BTreeSet::new();
         let columns = columns

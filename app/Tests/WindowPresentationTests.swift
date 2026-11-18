@@ -45,13 +45,12 @@ struct WindowPresentationTests {
             ColSpec(column: 0, sort: nil, filter: exact("bj")),
             ColSpec(column: 1, sort: ColSort(priority: 0, descending: true), filter: exact("haidian")),
         ])
-        let applied = try dataset.query(spec: spec, cancellation: Cancellation())
+        let applied = try dataset.query(spec: spec)
         #expect(applied.rowCount() == 1)
 
         // The district editor keeps city = bj but not its own district = haidian.
-        let district = try FilterFacet(spec: spec, column: 1).resolve(
-            dataset: dataset, cancellation: Cancellation())
-        let choices = try district.filterChoices(column: 1, cancellation: Cancellation())
+        let district = try FilterFacet(spec: spec, column: 1).resolve(dataset: dataset)
+        let choices = try district.filterChoices(column: 1)
         #expect(choices.values?.map(\.label) == ["chaoyang", "haidian"])
 
         // A column without its own filter reuses the applied view.
@@ -74,7 +73,7 @@ struct WindowPresentationTests {
         let expected: [FilterMode] = [.exact, .exact, .range, .text]
         for (index, column) in dataset.info().columns.enumerated() {
             #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
-            let choices = try view.filterChoices(column: UInt32(index), cancellation: Cancellation())
+            let choices = try view.filterChoices(column: UInt32(index))
             #expect(
                 FilterMode.initial(capabilities: column.capabilities, current: nil, choices: choices)
                     == expected[index])
@@ -95,10 +94,10 @@ struct WindowPresentationTests {
         // Value selection waits for choices and needs a complete list of values.
         let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)
         #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
-        let labels = try view.filterChoices(column: 1, cancellation: Cancellation())
+        let labels = try view.filterChoices(column: 1)
         #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)
         let manyLabels = dataset.info().columns[3].capabilities
-        let unlisted = try view.filterChoices(column: 3, cancellation: Cancellation())
+        let unlisted = try view.filterChoices(column: 3)
         #expect(unlisted.values == nil)
         #expect(FilterMode.initial(capabilities: manyLabels, current: selected, choices: unlisted) == .text)
     }

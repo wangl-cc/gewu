@@ -63,7 +63,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::Cancellation;
 
     #[test]
     fn unsearchable_children_produce_no_predicate() {
@@ -103,9 +102,7 @@ mod tests {
         ] {
             let predicate = compile(&array, query, None).unwrap().unwrap();
             let mut matches = [false; 3];
-            predicate
-                .evaluate(0..3, &mut matches, &Cancellation::default())
-                .unwrap();
+            predicate.evaluate(0..3, &mut matches);
             assert_eq!(matches, expected);
         }
     }

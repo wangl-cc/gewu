@@ -1,19 +1,20 @@
 import Foundation
 
-/// Run a synchronous scan off the UI thread and forward the owning Task's cancellation.
-func runCancellable<T: Sendable>(
-    cancellation: Cancellation,
-    operation: @escaping @Sendable () throws -> T
-) async throws -> T {
-    try await withTaskCancellationHandler {
-        try Task.checkCancellation()
-        let result = try await Task.detached(priority: .userInitiated) {
-            try operation()
-        }.value
-        try Task.checkCancellation()
-        return result
-    } onCancel: {
-        cancellation.cancel()
+/// Per-request cancellation flag checked before a queued synchronous FFI call starts.
+final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 }
 

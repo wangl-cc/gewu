@@ -51,23 +51,12 @@ impl GewuView {
         }))
     }
 
-    pub fn count_nulls(
-        &self,
-        column: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<u64, GewuError> {
-        Ok(self.inner.count_nulls(column, &cancellation.inner)?)
+    pub fn count_nulls(&self, column: u32) -> Result<u64, GewuError> {
+        Ok(self.inner.count_nulls(column)?)
     }
 
-    pub fn analyze_statistics(
-        &self,
-        column: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<crate::NumericStatistics, GewuError> {
-        Ok(self
-            .inner
-            .analyze_statistics(column, &cancellation.inner)?
-            .into())
+    pub fn analyze_statistics(&self, column: u32) -> Result<crate::NumericStatistics, GewuError> {
+        Ok(self.inner.analyze_statistics(column)?.into())
     }
 
     pub fn analyze_distribution(
@@ -75,46 +64,27 @@ impl GewuView {
         column: u32,
         bins: u32,
         scale: AxisScale,
-        cancellation: Arc<crate::Cancellation>,
     ) -> Result<crate::Histogram, GewuError> {
         Ok(self
             .inner
-            .analyze_distribution(column, bins, scale.into(), &cancellation.inner)?
+            .analyze_distribution(column, bins, scale.into())?
             .into())
     }
 
-    pub fn analyze_values(
-        &self,
-        column: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<crate::ValueSummary, GewuError> {
-        Ok(self
-            .inner
-            .analyze_values(column, &cancellation.inner)?
-            .into())
+    pub fn analyze_values(&self, column: u32) -> Result<crate::ValueSummary, GewuError> {
+        Ok(self.inner.analyze_values(column)?.into())
     }
 
     pub fn analyze_lengths(
         &self,
         column: u32,
         bins: u32,
-        cancellation: Arc<crate::Cancellation>,
     ) -> Result<crate::LengthSummary, GewuError> {
-        Ok(self
-            .inner
-            .analyze_lengths(column, bins, &cancellation.inner)?
-            .into())
+        Ok(self.inner.analyze_lengths(column, bins)?.into())
     }
 
-    pub fn filter_choices(
-        &self,
-        column: u32,
-        cancellation: Arc<crate::Cancellation>,
-    ) -> Result<FilterChoices, GewuError> {
-        Ok(self
-            .inner
-            .filter_choices(column, &cancellation.inner)?
-            .into())
+    pub fn filter_choices(&self, column: u32) -> Result<FilterChoices, GewuError> {
+        Ok(self.inner.filter_choices(column)?.into())
     }
 
     pub fn filter_distribution(
@@ -122,11 +92,10 @@ impl GewuView {
         column: u32,
         bins: u32,
         scale: AxisScale,
-        cancellation: Arc<crate::Cancellation>,
     ) -> Result<Option<RangeHistogram>, GewuError> {
         Ok(self
             .inner
-            .filter_distribution(column, bins, scale.into(), &cancellation.inner)?
+            .filter_distribution(column, bins, scale.into())?
             .map(Into::into))
     }
 
@@ -137,18 +106,10 @@ impl GewuView {
         limit: u32,
         x_scale: AxisScale,
         y_scale: AxisScale,
-        cancellation: Arc<crate::Cancellation>,
     ) -> Result<crate::ScatterResult, GewuError> {
         Ok(self
             .inner
-            .analyze_scatter(
-                x_column,
-                y_column,
-                limit,
-                x_scale.into(),
-                y_scale.into(),
-                &cancellation.inner,
-            )?
+            .analyze_scatter(x_column, y_column, limit, x_scale.into(), y_scale.into())?
             .into())
     }
 }

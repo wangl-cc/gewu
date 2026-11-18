@@ -20,30 +20,13 @@ fn typed_filters_compile_and_execute_across_ffi() {
     assert!(doc.info().columns[0].capabilities.scatter);
     let points = doc
         .view()
-        .analyze_scatter(
-            None,
-            0,
-            4,
-            AxisScale::Linear,
-            AxisScale::Linear,
-            Cancellation::new(),
-        )
+        .analyze_scatter(None, 0, 4, AxisScale::Linear, AxisScale::Linear)
         .unwrap();
     assert_eq!(points.eligible_rows, 2);
     assert_eq!(points.eligible_rows, points.points.len() as u64);
     assert_eq!(points.points[1].source_row, 1);
     assert_eq!(points.points[1].y_label, "9007199254740993");
-    let cancelled = Cancellation::new();
-    cancelled.cancel();
-    assert!(matches!(
-        doc.view()
-            .analyze_scatter(None, 0, 4, AxisScale::Linear, AxisScale::Linear, cancelled),
-        Err(GewuError::Cancelled)
-    ));
-    let statistics = doc
-        .view()
-        .analyze_statistics(0, crate::Cancellation::new())
-        .unwrap();
+    let statistics = doc.view().analyze_statistics(0).unwrap();
     assert_eq!(
         statistics.median_label.as_deref(),
         Some("9007199254740992.5")
@@ -59,8 +42,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
                     max: None
                 },
                 include_nulls: false,
-            }),
-            crate::Cancellation::new()
+            })
         ),
         Err(GewuError::Filter {
             kind: crate::FilterErrorKind::InvalidValue {
@@ -71,12 +53,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
             ..
         }) if value == "not a number" && expected_type == "Int64"
     ));
-    let values = doc
-        .view()
-        .filter_choices(0, crate::Cancellation::new())
-        .unwrap()
-        .values
-        .unwrap();
+    let values = doc.view().filter_choices(0).unwrap().values.unwrap();
     assert_eq!(values[1].value, "9007199254740993");
     assert_eq!(before.row_count(), 2);
     for condition in [
@@ -90,13 +67,10 @@ fn typed_filters_compile_and_execute_across_ffi() {
         },
     ] {
         let view = doc
-            .query(
-                query(0, Filter {
-                    condition,
-                    include_nulls: false,
-                }),
-                Cancellation::new(),
-            )
+            .query(query(0, Filter {
+                condition,
+                include_nulls: false,
+            }))
             .unwrap();
         let rows = view.rows(0, 10, vec![0]).unwrap();
         assert_eq!(rows.source_rows, [1]);
@@ -127,21 +101,18 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert!(info.columns[0].capabilities.text_match);
     assert!(info.columns[0].capabilities.exact);
     assert!(matches!(
-        doc.view().analyze_statistics(0, crate::Cancellation::new()),
+        doc.view().analyze_statistics(0),
         Err(GewuError::Internal { .. })
     ));
     let equals = |case_sensitive| {
-        doc.query(
-            query(0, Filter {
-                condition: FilterCondition::Text {
-                    text: "CAT".into(),
-                    mode: crate::TextMatch::Equals,
-                    case_sensitive,
-                },
-                include_nulls: false,
-            }),
-            Cancellation::new(),
-        )
+        doc.query(query(0, Filter {
+            condition: FilterCondition::Text {
+                text: "CAT".into(),
+                mode: crate::TextMatch::Equals,
+                case_sensitive,
+            },
+            include_nulls: false,
+        }))
         .unwrap()
         .row_count()
     };
@@ -155,9 +126,9 @@ fn text_filter_modes_and_choices_cross_ffi() {
         include_nulls: false,
     });
     let choices = doc
-        .query(state, Cancellation::new())
+        .query(state)
         .unwrap()
-        .filter_choices(0, Cancellation::new())
+        .filter_choices(0)
         .unwrap()
         .values
         .unwrap();
@@ -171,16 +142,13 @@ fn text_filter_modes_and_choices_cross_ffi() {
         "Only current-view values are candidates"
     );
     let view = doc
-        .query(
-            query(0, Filter {
-                condition: FilterCondition::Exact {
-                    values: vec!["dog".into()],
-                    exclude: false,
-                },
-                include_nulls: false,
-            }),
-            Cancellation::new(),
-        )
+        .query(query(0, Filter {
+            condition: FilterCondition::Exact {
+                values: vec!["dog".into()],
+                exclude: false,
+            },
+            include_nulls: false,
+        }))
         .unwrap();
     assert_eq!(view.rows(0, 10, vec![0]).unwrap().cells, [Some(
         "dog".into()
@@ -203,19 +171,18 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
     let custom = doc
         .view()
-        .filter_distribution(0, 10, AxisScale::Linear, crate::Cancellation::new())
+        .filter_distribution(0, 10, AxisScale::Linear)
         .unwrap()
         .unwrap();
     assert_eq!(custom.histogram.counts.len(), 10);
     assert_eq!(custom.histogram.counts.iter().sum::<u64>(), 1_000);
     assert!(matches!(
-        doc.view()
-            .filter_distribution(0, 0, AxisScale::Linear, crate::Cancellation::new()),
+        doc.view().filter_distribution(0, 0, AxisScale::Linear),
         Err(GewuError::Internal { .. })
     ));
     let distribution = doc
         .view()
-        .filter_distribution(0, 60, AxisScale::Linear, crate::Cancellation::new())
+        .filter_distribution(0, 60, AxisScale::Linear)
         .unwrap()
         .unwrap();
     assert_eq!(distribution.histogram.min_label, Some(base.to_string()));
@@ -236,16 +203,13 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     ] {
         let bounds = &distribution.ranges[bin];
         let view = doc
-            .query(
-                query(0, Filter {
-                    condition: FilterCondition::Range {
-                        min: bounds.min.as_ref().map(|b| b.value.clone()),
-                        max: bounds.max.as_ref().map(|b| b.value.clone()),
-                    },
-                    include_nulls: false,
-                }),
-                Cancellation::new(),
-            )
+            .query(query(0, Filter {
+                condition: FilterCondition::Range {
+                    min: bounds.min.as_ref().map(|b| b.value.clone()),
+                    max: bounds.max.as_ref().map(|b| b.value.clone()),
+                },
+                include_nulls: false,
+            }))
             .unwrap();
         assert_eq!(view.row_count(), distribution.histogram.counts[bin]);
     }
@@ -298,16 +262,13 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 "cat".into()
             )]);
             let filtered = selected
-                .query(
-                    query(0, Filter {
-                        condition: FilterCondition::Exact {
-                            values: vec!["cat".into()],
-                            exclude: false,
-                        },
-                        include_nulls: false,
-                    }),
-                    Cancellation::new(),
-                )
+                .query(query(0, Filter {
+                    condition: FilterCondition::Exact {
+                        values: vec!["cat".into()],
+                        exclude: false,
+                    },
+                    include_nulls: false,
+                }))
                 .unwrap();
             assert_eq!(filtered.row_count(), 1);
             assert_eq!(reopened.view().row_count(), 2);

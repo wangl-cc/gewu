@@ -3,7 +3,6 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 
 use super::{super::Dictionary, *};
-use crate::Cancellation;
 
 mod float {
     use arrow::{
@@ -68,9 +67,7 @@ mod float {
         ]);
         for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
             let array = arrow::compute::cast(&source, &data_type).unwrap();
-            let dictionary = Dictionary::build(&array, &Cancellation::default())
-                .unwrap()
-                .unwrap();
+            let dictionary = Dictionary::build(&array).unwrap().unwrap();
             assert_eq!(dictionary.n_values(), 3, "{data_type:?}");
             assert!((dictionary.null_count() > 0), "{data_type:?}");
 
@@ -117,9 +114,7 @@ mod integer {
     #[test]
     fn numbers_group_distinct_values() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![10, -3, 2, 10]));
-        let dictionary = Dictionary::build(&a, &Cancellation::default())
-            .unwrap()
-            .unwrap();
+        let dictionary = Dictionary::build(&a).unwrap().unwrap();
         assert_eq!(dictionary.n_values(), 3);
     }
 
@@ -139,9 +134,7 @@ mod integer {
             DataType::Int64,
         ] {
             let array = cast(&signed, &data_type).expect("integer cast");
-            let dictionary = Dictionary::build(&array, &Cancellation::default())
-                .unwrap()
-                .expect("encoded");
+            let dictionary = Dictionary::build(&array).unwrap().expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
             assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
@@ -164,9 +157,7 @@ mod integer {
             DataType::UInt64,
         ] {
             let array = cast(&unsigned, &data_type).expect("unsigned cast");
-            let dictionary = Dictionary::build(&array, &Cancellation::default())
-                .unwrap()
-                .expect("encoded");
+            let dictionary = Dictionary::build(&array).unwrap().expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
             assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
@@ -233,9 +224,7 @@ mod temporal {
         ];
         for (array, data_type) in cases {
             assert_eq!(array.data_type(), &data_type);
-            let dictionary = Dictionary::build(&array, &Cancellation::default())
-                .unwrap()
-                .expect("encoded");
+            let dictionary = Dictionary::build(&array).unwrap().expect("encoded");
             assert_eq!(dictionary.n_values(), 3, "{data_type}");
             assert!((dictionary.null_count() > 0));
             assert_eq!(dictionary.code_at(0), dictionary.code_at(2), "{data_type}");
@@ -261,9 +250,7 @@ mod decimal {
                 .with_precision_and_scale(10, 2)
                 .unwrap(),
         );
-        let dictionary = Dictionary::build(&d128, &Cancellation::default())
-            .unwrap()
-            .expect("encoded");
+        let dictionary = Dictionary::build(&d128).unwrap().expect("encoded");
         assert_eq!(dictionary.n_values(), 3);
         assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));
@@ -281,9 +268,7 @@ mod decimal {
             .with_precision_and_scale(76, 0)
             .unwrap(),
         );
-        let dictionary = Dictionary::build(&d256, &Cancellation::default())
-            .unwrap()
-            .expect("encoded");
+        let dictionary = Dictionary::build(&d256).unwrap().expect("encoded");
         assert_eq!(dictionary.n_values(), 2);
         assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(3));
@@ -305,9 +290,7 @@ mod boolean {
             Some(true),
             None,
         ]));
-        let dictionary = Dictionary::build(&array, &Cancellation::default())
-            .unwrap()
-            .expect("encoded");
+        let dictionary = Dictionary::build(&array).unwrap().expect("encoded");
         assert_eq!(dictionary.n_values(), 2);
         assert!((dictionary.null_count() > 0));
         assert_eq!(dictionary.code_at(0), dictionary.code_at(2));

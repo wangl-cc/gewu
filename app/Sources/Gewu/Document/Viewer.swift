@@ -135,7 +135,7 @@ final class Viewer {
     /// target viewport before committing the new View and its presentation.
     func query(_ spec: QuerySpec, debounce: Bool = false) async throws -> GewuView {
         try Task.checkCancellation()
-        let signal = Cancellation()
+        let flag = CancelFlag()
         let dataset = dataset
         let worker = worker
         return try await withTaskCancellationHandler {
@@ -143,8 +143,12 @@ final class Viewer {
             try Task.checkCancellation()
             let view: GewuView = try await withCheckedThrowingContinuation { continuation in
                 worker.async {
+                    guard !flag.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
                     do {
-                        continuation.resume(returning: try dataset.query(spec: spec, cancellation: signal))
+                        continuation.resume(returning: try dataset.query(spec: spec))
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -153,7 +157,7 @@ final class Viewer {
             try Task.checkCancellation()
             return view
         } onCancel: {
-            signal.cancel()
+            flag.cancel()
         }
     }
 
@@ -184,7 +188,7 @@ final class Viewer {
         if facet.usesAppliedView { return applied.rowView }
         let dataset = dataset
         return try await run {
-            try facet.resolve(dataset: dataset, cancellation: $0)
+            try facet.resolve(dataset: dataset)
         }
     }
 
@@ -192,10 +196,10 @@ final class Viewer {
         let applied = applied
         let dataset = dataset
         let facet = FilterFacet(spec: applied.spec, column: column)
-        return try await scan(epoch.filterChoices, key: column, slot: .choices(column)) { signal in
+        return try await scan(epoch.filterChoices, key: column, slot: .choices(column)) {
             let view =
-                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset, cancellation: signal)
-            return try view.filterChoices(column: column, cancellation: signal)
+                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset)
+            return try view.filterChoices(column: column)
         }
     }
 
@@ -204,10 +208,10 @@ final class Viewer {
         let applied = applied
         let dataset = dataset
         let facet = FilterFacet(spec: applied.spec, column: column)
-        return try await scan(epoch.filterDistributions, key: key, slot: .filterDistribution(column)) { signal in
+        return try await scan(epoch.filterDistributions, key: key, slot: .filterDistribution(column)) {
             let view =
-                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset, cancellation: signal)
-            return try view.filterDistribution(column: column, bins: bins, scale: scale, cancellation: signal)
+                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset)
+            return try view.filterDistribution(column: column, bins: bins, scale: scale)
         }
     }
 
@@ -216,14 +220,14 @@ final class Viewer {
     func countNulls(_ column: UInt32) async throws -> UInt64 {
         let view = applied.view
         return try await scan(epoch.nullCounts, key: column, slot: .nulls(column)) {
-            try view.countNulls(column: column, cancellation: $0)
+            try view.countNulls(column: column)
         }
     }
 
     func statistics(_ column: UInt32) async throws -> NumericStatistics {
         let view = applied.view
         return try await scan(epoch.statistics, key: column, slot: .statistics(column)) {
-            try view.analyzeStatistics(column: column, cancellation: $0)
+            try view.analyzeStatistics(column: column)
         }
     }
 
@@ -231,14 +235,14 @@ final class Viewer {
         let view = applied.view
         let key = DistributionKey(column: column, bins: bins, scale: scale)
         return try await scan(epoch.distributions, key: key, slot: .distribution(column)) {
-            try view.analyzeDistribution(column: column, bins: bins, scale: scale, cancellation: $0)
+            try view.analyzeDistribution(column: column, bins: bins, scale: scale)
         }
     }
 
     func values(_ column: UInt32) async throws -> ValueSummary {
         let view = applied.view
         return try await scan(epoch.values, key: column, slot: .values(column)) {
-            try view.analyzeValues(column: column, cancellation: $0)
+            try view.analyzeValues(column: column)
         }
     }
 
@@ -246,7 +250,7 @@ final class Viewer {
         let view = applied.view
         let key = LengthKey(column: column, bins: bins)
         return try await scan(epoch.lengths, key: key, slot: .lengths(column)) {
-            try view.analyzeLengths(column: column, bins: bins, cancellation: $0)
+            try view.analyzeLengths(column: column, bins: bins)
         }
     }
 
@@ -257,13 +261,13 @@ final class Viewer {
         let key = ScatterKey(x: x, y: y, limit: limit, xScale: xScale, yScale: yScale)
         return try await scan(epoch.scatter, key: key, slot: .scatter) {
             try view.analyzeScatter(
-                xColumn: x, yColumn: y, limit: limit, xScale: xScale, yScale: yScale, cancellation: $0)
+                xColumn: x, yColumn: y, limit: limit, xScale: xScale, yScale: yScale)
         }
     }
 
     private func scan<Key: Hashable, Value: Sendable>(
         _ cache: ResultCache<Key, Value>, key: Key, slot: Slot,
-        _ compute: @escaping @Sendable (Cancellation) throws -> Value
+        _ compute: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
         try Task.checkCancellation()
         let epoch = epoch
@@ -281,16 +285,14 @@ final class Viewer {
     }
 
     /// Synchronous FFI scans share one worker. Cancelled queued operations never call Core.
-    private func run<Value: Sendable>(_ compute: @escaping @Sendable (Cancellation) throws -> Value) async throws
+    private func run<Value: Sendable>(_ compute: @escaping @Sendable () throws -> Value) async throws
         -> Value
     {
         try Task.checkCancellation()
         let epoch = epoch
-        let signal = Cancellation()
-        let operation = ViewerScan { try compute(signal) }
+        let operation = ViewerScan(compute)
         let id = ObjectIdentifier(operation)
         epoch.active[id] = {
-            signal.cancel()
             operation.cancel()
         }
         defer { epoch.active[id] = nil }
@@ -306,7 +308,6 @@ final class Viewer {
             guard epoch === self.epoch, !operation.isCancelled else { throw CancellationError() }
             return result
         } onCancel: {
-            signal.cancel()
             operation.cancel()
         }
     }
@@ -350,11 +351,11 @@ struct FilterFacet {
     }
 
     /// May run a query over the whole dataset; call off the main actor.
-    func resolve(dataset: GewuDataset, cancellation: Cancellation) throws -> GewuView {
+    func resolve(dataset: GewuDataset) throws -> GewuView {
         let others = spec.columns.compactMap { entry -> ColSpec? in
             guard entry.column != column, let filter = entry.filter else { return nil }
             return ColSpec(column: entry.column, sort: nil, filter: filter)
         }
-        return try dataset.query(spec: QuerySpec(columns: others), cancellation: cancellation)
+        return try dataset.query(spec: QuerySpec(columns: others))
     }
 }

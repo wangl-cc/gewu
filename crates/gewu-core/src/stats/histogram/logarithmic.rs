@@ -7,13 +7,12 @@ use arrow::{
 };
 use num_traits::ToPrimitive;
 
-use super::{Cancellation, Histogram, Output, RangeBounds};
+use super::{Histogram, Output, RangeBounds};
 use crate::{col_view::ColView, scalar::Bound, stats::Result, AxisScale};
 
-pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellation) -> Result<H> {
+pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
     let array = view.array();
     let rows = view.rows();
-    context.check()?;
     if bins == 0 {
         return Err(crate::AnalysisError::InvalidBinCount {
             operation: crate::AnalysisOperation::Distribution,
@@ -31,16 +30,15 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellat
     let bins = bins as usize;
     match array.data_type() {
         t if t.is_integer() => {
-            downcast_integer_array!(array => integer(array, rows, bins, context), _ => unreachable!("integer dispatch"))
+            downcast_integer_array!(array => integer(array, rows, bins), _ => unreachable!("integer dispatch"))
         }
-        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), rows, bins, context),
-        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), rows, bins, context),
-        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), rows, bins, context),
+        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), rows, bins),
+        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), rows, bins),
+        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), rows, bins),
         DataType::Decimal32(_, scale) => decimal(
             array.as_primitive::<Decimal32Type>(),
             rows,
             bins,
-            context,
             *scale,
             |v| i256::from_i128(i128::from(v)),
             |v| v.to_i128().expect("native coefficient domain") as i32,
@@ -49,7 +47,6 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellat
             array.as_primitive::<Decimal64Type>(),
             rows,
             bins,
-            context,
             *scale,
             |v| i256::from_i128(i128::from(v)),
             |v| v.to_i128().expect("native coefficient domain") as i64,
@@ -58,7 +55,6 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellat
             array.as_primitive::<Decimal128Type>(),
             rows,
             bins,
-            context,
             *scale,
             i256::from_i128,
             |v| v.to_i128().expect("native coefficient domain"),
@@ -67,7 +63,6 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellat
             array.as_primitive::<Decimal256Type>(),
             rows,
             bins,
-            context,
             *scale,
             |v| v,
             |v| v,
@@ -79,16 +74,14 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32, context: &Cancellat
 fn positive_extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     rows: &[u32],
-    context: &Cancellation,
     positive: impl Fn(T::Native) -> bool,
-) -> Result<Option<(T::Native, T::Native)>>
+) -> Option<(T::Native, T::Native)>
 where
     T::Native: PartialOrd,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
+    for row in rows.iter().map(|&row| row as usize) {
         let value = array.is_valid(row).then(|| array.value(row));
-        context.check_at(index)?;
         if let Some(value) = value.filter(|&v| positive(v)) {
             extrema = Some(match extrema {
                 Some((lo, hi)) => (
@@ -99,8 +92,7 @@ where
             });
         }
     }
-    context.check()?;
-    Ok(extrema)
+    extrema
 }
 
 /// The native grid can collapse adjacent geometric cuts. Keep only increasing
@@ -111,13 +103,11 @@ fn cuts<N: Copy + PartialOrd>(
     log_min: f64,
     log_max: f64,
     bins: usize,
-    context: &Cancellation,
     native: impl Fn(f64) -> Option<N>,
-) -> Result<Vec<N>> {
+) -> Vec<N> {
     let mut cuts = Vec::with_capacity(bins.saturating_sub(1));
     if log_min < log_max {
         for index in 1..bins {
-            context.check_at(index)?;
             let exponent = log_min + (log_max - log_min) * (index as f64 / bins as f64);
             let Some(cut) = native(10_f64.powf(exponent)) else {
                 continue;
@@ -127,29 +117,27 @@ fn cuts<N: Copy + PartialOrd>(
             }
         }
     }
-    Ok(cuts)
+    cuts
 }
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &[u32],
     bins: usize,
-    context: &Cancellation,
 ) -> Result<H>
 where
     T::Native: Into<i128> + TryFrom<i128> + Ord,
 {
-    let extrema = positive_extrema(array, rows, context, |value| value.into() > 0)?;
+    let extrema = positive_extrema(array, rows, |value| value.into() > 0);
     let Some((min, max)) = extrema else {
-        return H::finish(
-            count(array, rows, empty(), context, |_| Class::NonPositive)?,
-            || Ok(Vec::new()),
-        );
+        return H::finish(count(array, rows, empty(), |_| Class::NonPositive), || {
+            Ok(Vec::new())
+        });
     };
     let (lo, hi) = ((min.into() as f64).log10(), (max.into() as f64).log10());
-    let cuts = cuts(min, max, lo, hi, bins, context, |value| {
+    let cuts = cuts(min, max, lo, hi, bins, |value| {
         T::Native::try_from(value.ceil() as i128).ok()
-    })?;
+    });
     let bound = |value: T::Native| {
         if array.data_type().is_unsigned_integer() {
             Ok(Bound::from_u64(array.data_type(), value.into() as u64)?)
@@ -163,23 +151,16 @@ where
         lo,
         ((max.into() + 1) as f64).log10(),
         cuts.iter().map(|&value| (value.into() as f64).log10()),
-        context,
-    )?;
-    let histogram = count(
-        array,
-        rows,
-        with_domain(edges, &lower, &upper),
-        context,
-        |value| {
-            if value.into() <= 0 {
-                Class::NonPositive
-            } else {
-                Class::Bin(cuts.partition_point(|&cut| cut <= value))
-            }
-        },
-    )?;
+    );
+    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
+        if value.into() <= 0 {
+            Class::NonPositive
+        } else {
+            Class::Bin(cuts.partition_point(|&cut| cut <= value))
+        }
+    });
     H::finish(histogram, || {
-        finite_ranges(&cuts, lower, upper, context, bound, |value| {
+        finite_ranges(&cuts, lower, upper, bound, |value| {
             let previous = T::Native::try_from(value.into() - 1)
                 .ok()
                 .expect("positive cut predecessor");
@@ -192,7 +173,6 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &[u32],
     bins: usize,
-    context: &Cancellation,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
     narrow: impl Fn(i256) -> T::Native,
@@ -200,12 +180,11 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Ord,
 {
-    let extrema = positive_extrema(array, rows, context, |value| widen(value) > i256::ZERO)?;
+    let extrema = positive_extrema(array, rows, |value| widen(value) > i256::ZERO);
     let Some((min, max)) = extrema else {
-        return H::finish(
-            count(array, rows, empty(), context, |_| Class::NonPositive)?,
-            || Ok(Vec::new()),
-        );
+        return H::finish(count(array, rows, empty(), |_| Class::NonPositive), || {
+            Ok(Vec::new())
+        });
     };
     let (min_coefficient, max_coefficient) = (widen(min), widen(max));
     // Work in coefficient space: the decimal scale only shifts the log axis.
@@ -218,11 +197,11 @@ where
         .to_f64()
         .expect("i256 exponent fits f64")
         .log10();
-    let cuts = cuts(min, max, lo, hi, bins, context, |value| {
+    let cuts = cuts(min, max, lo, hi, bins, |value| {
         let coefficient = i256::from_f64(value.ceil())?;
         (coefficient > min_coefficient && coefficient <= max_coefficient)
             .then(|| narrow(coefficient))
-    })?;
+    });
     let bound = |value| Ok(Bound::from_decimal(array.data_type(), widen(value), scale)?);
     let lower = bound(min)?;
     let upper = bound(max)?;
@@ -241,23 +220,16 @@ where
                 .unwrap_or(max_coefficient),
         ),
         cuts.iter().map(|&value| log_value(widen(value))),
-        context,
-    )?;
-    let histogram = count(
-        array,
-        rows,
-        with_domain(edges, &lower, &upper),
-        context,
-        |value| {
-            if widen(value) <= i256::ZERO {
-                Class::NonPositive
-            } else {
-                Class::Bin(cuts.partition_point(|&cut| cut <= value))
-            }
-        },
-    )?;
+    );
+    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
+        if widen(value) <= i256::ZERO {
+            Class::NonPositive
+        } else {
+            Class::Bin(cuts.partition_point(|&cut| cut <= value))
+        }
+    });
     H::finish(histogram, || {
-        finite_ranges(&cuts, lower, upper, context, bound, |value| {
+        finite_ranges(&cuts, lower, upper, bound, |value| {
             Ok(Bound::from_decimal(
                 array.data_type(),
                 widen(value) - i256::ONE,
@@ -271,26 +243,25 @@ fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     rows: &[u32],
     bins: usize,
-    context: &Cancellation,
 ) -> Result<H>
 where
     T::Native: Into<f64> + PartialOrd,
 {
-    let extrema = positive_extrema(array, rows, context, |value| {
+    let extrema = positive_extrema(array, rows, |value| {
         let value = value.into();
         value > 0.0 && value.is_finite()
-    })?;
+    });
     let Some((min, max)) = extrema else {
         return H::finish(
-            count(array, rows, empty(), context, |value| {
+            count(array, rows, empty(), |value| {
                 classify_float(value.into(), &[])
-            })?,
+            }),
             || Ok(Vec::new()),
         );
     };
     let (min, max) = (min.into(), max.into());
     let (lo, hi) = (min.log10(), max.log10());
-    let cuts = cuts(min, max, lo, hi, bins, context, Some)?;
+    let cuts = cuts(min, max, lo, hi, bins, Some);
     let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let lower = bound(min)?;
     let upper = bound(max)?;
@@ -301,23 +272,12 @@ where
     } else {
         hi.next_up()
     };
-    let edges = plot_edges(
-        lo,
-        display_hi,
-        cuts.iter().map(|value| value.log10()),
-        context,
-    )?;
-    let histogram = count(
-        array,
-        rows,
-        with_domain(edges, &lower, &upper),
-        context,
-        |value| classify_float(value.into(), &cuts),
-    )?;
+    let edges = plot_edges(lo, display_hi, cuts.iter().map(|value| value.log10()));
+    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
+        classify_float(value.into(), &cuts)
+    });
     H::finish(histogram, || {
-        finite_ranges(&cuts, lower, upper, context, bound, |value| {
-            bound(value.next_down())
-        })
+        finite_ranges(&cuts, lower, upper, bound, |value| bound(value.next_down()))
     })
 }
 
@@ -358,17 +318,11 @@ fn empty() -> Histogram {
 /// Preserve the unequal widths left by rounding geometric cuts onto a native
 /// grid. Adjacent exact values can share a logarithm at f64 precision; nudge
 /// only those display coordinates, never the native cut or filter endpoint.
-fn plot_edges(
-    lo: f64,
-    hi: f64,
-    cuts: impl ExactSizeIterator<Item = f64>,
-    context: &Cancellation,
-) -> Result<Vec<f64>> {
+fn plot_edges(lo: f64, hi: f64, cuts: impl ExactSizeIterator<Item = f64>) -> Vec<f64> {
     let mut edges = Vec::with_capacity(cuts.len() + 2);
     edges.push(lo);
     let mut previous = lo;
-    for (index, edge) in cuts.chain(std::iter::once(hi)).enumerate() {
-        context.check_at(index)?;
+    for edge in cuts.chain(std::iter::once(hi)) {
         let edge = if edge <= previous {
             previous.next_up()
         } else {
@@ -377,7 +331,7 @@ fn plot_edges(
         edges.push(edge);
         previous = edge;
     }
-    Ok(edges)
+    edges
 }
 
 fn with_domain(bin_edges: Vec<f64>, min: &Bound, max: &Bound) -> Histogram {
@@ -396,11 +350,9 @@ fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
     rows: &[u32],
     mut histogram: Histogram,
-    context: &Cancellation,
     classify: impl Fn(T::Native) -> Class,
-) -> Result<Histogram> {
-    for (index, row) in rows.iter().map(|&row| row as usize).enumerate() {
-        context.check_at(index)?;
+) -> Histogram {
+    for row in rows.iter().map(|&row| row as usize) {
         if array.is_valid(row) {
             match classify(array.value(row)) {
                 Class::Bin(bin) => histogram.counts[bin] += 1,
@@ -410,21 +362,18 @@ fn count<T: ArrowPrimitiveType>(
             }
         }
     }
-    context.check()?;
-    Ok(histogram)
+    histogram
 }
 
 fn finite_ranges<N: Copy>(
     cuts: &[N],
     min: Bound,
     max: Bound,
-    context: &Cancellation,
     lower: impl Fn(N) -> Result<Bound>,
     upper: impl Fn(N) -> Result<Bound>,
 ) -> Result<Vec<RangeBounds>> {
     (0..=cuts.len())
         .map(|index| {
-            context.check_at(index)?;
             Ok(RangeBounds {
                 min: Some(
                     if index == 0 {
@@ -457,12 +406,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::{col_view::test::Fixture, Cancellation, Filter, RangeHistogram};
+    use crate::{col_view::test::Fixture, Filter, RangeHistogram};
 
     fn verify(fixture: Fixture, bins: u32) -> Histogram {
         let view = fixture.view();
-        let result: RangeHistogram = build(view, bins, &Cancellation::default()).unwrap();
-        let histogram: Histogram = build(view, bins, &Cancellation::default()).unwrap();
+        let result: RangeHistogram = build(view, bins).unwrap();
+        let histogram: Histogram = build(view, bins).unwrap();
         assert_eq!(histogram, result.histogram);
         assert_eq!(histogram.scale, AxisScale::Log10);
         assert_eq!(result.ranges.len(), histogram.counts.len());
@@ -483,23 +432,14 @@ mod tests {
             assert!(range.min.is_some() && range.max.is_some());
             let predicate = view
                 .column()
-                .compile_filter(
-                    &Filter::range(
-                        (range.min.clone()).map(|b| b.value),
-                        (range.max.clone()).map(|b| b.value),
-                        false,
-                    ),
-                    &Cancellation::default(),
-                )
+                .compile_filter(&Filter::range(
+                    (range.min.clone()).map(|b| b.value),
+                    (range.max.clone()).map(|b| b.value),
+                    false,
+                ))
                 .unwrap();
             let mut matched = vec![false; view.array().len()];
-            predicate
-                .evaluate(
-                    0..view.array().len(),
-                    &mut matched,
-                    &Cancellation::default(),
-                )
-                .unwrap();
+            predicate.evaluate(0..view.array().len(), &mut matched);
             assert_eq!(
                 view.rows()
                     .iter()
@@ -517,10 +457,8 @@ mod tests {
         );
         assert_eq!(
             histogram.counts.iter().sum::<u64>()
-                + crate::stats::count_nulls(view, &Cancellation::default()).unwrap()
-                + crate::stats::analyze_statistics(view, &Cancellation::default())
-                    .unwrap()
-                    .nan_count
+                + crate::stats::count_nulls(view)
+                + crate::stats::analyze_statistics(view).unwrap().nan_count
                 + histogram.non_positive_count
                 + histogram.infinite_count,
             view.len() as u64
@@ -664,16 +602,10 @@ mod tests {
         );
         let histogram = verify(Fixture::new(&array, vec![]), 5);
         assert!(histogram.counts.is_empty());
-        let context = Cancellation::default();
         let all = Fixture::all(&array);
-        assert!(build::<Histogram>(all.view(), 0, &context).is_err());
+        assert!(build::<Histogram>(all.view(), 0).is_err());
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1, 10]));
         let dates = Fixture::all(&dates);
-        assert!(build::<Histogram>(dates.view(), 5, &context).is_err());
-        context.cancel();
-        assert!(matches!(
-            build::<Histogram>(all.view(), 5, &context),
-            Err(crate::AnalysisError::Cancelled(_))
-        ));
+        assert!(build::<Histogram>(dates.view(), 5).is_err());
     }
 }

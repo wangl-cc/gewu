@@ -1,13 +1,11 @@
 //! File adapters translate external formats to and from Arrow data.
 //! Dataset owns decoded data; Export owns snapshots and destination commits.
 
-#[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
-use std::sync::atomic::Ordering;
 use std::{
     fs::File,
     io::{Read, Seek},
     path::Path,
-    sync::atomic::AtomicU64,
+    sync::atomic::{AtomicBool, AtomicU64},
 };
 
 use arrow::{
@@ -15,7 +13,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::{Cancellation, Result};
+use crate::Result;
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
@@ -313,18 +311,23 @@ impl ExportData<'_> {
     expect(dead_code, reason = "No codec reports progress in this configuration")
 )]
 pub(crate) struct WriteProgress<'a> {
-    pub cancellation: &'a Cancellation,
+    pub cancelled: &'a AtomicBool,
     pub rows_written: &'a AtomicU64,
 }
 
 #[cfg(any(feature = "parquet", feature = "csv", feature = "xlsx"))]
 impl WriteProgress<'_> {
-    pub fn check(self) -> Result<(), crate::CancellationError> {
-        self.cancellation.check()
+    pub fn check(self) -> Result<(), ExportError> {
+        if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            Err(ExportError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn advance(self, rows: usize) {
-        self.rows_written.fetch_add(rows as u64, Ordering::Relaxed);
+        self.rows_written
+            .fetch_add(rows as u64, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -5,7 +5,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Cancellation, Error, Filter, QuerySpec};
+use gewu_core::{Error, Filter, QuerySpec};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -53,9 +53,7 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Arc<gewu_core::Dataset>) {
 }
 
 fn labels_of(doc: &std::sync::Arc<gewu_core::View>, column: u32) -> Vec<(String, u64)> {
-    let choices = doc
-        .filter_choices(column, &Cancellation::default())
-        .unwrap();
+    let choices = doc.filter_choices(column).unwrap();
     let mut result = Vec::new();
     if choices.null_count > 0 {
         result.push(("<null>".into(), choices.null_count));
@@ -86,7 +84,7 @@ fn busy_spec() -> QuerySpec {
 fn choices_include_only_visible_values() {
     let (path, doc) = sample("distinct");
     let spec = busy_spec();
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
+    let view = doc.query(&spec).unwrap();
 
     // Both filters apply to all candidate columns: rows a and f.
     assert_eq!(labels_of(&view, 1), [("cat".into(), 1), ("dog".into(), 1),]);
@@ -103,14 +101,14 @@ fn choices_and_distribution_apply_column_filters() {
     let (path, doc) = sample("search");
     // "cat" matches labels of rows a and d.
     let spec = QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false));
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
+    let view = doc.query(&spec).unwrap();
     let names: Vec<String> = labels_of(&view, 0).into_iter().map(|(l, _)| l).collect();
     assert_eq!(names, ["a", "d"]);
 
     let h = doc
-        .query(&spec, &gewu_core::Cancellation::default())
+        .query(&spec)
         .unwrap()
-        .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(3, 6, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
@@ -124,17 +122,17 @@ fn histogram_domain_and_counts_use_visible_rows() {
     let spec = busy_spec().with_filter(3, Filter::range(Some("60".into()), None, false));
     // All filters apply: only row f remains.
     let h = doc
-        .query(&spec, &gewu_core::Cancellation::default())
+        .query(&spec)
         .unwrap()
-        .filter_distribution(3, 6, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(3, 6, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 1);
     // The price domain contains only the visible value.
     let h = doc
-        .query(&spec, &gewu_core::Cancellation::default())
+        .query(&spec)
         .unwrap()
-        .filter_distribution(2, 4, gewu_core::AxisScale::Linear, &Cancellation::default())
+        .filter_distribution(2, 4, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 1);
@@ -150,9 +148,7 @@ fn failed_apply_keeps_the_old_view() {
     let (path, doc) = sample("failed");
     let before = doc.view();
     let bad = QuerySpec::single(0, Filter::range(Some("1".into()), None, false));
-    assert!(doc
-        .query(&bad, &gewu_core::Cancellation::default())
-        .is_err());
+    assert!(doc.query(&bad).is_err());
     assert_eq!(
         doc.view().rows(0, 6, &[0]).unwrap().cells,
         before.rows(0, 6, &[0]).unwrap().cells
@@ -164,35 +160,17 @@ fn failed_apply_keeps_the_old_view() {
 fn unknown_column_is_an_argument_error() {
     let (path, doc) = sample("unknown");
     assert!(matches!(
-        doc.view().filter_choices(9, &Cancellation::default()),
+        doc.view().filter_choices(9),
         Err(Error::Column(_))
     ));
     assert!(matches!(
         doc.view()
-            .filter_distribution(
-                9,
-                10,
-                gewu_core::AxisScale::Linear,
-                &Cancellation::default()
-            )
+            .filter_distribution(9, 10, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram),
         Err(Error::Column(_))
     ));
     let v = doc.view();
     assert!(matches!(v.rows(0, 1, &[9]), Err(Error::Column(_))));
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn cancellation_belongs_to_one_request() {
-    let (path, doc) = sample("cancel");
-    let token = Cancellation::default();
-    token.cancel();
-    let spec = busy_spec();
-    assert!(matches!(doc.query(&spec, &token), Err(Error::Cancelled)));
-    let view = doc.query(&spec, &Cancellation::default()).unwrap();
-    assert_eq!(view.row_count(), 2);
-    assert_eq!(doc.view().row_count(), 6);
     std::fs::remove_file(path).ok();
 }
 
@@ -210,21 +188,12 @@ fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
     let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
     let (path, doc) = write("many", &batch);
 
-    let choices = doc
-        .view()
-        .filter_choices(0, &Cancellation::default())
-        .unwrap();
+    let choices = doc.view().filter_choices(0).unwrap();
     assert!(choices.values.is_none());
     assert_eq!(choices.null_count, 0);
     let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
-    assert_eq!(
-        doc.query(&by_value, &gewu_core::Cancellation::default())
-            .unwrap()
-            .row_count(),
-        (n / 1000) as u64
-    );
-    doc.query(&QuerySpec::all(1), &gewu_core::Cancellation::default())
-        .unwrap();
+    assert_eq!(doc.query(&by_value).unwrap().row_count(), (n / 1000) as u64);
+    doc.query(&QuerySpec::all(1)).unwrap();
 
     std::fs::remove_file(path).ok();
 }
@@ -232,10 +201,7 @@ fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
 #[test]
 fn value_analysis_excludes_nulls_and_recounts_candidates() {
     let (path, doc) = sample("summary");
-    let summary = doc
-        .view()
-        .analyze_values(1, &gewu_core::Cancellation::default())
-        .unwrap();
+    let summary = doc.view().analyze_values(1).unwrap();
     assert_eq!(summary.distinct_count, 3);
     let top: Vec<_> = summary
         .values
@@ -243,10 +209,7 @@ fn value_analysis_excludes_nulls_and_recounts_candidates() {
         .map(|v| (v.label.as_str(), v.count))
         .collect();
     assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
-    assert_eq!(
-        doc.view().count_nulls(1, &Cancellation::default()).unwrap(),
-        1
-    );
+    assert_eq!(doc.view().count_nulls(1).unwrap(), 1);
     std::fs::remove_file(path).ok();
 }
 
@@ -260,10 +223,7 @@ fn min_and_max_leave_out_nan() {
     ]));
     let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
     let (path, doc) = write("nan", &batch);
-    let s = doc
-        .view()
-        .analyze_statistics(0, &gewu_core::Cancellation::default())
-        .unwrap();
+    let s = doc.view().analyze_statistics(0).unwrap();
     assert_eq!(s.nan_count, 1);
     assert_eq!(s.min_label.as_deref(), Some("-1.5"));
     assert_eq!(s.max_label.as_deref(), Some("2.0"));

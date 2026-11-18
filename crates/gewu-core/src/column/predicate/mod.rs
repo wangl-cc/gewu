@@ -16,7 +16,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use crate::{execution::predicate::Predicate, scalar::Bound, types, Cancellation, Filter};
+use crate::{execution::predicate::Predicate, scalar::Bound, types, Filter};
 
 pub(crate) type Result<T> = std::result::Result<T, crate::FilterError>;
 
@@ -43,9 +43,7 @@ pub(crate) fn supports_equals(data_type: &DataType) -> bool {
 pub(crate) fn compile_filter<'a>(
     column: &'a super::Column,
     filter: &Filter,
-    cancel: &Cancellation,
 ) -> Result<Predicate<'a>> {
-    cancel.check()?;
     use crate::FilterCondition;
     // Conditions that depend only on the value are evaluated once per distinct
     // dictionary value, then rows are matched by code.
@@ -66,53 +64,45 @@ pub(crate) fn compile_filter<'a>(
         _ => None,
     };
     if let Some((condition, exclude)) = per_value {
-        if let Some(dictionary) = column.dictionary(cancel)? {
-            let selection = compile_condition(dictionary.values(), &condition, cancel)?;
+        if let Some(dictionary) = column.dictionary()? {
+            let selection = compile_condition(dictionary.values(), &condition)?;
             let mut matched = vec![false; dictionary.values().len()];
-            selection.evaluate(0..matched.len(), &mut matched, cancel)?;
+            selection.evaluate(0..matched.len(), &mut matched);
             return Ok(dictionary.matching_codes(&matched, exclude, filter.include_nulls));
         }
     }
     let array = &column.array;
-    let predicate = compile_condition(array, &filter.condition, cancel)?;
+    let predicate = compile_condition(array, &filter.condition)?;
     let nulls = array.logical_nulls();
     let include_nulls = filter.include_nulls;
-    Ok(Predicate::new(Box::new(
-        move |rows, incoming, output, cancel| {
-            predicate.evaluate_chunk(rows.clone(), incoming, output, cancel)?;
-            for (i, row) in rows.iter().enumerate() {
-                if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row)) {
-                    output[i] = include_nulls && incoming.is_none_or(|mask| mask[i]);
-                }
+    Ok(Predicate::new(Box::new(move |rows, incoming, output| {
+        predicate.evaluate_chunk(rows.clone(), incoming, output);
+        for (i, row) in rows.iter().enumerate() {
+            if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row)) {
+                output[i] = include_nulls && incoming.is_none_or(|mask| mask[i]);
             }
-            Ok(())
-        },
-    )))
+        }
+    })))
 }
 
 fn compile_condition<'a>(
     array: &'a ArrayRef,
     condition: &crate::FilterCondition,
-    cancel: &Cancellation,
 ) -> Result<Predicate<'a>> {
-    cancel.check()?;
     use crate::FilterCondition;
     if let FilterCondition::Exact { values, exclude } = condition {
         if values.is_empty() {
             let all = *exclude;
-            return Ok(Predicate::new(Box::new(
-                move |_rows, incoming, output, _cancel| {
-                    for (i, value) in output.iter_mut().enumerate() {
-                        *value = all && incoming.is_none_or(|mask| mask[i]);
-                    }
-                    Ok(())
-                },
-            )));
+            return Ok(Predicate::new(Box::new(move |_rows, incoming, output| {
+                for (i, value) in output.iter_mut().enumerate() {
+                    *value = all && incoming.is_none_or(|mask| mask[i]);
+                }
+            })));
         }
     }
     if matches!(array.data_type(), DataType::Dictionary(..)) {
         return nested::dictionary(array, |values| {
-            compile_condition(values, condition, cancel).map(Some)
+            compile_condition(values, condition).map(Some)
         })?
         .ok_or_else(|| crate::FilterError::UnsupportedType {
             condition: condition.into(),
@@ -143,30 +133,24 @@ fn compile_condition<'a>(
                 types::value_type(array.data_type()),
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             ) {
-                text::selected_values(array, values, cancel)?
+                text::selected_values(array, values)?
             } else {
                 Predicate::any_of(
                     values
                         .iter()
-                        .map(|value| {
-                            cancel.check()?;
-                            scalar::equals(array, value)
-                        })
+                        .map(|value| scalar::equals(array, value))
                         .collect::<Result<Vec<_>>>()?,
                 )
             };
             if !exclude {
                 return Ok(predicate);
             }
-            Ok(Predicate::new(Box::new(
-                move |rows, incoming, output, cancel| {
-                    predicate.evaluate_chunk(rows, incoming, output, cancel)?;
-                    for (i, value) in output.iter_mut().enumerate() {
-                        *value = !*value && incoming.is_none_or(|mask| mask[i]);
-                    }
-                    Ok(())
-                },
-            )))
+            Ok(Predicate::new(Box::new(move |rows, incoming, output| {
+                predicate.evaluate_chunk(rows, incoming, output);
+                for (i, value) in output.iter_mut().enumerate() {
+                    *value = !*value && incoming.is_none_or(|mask| mask[i]);
+                }
+            })))
         }
         _ => Err(crate::FilterError::UnsupportedType {
             condition: condition.into(),

@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
 use thiserror::Error;
 
-use crate::{CancellationError, InternalError, IoError};
+use crate::{InternalError, IoError};
 
 #[derive(Debug, Error)]
 pub enum FileError {
@@ -89,8 +89,8 @@ pub enum ExportError {
     XlsxColumns { actual: u32, limit: u32 },
     #[error(transparent)]
     Io(#[from] IoError),
-    #[error(transparent)]
-    Cancelled(#[from] CancellationError),
+    #[error("cancelled")]
+    Cancelled,
     #[error(transparent)]
     Internal(#[from] InternalError),
 }

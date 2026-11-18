@@ -76,7 +76,7 @@ fn boolean(text: &str) -> Option<bool> {
 fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
     let array = array.as_boolean();
     let has_nulls = array.null_count() > 0;
-    Predicate::new(Box::new(move |rows, incoming, output, _cancel| {
+    Predicate::new(Box::new(move |rows, incoming, output| {
         match (rows, incoming) {
             (RowSelection::Range(range), None) => {
                 for (i, row) in range.enumerate() {
@@ -103,7 +103,6 @@ fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
                 }
             }
         }
-        Ok(())
     }))
 }
 
@@ -120,13 +119,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::Cancellation;
 
     fn matches(predicate: Predicate<'_>, len: usize) -> Vec<bool> {
         let mut matched = vec![false; len];
-        predicate
-            .evaluate(0..len, &mut matched, &Cancellation::default())
-            .unwrap();
+        predicate.evaluate(0..len, &mut matched);
         matched
     }
 

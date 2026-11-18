@@ -31,8 +31,6 @@ final class FindModel: ObservableObject {
     private let worker = DispatchQueue(label: "gewu.document.find", qos: .userInitiated)
     private var navigationTask: Task<Void, Never>?
     private var highlightTask: Task<Void, Never>?
-    private var navigationOperation: Cancellation?
-    private var highlightOperation: Cancellation?
     private var pendingHighlight: (start: UInt64, count: UInt32)?
     private var completedHighlight: (start: UInt64, count: UInt32)?
     /// The last directional page, ascending in display order, and the current
@@ -116,11 +114,6 @@ final class FindModel: ObservableObject {
         highlightTask?.cancel()
         navigationTask = nil
         highlightTask = nil
-        navigationOperation?.cancel()
-        highlightOperation?.cancel()
-        navigationOperation = nil
-        highlightOperation = nil
-        session?.cancel()
         session = nil
         columns = []
         if currentMatch != nil { currentMatch = nil }
@@ -157,9 +150,6 @@ final class FindModel: ObservableObject {
         let worker = worker
         let gate = gate
         let highlightGate = highlightGate
-        highlightOperation?.cancel()
-        let operation = Cancellation()
-        highlightOperation = operation
         highlightTask?.cancel()
         highlightTask = Task { [weak self] in
             guard !Task.isCancelled, let self, self.request == findRequest, self.highlightRequest == mine else {
@@ -174,8 +164,7 @@ final class FindModel: ObservableObject {
                         }
                         do {
                             continuation.resume(
-                                returning: try session.highlight(
-                                    start: start, count: count, cancellation: operation))
+                                returning: try session.highlight(start: start, count: count))
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -193,7 +182,7 @@ final class FindModel: ObservableObject {
                     return
                 }
                 self.pendingHighlight = nil
-                if case GewuError.Cancelled = error { return }
+                if error is CancellationError { return }
                 self.onError?(error, "Find highlight error: ")
             }
         }
@@ -241,9 +230,6 @@ final class FindModel: ObservableObject {
         let worker = worker
         let gate = gate
         let navigationGate = navigationGate
-        navigationOperation?.cancel()
-        let operation = Cancellation()
-        navigationOperation = operation
         navigationTask?.cancel()
         let limit = Self.pageSize
         navigationTask = Task { [weak self] in
@@ -257,14 +243,12 @@ final class FindModel: ObservableObject {
                         }
                         do {
                             var page = try readFindPage(
-                                session: session, cursor: cursor, backwards: backwards, limit: limit,
-                                operation: operation)
+                                session: session, cursor: cursor, backwards: backwards, limit: limit)
                             // A boundary wraps only after an actual cursor. The first
                             // empty scan establishes zero matches without scanning twice.
                             if page.isEmpty, cursor != nil {
                                 page = try readFindPage(
-                                    session: session, cursor: nil, backwards: backwards, limit: limit,
-                                    operation: operation)
+                                    session: session, cursor: nil, backwards: backwards, limit: limit)
                             }
                             continuation.resume(returning: page)
                         } catch {
@@ -284,7 +268,7 @@ final class FindModel: ObservableObject {
                 }
                 self.fetching = false
                 self.isFinding = false
-                if case GewuError.Cancelled = error { return }
+                if error is CancellationError { return }
                 self.onError?(error, "Find error: ")
             }
         }
@@ -321,9 +305,9 @@ final class FindModel: ObservableObject {
 
 /// Read one directional page on the Find worker queue.
 private func readFindPage(
-    session: FindSession, cursor: CellMatch?, backwards: Bool, limit: UInt32, operation: Cancellation
+    session: FindSession, cursor: CellMatch?, backwards: Bool, limit: UInt32
 ) throws -> [CellMatch] {
     backwards
-        ? try session.previous(before: cursor, limit: limit, cancellation: operation)
-        : try session.next(after: cursor, limit: limit, cancellation: operation)
+        ? try session.previous(before: cursor, limit: limit)
+        : try session.next(after: cursor, limit: limit)
 }

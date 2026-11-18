@@ -4,8 +4,6 @@
 //! Callers own query conditions and choose which result to display. Sorting and
 //! filtering never move data; they only produce a new list of row numbers.
 
-mod cancellation;
-pub use cancellation::{Cancellation, CancellationError};
 mod col_view;
 mod column;
 mod dataset;

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{CancellationError, FilterError, InternalError};
+use crate::{FilterError, InternalError};
 
 #[derive(Debug, Error)]
 pub enum FindError {
@@ -21,8 +21,6 @@ pub enum FindError {
     InvalidCursorColumn { column: u32 },
     #[error(transparent)]
     Filter(#[from] FilterError),
-    #[error(transparent)]
-    Cancelled(#[from] CancellationError),
     #[error(transparent)]
     Internal(#[from] InternalError),
 }

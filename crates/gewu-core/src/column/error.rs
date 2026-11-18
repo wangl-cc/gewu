@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
 use thiserror::Error;
 
-use crate::{CancellationError, InternalError};
+use crate::InternalError;
 
 #[derive(Debug, Error)]
 pub enum ColumnError {
@@ -19,8 +19,6 @@ pub enum ColumnError {
     },
     #[error("{operation:?} requires at least one selected column")]
     EmptySelection { operation: ColumnOperation },
-    #[error(transparent)]
-    Cancelled(#[from] CancellationError),
     #[error(transparent)]
     Internal(#[from] InternalError),
 }
@@ -61,8 +59,6 @@ pub enum FilterError {
     Bound(#[from] crate::BoundError),
     #[error(transparent)]
     Column(#[from] ColumnError),
-    #[error(transparent)]
-    Cancelled(#[from] CancellationError),
     #[error(transparent)]
     Internal(#[from] InternalError),
 }

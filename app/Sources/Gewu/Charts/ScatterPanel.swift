@@ -260,7 +260,7 @@ final class ScatterModel: ObservableObject {
                 x: x.map(UInt32.init), y: UInt32(y), limit: limit, xScale: xScale, yScale: yScale)
             try Task.checkCancellation()
             // Row numbering depends on display settings, so only the raw sample is cached.
-            let loaded = try await runCancellable(cancellation: Cancellation()) {
+            let loaded = try await Task.detached(priority: .userInitiated) {
                 var result = sample
                 if x == nil {
                     for index in result.points.indices {
@@ -274,7 +274,8 @@ final class ScatterModel: ObservableObject {
                     ScatterDates.make(points: result.points, x: true, kind: result.xAxisKind),
                     ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
                 )
-            }
+            }.value
+            try Task.checkCancellation()
             guard !Task.isCancelled, ticket == request, viewer.applied.rowView === view else { return }
             xDates = loaded.1
             yDates = loaded.2
@@ -284,9 +285,8 @@ final class ScatterModel: ObservableObject {
             result = loaded.0
         } catch {
             guard !Task.isCancelled, ticket == request else { return }
-            switch error {
-            case GewuError.Cancelled, is CancellationError: break
-            default: self.error = error.userMessage
+            if !(error is CancellationError) {
+                self.error = error.userMessage
             }
         }
     }

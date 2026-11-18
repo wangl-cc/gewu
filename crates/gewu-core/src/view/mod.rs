@@ -88,7 +88,7 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch, StringArray};
 
     use super::*;
-    use crate::{Cancellation, ColSpec, Error, Filter, QuerySpec};
+    use crate::{ColSpec, Error, Filter, QuerySpec};
 
     fn dataset() -> Arc<Dataset> {
         let numbers: ArrayRef = Arc::new(Int32Array::from_iter_values(0..12_000));
@@ -121,10 +121,7 @@ mod tests {
         let dataset = dataset();
         let initial = dataset.view();
         let sorted = dataset
-            .query(
-                &QuerySpec::all(2).with_sort(0, true, 0),
-                &Cancellation::default(),
-            )
+            .query(&QuerySpec::all(2).with_sort(0, true, 0))
             .unwrap();
         let reordered = sorted.reorder_columns(&[1, 0]).unwrap();
         assert!(Arc::ptr_eq(&sorted.dataset, &reordered.dataset));
@@ -151,25 +148,20 @@ mod tests {
         let spec = QuerySpec::all(2)
             .with_filter(0, Filter::range(Some("11998".into()), None, false))
             .with_sort(0, true, 0);
-        let filtered = dataset.query(&spec, &Cancellation::default()).unwrap();
+        let filtered = dataset.query(&spec).unwrap();
         let find = filtered.find("odd", &[1]).unwrap();
         let hidden = dataset
-            .query(
-                &QuerySpec {
-                    columns: vec![ColSpec {
-                        column: 1,
-                        sort: None,
-                        filter: None,
-                    }],
-                },
-                &Cancellation::default(),
-            )
+            .query(&QuerySpec {
+                columns: vec![ColSpec {
+                    column: 1,
+                    sort: None,
+                    filter: None,
+                }],
+            })
             .unwrap();
         assert_eq!(hidden.columns(), &[1]);
         assert_eq!(hidden.row_count(), 12_000);
-        let restored = dataset
-            .query(&QuerySpec::all(2), &Cancellation::default())
-            .unwrap();
+        let restored = dataset.query(&QuerySpec::all(2)).unwrap();
         assert_eq!(restored.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
         assert_eq!(filtered.rows(0, 2, &[0]).unwrap().source_rows, [
             11999, 11998
@@ -177,34 +169,16 @@ mod tests {
         drop(dataset);
         drop(initial);
         drop(filtered);
-        assert_eq!(
-            find.next(None, 10, &Cancellation::default()).unwrap()[0].display_row,
-            0
-        );
-        assert_eq!(
-            restored.count_nulls(0, &Cancellation::default()).unwrap(),
-            0
-        );
+        assert_eq!(find.next(None, 10).unwrap()[0].display_row, 0);
+        assert_eq!(restored.count_nulls(0).unwrap(), 0);
     }
 
     #[test]
-    fn cancelled_and_invalid_queries_leave_existing_views_usable() {
+    fn invalid_queries_leave_existing_views_usable() {
         let dataset = dataset();
         let initial = dataset.view();
         let spec = QuerySpec::all(2).with_sort(0, true, 0);
-        let token = Cancellation::default();
-        token.cancel();
-        assert!(matches!(
-            dataset.query(&spec, &token),
-            Err(Error::Cancelled)
-        ));
-        // Enter the real row scan, then stop at its next checkpoint.
-        let interrupted = Cancellation::after_checks(4);
-        assert!(matches!(
-            dataset.query(&spec, &interrupted),
-            Err(Error::Cancelled)
-        ));
-        let sorted = dataset.query(&spec, &Cancellation::default()).unwrap();
+        let sorted = dataset.query(&spec).unwrap();
         assert_eq!(sorted.rows(0, 1, &[0]).unwrap().source_rows, [11999]);
         for bad in [
             QuerySpec::single(5, Filter::exact(vec![], false, false)),
@@ -224,7 +198,7 @@ mod tests {
             QuerySpec::single(0, Filter::exact(vec!["invalid".into()], false, false)),
         ] {
             assert!(matches!(
-                dataset.query(&bad, &Cancellation::default()),
+                dataset.query(&bad),
                 Err(Error::Column(_) | Error::Query(_) | Error::Filter(_))
             ));
         }
