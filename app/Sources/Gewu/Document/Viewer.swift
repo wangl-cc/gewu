@@ -3,9 +3,9 @@ import Foundation
 /// One window's query state: the applied View, the spec it came from, and the
 /// results computed for that View.
 ///
-/// A bounded set of results is cached per applied View and shared by every panel. Replacing the
-/// View starts a new epoch: work still running for the old View is cancelled and
-/// its results are released. Reordering columns keeps the epoch, because no cached
+/// Completed results are cached per applied View. Each caller owns its pending scan;
+/// cancelling one caller never cancels another caller's scan. Replacing the View
+/// cancels all old scans and releases their results. Reordering columns keeps the cache, because no cached
 /// result depends on column order. Views stay immutable and can outlive their
 /// epoch, so export and copy capture a View directly instead of going through here.
 @MainActor
@@ -15,16 +15,14 @@ final class Viewer {
     struct Applied {
         let view: GewuView
         let spec: QuerySpec
-    }
+        /// The same row snapshot survives column-only reordering.
+        let rowView: GewuView
 
-    enum Outcome {
-        case applied
-        /// A newer request replaced this one, or its task was cancelled.
-        case superseded
-        /// The latest request was cancelled through Core; the applied View is unchanged.
-        case cancelled
-        /// The latest request failed; the applied View is unchanged.
-        case failed(Error)
+        init(view: GewuView, spec: QuerySpec, rowView: GewuView? = nil) {
+            self.view = view
+            self.spec = spec
+            self.rowView = rowView ?? view
+        }
     }
 
     private struct DistributionKey: Hashable {
@@ -48,12 +46,11 @@ final class Viewer {
 
     @MainActor
     private final class ResultCache<Key: Hashable, Value: Sendable> {
-        var tasks: [Key: Task<Value, Error>] = [:]
+        var values: [Key: Value] = [:]
     }
 
     /// Parameters select a result within a slot; changing them replaces that slot.
     private enum Slot: Hashable {
-        case facet(UInt32)
         case choices(UInt32)
         case filterDistribution(UInt32)
         case nulls(UInt32)
@@ -67,7 +64,6 @@ final class Viewer {
     /// Work and results that belong to one applied View.
     @MainActor
     private final class Epoch {
-        let facets = ResultCache<UInt32, GewuView>()
         let filterChoices = ResultCache<UInt32, FilterChoices>()
         let filterDistributions = ResultCache<DistributionKey, RangeHistogram?>()
         let nullCounts = ResultCache<UInt32, UInt64>()
@@ -77,42 +73,52 @@ final class Viewer {
         let lengths = ResultCache<LengthKey, LengthSummary>()
         let scatter = ResultCache<ScatterKey, ScatterResult>()
 
-        // Include pending work in the budget, so rapid navigation cannot queue unlimited scans.
         private var recent: [Slot] = []
-        private var removals: [Slot: (Bool) -> Void] = [:]
+        private var removals: [Slot: () -> Void] = [:]
+        private var tickets: [Slot: UUID] = [:]
+        var active: [ObjectIdentifier: () -> Void] = [:]
 
         func touch(_ slot: Slot) {
             recent.removeAll { $0 == slot }
             recent.append(slot)
         }
 
-        func insert(_ slot: Slot, remove: @escaping (Bool) -> Void) {
-            removals[slot] = remove
+        /// Bound cache slots and reserve the latest parameters without taking ownership
+        /// of a caller's work. An older scan may finish for its caller but cannot replace it.
+        func reserve(_ slot: Slot) -> UUID {
+            discard(slot)
+            let ticket = UUID()
+            tickets[slot] = ticket
             touch(slot)
             if recent.count > 32 { discard(recent[0]) }
+            return ticket
         }
 
-        func discard(_ slot: Slot, cancel: Bool = true) {
-            removals.removeValue(forKey: slot)?(cancel)
+        func insert(_ slot: Slot, ticket: UUID, remove: @escaping () -> Void) -> Bool {
+            guard tickets[slot] == ticket else { return false }
+            removals[slot] = remove
+            return true
+        }
+
+        func discard(_ slot: Slot) {
+            removals.removeValue(forKey: slot)?()
+            tickets[slot] = nil
             recent.removeAll { $0 == slot }
         }
 
         func cancel() {
-            for remove in removals.values { remove(true) }
+            for cancel in active.values { cancel() }
+            active.removeAll()
+            for remove in removals.values { remove() }
             removals.removeAll()
+            tickets.removeAll()
             recent.removeAll()
         }
     }
 
-    private(set) var applied: Applied {
-        willSet { willChange?() }
-    }
-    /// Called before the applied View or spec changes, so an observing model can publish it.
-    var willChange: (() -> Void)?
+    private(set) var applied: Applied
     private var epoch = Epoch()
-    private var generation: UInt64 = 0
-    private var pending: Cancellation?
-    // Bound concurrent queries; the generation decides which completed query applies.
+    // Queries are serialized; the window owns cancellation and result publication.
     private let worker = DispatchQueue(label: "gewu.viewer.queries", qos: .userInitiated)
     private let analysisWorker: OperationQueue
 
@@ -125,64 +131,48 @@ final class Viewer {
         self.analysisWorker.maxConcurrentOperationCount = 1
     }
 
-    /// Compute a complete spec from the full dataset and apply it. The most
-    /// recently started request wins; a failed or superseded request keeps the
-    /// applied View.
-    func apply(_ spec: QuerySpec, debounce: Bool = false) async -> Outcome {
-        generation &+= 1
-        let mine = generation
-        pending?.cancel()
+    /// Compute a replacement without publishing it. The window also loads the
+    /// target viewport before committing the new View and its presentation.
+    func query(_ spec: QuerySpec, debounce: Bool = false) async throws -> GewuView {
+        try Task.checkCancellation()
         let signal = Cancellation()
-        pending = signal
         let dataset = dataset
         let worker = worker
-        do {
+        return try await withTaskCancellationHandler {
             if debounce { try await Task.sleep(for: .milliseconds(150)) }
             try Task.checkCancellation()
-            guard mine == generation else { return .superseded }
-            let view: GewuView = try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { continuation in
-                    worker.async {
-                        do {
-                            continuation.resume(returning: try dataset.query(spec: spec, cancellation: signal))
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
+            let view: GewuView = try await withCheckedThrowingContinuation { continuation in
+                worker.async {
+                    do {
+                        continuation.resume(returning: try dataset.query(spec: spec, cancellation: signal))
+                    } catch {
+                        continuation.resume(throwing: error)
                     }
                 }
-            } onCancel: {
-                signal.cancel()
             }
-            guard !Task.isCancelled, mine == generation else { return .superseded }
-            pending = nil
-            replace(Applied(view: view, spec: spec))
-            return .applied
-        } catch {
-            guard !Task.isCancelled, mine == generation else { return .superseded }
-            pending = nil
-            return error.isCancellation ? .cancelled : .failed(error)
+            try Task.checkCancellation()
+            return view
+        } onCancel: {
+            signal.cancel()
         }
+    }
+
+    func apply(_ view: GewuView, spec: QuerySpec) {
+        epoch.cancel()
+        epoch = Epoch()
+        applied = Applied(view: view, spec: spec)
     }
 
     /// Show the same rows in another column order. Cached results stay valid.
     func reorder(_ columns: [UInt32], spec: QuerySpec) throws {
         let view = try applied.view.reorderColumns(order: columns)
-        applied = Applied(view: view, spec: spec)
+        applied = Applied(view: view, spec: spec, rowView: applied.rowView)
     }
 
-    /// Stop pending queries and all work for the applied View.
+    /// Stop analysis work for the applied View. Query tasks belong to the window.
     func close() {
-        generation &+= 1
-        pending?.cancel()
-        pending = nil
         epoch.cancel()
         epoch = Epoch()
-    }
-
-    private func replace(_ next: Applied) {
-        epoch.cancel()
-        epoch = Epoch()
-        applied = next
     }
 
     // MARK: Filter editors
@@ -190,29 +180,34 @@ final class Viewer {
     /// The rows a column's filter editor describes; see `FilterFacet`.
     func facet(_ column: UInt32) async throws -> GewuView {
         let facet = FilterFacet(spec: applied.spec, column: column)
-        if facet.usesAppliedView { return applied.view }
+        try Task.checkCancellation()
+        if facet.usesAppliedView { return applied.rowView }
         let dataset = dataset
-        return try await scan(epoch.facets, key: column, slot: .facet(column), retain: false) {
+        return try await run {
             try facet.resolve(dataset: dataset, cancellation: $0)
         }
     }
 
     func filterChoices(_ column: UInt32) async throws -> FilterChoices {
-        return try await cached(epoch.filterChoices, key: column, slot: .choices(column)) { signal in
-            let view = try await self.facet(column)
-            return try await self.run {
-                try view.filterChoices(column: column, cancellation: signal)
-            }
+        let applied = applied
+        let dataset = dataset
+        let facet = FilterFacet(spec: applied.spec, column: column)
+        return try await scan(epoch.filterChoices, key: column, slot: .choices(column)) { signal in
+            let view =
+                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset, cancellation: signal)
+            return try view.filterChoices(column: column, cancellation: signal)
         }
     }
 
     func filterDistribution(_ column: UInt32, bins: UInt32, scale: AxisScale) async throws -> RangeHistogram? {
         let key = DistributionKey(column: column, bins: bins, scale: scale)
-        return try await cached(epoch.filterDistributions, key: key, slot: .filterDistribution(column)) { signal in
-            let view = try await self.facet(column)
-            return try await self.run {
-                try view.filterDistribution(column: column, bins: bins, scale: scale, cancellation: signal)
-            }
+        let applied = applied
+        let dataset = dataset
+        let facet = FilterFacet(spec: applied.spec, column: column)
+        return try await scan(epoch.filterDistributions, key: key, slot: .filterDistribution(column)) { signal in
+            let view =
+                try facet.usesAppliedView ? applied.rowView : facet.resolve(dataset: dataset, cancellation: signal)
+            return try view.filterDistribution(column: column, bins: bins, scale: scale, cancellation: signal)
         }
     }
 
@@ -267,17 +262,38 @@ final class Viewer {
     }
 
     private func scan<Key: Hashable, Value: Sendable>(
-        _ cache: ResultCache<Key, Value>, key: Key, slot: Slot, retain: Bool = true,
+        _ cache: ResultCache<Key, Value>, key: Key, slot: Slot,
         _ compute: @escaping @Sendable (Cancellation) throws -> Value
     ) async throws -> Value {
-        try await cached(cache, key: key, slot: slot, retain: retain) { signal in
-            try await self.run { try compute(signal) }
+        try Task.checkCancellation()
+        let epoch = epoch
+        if let value = cache.values[key] {
+            epoch.touch(slot)
+            return value
         }
+        let ticket = epoch.reserve(slot)
+        let value = try await run(compute)
+        guard epoch === self.epoch else { throw CancellationError() }
+        if epoch.insert(slot, ticket: ticket, remove: { cache.values[key] = nil }) {
+            cache.values[key] = .some(value)
+        }
+        return value
     }
 
     /// Synchronous FFI scans share one worker. Cancelled queued operations never call Core.
-    private func run<Value: Sendable>(_ compute: @escaping @Sendable () throws -> Value) async throws -> Value {
-        let operation = ViewerScan(compute)
+    private func run<Value: Sendable>(_ compute: @escaping @Sendable (Cancellation) throws -> Value) async throws
+        -> Value
+    {
+        try Task.checkCancellation()
+        let epoch = epoch
+        let signal = Cancellation()
+        let operation = ViewerScan { try compute(signal) }
+        let id = ObjectIdentifier(operation)
+        epoch.active[id] = {
+            signal.cancel()
+            operation.cancel()
+        }
+        defer { epoch.active[id] = nil }
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             let result: Value = try await withCheckedThrowingContinuation { continuation in
@@ -287,53 +303,12 @@ final class Viewer {
                 analysisWorker.addOperation(operation)
             }
             try Task.checkCancellation()
+            guard epoch === self.epoch, !operation.isCancelled else { throw CancellationError() }
             return result
         } onCancel: {
+            signal.cancel()
             operation.cancel()
         }
-    }
-
-    /// Share matching requests, retain only the most recent parameters per slot,
-    /// and discard failed or superseded work. Facets share only in-flight computation.
-    private func cached<Key: Hashable, Value: Sendable>(
-        _ cache: ResultCache<Key, Value>, key: Key, slot: Slot, retain: Bool = true,
-        _ compute: @escaping @MainActor (Cancellation) async throws -> Value
-    ) async throws -> Value {
-        try Task.checkCancellation()
-        let epoch = epoch
-        let task: Task<Value, Error>
-        if let existing = cache.tasks[key] {
-            task = existing
-            epoch.touch(slot)
-        } else {
-            epoch.discard(slot)
-            let signal = Cancellation()
-            task = Task {
-                try await withTaskCancellationHandler {
-                    try Task.checkCancellation()
-                    return try await compute(signal)
-                } onCancel: {
-                    signal.cancel()
-                }
-            }
-            cache.tasks[key] = task
-            epoch.insert(slot) { cancel in
-                cache.tasks[key] = nil
-                if cancel { task.cancel() }
-            }
-        }
-        let value: Value
-        do {
-            value = try await task.value
-            guard epoch === self.epoch, !task.isCancelled else { throw CancellationError() }
-            if !retain, cache.tasks[key] == task { epoch.discard(slot, cancel: false) }
-        } catch {
-            if cache.tasks[key] == task { epoch.discard(slot) }
-            throw error
-        }
-        // A panel cancelling its wait must not evict work shared with another panel.
-        try Task.checkCancellation()
-        return value
     }
 }
 

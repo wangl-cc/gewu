@@ -30,7 +30,7 @@ struct ScatterPanel: View {
 
     private var request: Request {
         Request(
-            view: ObjectIdentifier(model.view),
+            view: ObjectIdentifier(model.applied.rowView),
             x: model.chartX, y: model.chartY, retry: retry, pointLimit: settings.scatterPointLimit,
             rowNumberBase: rowNumberBase,
             xScale: supportsLog(model.chartX) ? settings.scatterXScale : .linear,
@@ -203,10 +203,13 @@ final class ScatterModel: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var request: UInt64 = 0
+    private var work: Task<Void, Never>?
 
-    /// Stop presenting a pending sample. The shared computation belongs to the Viewer.
+    /// Cancel this panel's pending sample and presentation work.
     func cancel() {
         request &+= 1
+        work?.cancel()
+        work = nil
         loading = false
     }
 
@@ -220,6 +223,26 @@ final class ScatterModel: ObservableObject {
         guard !Task.isCancelled else { return }
         cancel()
         let ticket = request
+        let view = viewer.applied.rowView
+        let task = Task {
+            await performLoad(
+                viewer: viewer, view: view, x: x, y: y, limit: limit, rowNumberBase: rowNumberBase,
+                xScale: xScale, yScale: yScale, ticket: ticket)
+        }
+        work = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if request == ticket { work = nil }
+    }
+
+    private func performLoad(
+        viewer: Viewer, view: GewuView, x: Int?, y: Int, limit: UInt32, rowNumberBase: Int,
+        xScale: AxisScale, yScale: AxisScale, ticket: UInt64
+    ) async {
+        guard !Task.isCancelled, ticket == request, viewer.applied.rowView === view else { return }
         defer {
             if ticket == request { loading = false }
         }
@@ -228,7 +251,7 @@ final class ScatterModel: ObservableObject {
         loading = true
         do {
             try Task.checkCancellation()
-            let rowCount = viewer.applied.view.rowCount()
+            let rowCount = view.rowCount()
             let sample = try await viewer.scatter(
                 x: x.map(UInt32.init), y: UInt32(y), limit: limit, xScale: xScale, yScale: yScale)
             try Task.checkCancellation()
@@ -248,7 +271,7 @@ final class ScatterModel: ObservableObject {
                     ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
                 )
             }
-            guard !Task.isCancelled, ticket == request else { return }
+            guard !Task.isCancelled, ticket == request, viewer.applied.rowView === view else { return }
             xDates = loaded.1
             yDates = loaded.2
             self.xScale = xScale

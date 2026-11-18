@@ -7,18 +7,20 @@ struct TableExecutionTests {
     private static func dataset() throws -> GewuDataset {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-loader-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
-        try "number,label\n1,first\n2,second\n3,third\n".write(to: path, atomically: true, encoding: .utf8)
+        try "number,label,other\n1,first,10\n2,second,20\n3,third,30\n".write(
+            to: path, atomically: true, encoding: .utf8)
         return try GewuDataset.open(path: path.path)
     }
 
     @Test @MainActor
-    static func loaderCoalescesReadsAndDeliversUncachedBlocks() async throws {
+    static func loaderBatchesVisibleColumnsAndReusesCache() async throws {
         let view = try dataset().view()
         let reads = AsyncStream<PendingTableRead>.makeStream()
         let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader(cache: RowCache(cellLimit: 1)) { view, key in
+        let loader = TableRowLoader { view, start, columns in
             try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(PendingTableRead(view: view, key: key, continuation: continuation))
+                reads.continuation.yield(
+                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
             }
         }
         defer {
@@ -32,17 +34,110 @@ struct TableExecutionTests {
         var requests = reads.stream.makeAsyncIterator()
         var blocks = delivered.stream.makeAsyncIterator()
         #expect(loader.block(for: 0, column: 0) == nil)
-        #expect(loader.block(for: 1, column: 0) == nil)
-        #expect(loader.block(for: 0, column: 1) == nil)
+        loader.updateViewport(rows: 0..<3, columns: [0, 1, 0])
         let first = try #require(await requests.next())
-        #expect(first.key == RowCache.Key(start: 0, column: 0))
+        #expect(first.start == 0 && first.columns == [0, 1])
         first.finish()
-        #expect(try #require(await blocks.next()).cells == ["1", "2", "3"])
-        #expect(loader.cachedBlock(for: first.key) == nil, "Oversized data is delivered without retaining it")
+        #expect(try #require(await blocks.next()).cells == ["1", "first", "2", "second", "3", "third"])
+        #expect(loader.block(for: 1, column: 0)?.cells == ["1", "2", "3"])
+        #expect(loader.block(for: 1, column: 1)?.cells == ["first", "second", "third"])
+        #expect(loader.block(for: 1, column: nil)?.sourceRows == [0, 1, 2])
+        // Replanning adds only the missing column; cached cells never enqueue reads.
+        loader.updateViewport(rows: 1..<3, columns: [1, 0, 2])
+        let added = try #require(await requests.next())
+        #expect(added.start == 0 && added.columns == [2])
+        added.finish()
+        #expect(try #require(await blocks.next()).cells == ["10", "20", "30"])
+    }
+
+    @Test @MainActor
+    static func loaderPrioritizesLatestViewportAndDoesNotRepeatOversizedReads() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try ("value\n" + (0..<300).map(String.init).joined(separator: "\n"))
+            .write(to: path, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: path.path).view()
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let delivered = AsyncStream<RowBlock>.makeStream()
+        let loader = TableRowLoader(cache: RowCache(cellLimit: 1)) { view, start, columns in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(
+                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
+            }
+        }
+        defer {
+            loader.stop()
+            reads.continuation.finish()
+            delivered.continuation.finish()
+        }
+        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onError = { _, error in Issue.record(error) }
+        var requests = reads.stream.makeAsyncIterator()
+        var blocks = delivered.stream.makeAsyncIterator()
+        loader.reset(to: view)
+        loader.updateViewport(rows: 0..<100, columns: [0])
+        let first = try #require(await requests.next())
+        #expect(first.start == 0)
+        // The block at 64 was demanded, but must not delay this new viewport.
+        loader.updateViewport(rows: 192..<200, columns: [0])
+        first.finish()
+        let current = try #require(await requests.next())
+        #expect(current.start == 192)
+        current.finish()
+        #expect(try #require(await blocks.next()).start == 192)
+        #expect(loader.block(for: 192, column: 0) == nil, "Oversized blocks are delivered without retaining them")
+        loader.updateViewport(rows: 192..<200, columns: [0])
+        loader.updateViewport(rows: 256..<260, columns: [0])
+        let next = try #require(await requests.next())
+        #expect(next.start == 256, "A completed oversized block must not start an endless reread loop")
+        next.finish()
+        #expect(try #require(await blocks.next()).start == 256)
+    }
+
+    @Test @MainActor
+    static func loaderBoundsWideReadsAndClampsRows() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("wide-viewport-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let header = (0..<20).map { "c\($0)" }.joined(separator: ",")
+        let line = (0..<20).map(String.init).joined(separator: ",")
+        try "\(header)\n\(line)\n".write(to: path, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: path.path).view()
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let delivered = AsyncStream<RowBlock>.makeStream()
+        let loader = TableRowLoader { view, start, columns in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(
+                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
+            }
+        }
+        defer {
+            loader.stop()
+            reads.continuation.finish()
+            delivered.continuation.finish()
+        }
+        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onError = { _, error in Issue.record(error) }
+        var requests = reads.stream.makeAsyncIterator()
+        var blocks = delivered.stream.makeAsyncIterator()
+        loader.reset(to: view)
+        loader.updateViewport(rows: 0..<500, columns: (0..<20).map(UInt32.init))
+        let first = try #require(await requests.next())
+        #expect(first.columns == (0..<16).map(UInt32.init))
+        first.finish()
+        #expect(try #require(await blocks.next()).nRows == 1)
         let second = try #require(await requests.next())
-        #expect(second.key == RowCache.Key(start: 0, column: 1), "Rows in the same block share a request")
+        #expect(second.start == 0 && second.columns == (16..<20).map(UInt32.init))
         second.finish()
-        #expect(try #require(await blocks.next()).cells == ["first", "second", "third"])
+        #expect(try #require(await blocks.next()).nCols == 4)
+        #expect(loader.block(for: 0, column: 19)?.cells == ["19"])
+        #expect(loader.block(for: 0, column: nil)?.sourceRows == [0])
+        // A source-only viewport also works without formatting any cells.
+        loader.reset(to: view)
+        loader.updateViewport(rows: 0..<500, columns: [])
+        let source = try #require(await requests.next())
+        #expect(source.start == 0 && source.columns.isEmpty)
+        source.finish()
+        #expect(try #require(await blocks.next()).sourceRows == [0])
     }
 
     @Test @MainActor
@@ -54,9 +149,10 @@ struct TableExecutionTests {
             cancellation: Cancellation())
         let reads = AsyncStream<PendingTableRead>.makeStream()
         let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader { view, key in
+        let loader = TableRowLoader { view, start, columns in
             try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(PendingTableRead(view: view, key: key, continuation: continuation))
+                reads.continuation.yield(
+                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
             }
         }
         defer {
@@ -72,10 +168,10 @@ struct TableExecutionTests {
         var requests = reads.stream.makeAsyncIterator()
         var blocks = delivered.stream.makeAsyncIterator()
         loader.reset(to: original)
-        _ = loader.block(for: 0, column: 0)
+        loader.updateViewport(rows: 0..<3, columns: [0])
         let oldRead = try #require(await requests.next())
         loader.reset(to: replacement)
-        _ = loader.block(for: 0, column: 0)
+        loader.updateViewport(rows: 0..<3, columns: [0])
         let newRead = try #require(await requests.next())
         oldRead.finish()  // Simulate an FFI read completing after cancellation.
         newRead.finish()
@@ -196,14 +292,15 @@ struct TableExecutionTests {
 
 private struct PendingTableRead: Sendable {
     let view: GewuView
-    let key: RowCache.Key
+    let start: Int
+    let columns: [UInt32]
     let continuation: CheckedContinuation<RowBlock, Error>
 
     func finish() {
         continuation.resume(
             with: Result {
                 try view.rows(
-                    start: UInt64(key.start), count: UInt32(RowCache.blockSize), columns: key.column.map { [$0] } ?? [])
+                    start: UInt64(start), count: UInt32(RowCache.blockSize), columns: columns)
             })
     }
 }

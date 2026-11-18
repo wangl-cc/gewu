@@ -22,22 +22,15 @@ struct ViewerTests {
         ])
     }
 
-    @Test func newerApplySupersedesAnOlderOne() async throws {
+    @Test func queryDoesNotPublishBeforeTheWindowCommits() async throws {
         let dataset = try Self.dataset()
         let view = dataset.view()
         let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
-        let older = Task { await viewer.apply(Self.spec(city: "bj", district: nil), debounce: true) }
-        // Let the older request start first; the main actor runs tasks in order.
-        await Task.yield()
-        let newer = await viewer.apply(Self.spec(city: "sh", district: nil))
-        guard case .applied = newer else {
-            Issue.record("The newest request must apply")
-            return
-        }
-        guard case .superseded = await older.value else {
-            Issue.record("The older request must not apply")
-            return
-        }
+        let spec = Self.spec(city: "sh", district: nil)
+        let result = try await viewer.query(spec)
+        #expect(viewer.applied.view === view)
+        #expect(viewer.applied.spec == Self.spec(city: nil, district: nil))
+        viewer.apply(result, spec: spec)
         #expect(viewer.applied.spec == Self.spec(city: "sh", district: nil))
         #expect(viewer.applied.view.rowCount() == 2)
     }
@@ -48,10 +41,10 @@ struct ViewerTests {
         let viewer = Viewer(dataset: dataset, view: initial, spec: Self.spec(city: nil, district: nil))
         var invalid = Self.spec(city: nil, district: nil)
         invalid.columns[0].filter = Filter(condition: .range(min: "1", max: nil), includeNulls: false)
-        guard case .failed = await viewer.apply(invalid) else {
+        do {
+            _ = try await viewer.query(invalid)
             Issue.record("A text range must fail")
-            return
-        }
+        } catch {}
         #expect(viewer.applied.view === initial)
     }
 
@@ -59,7 +52,7 @@ struct ViewerTests {
         let dataset = try Self.dataset()
         let view = dataset.view()
         let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
-        _ = await viewer.apply(Self.spec(city: "bj", district: "haidian"))
+        try await Self.apply(Self.spec(city: "bj", district: "haidian"), to: viewer)
         let facet = try await viewer.facet(1)
         #expect(try await viewer.facet(1) !== facet, "Completed facets must not retain their row arrays in the cache")
         #expect(facet.rowCount() == 2, "The district facet keeps city = bj only")
@@ -72,10 +65,15 @@ struct ViewerTests {
         // Column order does not affect any cached result.
         var reordered = viewer.applied.spec
         reordered.columns.reverse()
+        let rowView = viewer.applied.rowView
         try viewer.reorder([1, 0], spec: reordered)
+        #expect(viewer.applied.rowView === rowView)
+        #expect(viewer.applied.view !== rowView)
         #expect(try await viewer.filterChoices(1) == choices)
 
-        _ = await viewer.apply(Self.spec(city: "sh", district: "pudong"))
+        try await Self.apply(Self.spec(city: "sh", district: "pudong"), to: viewer)
+        #expect(viewer.applied.rowView !== rowView)
+        #expect(viewer.applied.rowView === viewer.applied.view)
         let replaced = try await viewer.facet(1)
         #expect(replaced !== facet)
         let labels = try await viewer.filterChoices(1).values?.map(\.label)
@@ -99,7 +97,12 @@ struct ViewerTests {
         }
     }
 
-    @Test func changedParametersCancelQueuedWorkAndKeepOnlyTheLatestResult() async throws {
+    private static func apply(_ spec: QuerySpec, to viewer: Viewer) async throws {
+        let view = try await viewer.query(spec)
+        viewer.apply(view, spec: spec)
+    }
+
+    @Test func consumerCancellationStopsQueuedWorkAndCompletedCacheKeepsLatestParameters() async throws {
         let dataset = try Self.dataset()
         let worker = OperationQueue()
         worker.isSuspended = true
@@ -111,14 +114,17 @@ struct ViewerTests {
         try await Self.queued(on: worker)
         let operation = try #require(worker.operations.first)
         let newer = Task { try await viewer.lengths(1, bins: 3) }
+        try await Self.queued(on: worker, count: 2)
+        #expect(!operation.isCancelled, "Another consumer's parameters must not cancel this consumer")
+        older.cancel()
         while !operation.isCancelled { await Task.yield() }
         worker.isSuspended = false
         await Self.expectCancelled(older)
         let result = try await newer.value
+        worker.isSuspended = true
         #expect(result == (try await viewer.lengths(1, bins: 3)))
 
         // A previous parameter set must now require new work, rather than hitting history.
-        worker.isSuspended = true
         let previous = Task { try await viewer.lengths(1, bins: 2) }
         try await Self.queued(on: worker)
         viewer.close()
@@ -126,7 +132,7 @@ struct ViewerTests {
         await Self.expectCancelled(previous)
     }
 
-    @Test func resultBudgetEvictsOldColumnsIncludingQueuedWork() async throws {
+    @Test func completedResultBudgetEvictsOldColumns() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("cache-budget-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: url) }
         let header = (0..<33).map { "c\($0)" }.joined(separator: ",")
@@ -134,21 +140,41 @@ struct ViewerTests {
         try "\(header)\n\(row)\n".write(to: url, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: url.path)
         let worker = OperationQueue()
-        worker.isSuspended = true
         defer { worker.isSuspended = false }
         let viewer = Viewer(
             dataset: dataset, view: dataset.view(), spec: QuerySpec(columns: []), analysisWorker: worker)
-        var tasks: [Task<UInt64, Error>] = []
-        for column in 0..<32 {
-            tasks.append(Task { try await viewer.countNulls(UInt32(column)) })
-            try await Self.queued(on: worker, count: column + 1)
+        for column in 0..<33 {
+            #expect(try await viewer.countNulls(UInt32(column)) == 0)
         }
-        let operations = worker.operations
-        tasks.append(Task { try await viewer.countNulls(32) })
-        while !operations.contains(where: \.isCancelled) { await Task.yield() }
+        worker.isSuspended = true
+        #expect(try await viewer.countNulls(32) == 0, "A completed cached result needs no worker")
+        let evicted = Task { try await viewer.countNulls(0) }
+        try await Self.queued(on: worker)
+        evicted.cancel()
         worker.isSuspended = false
-        await Self.expectCancelled(tasks[0])
-        for task in tasks.dropFirst() { #expect(try await task.value == 0) }
+        await Self.expectCancelled(evicted)
+    }
+
+    @Test func olderParametersFinishingLastDoNotReplaceTheLatestCachedResult() async throws {
+        let dataset = try Self.dataset()
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, view: dataset.view(), spec: Self.spec(city: nil, district: nil), analysisWorker: worker)
+        let older = Task { try await viewer.lengths(1, bins: 2) }
+        try await Self.queued(on: worker)
+        let olderOperation = try #require(worker.operations.first)
+        let newer = Task { try await viewer.lengths(1, bins: 3) }
+        try await Self.queued(on: worker, count: 2)
+        let newerOperation = try #require(worker.operations.first { $0 !== olderOperation })
+        olderOperation.addDependency(newerOperation)
+        worker.isSuspended = false
+        let latest = try await newer.value
+        _ = try await older.value
+        worker.isSuspended = true
+        #expect(try await viewer.lengths(1, bins: 3) == latest)
+        #expect(worker.operations.allSatisfy { $0.isFinished }, "Cache hits must not queue new scans")
     }
 
     @Test func replacementCancelsCachedWorkAndOneConsumerCannotCancelAnother() async throws {
@@ -160,8 +186,12 @@ struct ViewerTests {
             dataset: dataset, view: dataset.view(), spec: Self.spec(city: nil, district: nil), analysisWorker: worker)
         let first = Task { try await viewer.countNulls(0) }
         try await Self.queued(on: worker)
+        let firstOperation = try #require(worker.operations.first)
         let other = Task { try await viewer.countNulls(0) }
+        try await Self.queued(on: worker, count: 2)
+        #expect(worker.operations.filter { !$0.isFinished }.count == 2, "Pending computations belong to their callers")
         first.cancel()
+        #expect(firstOperation.isCancelled)
         worker.isSuspended = false
         await Self.expectCancelled(first)
         #expect(try await other.value == 0)
@@ -169,23 +199,41 @@ struct ViewerTests {
         worker.isSuspended = true
         let old = Task { try await viewer.filterChoices(1) }
         try await Self.queued(on: worker)
-        _ = await viewer.apply(Self.spec(city: "sh", district: nil))
+        try await Self.apply(Self.spec(city: "sh", district: nil), to: viewer)
         worker.isSuspended = false
         await Self.expectCancelled(old)
         #expect(try await viewer.filterChoices(1).values?.map(\.label) == ["pudong", "xuhui"])
     }
 
-    @Test func closingSupersedesPendingQueries() async throws {
+    @Test func closingInspectorCancelsItsQueuedScan() async throws {
+        let dataset = try Self.dataset()
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, view: dataset.view(), spec: Self.spec(city: nil, district: nil), analysisWorker: worker)
+        let inspector = InspectorModel()
+        let request = Task {
+            await inspector.load(
+                dataset: dataset, viewer: viewer, column: 0, expanded: InspectorSection.overview.mask)
+        }
+        try await Self.queued(on: worker)
+        let operation = try #require(worker.operations.first)
+        inspector.cancel()
+        #expect(operation.isCancelled)
+        worker.isSuspended = false
+        await request.value
+        #expect(inspector.nullCount == nil && inspector.loading == nil)
+    }
+
+    @Test func queryCancellationBelongsToItsCallingTask() async throws {
         let dataset = try Self.dataset()
         let view = dataset.view()
         let viewer = Viewer(dataset: dataset, view: view, spec: Self.spec(city: nil, district: nil))
-        let pending = Task { await viewer.apply(Self.spec(city: "bj", district: nil), debounce: true) }
+        let pending = Task { try await viewer.query(Self.spec(city: "bj", district: nil), debounce: true) }
         await Task.yield()
-        viewer.close()
-        guard case .superseded = await pending.value else {
-            Issue.record("Closing must stop queries")
-            return
-        }
+        pending.cancel()
+        await Self.expectCancelled(pending)
         #expect(viewer.applied.spec == Self.spec(city: nil, district: nil))
     }
 }

@@ -94,7 +94,7 @@ struct ColumnAnalysisView: View {
 
     private var request: Request {
         Request(
-            view: ObjectIdentifier(model.view),
+            view: ObjectIdentifier(model.applied.rowView),
             column: column, expanded: expanded, retry: retry, histogramBins: settings.histogramBins,
             histogramScale: histogramScale)
     }
@@ -115,7 +115,7 @@ struct ColumnAnalysisView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if analysis.matches(view: model.view, column: UInt32(column)) {
+                    if analysis.matches(view: model.applied.rowView, column: UInt32(column)) {
                         VStack(alignment: .leading, spacing: 6) {
                             detail("Rows", formatCount(analysis.rowCount))
                             if let count = analysis.nullCount {

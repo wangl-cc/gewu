@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Presents the current column's analysis. Results come from the window's Viewer,
-/// which shares and caches them per applied View and cancels them when it changes.
+/// Owns the current column's analysis request. The Viewer retains completed results;
+/// closing or replacing this presentation cancels its pending computations.
 @MainActor
 final class InspectorModel: ObservableObject {
     @Published private(set) var sections: [InspectorSection] = []
@@ -25,6 +25,7 @@ final class InspectorModel: ObservableObject {
     }
     private var context: Context?
     private var request: UInt64 = 0
+    private var work: Task<Void, Never>?
     private var histogramBins: UInt32 = 40
     private var histogramScale: AxisScale = .linear
 
@@ -32,9 +33,11 @@ final class InspectorModel: ObservableObject {
         context == Context(view: view, column: column)
     }
 
-    /// Stop presenting pending results. Shared computations continue for other panels.
+    /// Stop this panel's work without affecting other consumers.
     func cancel() {
         request &+= 1
+        work?.cancel()
+        work = nil
         loading = nil
     }
 
@@ -43,9 +46,28 @@ final class InspectorModel: ObservableObject {
         bins: UInt32 = 40, scale: AxisScale = .linear
     ) async {
         guard !Task.isCancelled else { return }
-        let view = viewer.applied.view
+        let view = viewer.applied.rowView
         cancel()
         let ticket = request
+        let task = Task {
+            await performLoad(
+                dataset: dataset, viewer: viewer, view: view, column: column, expanded: expanded,
+                bins: bins, scale: scale, ticket: ticket)
+        }
+        work = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if request == ticket { work = nil }
+    }
+
+    private func performLoad(
+        dataset: GewuDataset, viewer: Viewer, view: GewuView, column: UInt32, expanded: Int,
+        bins: UInt32, scale: AxisScale, ticket: UInt64
+    ) async {
+        guard !Task.isCancelled, request == ticket, viewer.applied.rowView === view else { return }
         defer {
             if request == ticket { loading = nil }
         }
@@ -83,29 +105,29 @@ final class InspectorModel: ObservableObject {
             return
         }
         for section in sections where expanded & section.mask != 0 && !hasResult(section) {
-            guard !Task.isCancelled, request == ticket else { return }
+            guard !Task.isCancelled, request == ticket, viewer.applied.rowView === view else { return }
             loading = section
             errors[section] = nil
             do {
                 switch section {
                 case .overview:
-                    try await load(\.nullCount, ticket: ticket, context: next) {
+                    try await load(\.nullCount, ticket: ticket, context: next, viewer: viewer) {
                         try await viewer.countNulls(column)
                     }
                 case .statistics:
-                    try await load(\.statistics, ticket: ticket, context: next) {
+                    try await load(\.statistics, ticket: ticket, context: next, viewer: viewer) {
                         try await viewer.statistics(column)
                     }
                 case .distribution:
-                    try await load(\.distribution, ticket: ticket, context: next) {
+                    try await load(\.distribution, ticket: ticket, context: next, viewer: viewer) {
                         try await viewer.distribution(column, bins: bins, scale: scale)
                     }
                 case .values:
-                    try await load(\.values, ticket: ticket, context: next) {
+                    try await load(\.values, ticket: ticket, context: next, viewer: viewer) {
                         try await viewer.values(column)
                     }
                 case .lengths:
-                    try await load(\.lengths, ticket: ticket, context: next) {
+                    try await load(\.lengths, ticket: ticket, context: next, viewer: viewer) {
                         try await viewer.lengths(column, bins: bins)
                     }
                 case .structure:
@@ -135,13 +157,18 @@ final class InspectorModel: ObservableObject {
         _ destination: ReferenceWritableKeyPath<InspectorModel, T?>,
         ticket: UInt64,
         context expected: Context,
+        viewer: Viewer,
         operation: () async throws -> T
     ) async throws {
         try Task.checkCancellation()
-        guard request == ticket, context == expected else { throw CancellationError() }
+        guard request == ticket, context == expected, viewer.applied.rowView === expected.view else {
+            throw CancellationError()
+        }
         let result = try await operation()
         try Task.checkCancellation()
-        guard request == ticket, context == expected else { throw CancellationError() }
+        guard request == ticket, context == expected, viewer.applied.rowView === expected.view else {
+            throw CancellationError()
+        }
         self[keyPath: destination] = result
     }
 }

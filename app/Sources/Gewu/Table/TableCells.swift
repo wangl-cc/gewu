@@ -51,7 +51,19 @@ final class MatchCellView: NSTableCellView {
     private(set) var currentMatch = false
     private var value = ""
     private var query: String?
-    private var muted = false
+    private(set) var muted = false
+    private var font = NSFont.systemFont(ofSize: 12)
+    private var alignment = NSTextAlignment.left
+
+    private struct TextAppearance: Equatable {
+        let value: String
+        let query: String?
+        let font: NSFont
+        let alignment: NSTextAlignment
+        let foreground: NSColor
+    }
+    private var rendered: TextAppearance?
+    private var usesAttributedText = false
 
     func configure(
         text: String, font: NSFont, alignment: NSTextAlignment,
@@ -59,37 +71,73 @@ final class MatchCellView: NSTableCellView {
     ) {
         value = text
         self.query = query
+        let decorationChanged = wholeCellMatch != wholeMatch || currentMatch != current
         wholeCellMatch = wholeMatch
         currentMatch = current
         self.muted = muted
-        textField?.font = font
-        textField?.alignment = alignment
+        self.font = font
+        self.alignment = alignment
         refreshAppearance()
+        if decorationChanged { needsDisplay = true }
+    }
+
+    /// Find decoration does not require another read of the cell's value.
+    func updateFind(query: String?, wholeMatch: Bool, current: Bool) {
+        configure(
+            text: value, font: font, alignment: alignment, query: query,
+            wholeMatch: wholeMatch, current: current, muted: muted)
+    }
+
+    func updateStyle(font: NSFont, alignment: NSTextAlignment) {
+        configure(
+            text: value, font: font, alignment: alignment, query: query,
+            wholeMatch: wholeCellMatch, current: currentMatch, muted: muted)
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {
-        didSet { refreshAppearance() }
+        didSet {
+            guard oldValue != backgroundStyle else { return }
+            refreshAppearance()
+            needsDisplay = true
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        rendered = nil
         refreshAppearance()
+        needsDisplay = true
     }
 
     func refreshAppearance() {
         guard let field = textField else { return }
         let selected = backgroundStyle == .emphasized && window?.isKeyWindow != false
         let foreground: NSColor =
-            selected ? .alternateSelectedControlTextColor : (muted ? .tertiaryLabelColor : .labelColor)
-        let text = highlighted(
-            value, query: query ?? "", font: field.font ?? .systemFont(ofSize: 12),
-            foreground: wholeCellMatch ? .black : foreground)
-        let styled = NSMutableAttributedString(attributedString: text)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = field.alignment
-        paragraph.lineBreakMode = .byTruncatingTail
-        styled.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: styled.length))
-        field.attributedStringValue = styled
+            wholeCellMatch
+            ? .black
+            : (selected ? .alternateSelectedControlTextColor : (muted ? .tertiaryLabelColor : .labelColor))
+        let appearance = TextAppearance(
+            value: value, query: query, font: font, alignment: alignment, foreground: foreground)
+        guard rendered != appearance else { return }
+        rendered = appearance
+        if let query, !query.isEmpty, value.range(of: query, options: .caseInsensitive) != nil {
+            if field.font != font { field.font = font }
+            if field.alignment != alignment { field.alignment = alignment }
+            let styled = highlighted(value, query: query, font: font, foreground: foreground)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = alignment
+            paragraph.lineBreakMode = .byTruncatingTail
+            styled.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: styled.length))
+            field.attributedStringValue = styled
+            usesAttributedText = true
+        } else {
+            // Reassigning plain text when leaving Find also removes old range attributes.
+            if usesAttributedText || field.stringValue != value { field.stringValue = value }
+            usesAttributedText = false
+            if field.font != font { field.font = font }
+            if field.alignment != alignment { field.alignment = alignment }
+            if field.textColor != foreground { field.textColor = foreground }
+        }
         needsDisplay = true
     }
 
@@ -113,7 +161,9 @@ final class MatchCellView: NSTableCellView {
 }
 
 /// Text with every case-insensitive occurrence of `query` highlighted.
-func highlighted(_ text: String, query: String, font: NSFont, foreground: NSColor = .labelColor) -> NSAttributedString {
+func highlighted(_ text: String, query: String, font: NSFont, foreground: NSColor = .labelColor)
+    -> NSMutableAttributedString
+{
     let result = NSMutableAttributedString(
         string: text,
         attributes: [

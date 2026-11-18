@@ -20,16 +20,16 @@ final class DocumentModel: ObservableObject {
     var applied: Viewer.Applied { viewer.applied }
     var view: GewuView { applied.view }
     var appliedSpec: QuerySpec { applied.spec }
-    @Published private(set) var isBusy = false
+    var isBusy: Bool { submittedSpec != nil }
     @Published private(set) var errorMessage: String?
     @Published var isErrorPresented = false
-    @Published var selectedColumn: Int?
-    @Published var inspectedColumn: Int?
+    @Published var selectedColumn: Int? { didSet { publishTable() } }
+    @Published var inspectedColumn: Int? { didSet { publishTable() } }
     @Published var inspectorPage = InspectorPage.column
     @Published var showsSorting = false
     @Published var inspectorRequest = 0
     @Published var showsColumns = false
-    @Published var inspectorVisible = true
+    @Published var inspectorVisible = true { didSet { publishTable() } }
     let inspectorSettings = InspectorSettings()
     @Published var chartX: Int?
     @Published var chartY: Int?
@@ -48,7 +48,17 @@ final class DocumentModel: ObservableObject {
     }
 
     weak var table: DataTableController?
+    private(set) lazy var tablePresentation = TablePresentation(tableInput)
     private var viewTask: Task<Void, Never>?
+    @Published private var submittedSpec: QuerySpec?
+
+    private var tableInput: TablePresentation.Input {
+        .init(
+            rows: applied.rowView, spec: appliedSpec, selectedColumn: selectedColumn,
+            inspectedColumn: inspectorVisible ? inspectedColumn : nil)
+    }
+
+    private func publishTable() { tablePresentation.apply(tableInput) }
 
     /// Receives the initial View already allocated by the background loading worker.
     init(url: URL, dataset: GewuDataset, view: GewuView) {
@@ -68,7 +78,6 @@ final class DocumentModel: ObservableObject {
         inspectedColumn = selectedColumn
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
         find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
-        viewer.willChange = { [weak self] in self?.objectWillChange.send() }
     }
 
     var canExport: Bool { !isBusy && export.isIdle && !appliedSpec.columns.isEmpty }
@@ -179,10 +188,9 @@ final class DocumentModel: ObservableObject {
         spec.columns = columns.compactMap { column in spec.columns.first { $0.column == column } }
         if reorderOnly {
             do {
+                objectWillChange.send()
                 try viewer.reorder(columns, spec: spec)
-                copying.cancel()
-                selectedDisplayRow = nil
-                selectedSourceRow = nil
+                publishTable()
                 updateFind(preservingMatch: true)
             } catch {
                 spec = appliedSpec
@@ -232,34 +240,56 @@ final class DocumentModel: ObservableObject {
     }
 
     func refresh(debounce: Bool = false) {
-        find.invalidate()
+        guard spec != submittedSpec else { return }
         viewTask?.cancel()
+        if spec == appliedSpec {
+            viewTask = nil
+            if isBusy {
+                submittedSpec = nil
+                updateFind()
+            }
+            return
+        }
+        find.invalidate()
         let spec = spec
+        submittedSpec = spec
         let viewer = viewer
-        isBusy = true
         viewTask = Task { [weak self] in
-            let outcome = await viewer.apply(spec, debounce: debounce)
-            guard let self else { return }
-            switch outcome {
-            case .superseded:
-                return
-            case .applied:
-                self.copying.cancel()
-                self.selectedDisplayRow = nil
-                self.selectedSourceRow = nil
-                self.isBusy = false
-                self.updateFind()
-            case .cancelled:
-                self.isBusy = false
+            do {
+                let view = try await viewer.query(spec, debounce: debounce)
+                guard !Task.isCancelled, let self else { return }
+                var prepared: TableRowLoader.Snapshot?
+                while let table = self.table {
+                    prepared = try await table.loadViewport(in: view, spec: spec)
+                    try Task.checkCancellation()
+                    if self.table === table { break }
+                }
+                try Task.checkCancellation()
+                self.commit(view, spec: spec, rows: prepared)
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.viewTask = nil
+                self.submittedSpec = nil
                 self.spec = self.appliedSpec
-                self.updateFind()
-            case .failed(let error):
-                self.isBusy = false
-                self.spec = self.appliedSpec
-                self.reportError(error)
+                if !error.isCancellation { self.reportError(error) }
                 self.updateFind()
             }
         }
+    }
+
+    /// Publish the View and its ready cells together, without suspending or
+    /// waiting for SwiftUI to deliver another table update.
+    private func commit(_ view: GewuView, spec: QuerySpec, rows: TableRowLoader.Snapshot?) {
+        objectWillChange.send()
+        viewer.apply(view, spec: spec)
+        publishTable()
+        if let rows { table?.commit(rows) }
+        copying.cancel()
+        selectedDisplayRow = nil
+        selectedSourceRow = nil
+        viewTask = nil
+        submittedSpec = nil
+        updateFind()
     }
 
     func updateFind(debounce: Bool = false, preservingMatch: Bool = false) {
@@ -276,8 +306,8 @@ final class DocumentModel: ObservableObject {
     func stop() {
         viewTask?.cancel()
         viewTask = nil
+        submittedSpec = nil
         viewer.close()
-        isBusy = false
         spec = appliedSpec
         find.stop()
         export.stop()

@@ -105,6 +105,7 @@ final class FindModel: ObservableObject {
     }
 
     func invalidate() {
+        let hadSession = session != nil
         request &+= 1
         gate.set(request)
         navigationRequest &+= 1
@@ -113,6 +114,8 @@ final class FindModel: ObservableObject {
         highlightGate.set(highlightRequest)
         navigationTask?.cancel()
         highlightTask?.cancel()
+        navigationTask = nil
+        highlightTask = nil
         navigationOperation?.cancel()
         highlightOperation?.cancel()
         navigationOperation = nil
@@ -120,18 +123,20 @@ final class FindModel: ObservableObject {
         session?.cancel()
         session = nil
         columns = []
-        currentMatch = nil
-        isFinding = false
-        hasMatches = nil
+        if currentMatch != nil { currentMatch = nil }
+        if isFinding { isFinding = false }
+        if hasMatches != nil { hasMatches = nil }
         page = []
         pageIndex = nil
         pendingSteps = 0
         fetching = false
         pendingHighlight = nil
         completedHighlight = nil
-        highlight = nil
-        highlightRevision &+= 1
-        revision = request
+        if highlight != nil {
+            highlight = nil
+            highlightRevision &+= 1
+        }
+        if hadSession { revision = request }
     }
 
     func stop() { invalidate() }

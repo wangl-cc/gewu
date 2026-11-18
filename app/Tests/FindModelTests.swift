@@ -1,8 +1,21 @@
+import Combine
 import Foundation
 import Testing
 
 @Suite
 struct FindModelTests {
+    @Test @MainActor
+    func emptyInvalidationDoesNotPublishDisplayChanges() {
+        let find = FindModel()
+        var publications = 0
+        let observation = find.objectWillChange.sink { publications += 1 }
+        find.invalidate()
+        find.stop()
+        #expect(publications == 0)
+        #expect(find.revision == 0 && find.highlightRevision == 0)
+        withExtendedLifetime(observation) {}
+    }
+
     @Test @MainActor
     func delayedReplacementNavigationAndHighlightsUseOneCapturedFind() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-find-\(UUID()).csv")
