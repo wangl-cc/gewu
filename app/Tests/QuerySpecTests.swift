@@ -1,9 +1,31 @@
 import AppKit
+import Combine
 import Foundation
 import Testing
 
 @Suite @MainActor
 struct QuerySpecTests {
+    @Test func queryEditsPublishOnlyTheirFinalSpec() throws {
+        let model = try model()
+        defer { model.stop() }
+        var publications: [QuerySpec] = []
+        let observer = model.$spec.dropFirst().sink { publications.append($0) }
+        defer { observer.cancel() }
+
+        model.cycleSort(column: 0, multiple: false)
+        let ascending = model.spec
+        model.setSortDirection(column: 0, descending: false)
+        #expect(publications == [ascending])
+
+        model.cycleSort(column: 1, multiple: true)
+        let multiple = model.spec
+        #expect(publications == [ascending, multiple])
+        model.clearSort()
+        model.clearSort()
+        #expect(publications == [ascending, multiple, model.appliedSpec])
+        #expect(!model.isBusy)
+    }
+
     @Test func statusDescribesAppliedResultsIncludingFiltersThatKeepEveryRow() async throws {
         let model = try model()
         defer { model.stop() }

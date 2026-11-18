@@ -101,40 +101,50 @@ final class DocumentModel: ObservableObject {
     }
 
     var sortedColumns: [ColSpec] {
-        spec.columns.filter { $0.sort != nil }.sorted { $0.sort!.priority < $1.sort!.priority }
+        spec.sortedIndices.map { spec.columns[$0] }
+    }
+
+    private func submit(_ next: QuerySpec) {
+        guard next != spec else { return }
+        spec = next
+        refresh()
     }
 
     func cycleSort(column: UInt32, multiple: Bool) {
         guard let index = spec.columns.firstIndex(where: { $0.column == column }) else { return }
+        var next = spec
         let old = spec.columns[index].sort
-        if !multiple { for i in spec.columns.indices { spec.columns[i].sort = nil } }
+        if !multiple { for i in next.columns.indices { next.columns[i].sort = nil } }
         if old?.descending == true {
-            spec.columns[index].sort = nil
+            next.columns[index].sort = nil
         } else {
             let priority = multiple ? (old?.priority ?? UInt32(sortedColumns.count)) : 0
-            spec.columns[index].sort = ColSort(priority: priority, descending: old != nil)
+            next.columns[index].sort = ColSort(priority: priority, descending: old != nil)
         }
-        normalizeSort()
-        refresh()
+        next.normalizeSort()
+        submit(next)
     }
 
     func setSortDirection(column: UInt32, descending: Bool) {
         guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        spec.columns[i].sort = ColSort(
+        var next = spec
+        next.columns[i].sort = ColSort(
             priority: spec.columns[i].sort?.priority ?? UInt32(sortedColumns.count), descending: descending)
-        refresh()
+        submit(next)
     }
 
     func removeSort(column: UInt32) {
         guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        spec.columns[i].sort = nil
-        normalizeSort()
-        refresh()
+        var next = spec
+        next.columns[i].sort = nil
+        next.normalizeSort()
+        submit(next)
     }
 
     func clearSort() {
-        for i in spec.columns.indices { spec.columns[i].sort = nil }
-        refresh()
+        var next = spec
+        for i in next.columns.indices { next.columns[i].sort = nil }
+        submit(next)
     }
 
     func replaceSortColumn(_ column: UInt32, with replacement: UInt32) {
@@ -144,60 +154,57 @@ final class DocumentModel: ObservableObject {
             let sort = spec.columns[source].sort,
             spec.columns[destination].sort == nil
         else { return }
-        spec.columns[destination].sort = sort
-        spec.columns[source].sort = nil
-        refresh()
+        var next = spec
+        next.columns[destination].sort = sort
+        next.columns[source].sort = nil
+        submit(next)
     }
 
     func reorderSort(_ columns: [UInt32]) {
         guard Set(columns) == Set(sortedColumns.map(\.column)), columns.count == sortedColumns.count else { return }
+        var next = spec
         for (priority, column) in columns.enumerated() {
             if let i = spec.columns.firstIndex(where: { $0.column == column }) {
-                spec.columns[i].sort?.priority = UInt32(priority)
+                next.columns[i].sort?.priority = UInt32(priority)
             }
         }
-        refresh()
-    }
-
-    private func normalizeSort() {
-        for (priority, column) in sortedColumns.enumerated() {
-            let i = spec.columns.firstIndex { $0.column == column.column }!
-            spec.columns[i].sort?.priority = UInt32(priority)
-        }
+        submit(next)
     }
 
     func setFilter(_ filter: Filter?, column: UInt32) {
         guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        spec.columns[i].filter = filter
-        refresh()
+        var next = spec
+        next.columns[i].filter = filter
+        submit(next)
     }
 
     var canClearFilters: Bool { spec.columns.contains { $0.filter != nil } || !appliedFilterColumns.isEmpty }
 
     func clearFilters() {
         guard canClearFilters else { return }
-        for i in spec.columns.indices { spec.columns[i].filter = nil }
-        refresh()
+        var next = spec
+        for i in next.columns.indices { next.columns[i].filter = nil }
+        submit(next)
     }
 
     func reorderColumns(_ columns: [UInt32]) {
         guard columns != spec.columns.map(\.column), Set(columns) == Set(spec.columns.map(\.column)),
             columns.count == spec.columns.count
         else { return }
-        let reorderOnly = !isBusy && spec == appliedSpec
-        spec.columns = columns.compactMap { column in spec.columns.first { $0.column == column } }
-        if reorderOnly {
+        var next = spec
+        let byColumn = Dictionary(uniqueKeysWithValues: spec.columns.map { ($0.column, $0) })
+        next.columns = columns.compactMap { byColumn[$0] }
+        if !isBusy && spec == appliedSpec {
             do {
-                objectWillChange.send()
-                try viewer.reorder(columns, spec: spec)
+                try viewer.reorder(columns, spec: next)
+                spec = next
                 publishTable()
                 updateFind(preservingMatch: true)
             } catch {
-                spec = appliedSpec
                 reportError(error)
             }
         } else {
-            refresh()
+            submit(next)
         }
     }
 
@@ -217,19 +224,18 @@ final class DocumentModel: ObservableObject {
     /// Applies a confirmed bulk visibility edit as one query, preserving surviving display order.
     func setColumnsVisible(_ columns: [UInt32], visible: Bool) {
         let targets = Set(columns.filter { Int($0) < info.columns.count })
-        let before = spec
+        var next = spec
         if visible {
-            let shown = Set(spec.columns.map(\.column))
-            spec.columns += targets.subtracting(shown).sorted().map { ColSpec(column: $0, sort: nil, filter: nil) }
+            let shown = Set(next.columns.map(\.column))
+            next.columns += targets.subtracting(shown).sorted().map { ColSpec(column: $0, sort: nil, filter: nil) }
         } else {
-            spec.columns.removeAll { targets.contains($0.column) }
-            normalizeSort()
+            next.columns.removeAll { targets.contains($0.column) }
+            next.normalizeSort()
             if let selectedColumn, targets.contains(UInt32(selectedColumn)) {
-                self.selectedColumn = spec.columns.first.map { Int($0.column) }
+                self.selectedColumn = next.columns.first.map { Int($0.column) }
             }
         }
-        guard spec != before else { return }
-        refresh()
+        submit(next)
     }
 
     func inspectColumn(_ column: Int) {
@@ -329,5 +335,18 @@ final class DocumentModel: ObservableObject {
 
     func reportError(_ error: Error, prefix: String = "") {
         reportError(prefix + error.userMessage)
+    }
+}
+
+extension QuerySpec {
+    fileprivate var sortedIndices: [Int] {
+        columns.indices.filter { columns[$0].sort != nil }
+            .sorted { columns[$0].sort!.priority < columns[$1].sort!.priority }
+    }
+
+    fileprivate mutating func normalizeSort() {
+        for (priority, index) in sortedIndices.enumerated() {
+            columns[index].sort?.priority = UInt32(priority)
+        }
     }
 }
