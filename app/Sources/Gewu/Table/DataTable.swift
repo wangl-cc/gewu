@@ -128,7 +128,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         reloading = true
         rows.install(snapshot)
         updateColumns(model.tablePresentation.input)
-        viewportRows = nil
         table.deselectAll(nil)
         if oldCount != snapshot.view.rowCount() { table.noteNumberOfRowsChanged() }
         table.layoutSubtreeIfNeeded()
@@ -136,14 +135,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         // Visible cells receive the prepared values directly. Retained row views
         // outside this viewport must also lose their old-order content.
         let visible = table.rows(in: table.visibleRect)
-        let visibleColumns = table.columnIndexes(in: table.visibleRect)
+        let visibleColumns = Set(
+            table.columnIndexes(in: table.visibleRect).compactMap { columnIndex(table.tableColumns[$0]) })
+        let preparedColumns = Set(snapshot.viewport.columns)
         table.enumerateAvailableRowViews { rowView, row in
-            for index in table.tableColumns.indices {
-                guard let column = self.columnIndex(table.tableColumns[index]),
-                    let cell = rowView.view(atColumn: index) as? MatchCellView
-                else { continue }
-                if NSLocationInRange(row, visible), visibleColumns.contains(index),
-                    snapshot.viewport.rows.contains(row), snapshot.viewport.columns.contains(UInt32(column))
+            for case let cell as MatchCellView in rowView.subviews {
+                guard let id = cell.identifier, let column = Int(id.rawValue.dropFirst()) else { continue }
+                if NSLocationInRange(row, visible), visibleColumns.contains(column),
+                    snapshot.viewport.rows.contains(row), preparedColumns.contains(UInt32(column))
                 {
                     continue
                 }
@@ -347,9 +346,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             return UInt32(source)
         }
         if viewportRows != visibleRows || viewportColumns != columns {
+            refreshVisibleCells(restyle: true, enteringViewport: true)
             viewportRows = visibleRows
             viewportColumns = columns
-            refreshVisibleCells(restyle: true)
         }
         rows.updateViewport(
             rows: visibleRows.location..<(visibleRows.location + visibleRows.length), columns: columns)
@@ -430,12 +429,17 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     /// Decoration and style changes operate on the content already in the cell,
     /// including large values intentionally not retained by the row cache.
-    private func refreshVisibleCells(restyle: Bool) {
+    private func refreshVisibleCells(restyle: Bool, enteringViewport: Bool = false) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
         for index in table.columnIndexes(in: table.visibleRect) {
             guard let column = columnIndex(table.tableColumns[index]) else { continue }
             for row in visible.location..<(visible.location + visible.length) {
+                if enteringViewport, let viewportRows, NSLocationInRange(row, viewportRows),
+                    viewportColumns.contains(UInt32(column))
+                {
+                    continue
+                }
                 guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView else {
                     continue
                 }
