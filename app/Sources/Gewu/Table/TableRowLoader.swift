@@ -39,8 +39,8 @@ final class TableRowLoader {
     // Completed demand, including uncached blocks, prevents cache pressure from
     // repeatedly loading the same viewport. Moving the viewport renews demand.
     private var delivered: Set<RowCache.Key> = []
+    private var failed: Set<RowCache.Key> = []
     private var task: Task<Void, Never>?
-    private var failed = false
 
     init(cache: RowCache = RowCache(), read: Read? = nil) {
         self.cache = cache
@@ -54,15 +54,36 @@ final class TableRowLoader {
 
     /// Read only the target viewport, without invalidating the displayed cache.
     /// The temporary pages also allow oversized values to be committed together.
-    func snapshot(of view: GewuView, viewport: Viewport) async throws -> Snapshot {
+    func snapshot(of view: GewuView, viewport: () -> Viewport) async throws -> Snapshot {
         var pages: [Snapshot.Page] = []
-        for request in Self.requests(in: viewport) {
+        var target = viewport()
+        while true {
             try Task.checkCancellation()
-            let block = try await read(view, request.start, request.columns)
-            try Task.checkCancellation()
-            pages.append(.init(block: block, columns: request.columns))
+            let columns = Set(target.columns)
+            pages.removeAll { page in
+                let start = Int(page.block.start)
+                return !target.rows.overlaps(start..<(start + Int(page.block.nRows)))
+                    || (!columns.isEmpty && columns.isDisjoint(with: page.columns))
+            }
+            var ready = Set<RowCache.Key>()
+            for page in pages {
+                let start = Int(page.block.start)
+                ready.insert(.init(start: start, column: nil))
+                for column in page.columns { ready.insert(.init(start: start, column: column)) }
+            }
+            let missing = Self.requests(in: target) { !ready.contains($0) }
+            if missing.isEmpty { return Snapshot(view: view, viewport: target, pages: pages) }
+            for request in missing {
+                try Task.checkCancellation()
+                let block = try await read(view, request.start, request.columns)
+                pages.append(.init(block: block, columns: request.columns))
+                let latest = viewport()
+                if target != latest {
+                    target = latest
+                    break
+                }
+            }
         }
-        return Snapshot(view: view, viewport: viewport, pages: pages)
     }
 
     func install(_ snapshot: Snapshot) {
@@ -78,7 +99,7 @@ final class TableRowLoader {
         stop()
         self.view = view
         cache.clear()
-        failed = false
+
     }
 
     func stop() {
@@ -88,6 +109,7 @@ final class TableRowLoader {
         visibleRows = 0..<0
         visibleColumns = []
         delivered.removeAll()
+        failed.removeAll()
     }
 
     func cachedBlock(for key: RowCache.Key) -> RowBlock? {
@@ -124,6 +146,13 @@ final class TableRowLoader {
             {
                 delivered.removeAll()
             }
+            if !failed.isEmpty {
+                let sources = Set(columns)
+                failed = failed.filter { key in
+                    rows.overlaps(key.start..<(key.start + RowCache.blockSize))
+                        && (key.column.map(sources.contains) ?? true)
+                }
+            }
             visibleRows = rows
             visibleColumns = columns
         }
@@ -131,7 +160,7 @@ final class TableRowLoader {
     }
 
     private func needed(_ key: RowCache.Key) -> Bool {
-        !delivered.contains(key) && cache.block(for: key) == nil
+        !failed.contains(key) && !delivered.contains(key) && cache.block(for: key) == nil
     }
 
     private static func requests(in viewport: Viewport, needed: (RowCache.Key) -> Bool = { _ in true }) -> [Request] {
@@ -167,7 +196,7 @@ final class TableRowLoader {
     }
 
     private func loadNext() {
-        guard task == nil, !failed, let view,
+        guard task == nil, let view,
             let request = Self.requests(in: .init(rows: visibleRows, columns: visibleColumns), needed: needed).first
         else { return }
         let read = read
@@ -185,8 +214,14 @@ final class TableRowLoader {
             } catch {
                 guard !Task.isCancelled, let self, self.view === view else { return }
                 self.task = nil
-                self.failed = true
+                // Suppress this request for the current demand, while allowing
+                // unrelated pages to load. Moving away and back permits a retry.
+                if request.columns.isEmpty { self.failed.insert(.init(start: request.start, column: nil)) }
+                for column in request.columns {
+                    self.failed.insert(.init(start: request.start, column: column))
+                }
                 self.onError?(view, error)
+                self.loadNext()
             }
         }
     }

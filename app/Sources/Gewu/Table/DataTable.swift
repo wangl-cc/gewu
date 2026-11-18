@@ -89,13 +89,22 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     /// Predict the visible region after row-count and column-layout changes.
     /// Include one bordering row for fractional scrolling and AppKit's clipping.
-    private func viewport(for view: GewuView, spec: QuerySpec) -> TableRowLoader.Viewport {
+    private func viewport(for view: GewuView, spec: QuerySpec, sameLayout: Bool) -> TableRowLoader.Viewport {
         let count = Int(clamping: view.rowCount())
         let clip = scroll.contentView.bounds
         let stride = table.rowHeight + table.intercellSpacing.height
         let y = max(0, min(clip.minY, CGFloat(count) * stride - clip.height))
         let first = max(0, Int(floor(y / stride)) - 1)
         let last = min(count, Int(ceil((y + clip.height) / stride)) + 1)
+        let rows = min(first, count)..<max(min(first, count), last)
+        if sameLayout {
+            let columns = table.columnIndexes(in: clip).compactMap { index -> UInt32? in
+                let column = table.tableColumns[index]
+                guard !column.isHidden, let source = columnIndex(column) else { return nil }
+                return UInt32(source)
+            }
+            return .init(rows: rows, columns: columns)
+        }
         let gutterWidth = showsNumbers == true ? gutter.fittedWidth : 0
         let widths = spec.columns.map { col in
             table.tableColumn(withIdentifier: .init("c\(col.column)"))?.width ?? 140
@@ -108,16 +117,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             if edge + width > x && edge < x + clip.width { columns.append(col.column) }
             edge += width
         }
-        return .init(rows: min(first, count)..<max(min(first, count), last), columns: columns)
+        return .init(rows: rows, columns: columns)
     }
 
     func loadViewport(in view: GewuView, spec: QuerySpec) async throws -> TableRowLoader.Snapshot {
-        while true {
-            let snapshot = try await rows.snapshot(of: view, viewport: viewport(for: view, spec: spec))
-            try Task.checkCancellation()
-            // The user can scroll, resize or change column widths during the read.
-            if viewport(for: view, spec: spec) == snapshot.viewport { return snapshot }
-        }
+        let sameLayout = displayedInput?.spec.columns.map(\.column) == spec.columns.map(\.column)
+        return try await rows.snapshot(of: view) { viewport(for: view, spec: spec, sameLayout: sameLayout) }
     }
 
     func commit(_ snapshot: TableRowLoader.Snapshot) {

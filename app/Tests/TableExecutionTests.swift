@@ -13,6 +13,54 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
+    static func snapshotKeepsCoveredRowsAndReadsOnlyNewColumns() async throws {
+        let view = try dataset().view()
+        var viewport = TableRowLoader.Viewport(rows: 0..<2, columns: [0])
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let loader = TableRowLoader { view, start, columns in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(.init(view: view, start: start, columns: columns, continuation: continuation))
+            }
+        }
+        defer { reads.continuation.finish() }
+        var requests = reads.stream.makeAsyncIterator()
+        let pending = Task { try await loader.snapshot(of: view) { viewport } }
+        let first = try #require(await requests.next())
+        #expect(first.columns == [0])
+        viewport = .init(rows: 1..<3, columns: [0, 2])
+        first.finish()
+        let second = try #require(await requests.next())
+        #expect(second.columns == [2])
+        second.finish()
+        let snapshot = try await pending.value
+        #expect(snapshot.viewport == viewport && snapshot.pages.count == 2)
+    }
+
+    @Test @MainActor
+    static func failedColumnReadAllowsOtherColumnsInSameView() async throws {
+        let view = try dataset().view()
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let loader = TableRowLoader { view, start, columns in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(.init(view: view, start: start, columns: columns, continuation: continuation))
+            }
+        }
+        defer {
+            loader.stop()
+            reads.continuation.finish()
+        }
+        loader.reset(to: view)
+        var requests = reads.stream.makeAsyncIterator()
+        loader.updateViewport(rows: 0..<2, columns: [0])
+        let first = try #require(await requests.next())
+        loader.updateViewport(rows: 0..<2, columns: [0, 1])
+        first.continuation.resume(throwing: CocoaError(.fileReadCorruptFile))
+        let next = try #require(await requests.next())
+        #expect(next.columns == [1])
+        next.finish()
+    }
+
+    @Test @MainActor
     static func loaderBatchesVisibleColumnsAndReusesCache() async throws {
         let view = try dataset().view()
         let reads = AsyncStream<PendingTableRead>.makeStream()
