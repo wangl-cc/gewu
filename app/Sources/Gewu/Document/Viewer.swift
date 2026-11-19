@@ -115,7 +115,7 @@ final class Viewer {
 
     @ObservationIgnored private var epoch = Epoch()
     // Queries are serialized; the window owns cancellation and result publication.
-    @ObservationIgnored private let worker = DispatchQueue(label: "gewu.viewer.queries", qos: .userInitiated)
+    @ObservationIgnored private let queryWorker: OperationQueue
     @ObservationIgnored private let analysisWorker: OperationQueue
 
     init(
@@ -124,6 +124,7 @@ final class Viewer {
         ordered: GewuOrderedView,
         filters: [ColumnFilter] = [],
         sorts: [ColumnSort] = [],
+        queryWorker: OperationQueue? = nil,
         analysisWorker: OperationQueue? = nil
     ) {
         self.dataset = dataset
@@ -131,6 +132,10 @@ final class Viewer {
         self.ordered = ordered
         appliedFilters = filters
         appliedSorts = sorts
+        self.queryWorker = queryWorker ?? OperationQueue()
+        self.queryWorker.name = "gewu.viewer.queries"
+        self.queryWorker.qualityOfService = .userInitiated
+        self.queryWorker.maxConcurrentOperationCount = 1
         self.analysisWorker = analysisWorker ?? OperationQueue()
         self.analysisWorker.name = "gewu.viewer.analysis"
         self.analysisWorker.qualityOfService = .userInitiated
@@ -158,28 +163,22 @@ final class Viewer {
         debounce: Bool, _ compute: @escaping @Sendable () throws -> Value
     ) async throws -> Value {
         try Task.checkCancellation()
-        let flag = CancelFlag()
-        let worker = worker
+        let operation = ViewerScan(compute)
+        let worker = queryWorker
         return try await withTaskCancellationHandler {
             if debounce { try await Task.sleep(for: .milliseconds(150)) }
             try Task.checkCancellation()
             let value: Value = try await withCheckedThrowingContinuation { continuation in
-                worker.async {
-                    guard !flag.isCancelled else {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-                    do {
-                        continuation.resume(returning: try compute())
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
+                operation.completionBlock = { [weak operation] in
+                    continuation.resume(with: operation?.result ?? .failure(CancellationError()))
                 }
+                worker.addOperation(operation)
             }
             try Task.checkCancellation()
+            guard !operation.isCancelled else { throw CancellationError() }
             return value
         } onCancel: {
-            flag.cancel()
+            operation.cancel()
         }
     }
 
@@ -210,19 +209,6 @@ final class Viewer {
     }
 
     // MARK: Filter editors
-
-    /// The rows a column's filter editor describes: applied filters on all other columns.
-    func facet(_ column: ColumnId) async throws -> GewuFilteredView {
-        try Task.checkCancellation()
-        let filtered = filtered
-        let appliedFilters = appliedFilters
-        guard appliedFilters.contains(where: { $0.column == column }) else { return filtered }
-        let dataset = dataset
-        return try await run {
-            try Self.resolveFacet(
-                dataset: dataset, filtered: filtered, appliedFilters: appliedFilters, column: column)
-        }
-    }
 
     func filterChoices(_ column: ColumnId) async throws -> FilterChoices {
         let filtered = filtered

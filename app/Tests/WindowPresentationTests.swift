@@ -55,17 +55,19 @@ struct WindowPresentationTests {
         let viewer = Viewer(
             dataset: dataset, filtered: filtered, ordered: ordered, filters: filters,
             sorts: [ColumnSort(column: c1, descending: true)])
-        let district = try await viewer.facet(c1)
-        let choices = try district.filterChoices(column: c1)
+        let choices = try await viewer.filterChoices(c1)
         #expect(choices.values?.map(\.label) == ["chaoyang", "haidian"])
+        #expect(try await viewer.values(c1).values.map(\.label) == ["haidian"])
 
-        // A column without its own filter reuses the applied filtered view.
+        // When the edited column has no filter of its own, its choices match the applied rows,
+        // while city's own editor ignores city = bj.
         let cityOnlyFilters = [ColumnFilter(column: c0, filter: exact("bj"))]
         let cityOnlyFiltered = try dataset.filter(filters: cityOnlyFilters)
         let cityOnlyViewer = Viewer(
             dataset: dataset, filtered: cityOnlyFiltered, ordered: cityOnlyFiltered.unsorted(),
             filters: cityOnlyFilters)
-        #expect(try await cityOnlyViewer.facet(c1) === cityOnlyFiltered)
+        #expect(try await cityOnlyViewer.filterChoices(c1).values?.map(\.label) == ["chaoyang", "haidian"])
+        #expect(try await cityOnlyViewer.filterChoices(c0).values?.map(\.label) == ["bj", "sh"])
     }
 
     @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() throws {

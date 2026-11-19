@@ -129,7 +129,7 @@ struct WorkbookLifecycleTests {
         let original = try #require(model.document)
         #expect(model.selectedSheet?.rawValue == "First")
         original.find.query = "keep while loading"
-        original.chartY = ColumnId(raw: 0)
+        original.chartX = ColumnId(raw: 0)
 
         model.selectSheet(.init(rawValue: "Bad"))
         await settled(model)
@@ -147,7 +147,9 @@ struct WorkbookLifecycleTests {
         #expect(model.selectedSheet?.rawValue == "Last")
         #expect(model.document !== original)
         #expect(model.document?.info.columns.first?.name == "column_3")
-        #expect(model.document?.find.query == "" && model.document?.chartY == nil)
+        #expect(
+            model.document?.find.query == "" && model.document?.chartX == nil
+                && model.document?.chartY == ColumnId(raw: 0))
         #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
         #expect(!probe.viewSheets.contains("Slow"), "A decode superseded before completion must not allocate row IDs")
         #expect(model.document?.ordered !== original.ordered)

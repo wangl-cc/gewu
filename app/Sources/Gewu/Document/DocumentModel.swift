@@ -29,10 +29,9 @@ final class DocumentModel {
         }
     }
 
-    private struct PendingQuery: Equatable {
+    private struct RowQuery: Equatable {
         let filters: [ColumnFilter]
         let sorts: [ColumnSort]
-        let visibleColumns: [ColumnId]
     }
 
     let url: URL
@@ -50,7 +49,7 @@ final class DocumentModel {
     private(set) var draftVisibleColumns: [ColumnId]
     private(set) var draftFilters: [ColumnFilter]
     private(set) var draftSorts: [ColumnSort]
-    private var submitted: PendingQuery?
+    private var submitted: RowQuery?
     var isBusy: Bool { submitted != nil }
 
     private(set) var errorMessage: String?
@@ -136,7 +135,8 @@ final class DocumentModel {
         url: URL,
         dataset: GewuDataset,
         filtered: GewuFilteredView? = nil,
-        ordered: GewuOrderedView? = nil
+        ordered: GewuOrderedView? = nil,
+        queryWorker: OperationQueue? = nil
     ) {
         self.url = url
         self.dataset = dataset
@@ -147,7 +147,8 @@ final class DocumentModel {
         find = FindModel()
         let initialFiltered = filtered ?? dataset.unfiltered()
         let initialOrdered = ordered ?? initialFiltered.unsorted()
-        viewer = Viewer(dataset: dataset, filtered: initialFiltered, ordered: initialOrdered)
+        viewer = Viewer(
+            dataset: dataset, filtered: initialFiltered, ordered: initialOrdered, queryWorker: queryWorker)
         let initialColumns = metadata.columns.map(\.id)
         visibleColumns = initialColumns
         draftVisibleColumns = initialColumns
@@ -155,6 +156,7 @@ final class DocumentModel {
         draftSorts = []
         _selectedColumn = initialColumns.first
         _inspectedColumn = initialColumns.first
+        chartY = metadata.columns.first { $0.capabilities.scatter }?.id
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
         find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
     }
@@ -353,6 +355,10 @@ final class DocumentModel {
         }
     }
 
+    private func isPlottable(_ column: ColumnId) -> Bool {
+        columnInfo[column]?.capabilities.scatter == true
+    }
+
     private func reconcileVisibleColumnSelections() {
         let visible = Set(visibleColumns)
         if selectedColumn.map({ !visible.contains($0) }) ?? true {
@@ -361,11 +367,11 @@ final class DocumentModel {
         if inspectedColumn.map({ !visible.contains($0) }) ?? true {
             inspectedColumn = visibleColumns.first
         }
-        if let chartX, !visible.contains(chartX) {
+        if let chartX, !(visible.contains(chartX) && isPlottable(chartX)) {
             self.chartX = nil
         }
-        if let chartY, !visible.contains(chartY) {
-            self.chartY = visibleColumns.first { columnInfo[$0]?.capabilities.scatter == true }
+        if chartY.map({ !(visible.contains($0) && isPlottable($0)) }) ?? true {
+            self.chartY = visibleColumns.first { isPlottable($0) }
         }
     }
 
@@ -377,36 +383,25 @@ final class DocumentModel {
     }
 
     func refresh(debounce: Bool = false) {
-        let target = PendingQuery(
-            filters: draftFilters,
-            sorts: draftSorts,
-            visibleColumns: draftVisibleColumns
-        )
+        let target = RowQuery(filters: draftFilters, sorts: draftSorts)
         guard target != submitted else { return }
         viewTask?.cancel()
-        let applied = PendingQuery(
-            filters: viewer.appliedFilters,
-            sorts: viewer.appliedSorts,
-            visibleColumns: visibleColumns
-        )
+        let applied = RowQuery(filters: viewer.appliedFilters, sorts: viewer.appliedSorts)
         if target == applied {
             viewTask = nil
-            if isBusy {
-                submitted = nil
+            let wasBusy = submitted != nil
+            submitted = nil
+            let columnsChanged = visibleColumns != draftVisibleColumns
+            if columnsChanged {
+                visibleColumns = draftVisibleColumns
+                reconcileVisibleColumnSelections()
+            }
+            if wasBusy || columnsChanged {
                 updateFind()
             }
             return
         }
         let filtersChanged = target.filters != viewer.appliedFilters
-        let sortsChanged = target.sorts != viewer.appliedSorts
-        if !filtersChanged && !sortsChanged {
-            viewTask = nil
-            submitted = nil
-            visibleColumns = target.visibleColumns
-            reconcileVisibleColumnSelections()
-            updateFind()
-            return
-        }
         find.invalidate()
         submitted = target
         let viewer = viewer
@@ -428,13 +423,18 @@ final class DocumentModel {
                 guard let self else { return }
                 var prepared: TableRowLoader.Snapshot?
                 while let table = self.table {
-                    prepared = try await table.loadViewport(in: nextOrdered, columns: target.visibleColumns)
+                    let columns = self.draftVisibleColumns
+                    let snapshot = try await table.loadViewport(in: nextOrdered, columns: columns)
                     try Task.checkCancellation()
-                    if self.table === table { break }
+                    if self.table === table && self.draftVisibleColumns == columns {
+                        prepared = snapshot
+                        break
+                    }
                 }
                 try Task.checkCancellation()
                 self.commit(
                     target: target,
+                    visibleColumns: self.draftVisibleColumns,
                     filtered: nextFiltered,
                     ordered: nextOrdered,
                     rows: prepared
@@ -455,7 +455,8 @@ final class DocumentModel {
     /// Publish the resolved views and ready cells together, without suspending or
     /// waiting for SwiftUI to deliver another table update.
     private func commit(
-        target: PendingQuery,
+        target: RowQuery,
+        visibleColumns: [ColumnId],
         filtered: GewuFilteredView?,
         ordered: GewuOrderedView,
         rows: TableRowLoader.Snapshot?
@@ -465,7 +466,7 @@ final class DocumentModel {
         } else {
             viewer.apply(ordered: ordered, sorts: target.sorts)
         }
-        visibleColumns = target.visibleColumns
+        self.visibleColumns = visibleColumns
         reconcileVisibleColumnSelections()
         if let rows { table?.commit(rows) }
         copying.cancel()

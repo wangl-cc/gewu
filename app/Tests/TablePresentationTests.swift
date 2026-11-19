@@ -456,6 +456,47 @@ struct TablePresentationTests {
         #expect(model.errorMessage == nil)
     }
 
+    @Test func columnLayoutChangeDuringViewportPreloadReloadsUpdatedColumnsWithoutRerunningQuery() async throws {
+        let header = (0..<16).map { "c\($0)" }.joined(separator: ",")
+        let rows = (0..<3).map { row in (0..<16).map { String(row * 100 + $0) }.joined(separator: ",") }
+        let model = try makeModel(csv: header + "\n" + rows.joined(separator: "\n"))
+        let original = model.ordered
+        let requests = AsyncStream<PendingViewportRead>.makeStream()
+        let controller = DataTableController(
+            model: model, loader: gatedLoader(original: original, requests: requests.continuation))
+        model.table = controller
+        defer {
+            model.stop()
+            requests.continuation.finish()
+        }
+        let table = try prepareTable(controller)
+        let initial = try cell(table, column: Self.c0, row: 0)
+        try await waitUntil { !initial.isLoading }
+        var reads = requests.stream.makeAsyncIterator()
+
+        model.setSortDirection(column: Self.c0, descending: true)
+        let firstRead = try #require(await reads.next())
+        let c15 = ColumnId(raw: 15)
+        #expect(!firstRead.columns.contains(c15))
+        let computedOrdered = firstRead.view
+
+        // Hide off-viewport/unrelated columns during preload so c15 enters the viewport.
+        model.setColumnsVisible((1..<14).map { ColumnId(raw: UInt32($0)) }, visible: false)
+        firstRead.finish()
+        let secondRead = try #require(await reads.next())
+        #expect(secondRead.view === computedOrdered)
+        #expect(secondRead.columns.contains(c15))
+        secondRead.finish()
+
+        try await waitUntil { !model.isBusy }
+        #expect(model.ordered === computedOrdered)
+        #expect(model.visibleColumns == [Self.c0, ColumnId(raw: 14), c15])
+        let exposed = try cell(table, column: c15, row: 0)
+        let sortedLead = try cell(table, column: Self.c0, row: 0)
+        #expect(!sortedLead.isLoading && sortedLead.textField?.stringValue == "200")
+        #expect(!exposed.isLoading && exposed.textField?.stringValue == "215")
+    }
+
     private func makeModel(csv: String = "number,label\n1,first\n2,second\n3,third\n") throws -> DocumentModel {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("table-presentation-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }

@@ -71,36 +71,63 @@ struct ViewerTests {
         #expect(viewer.filtered === initial)
     }
 
-    @Test func facetsAreTemporaryAndChoicesFollowTheAppliedView() async throws {
+    @Test func filterEditorsIgnoreOwnFilterKeepOtherFiltersAndFollowAppliedEpochs() async throws {
         let dataset = try Self.dataset()
-        let viewer = Self.makeViewer(dataset)
+        let worker = OperationQueue()
+        defer { worker.isSuspended = false }
+        let viewer = Self.makeViewer(dataset, analysisWorker: worker)
+        let col0 = ColumnId(raw: 0)
         let col1 = ColumnId(raw: 1)
         try await Self.apply(Self.filters(city: "bj", district: "haidian"), sorts: [], to: viewer)
-        let facet = try await viewer.facet(col1)
-        #expect(
-            try await viewer.facet(col1) !== facet, "Completed facets must not retain their row arrays in the cache")
-        #expect(facet.rowCount() == 2, "The district facet keeps city = bj only")
-        weak var released: GewuFilteredView?
-        released = try await viewer.facet(col1)
-        #expect(released == nil, "The Viewer must release a completed facet after its last consumer releases it")
+        #expect(viewer.ordered.rowCount() == 1)
+
         let choices = try await viewer.filterChoices(col1)
         #expect(choices.values?.map(\.label).sorted() == ["chaoyang", "haidian"])
+        #expect(try await viewer.filterChoices(col0).values?.map(\.label) == ["bj"])
 
-        // Pure sorting keeps `filtered` and its cached analysis results.
+        // Pure sorting keeps `filtered` and hits cached filter-editor results without touching Core.
         let beforeFiltered = viewer.filtered
         let sorts = [ColumnSort(column: col1, descending: true)]
         let sorted = try await viewer.sort(sorts, on: beforeFiltered)
         viewer.apply(ordered: sorted, sorts: sorts)
         #expect(viewer.filtered === beforeFiltered)
         #expect(viewer.ordered === sorted)
+        worker.isSuspended = true
         #expect(try await viewer.filterChoices(col1) == choices)
+        worker.isSuspended = false
 
         try await Self.apply(Self.filters(city: "sh", district: "pudong"), sorts: [], to: viewer)
         #expect(viewer.filtered !== beforeFiltered)
-        let replaced = try await viewer.facet(col1)
-        #expect(replaced !== facet)
         let labels = try await viewer.filterChoices(col1).values?.map(\.label)
         #expect(labels == ["pudong", "xuhui"])
+
+        // Numeric filterDistribution likewise ignores only the target column's own range filter.
+        let numDataset = try Self.numericDataset()
+        let numViewer = Self.makeViewer(numDataset, analysisWorker: worker)
+        let cityCol = ColumnId(raw: 0)
+        let scoreCol = ColumnId(raw: 1)
+        let initialRange = [
+            ColumnFilter(column: cityCol, filter: Self.exact("bj")),
+            ColumnFilter(column: scoreCol, filter: Filter(condition: .range(min: nil, max: "15"), includeNulls: false)),
+        ]
+        try await Self.apply(initialRange, sorts: [], to: numViewer)
+        #expect(numViewer.ordered.rowCount() == 1)
+        let dist = try #require(try await numViewer.filterDistribution(scoreCol, bins: 4, scale: .linear))
+        #expect(dist.histogram.minLabel == "10" && dist.histogram.maxLabel == "20")
+        #expect(dist.histogram.counts.reduce(0, +) == 2)
+
+        let scoreSort = [ColumnSort(column: scoreCol, descending: true)]
+        let sortedNum = try await numViewer.sort(scoreSort, on: numViewer.filtered)
+        numViewer.apply(ordered: sortedNum, sorts: scoreSort)
+        worker.isSuspended = true
+        #expect(try await numViewer.filterDistribution(scoreCol, bins: 4, scale: .linear) == dist)
+        worker.isSuspended = false
+
+        try await Self.apply(
+            [ColumnFilter(column: cityCol, filter: Self.exact("sh"))], sorts: scoreSort, to: numViewer)
+        let nextDist = try #require(try await numViewer.filterDistribution(scoreCol, bins: 4, scale: .linear))
+        #expect(nextDist.histogram.minLabel == "30" && nextDist.histogram.maxLabel == "40")
+        #expect(nextDist.histogram.counts.reduce(0, +) == 2)
     }
 
     @Test func pureSortRetainsFilteredViewAndEpochCachesWhileFilterReplacesBoth() async throws {

@@ -162,8 +162,6 @@ struct ScatterPanel: View {
                 .padding(16).frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .onAppear { reconcileAxes() }
-        .onChange(of: columns) { _, _ in reconcileAxes() }
         .onChange(of: model.chartX) { _, column in
             if !supportsLog(column) { settings.scatterXScale = .linear }
         }
@@ -180,17 +178,6 @@ struct ScatterPanel: View {
                 xScale: request.xScale, yScale: request.yScale)
         }
         .onDisappear { chart.cancel() }
-    }
-
-    private func reconcileAxes() {
-        if let x = model.chartX, !columns.contains(x) {
-            model.chartX = nil
-        }
-        if let y = model.chartY {
-            if !columns.contains(y) { model.chartY = columns.first }
-        } else {
-            model.chartY = columns.first
-        }
     }
 
     private func axisPicker(_ axis: String, selection: Binding<ColumnId?>, allowsSourceRow: Bool) -> some View {

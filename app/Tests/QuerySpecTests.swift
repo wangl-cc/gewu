@@ -175,12 +175,12 @@ struct QuerySpecTests {
         #expect(model.viewer.appliedSorts.map(\.column) == [Self.c1] && model.find.query == "x")
     }
 
-    private func model() throws -> DocumentModel {
+    private func model(queryWorker: OperationQueue? = nil) throws -> DocumentModel {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-query-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "a,b,c\n1,2,x\n1,1,y\n2,0,z\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        return DocumentModel(url: path, dataset: dataset)
+        return DocumentModel(url: path, dataset: dataset, queryWorker: queryWorker)
     }
 
     private func settled(_ model: DocumentModel) async throws {
@@ -244,6 +244,8 @@ struct QuerySpecTests {
     @Test func hidingInspectedSelectedAndChartColumnsFallsBackToRemainingVisibleColumns() async throws {
         let model = try model()
         defer { model.stop() }
+        #expect(model.chartX == nil)
+        #expect(model.chartY == Self.c0)
         model.selectedColumn = Self.c0
         model.inspectedColumn = Self.c0
         model.chartX = Self.c0
@@ -268,14 +270,103 @@ struct QuerySpecTests {
         try await settled(model)
         #expect(model.selectedColumn == nil)
         #expect(model.inspectedColumn == nil)
+        #expect(model.chartX == nil)
+        #expect(model.chartY == nil)
 
-        // Hidden columns cannot be inspected; restoring columns recovers selection and inspector target.
+        // Restoring a single non-plottable column recovers selection and inspector, keeping chartY nil.
+        model.showColumn(Self.c2)
+        #expect(model.selectedColumn == Self.c2)
+        #expect(model.inspectedColumn == Self.c2)
+        #expect(model.chartY == nil)
+
+        // Restoring a plottable column selects it for chartY while preserving chartX = nil (Source row).
+        model.showColumn(Self.c1)
+        #expect(model.chartX == nil)
+        #expect(model.chartY == Self.c1)
+
+        // Hidden columns cannot be inspected; Show All also recovers selection, inspector, and chartY.
+        model.setColumnsVisible([Self.c2, Self.c1], visible: false)
+        #expect(model.selectedColumn == nil)
+        #expect(model.inspectedColumn == nil)
+        #expect(model.chartY == nil)
         model.inspectColumn(Self.c0)
         #expect(model.inspectedColumn == nil)
         model.showAllColumns()
         try await settled(model)
         #expect(model.selectedColumn == Self.c0)
         #expect(model.inspectedColumn == Self.c0)
+        #expect(model.chartX == nil)
+        #expect(model.chartY == Self.c0)
+    }
+
+    @Test func columnLayoutEditsDuringInFlightQueryReuseRowWorkAndCommitLatestColumns() async throws {
+        let queryWorker = OperationQueue()
+        queryWorker.isSuspended = true
+        defer { queryWorker.isSuspended = false }
+        let model = try model(queryWorker: queryWorker)
+        defer { model.stop() }
+        let initialOrdered = model.ordered
+
+        // Start a sort; one query operation waits on the suspended worker.
+        model.setSortDirection(column: Self.c0, descending: true)
+        #expect(model.isBusy)
+        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
+            await Task.yield()
+        }
+        let inFlightOperation = try #require(queryWorker.operations.first)
+        #expect(queryWorker.operations.count == 1)
+
+        // Reordering or toggling unrelated columns must not cancel or queue another row query.
+        model.reorderColumns([Self.c2, Self.c1, Self.c0])
+        model.removeColumn(Self.c2)
+        model.showColumn(Self.c2)
+        await Task.yield()
+        #expect(!inFlightOperation.isCancelled)
+        #expect(queryWorker.operations.count == 1)
+        #expect(model.isBusy && model.ordered === initialOrdered)
+
+        queryWorker.isSuspended = false
+        try await settled(model)
+        #expect(model.ordered !== initialOrdered)
+        #expect(model.appliedSort(for: Self.c0)?.descending == true)
+        #expect(model.visibleColumns == [Self.c1, Self.c0, Self.c2])
+        #expect(try model.ordered.rows(start: 0, count: 3, columns: [Self.c0]).cells == ["2", "1", "1"])
+
+        // Hiding a column whose only pending condition differs from applied state cancels and commits columns.
+        queryWorker.isSuspended = true
+        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: Self.c1)
+        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
+            await Task.yield()
+        }
+        model.removeColumn(Self.c1)
+        #expect(!model.isBusy)
+        #expect(model.visibleColumns == [Self.c0, Self.c2])
+        #expect(model.appliedFilter(for: Self.c1) == nil)
+        #expect(model.appliedSort(for: Self.c0)?.descending == true)
+        queryWorker.isSuspended = false
+        while queryWorker.operationCount > 0 {
+            await Task.yield()
+        }
+
+        // Hiding a conditioned column while another pending condition remains queues replacement row work.
+        queryWorker.isSuspended = true
+        model.setFilter(Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false), column: Self.c2)
+        model.setSortDirection(column: Self.c0, descending: false)
+        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
+            await Task.yield()
+        }
+        let combinedOp = try #require(queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }))
+        model.removeColumn(Self.c2)
+        #expect(model.isBusy)
+        while !combinedOp.isCancelled {
+            await Task.yield()
+        }
+        queryWorker.isSuspended = false
+        try await settled(model)
+        #expect(model.visibleColumns == [Self.c0])
+        #expect(model.appliedFilterColumns.isEmpty)
+        #expect(model.appliedSort(for: Self.c0)?.descending == false)
+        #expect(model.ordered.rowCount() == 3)
     }
 
     @Test func filtersStayInCanonicalSchemaOrderRegardlessOfEditSequence() async throws {
