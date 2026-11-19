@@ -1,5 +1,6 @@
 /target
 /Gewu.xcodeproj/
+/buildServer.json
 /build
 .DS_Store
 /TODO.md

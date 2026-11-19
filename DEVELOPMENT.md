@@ -58,6 +58,12 @@ All App configurations use Rust's `release` profile with optimization level 3, f
 
 For UI source navigation and icon assets, see the [App README](app/README.md).
 
+### Swift language server in Zed
+
+Install `xcodegen` and `xcode-build-server` with `brew install xcodegen xcode-build-server`. When Zed creates a linked worktree, its **Set up Gewu Swift LSP** task generates the Xcode project, builds the Debug app (including the UniFFI bindings), and writes a local `buildServer.json` for SourceKit-LSP. The task skips non-macOS hosts.
+
+For an existing checkout or a worktree created outside Zed, run the same task from Zed's task picker or run `bash scripts/setup-swift-lsp.sh` from the repository root. If a Swift file was already open before setup finished, run `editor: restart language server` in Zed. Build into `build/xcode` after changing exported Rust interfaces so the bindings stay up to date. The generated `buildServer.json` contains local paths and is not checked in.
+
 ### Test and format the UI
 
 After generating the project, run:
