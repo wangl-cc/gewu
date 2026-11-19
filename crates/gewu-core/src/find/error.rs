@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{FilterError, InternalError};
+use crate::{ColumnId, FilterError, InternalError};
 
 #[derive(Debug, Error)]
 pub enum FindError {
@@ -18,7 +18,7 @@ pub enum FindError {
     #[error("find cursor row {row} is outside the captured view with {row_count} rows")]
     InvalidCursorRow { row: u64, row_count: u64 },
     #[error("find cursor column {column} is outside the captured scope")]
-    InvalidCursorColumn { column: u32 },
+    InvalidCursorColumn { column: ColumnId },
     #[error(transparent)]
     Filter(#[from] FilterError),
     #[error(transparent)]

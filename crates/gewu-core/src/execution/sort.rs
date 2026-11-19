@@ -8,17 +8,20 @@ use arrow::{
     error::ArrowError,
 };
 
+use crate::row_ids::RowSlice;
+
 pub(crate) fn sort_rows(
-    mut rows: Vec<u32>,
+    rows: RowSlice<'_>,
     comparators: &[DynComparator],
     primitive: Option<(&ArrayRef, SortOptions)>,
 ) -> Result<Vec<u32>, ArrowError> {
     if rows.len() <= 1 {
-        return Ok(rows);
+        return Ok(rows.iter_u32().collect());
     }
     if let Some((array, options)) = primitive {
-        return sort_primitive(&rows, array, options, &comparators[0]);
+        return sort_primitive(rows, array, options, &comparators[0]);
     }
+    let mut rows: Vec<u32> = rows.iter_u32().collect();
     rows.sort_unstable_by(|left, right| {
         for comparator in comparators {
             let order = comparator(*left as usize, *right as usize);
@@ -36,25 +39,38 @@ pub(crate) fn sort_rows(
 /// indirect source-array reads. Restrict it to one primitive key so multi-key
 /// or nested types use the generic source-comparator sort directly.
 fn sort_primitive(
-    rows: &[u32],
+    rows: RowSlice<'_>,
     array: &ArrayRef,
     options: SortOptions,
     compare: &DynComparator,
 ) -> Result<Vec<u32>, ArrowError> {
-    let values = if rows
-        .windows(2)
-        .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
-    {
-        array.slice(rows[0] as usize, rows.len())
-    } else {
-        take(array.as_ref(), &UInt32Array::from(rows.to_vec()), None)?
+    let mut sorted = match rows {
+        RowSlice::All(n) => {
+            let values = if n == array.len() {
+                array.clone()
+            } else {
+                array.slice(0, n)
+            };
+            let order = sort_to_indices(values.as_ref(), Some(options), None)?;
+            order.values().to_vec()
+        }
+        RowSlice::Selected(selected) => {
+            let values = if selected
+                .windows(2)
+                .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
+            {
+                array.slice(selected[0] as usize, selected.len())
+            } else {
+                take(array.as_ref(), &UInt32Array::from(selected.to_vec()), None)?
+            };
+            let order = sort_to_indices(values.as_ref(), Some(options), None)?;
+            order
+                .values()
+                .iter()
+                .map(|&index| selected[index as usize])
+                .collect()
+        }
     };
-    let order = sort_to_indices(values.as_ref(), Some(options), None)?;
-    let mut sorted: Vec<_> = order
-        .values()
-        .iter()
-        .map(|&index| rows[index as usize])
-        .collect();
     // Arrow's primitive kernel is unstable; normalize equal keys to source-ID
     // order, including nulls and NaNs.
     let mut start = 0;
@@ -88,8 +104,9 @@ mod tests {
 
     use super::*;
 
-    fn agrees_with_arrow(rows: Vec<u32>, columns: &[(&ArrayRef, bool)]) {
-        let selected = UInt32Array::from(rows.clone());
+    fn agrees_with_arrow(rows: RowSlice<'_>, columns: &[(&ArrayRef, bool)]) {
+        let row_vec: Vec<u32> = rows.iter_u32().collect();
+        let selected = UInt32Array::from(row_vec.clone());
         let mut old_columns = Vec::new();
         let mut comparators = Vec::new();
         for &(array, descending) in columns {
@@ -107,7 +124,7 @@ mod tests {
         let old_rows: Vec<_> = old_order
             .values()
             .iter()
-            .map(|&index| rows[index as usize])
+            .map(|&index| row_vec[index as usize])
             .collect();
         // The old ordering is unstable for equal keys. Add the same explicit
         // source-row tie-break so equality here checks every output position.
@@ -119,12 +136,12 @@ mod tests {
         let expected: Vec<_> = order
             .values()
             .iter()
-            .map(|&index| rows[index as usize])
+            .map(|&index| row_vec[index as usize])
             .collect();
         if let [(array, descending)] = columns {
             if array.data_type().is_primitive() {
                 let actual = sort_rows(
-                    rows.clone(),
+                    rows,
                     &comparators,
                     Some((array, SortOptions {
                         descending: *descending,
@@ -198,15 +215,24 @@ mod tests {
         let rows: Vec<_> = (0..len as u32).rev().filter(|row| row % 3 != 0).collect();
         for array in [&numbers, &floats, &strings, &dictionary] {
             for descending in [false, true] {
-                agrees_with_arrow(rows.clone(), &[(array, descending)]);
+                agrees_with_arrow(RowSlice::Selected(&rows), &[(array, descending)]);
+                agrees_with_arrow(RowSlice::All(len), &[(array, descending)]);
             }
         }
-        agrees_with_arrow(rows.clone(), &[
+        agrees_with_arrow(RowSlice::Selected(&rows), &[
             (&dictionary, true),
             (&floats, false),
             (&numbers, true),
         ]);
-        agrees_with_arrow(rows, &[(&floats, true), (&strings, false)]);
+        agrees_with_arrow(RowSlice::All(len), &[
+            (&dictionary, true),
+            (&floats, false),
+            (&numbers, true),
+        ]);
+        agrees_with_arrow(RowSlice::Selected(&rows), &[
+            (&floats, true),
+            (&strings, false),
+        ]);
     }
 
     #[test]
@@ -224,12 +250,12 @@ mod tests {
                     })
                 }
             })));
-            let rows = if pattern == 3 {
-                (0..len as u32).rev().filter(|row| row % 3 != 0).collect()
+            if pattern == 3 {
+                let rows: Vec<u32> = (0..len as u32).rev().filter(|row| row % 3 != 0).collect();
+                agrees_with_arrow(RowSlice::Selected(&rows), &[(&array, false)]);
             } else {
-                (0..len as u32).collect()
-            };
-            agrees_with_arrow(rows, &[(&array, false)]);
+                agrees_with_arrow(RowSlice::All(len), &[(&array, false)]);
+            }
         }
     }
 
@@ -239,7 +265,9 @@ mod tests {
             (0..5_000).map(|row| (row % 17) as i64),
         ));
         for len in [0, 1, 2, 17, 5_000] {
-            agrees_with_arrow((0..len as u32).rev().collect(), &[(&array, false)]);
+            let rev: Vec<u32> = (0..len as u32).rev().collect();
+            agrees_with_arrow(RowSlice::Selected(&rev), &[(&array, false)]);
+            agrees_with_arrow(RowSlice::All(len), &[(&array, false)]);
         }
     }
 }

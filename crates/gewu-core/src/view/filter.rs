@@ -1,10 +1,10 @@
 //! Filter editor candidates and distributions over visible rows.
 
-use super::View;
+use super::FilteredView;
 use crate::{
     col_view::ColView,
     column::{predicate, value_text, Dictionary, FilterChoices, ValueChoice},
-    stats, RangeHistogram, Result,
+    stats, ColumnId, RangeHistogram, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,8 +13,8 @@ struct Tally {
     null_count: u64,
 }
 
-impl View {
-    pub fn filter_choices(&self, column: u32) -> Result<FilterChoices> {
+impl FilteredView {
+    pub fn filter_choices(&self, column: ColumnId) -> Result<FilterChoices> {
         let view = self.col(column)?;
         if predicate::supports_equals(view.data_type()) {
             if let Some(dictionary) = view.column().dictionary()? {
@@ -29,7 +29,7 @@ impl View {
 
     pub fn filter_distribution(
         &self,
-        column: u32,
+        column: ColumnId,
         bins: u32,
         scale: crate::AxisScale,
     ) -> Result<Option<RangeHistogram>> {
@@ -76,8 +76,7 @@ fn tally_candidates(view: ColView<'_>, dictionary: &Dictionary) -> Tally {
     }
     let mut counts = [0u64; 256];
     let mut null_count = 0u64;
-    for &row in view.rows() {
-        let row = row as usize;
+    for row in view.rows().iter() {
         if dictionary.is_null(row) {
             null_count += 1;
         } else {

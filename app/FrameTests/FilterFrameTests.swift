@@ -18,7 +18,7 @@ final class FilterFrameTests: XCTestCase {
         try ("cohort,specimen,index\n" + lines.joined(separator: "\n")).write(
             to: url, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: url.path)
-        let model = DocumentModel(url: url, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: url, dataset: dataset)
         defer { model.stop() }
 
         let viewport = NSRect(x: 40, y: 48, width: 640, height: 400)
@@ -79,10 +79,11 @@ final class FilterFrameTests: XCTestCase {
         try await stream.startCapture()
 
         do {
+            let c0 = ColumnId(raw: 0)
             let keep = Filter(condition: .exact(values: ["Keep"], exclude: false), includeNulls: false)
             @MainActor func settle(filtered: Bool) async throws -> SHA256.Digest {
                 try await waitUntil("the expected second row after filtering=\(filtered)") {
-                    guard !model.isBusy, model.view.rowCount() == (filtered ? 512 : 8192),
+                    guard !model.isBusy, model.ordered.rowCount() == (filtered ? 512 : 8192),
                         table.numberOfRows == (filtered ? 512 : 8192),
                         let cell = table.view(atColumn: specimenColumn, row: 1, makeIfNecessary: false)
                             as? NSTableCellView
@@ -99,7 +100,7 @@ final class FilterFrameTests: XCTestCase {
             }
 
             _ = try await settle(filtered: false)
-            model.setFilter(keep, column: 0)
+            model.setFilter(keep, column: c0)
             let subset = try await settle(filtered: true)
             model.clearFilters()
             let full = try await settle(filtered: false)
@@ -110,7 +111,7 @@ final class FilterFrameTests: XCTestCase {
                 let filtered = index.isMultiple(of: 2)
                 let start = frames.samples.count
                 let submitted = mach_absolute_time()
-                model.setFilter(filtered ? keep : nil, column: 0)
+                model.setFilter(filtered ? keep : nil, column: c0)
                 let expected = filtered ? subset : full
                 let previous = filtered ? full : subset
                 let settled = try await settle(filtered: filtered)

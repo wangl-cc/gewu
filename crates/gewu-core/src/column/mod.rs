@@ -7,6 +7,7 @@
 
 pub(crate) mod dictionary;
 mod error;
+mod id;
 mod metadata;
 pub(crate) mod predicate;
 pub(crate) mod value_text;
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use arrow::array::ArrayRef;
 pub(crate) use dictionary::Dictionary;
 pub use error::{ColumnError, ColumnOperation, FilterError, FilterKind, ValueParseError};
+pub use id::ColumnId;
 pub use metadata::{ColumnInfo, ValueCategory};
 
 use crate::{execution::predicate::Predicate, types, FileError, Filter};
@@ -105,8 +107,8 @@ impl Column {
         &self.array
     }
 
-    pub(crate) fn info(&self) -> ColumnInfo {
-        ColumnInfo::from_column(self)
+    pub(crate) fn info(&self, id: ColumnId) -> ColumnInfo {
+        ColumnInfo::from_column(id, self)
     }
 
     pub(crate) fn compile_filter<'a>(
@@ -170,7 +172,7 @@ mod tests {
         ] {
             assert_eq!(
                 col(arrow::array::new_null_array(&data_type, 1))
-                    .info()
+                    .info(ColumnId::new(0))
                     .capabilities,
                 ColumnCapabilities {
                     text_match: contains,
@@ -439,7 +441,10 @@ mod tests {
                 DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type)),
             ] {
                 let column = col(arrow::array::new_null_array(&data_type, 2));
-                assert!(!column.info().capabilities.text_match, "{data_type}");
+                assert!(
+                    !column.info(ColumnId::new(0)).capabilities.text_match,
+                    "{data_type}"
+                );
                 for text in ["", "needle"] {
                     for mode in [TextMatch::Contains, TextMatch::Equals] {
                         assert!(
@@ -591,13 +596,16 @@ mod tests {
             )
             .unwrap(),
         );
-        assert_eq!(col(array).info().capabilities, ColumnCapabilities {
-            text_match: false,
-            range: true,
-            exact: true,
-            scatter: false,
-            logarithmic: false,
-        });
+        assert_eq!(
+            col(array).info(ColumnId::new(0)).capabilities,
+            ColumnCapabilities {
+                text_match: false,
+                range: true,
+                exact: true,
+                scatter: false,
+                logarithmic: false,
+            }
+        );
     }
 
     #[test]

@@ -1,14 +1,8 @@
 use super::*;
-use crate::{ColSpec, FilterCondition};
+use crate::{ColumnFilter, ColumnId, ColumnSort, FilterCondition};
 
-fn query(column: u32, filter: Filter) -> QuerySpec {
-    QuerySpec {
-        columns: vec![ColSpec {
-            column,
-            filter: Some(filter),
-            sort: None,
-        }],
-    }
+fn filter_single(column: ColumnId, filter: Filter) -> Vec<ColumnFilter> {
+    vec![ColumnFilter { column, filter }]
 }
 
 #[test]
@@ -16,34 +10,35 @@ fn typed_filters_compile_and_execute_across_ffi() {
     let source = std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
     std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
-    assert!(doc.analysis_capabilities(0).unwrap().distribution);
-    assert!(doc.info().columns[0].capabilities.scatter);
-    let points = doc
-        .view()
-        .analyze_scatter(None, 0, 4, AxisScale::Linear, AxisScale::Linear)
+    let id_col = doc.column_id("id".into()).unwrap();
+    assert!(doc.column_id("missing".into()).is_none());
+    let info = doc.info();
+    assert_eq!(info.columns[0].id, id_col);
+    assert!(info.columns[0].analysis.distribution);
+    assert!(info.columns[0].capabilities.scatter);
+    let unfiltered = doc.unfiltered();
+    let points = unfiltered
+        .scatter(None, id_col, 4, AxisScale::Linear, AxisScale::Linear)
         .unwrap();
     assert_eq!(points.eligible_rows, 2);
     assert_eq!(points.eligible_rows, points.points.len() as u64);
     assert_eq!(points.points[1].source_row, 1);
     assert_eq!(points.points[1].y_label, "9007199254740993");
-    let statistics = doc.view().analyze_statistics(0).unwrap();
+    let statistics = unfiltered.statistics(id_col).unwrap();
     assert_eq!(
         statistics.median_label.as_deref(),
         Some("9007199254740992.5")
     );
-    assert!(!doc.info().columns[0].capabilities.text_match);
+    assert!(!info.columns[0].capabilities.text_match);
     // Chart coordinates may round a large ID; typed filters below must not.
-    let before = doc.view();
     assert!(matches!(
-        doc.query(
-            query(0, Filter {
-                condition: FilterCondition::Range {
-                    min: Some("not a number".into()),
-                    max: None
-                },
-                include_nulls: false,
-            })
-        ),
+        doc.filter(filter_single(id_col, Filter {
+            condition: FilterCondition::Range {
+                min: Some("not a number".into()),
+                max: None
+            },
+            include_nulls: false,
+        })),
         Err(GewuError::Filter {
             kind: crate::FilterErrorKind::InvalidValue {
                 value,
@@ -53,9 +48,9 @@ fn typed_filters_compile_and_execute_across_ffi() {
             ..
         }) if value == "not a number" && expected_type == "Int64"
     ));
-    let values = doc.view().filter_choices(0).unwrap().values.unwrap();
+    let values = unfiltered.filter_choices(id_col).unwrap().values.unwrap();
     assert_eq!(values[1].value, "9007199254740993");
-    assert_eq!(before.row_count(), 2);
+    assert_eq!(unfiltered.row_count(), 2);
     for condition in [
         FilterCondition::Exact {
             values: vec![values[1].value.clone()],
@@ -66,13 +61,14 @@ fn typed_filters_compile_and_execute_across_ffi() {
             max: None,
         },
     ] {
-        let view = doc
-            .query(query(0, Filter {
+        let filtered = doc
+            .filter(filter_single(id_col, Filter {
                 condition,
                 include_nulls: false,
             }))
             .unwrap();
-        let rows = view.rows(0, 10, vec![0]).unwrap();
+        let ordered = filtered.unsorted();
+        let rows = ordered.rows(0, 10, vec![id_col]).unwrap();
         assert_eq!(rows.source_rows, [1]);
         assert_eq!(rows.cells, [Some("9007199254740993".into())]);
     }
@@ -88,6 +84,10 @@ fn text_filter_modes_and_choices_cross_ffi() {
     std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
     let info = doc.info();
+    let label_col = info.columns[0].id;
+    let id_col = info.columns[1].id;
+    assert_eq!(doc.column_id("label".into()), Some(label_col));
+    assert_eq!(doc.column_id("id".into()), Some(id_col));
     assert!(matches!(
         info.columns[0].value_category,
         crate::ValueCategory::Text
@@ -101,11 +101,11 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert!(info.columns[0].capabilities.text_match);
     assert!(info.columns[0].capabilities.exact);
     assert!(matches!(
-        doc.view().analyze_statistics(0),
+        doc.unfiltered().statistics(label_col),
         Err(GewuError::Internal { .. })
     ));
     let equals = |case_sensitive| {
-        doc.query(query(0, Filter {
+        doc.filter(filter_single(label_col, Filter {
             condition: FilterCondition::Text {
                 text: "CAT".into(),
                 mode: crate::TextMatch::Equals,
@@ -118,17 +118,16 @@ fn text_filter_modes_and_choices_cross_ffi() {
     };
     assert_eq!(equals(false), 1);
     assert_eq!(equals(true), 0);
-    let state = query(1, Filter {
-        condition: FilterCondition::Exact {
-            values: vec!["10".into()],
-            exclude: false,
-        },
-        include_nulls: false,
-    });
     let choices = doc
-        .query(state)
+        .filter(filter_single(id_col, Filter {
+            condition: FilterCondition::Exact {
+                values: vec!["10".into()],
+                exclude: false,
+            },
+            include_nulls: false,
+        }))
         .unwrap()
-        .filter_choices(0)
+        .filter_choices(label_col)
         .unwrap()
         .values
         .unwrap();
@@ -141,8 +140,8 @@ fn text_filter_modes_and_choices_cross_ffi() {
         [("cat", 1)],
         "Only current-view values are candidates"
     );
-    let view = doc
-        .query(query(0, Filter {
+    let filtered = doc
+        .filter(filter_single(label_col, Filter {
             condition: FilterCondition::Exact {
                 values: vec!["dog".into()],
                 exclude: false,
@@ -150,9 +149,25 @@ fn text_filter_modes_and_choices_cross_ffi() {
             include_nulls: false,
         }))
         .unwrap();
-    assert_eq!(view.rows(0, 10, vec![0]).unwrap().cells, [Some(
-        "dog".into()
-    )]);
+    assert_eq!(
+        filtered
+            .unsorted()
+            .rows(0, 10, vec![label_col])
+            .unwrap()
+            .cells,
+        [Some("dog".into())]
+    );
+    let sorted_desc = doc
+        .unfiltered()
+        .sort(vec![ColumnSort {
+            column: id_col,
+            descending: true,
+        }])
+        .unwrap();
+    assert_eq!(
+        sorted_desc.rows(0, 2, vec![label_col]).unwrap().source_rows,
+        [1, 0]
+    );
     std::fs::remove_file(source).unwrap();
 }
 
@@ -169,20 +184,20 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     }
     std::fs::write(&source, csv).unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
-    let custom = doc
-        .view()
-        .filter_distribution(0, 10, AxisScale::Linear)
+    let id_col = doc.column_id("id".into()).unwrap();
+    let unfiltered = doc.unfiltered();
+    let custom = unfiltered
+        .filter_distribution(id_col, 10, AxisScale::Linear)
         .unwrap()
         .unwrap();
     assert_eq!(custom.histogram.counts.len(), 10);
     assert_eq!(custom.histogram.counts.iter().sum::<u64>(), 1_000);
     assert!(matches!(
-        doc.view().filter_distribution(0, 0, AxisScale::Linear),
+        unfiltered.filter_distribution(id_col, 0, AxisScale::Linear),
         Err(GewuError::Internal { .. })
     ));
-    let distribution = doc
-        .view()
-        .filter_distribution(0, 60, AxisScale::Linear)
+    let distribution = unfiltered
+        .filter_distribution(id_col, 60, AxisScale::Linear)
         .unwrap()
         .unwrap();
     assert_eq!(distribution.histogram.min_label, Some(base.to_string()));
@@ -203,7 +218,7 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
     ] {
         let bounds = &distribution.ranges[bin];
         let view = doc
-            .query(query(0, Filter {
+            .filter(filter_single(id_col, Filter {
                 condition: FilterCondition::Range {
                     min: bounds.min.as_ref().map(|b| b.value.clone()),
                     max: bounds.max.as_ref().map(|b| b.value.clone()),
@@ -223,6 +238,8 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
     std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
     let doc = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
     let info = doc.info();
+    let label_col = info.columns[0].id;
+    let id_col = info.columns[1].id;
     assert_eq!(info.format, FileType::Csv);
     assert_eq!(info.row_count, 2);
     assert!(matches!(info.metadata, FileMetadata::Delimited));
@@ -237,8 +254,9 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
 
     for (format, extension) in [(FileType::Xlsx, "xlsx"), (FileType::Parquet, "parquet")] {
         let destination = source.with_extension(extension);
-        doc.view()
-            .export(vec![0, 1], format)
+        doc.unfiltered()
+            .unsorted()
+            .export(vec![label_col, id_col], format)
             .unwrap()
             .write(destination.to_str().unwrap().to_owned())
             .unwrap();
@@ -254,15 +272,22 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             assert_eq!(crate::xlsx_sheet_names(path.clone()).unwrap(), sheets);
             assert_eq!(sheets, vec![sheet.clone()]);
             let selected = GewuDataset::open_sheet(path.clone(), sheet.clone()).unwrap();
+            let selected_label = selected.column_id("label".into()).unwrap();
             assert!(matches!(
                 selected.info().metadata,
                 FileMetadata::Xlsx { sheet: selected, .. } if selected == sheet
             ));
-            assert_eq!(selected.view().rows(0, 1, vec![0]).unwrap().cells, [Some(
-                "cat".into()
-            )]);
+            assert_eq!(
+                selected
+                    .unfiltered()
+                    .unsorted()
+                    .rows(0, 1, vec![selected_label])
+                    .unwrap()
+                    .cells,
+                [Some("cat".into())]
+            );
             let filtered = selected
-                .query(query(0, Filter {
+                .filter(filter_single(selected_label, Filter {
                     condition: FilterCondition::Exact {
                         values: vec!["cat".into()],
                         exclude: false,
@@ -271,7 +296,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 }))
                 .unwrap();
             assert_eq!(filtered.row_count(), 1);
-            assert_eq!(reopened.view().row_count(), 2);
+            assert_eq!(reopened.unfiltered().row_count(), 2);
             assert!(matches!(
                 GewuDataset::open_sheet(path, "absent".into()),
                 Err(GewuError::File {

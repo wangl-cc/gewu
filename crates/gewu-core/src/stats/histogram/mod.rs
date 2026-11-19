@@ -11,7 +11,7 @@ use arrow::{
 };
 
 use super::AxisScale;
-use crate::{col_view::ColView, scalar::Bound, stats::Result};
+use crate::{col_view::ColView, row_ids::RowSlice, scalar::Bound, stats::Result};
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -167,7 +167,7 @@ pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
     )
 }
 
-fn statistics(array: &ArrayRef, rows: &[u32], bins: u32) -> Result<Histogram> {
+fn statistics(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Histogram> {
     let histogram = supports_histogram(array.data_type());
     if !histogram {
         return Err(crate::AnalysisError::UnsupportedOperation {
@@ -201,7 +201,7 @@ fn statistics(array: &ArrayRef, rows: &[u32], bins: u32) -> Result<Histogram> {
     })
 }
 
-fn build_bins<H: Output>(array: &ArrayRef, rows: &[u32], bins: u32) -> Result<Domain<H>> {
+fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Domain<H>> {
     if bins == 0 {
         return Err(crate::AnalysisError::InvalidBinCount {
             operation: crate::AnalysisOperation::Distribution,
@@ -277,13 +277,13 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: &[u32], bins: u32) -> Result<Do
 
 fn extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
 ) -> Option<(T::Native, T::Native)>
 where
     T::Native: Ord,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         if let Some(value) = array.is_valid(row).then(|| array.value(row)) {
             extrema = Some(match extrema {
                 Some((lo, hi)) => (lo.min(value), hi.max(value)),
@@ -296,7 +296,7 @@ where
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
 ) -> Result<Domain<H>>
 where
@@ -341,7 +341,7 @@ where
 
 fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
@@ -394,7 +394,7 @@ where
 
 fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
 ) -> Result<Domain<H>>
 where
@@ -403,7 +403,7 @@ where
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut has_infinite = false;
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         let Some(value) = array.is_valid(row).then(|| array.value(row)) else {
             continue;
         };
@@ -496,7 +496,7 @@ fn axis(lo: f64, hi: f64, bins: usize) -> (f64, f64) {
 
 fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
     integer: bool,
     axis: (f64, f64),
@@ -514,7 +514,7 @@ fn count<T: ArrowPrimitiveType>(
         non_positive_count: 0,
         infinite_count: 0,
     };
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         if array.is_valid(row) {
             if let Some(bin) = classify(array.value(row)) {
                 histogram.counts[bin] += 1;
@@ -559,10 +559,7 @@ mod tests {
             let mut matched = vec![false; view.array().len()];
             predicate.evaluate(0..view.array().len(), &mut matched);
             assert_eq!(
-                view.rows()
-                    .iter()
-                    .filter(|&&row| matched[row as usize])
-                    .count() as u64,
+                view.rows().iter().filter(|&row| matched[row]).count() as u64,
                 expected
             );
             for (selected, matched) in selected.iter_mut().zip(matched) {

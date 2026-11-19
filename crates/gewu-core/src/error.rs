@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::{
-    AnalysisError, ColumnError, ExportError, FileError, FilterError, FindError, QueryError,
-};
+use crate::{AnalysisError, ColumnError, ExportError, FileError, FilterError, FindError};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -14,8 +12,6 @@ pub enum Error {
     File(FileError),
     #[error(transparent)]
     Column(ColumnError),
-    #[error(transparent)]
-    Query(QueryError),
     #[error(transparent)]
     Filter(FilterError),
     #[error(transparent)]
@@ -46,17 +42,6 @@ impl From<ColumnError> for Error {
         match error {
             ColumnError::Internal(error) => Self::Internal(error),
             other => Self::Column(other),
-        }
-    }
-}
-
-impl From<QueryError> for Error {
-    fn from(error: QueryError) -> Self {
-        match error {
-            QueryError::Column(error) => error.into(),
-            QueryError::Filter(error) => error.into(),
-            QueryError::Internal(error) => Self::Internal(error),
-            other => Self::Query(other),
         }
     }
 }

@@ -3,12 +3,12 @@ use gewu_core as core;
 
 use crate::Histogram;
 
-#[derive(uniffi::Record)]
+#[derive(uniffi::Record, Clone)]
 pub struct Filter {
     pub condition: FilterCondition,
     pub include_nulls: bool,
 }
-#[derive(uniffi::Enum)]
+#[derive(uniffi::Enum, Clone)]
 pub enum FilterCondition {
     Range {
         min: Option<String>,

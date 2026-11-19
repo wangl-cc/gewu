@@ -7,10 +7,10 @@ use std::{
 
 use arrow::datatypes::SchemaRef;
 
-use crate::{column::Column, file, FileMetadata, FileType, OpenOptions, Result};
+use crate::{column::Column, file, ColumnId, FileMetadata, FileType, OpenOptions, Result};
 
+mod filter;
 mod info;
-mod query;
 
 pub use info::DatasetInfo;
 
@@ -26,18 +26,12 @@ pub struct Dataset {
 }
 
 impl Dataset {
-    /// A full-data initial view. Existing views remain valid independently of this handle.
-    pub fn view(self: &Arc<Self>) -> Arc<crate::View> {
-        crate::View::all(self.clone())
+    /// A full-data unfiltered view. Existing views remain valid independently of this handle.
+    pub fn unfiltered(self: &Arc<Self>) -> Arc<crate::FilteredView> {
+        crate::FilteredView::all(self.clone())
     }
 
-    pub fn analysis_capabilities(&self, column: u32) -> Result<crate::AnalysisCapabilities> {
-        Ok(crate::stats::capabilities(
-            self.column(column)?.array().data_type(),
-        ))
-    }
-
-    pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>> {
+    pub fn column_structure(&self, column: ColumnId) -> Result<Vec<crate::AnalysisField>> {
         Ok(crate::stats::analysis::structure(
             self.column(column)?.array().data_type(),
         )?)
@@ -101,7 +95,12 @@ impl Dataset {
         DatasetInfo {
             path: self.source_path.display().to_string(),
             row_count: self.n_rows as u64,
-            columns: self.columns.iter().map(Column::info).collect(),
+            columns: self
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, col)| col.info(ColumnId::new(i as u32)))
+                .collect(),
             file_size: self.file_size,
             format: self.format,
             metadata: self.metadata.clone(),
@@ -112,18 +111,18 @@ impl Dataset {
         &self.columns
     }
 
-    /// Index of the column with this name.
-    pub fn column_index(&self, name: &str) -> Option<u32> {
+    /// Identifier of the column with this name.
+    pub fn column_id(&self, name: &str) -> Option<ColumnId> {
         self.schema
             .fields()
             .iter()
             .position(|f| f.name() == name)
-            .map(|i| i as u32)
+            .map(|i| ColumnId::new(i as u32))
     }
 
-    pub(crate) fn column(&self, c: u32) -> Result<&Column, crate::ColumnError> {
+    pub(crate) fn column(&self, c: ColumnId) -> Result<&Column, crate::ColumnError> {
         self.columns
-            .get(c as usize)
+            .get(c.index())
             .ok_or_else(|| crate::ColumnError::NotFound {
                 column: c,
                 column_count: self.columns.len() as u32,

@@ -5,7 +5,7 @@ use arrow::array::{
     ArrayRef, Decimal128Array, Float64Array, Int32Array, RecordBatch, StringArray,
     TimestampNanosecondArray, UInt64Array,
 };
-use gewu_core::{AxisScale, Error, Filter, QuerySpec};
+use gewu_core::{AxisScale, ColumnFilter, ColumnId, Error, Filter};
 use parquet::arrow::ArrowWriter;
 
 fn document(columns: Vec<(&str, ArrayRef)>) -> Arc<gewu_core::Dataset> {
@@ -32,20 +32,28 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
             )),
         ),
     ]);
-    let original = doc.view().filter_choices(0).unwrap().values.unwrap();
+    let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
+    let original = doc.unfiltered().filter_choices(c0).unwrap().values.unwrap();
     assert_eq!(original.iter().map(|v| v.count).collect::<Vec<_>>(), [
         200, 200, 200
     ]);
-    assert!(doc.view().filter_choices(1).unwrap().values.is_none());
+    assert!(doc
+        .unfiltered()
+        .filter_choices(c1)
+        .unwrap()
+        .values
+        .is_none());
     assert!(doc.info().columns[1].capabilities.range);
     assert!(doc.info().columns[1].capabilities.exact);
     assert!(doc.info().columns[2].capabilities.text_match);
     assert!(doc.info().columns[2].capabilities.exact);
-    let spec = QuerySpec::single(1, Filter::range(None, Some("0".into()), false));
     let values = doc
-        .query(&spec)
+        .filter(&[ColumnFilter {
+            column: c1,
+            filter: Filter::range(None, Some("0".into()), false),
+        }])
         .unwrap()
-        .filter_choices(0)
+        .filter_choices(c0)
         .unwrap()
         .values
         .unwrap();
@@ -53,20 +61,16 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
     assert_eq!(values.iter().map(|v| &v.value).collect::<Vec<_>>(), vec![
         &original[0].value
     ]);
-    let chosen = QuerySpec::single(
-        0,
-        Filter::exact(vec![values[0].value.clone()], false, false),
-    );
-    assert_eq!(doc.query(&chosen).unwrap().row_count(), 200);
-    assert_eq!(
-        doc.query(&chosen)
-            .unwrap()
-            .filter_choices(0)
-            .unwrap()
-            .values
-            .unwrap(),
-        vec![original[0].clone()]
-    );
+    let chosen = doc
+        .filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::exact(vec![values[0].value.clone()], false, false),
+        }])
+        .unwrap();
+    assert_eq!(chosen.row_count(), 200);
+    assert_eq!(chosen.filter_choices(c0).unwrap().values.unwrap(), vec![
+        original[0].clone()
+    ]);
 }
 
 #[test]
@@ -76,21 +80,22 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
         "id",
         Arc::new(UInt64Array::from_iter_values(base..=u64::MAX)),
     )]);
+    let c0 = ColumnId::from_raw(0);
     let distribution = doc
-        .view()
-        .filter_distribution(0, 60, AxisScale::Linear)
+        .unfiltered()
+        .filter_distribution(c0, 60, AxisScale::Linear)
         .unwrap()
         .unwrap();
     for (bin, bounds) in distribution.ranges.iter().enumerate() {
         let view = doc
-            .query(&QuerySpec::single(
-                0,
-                Filter::range(
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::range(
                     bounds.min.as_ref().map(|b| b.value.clone()),
                     bounds.max.as_ref().map(|b| b.value.clone()),
                     false,
                 ),
-            ))
+            }])
             .unwrap();
         assert_eq!(view.row_count(), distribution.histogram.counts[bin]);
     }
@@ -99,19 +104,24 @@ fn provided_bin_bounds_round_trip_above_double_integer_precision() {
 #[test]
 fn invalid_text_leaves_the_applied_view_intact() {
     let doc = document(vec![("id", Arc::new(Int32Array::from(vec![1, 2, 3])))]);
-    let before = doc.view();
+    let c0 = ColumnId::from_raw(0);
+    let before = doc.unfiltered().unsorted();
     assert!(matches!(
-        doc.query(&QuerySpec::single(
-            0,
-            Filter::range(Some("invalid".into()), None, false)
-        )),
+        doc.filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some("invalid".into()), None, false),
+        }]),
         Err(Error::Filter(gewu_core::FilterError::Bound(
             gewu_core::BoundError::InvalidValue { .. }
         )))
     ));
     assert_eq!(
-        doc.view().rows(0, 10, &[0]).unwrap().cells,
-        before.rows(0, 10, &[0]).unwrap().cells
+        doc.unfiltered()
+            .unsorted()
+            .rows(0, 10, &[c0])
+            .unwrap()
+            .cells,
+        before.rows(0, 10, &[c0]).unwrap().cells
     );
 }
 
@@ -128,7 +138,8 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
             None,
         ])),
     )]);
-    let choices = doc.view().filter_choices(0).unwrap();
+    let c0 = ColumnId::from_raw(0);
+    let choices = doc.unfiltered().filter_choices(c0).unwrap();
     assert_eq!(choices.null_count, 1);
     let values = choices.values.unwrap();
     assert_eq!(values.iter().map(|v| v.count).collect::<Vec<_>>(), [
@@ -136,10 +147,10 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
     ]);
     for value in values {
         assert_eq!(
-            doc.query(&QuerySpec::single(
-                0,
-                Filter::exact(vec![value.value], false, false)
-            ))
+            doc.filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::exact(vec![value.value], false, false),
+            }])
             .unwrap()
             .row_count(),
             value.count
@@ -149,12 +160,13 @@ fn float_choices_group_signed_zero_and_nan_payloads_with_nulls_separate() {
 
 #[test]
 fn bounded_choices_and_empty_columns_have_explicit_results() {
+    let c0 = ColumnId::from_raw(0);
     for (count, bounded) in [(255, true), (256, false)] {
         let doc = document(vec![(
             "value",
             Arc::new(Int32Array::from_iter((0..count).map(Some).chain([None]))),
         )]);
-        let choices = doc.view().filter_choices(0).unwrap();
+        let choices = doc.unfiltered().filter_choices(c0).unwrap();
         assert_eq!(choices.null_count, 1);
         assert_eq!(choices.values.is_some(), bounded);
     }
@@ -163,8 +175,8 @@ fn bounded_choices_and_empty_columns_have_explicit_results() {
         Arc::new(Int32Array::from(Vec::<i32>::new())),
     )]);
     assert!(doc
-        .view()
-        .filter_choices(0)
+        .unfiltered()
+        .filter_choices(c0)
         .unwrap()
         .values
         .unwrap()
@@ -179,14 +191,21 @@ fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
             (0..100_001).map(|i| format!("value-{i:06}")),
         )),
     )]);
-    assert!(doc.view().filter_choices(0).unwrap().values.is_none());
+    let c0 = ColumnId::from_raw(0);
+    assert!(doc
+        .unfiltered()
+        .filter_choices(c0)
+        .unwrap()
+        .values
+        .is_none());
     let view = doc
-        .query(&QuerySpec::single(
-            0,
-            Filter::exact(vec!["value-100000".into()], false, false),
-        ))
-        .unwrap();
-    assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, [100_000]);
+        .filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::exact(vec!["value-100000".into()], false, false),
+        }])
+        .unwrap()
+        .unsorted();
+    assert_eq!(view.rows(0, 10, &[c0]).unwrap().source_rows, [100_000]);
 }
 
 #[test]
@@ -204,10 +223,20 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         ),
         ("group", Arc::new(Int32Array::from(vec![1, 1, 1, 1, 2]))),
     ]);
-    let spec = QuerySpec::all(2)
-        .with_filter(0, Filter::exact(vec!["Cat".into()], false, false))
-        .with_filter(1, Filter::exact(vec!["1".into()], false, false));
-    let choices = doc.query(&spec).unwrap().filter_choices(0).unwrap();
+    let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
+    let filtered = doc
+        .filter(&[
+            ColumnFilter {
+                column: c0,
+                filter: Filter::exact(vec!["Cat".into()], false, false),
+            },
+            ColumnFilter {
+                column: c1,
+                filter: Filter::exact(vec!["1".into()], false, false),
+            },
+        ])
+        .unwrap();
+    let choices = filtered.filter_choices(c0).unwrap();
     assert_eq!(
         choices
             .values
@@ -217,14 +246,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
             .collect::<Vec<_>>(),
         [("Cat", 1)]
     );
-    assert_eq!(
-        doc.query(&spec)
-            .unwrap()
-            .filter_choices(0)
-            .unwrap()
-            .null_count,
-        0
-    );
+    assert_eq!(filtered.filter_choices(c0).unwrap().null_count, 0);
     for (values, exclude, include_nulls, expected) in [
         (vec!["cat".into()], false, true, vec![0, 2, 4]),
         (vec!["cat".into()], true, false, vec![1, 3]),
@@ -234,12 +256,13 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
         (vec![], true, true, vec![0, 1, 2, 3, 4]),
     ] {
         let view = doc
-            .query(&QuerySpec::single(
-                0,
-                Filter::exact(values, exclude, include_nulls),
-            ))
-            .unwrap();
-        assert_eq!(view.rows(0, 10, &[0]).unwrap().source_rows, expected);
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::exact(values, exclude, include_nulls),
+            }])
+            .unwrap()
+            .unsorted();
+        assert_eq!(view.rows(0, 10, &[c0]).unwrap().source_rows, expected);
     }
 }
 
@@ -266,9 +289,10 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             ),
         ),
     ]);
-    for column in 0..3 {
+    for col_idx in 0..3 {
+        let column = ColumnId::from_raw(col_idx);
         for (row, value) in doc
-            .view()
+            .unfiltered()
             .filter_choices(column)
             .unwrap()
             .values
@@ -277,11 +301,12 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
             .enumerate()
         {
             let view = doc
-                .query(&QuerySpec::single(
+                .filter(&[ColumnFilter {
                     column,
-                    Filter::exact(vec![value.value.clone()], false, false),
-                ))
-                .unwrap();
+                    filter: Filter::exact(vec![value.value.clone()], false, false),
+                }])
+                .unwrap()
+                .unsorted();
             assert_eq!(view.rows(0, 10, &[column]).unwrap().source_rows, [
                 row as u64
             ]);
@@ -295,7 +320,13 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         "value",
         Arc::new(Int32Array::from_iter((0..300).map(Some).chain([None]))),
     )]);
-    assert!(doc.view().filter_choices(0).unwrap().values.is_none());
+    let c0 = ColumnId::from_raw(0);
+    assert!(doc
+        .unfiltered()
+        .filter_choices(c0)
+        .unwrap()
+        .values
+        .is_none());
     for (exclude, include_nulls, count) in [
         (false, false, 2),
         (false, true, 3),
@@ -303,10 +334,10 @@ fn exact_selection_keeps_null_policy_without_a_bounded_dictionary() {
         (true, true, 299),
     ] {
         let view = doc
-            .query(&QuerySpec::single(
-                0,
-                Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
-            ))
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::exact(vec!["1".into(), "299".into()], exclude, include_nulls),
+            }])
             .unwrap();
         assert_eq!(view.row_count(), count);
     }

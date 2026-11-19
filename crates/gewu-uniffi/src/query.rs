@@ -1,39 +1,34 @@
-//! Ordered column projection and row query configuration.
+//! Column filter and sort specifications across the language boundary.
 use gewu_core as core;
 
-use crate::Filter;
+use crate::{ColumnId, Filter};
 
-#[derive(uniffi::Record)]
-pub struct ColSort {
-    pub priority: u32,
+#[derive(uniffi::Record, Clone)]
+pub struct ColumnFilter {
+    pub column: ColumnId,
+    pub filter: Filter,
+}
+
+impl From<ColumnFilter> for core::ColumnFilter {
+    fn from(spec: ColumnFilter) -> Self {
+        Self {
+            column: spec.column.into(),
+            filter: spec.filter.into(),
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnSort {
+    pub column: ColumnId,
     pub descending: bool,
 }
-#[derive(uniffi::Record)]
-pub struct ColSpec {
-    pub column: u32,
-    pub sort: Option<ColSort>,
-    pub filter: Option<Filter>,
-}
-#[derive(uniffi::Record)]
-pub struct QuerySpec {
-    pub columns: Vec<ColSpec>,
-}
 
-impl From<QuerySpec> for core::QuerySpec {
-    fn from(spec: QuerySpec) -> Self {
+impl From<ColumnSort> for core::ColumnSort {
+    fn from(spec: ColumnSort) -> Self {
         Self {
-            columns: spec
-                .columns
-                .into_iter()
-                .map(|c| core::ColSpec {
-                    column: c.column,
-                    filter: c.filter.map(Into::into),
-                    sort: c.sort.map(|s| core::ColSort {
-                        priority: s.priority,
-                        descending: s.descending,
-                    }),
-                })
-                .collect(),
+            column: spec.column.into(),
+            descending: spec.descending,
         }
     }
 }

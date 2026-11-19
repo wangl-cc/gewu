@@ -142,7 +142,7 @@ pub enum ExportErrorKind {
     },
     NestedColumns {
         format: crate::FileType,
-        columns: Vec<u32>,
+        columns: Vec<crate::ColumnId>,
     },
     Encode {
         format: crate::FileType,
@@ -181,9 +181,7 @@ impl From<core::Error> for GewuError {
             },
             core::Error::Analysis(kind) => analysis_error(kind, message),
             core::Error::Export(kind) => export_error(kind, message),
-            core::Error::Column(_) | core::Error::Query(_) | core::Error::Internal(_) => {
-                Self::Internal { message }
-            }
+            core::Error::Column(_) | core::Error::Internal(_) => Self::Internal { message },
             core::Error::Cancelled => Self::Cancelled,
         }
     }
@@ -318,7 +316,7 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
         core::ExportError::NestedColumns { format, columns } => GewuError::Export {
             kind: ExportErrorKind::NestedColumns {
                 format: format.into(),
-                columns,
+                columns: columns.into_iter().map(Into::into).collect(),
             },
             message,
         },

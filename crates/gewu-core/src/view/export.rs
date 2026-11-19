@@ -1,14 +1,14 @@
-//! Capture validated export snapshots from a document.
+//! Capture validated export snapshots from an [`OrderedView`].
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use super::View;
-use crate::{Export, FileType, Result};
+use super::OrderedView;
+use crate::{ColumnId, Export, FileType, Result};
 
-impl View {
+impl OrderedView {
     /// Capture a view and column order for export without copying its cells or
     /// row indices. The returned job remains valid when the current view changes.
-    pub fn export(&self, columns: &[u32], format: FileType) -> Result<Export> {
+    pub fn export(&self, columns: &[ColumnId], format: FileType) -> Result<Export> {
         format.require_enabled()?;
         if columns.is_empty() {
             return Err(crate::ColumnError::EmptySelection {
@@ -29,14 +29,14 @@ impl View {
                 self.column_array(column).cloned()
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let indices = columns.iter().map(|&c| c as usize).collect::<Vec<_>>();
+        let indices = columns.iter().map(|c| c.index()).collect::<Vec<_>>();
         let schema = Arc::new(self.dataset.schema.project(&indices)?);
         if format != FileType::Parquet {
-            let nested: Vec<u32> = columns
+            let nested: Vec<ColumnId> = columns
                 .iter()
                 .copied()
                 .filter(|&column| {
-                    self.dataset.columns[column as usize]
+                    self.dataset.columns()[column.index()]
                         .array()
                         .data_type()
                         .is_nested()
@@ -61,11 +61,11 @@ impl View {
 
     /// Names of selected nested columns, which require Parquet for export.
     /// Inspect types only; this does not scan or copy any cells.
-    pub fn nested_export_columns(&self, columns: &[u32]) -> Result<Vec<String>> {
+    pub fn nested_export_columns(&self, columns: &[ColumnId]) -> Result<Vec<String>> {
         let mut nested = Vec::new();
         for &column in columns {
             if self.column(column)?.array().data_type().is_nested() {
-                nested.push(self.dataset.schema.field(column as usize).name().clone());
+                nested.push(self.dataset.schema.field(column.index()).name().clone());
             }
         }
         Ok(nested)

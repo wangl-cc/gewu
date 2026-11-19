@@ -3,22 +3,36 @@ import SwiftUI
 
 /// The native table consumes its own presentation, independent of window panels
 /// and pending queries. Find updates decorate existing cells.
-struct DataTable: NSViewControllerRepresentable {
+struct DataTable: View {
     let model: DocumentModel
-    @ObservedObject private var presentation: TablePresentation
-    // Observed only so SwiftUI calls `update` when Find state or highlights change.
-    @ObservedObject private var find: FindModel
     var showsRowNumbers: Bool
     @AppStorage("TableFontSize") private var fontSize = 12.0
     @AppStorage("TableRowHeight") private var rowHeight = 28.0
     @AppStorage("RowNumberBase") private var rowNumberBase = 0
 
-    init(model: DocumentModel, showsRowNumbers: Bool) {
-        self.model = model
-        _presentation = ObservedObject(wrappedValue: model.tablePresentation)
-        self.showsRowNumbers = showsRowNumbers
-        _find = ObservedObject(wrappedValue: model.find)
+    var body: some View {
+        let input = model.tableInput
+        DataTableRepresentable(
+            model: model,
+            input: input,
+            find: model.find,
+            showsRowNumbers: showsRowNumbers,
+            fontSize: min(max(fontSize, 10), 20),
+            rowHeight: min(max(rowHeight, 24), 36),
+            rowNumberBase: rowNumberBase
+        )
     }
+}
+
+private struct DataTableRepresentable: NSViewControllerRepresentable {
+    let model: DocumentModel
+    let input: DocumentModel.TableInput
+    // Observed only so SwiftUI calls `update` when Find state or highlights change.
+    @ObservedObject var find: FindModel
+    let showsRowNumbers: Bool
+    let fontSize: CGFloat
+    let rowHeight: CGFloat
+    let rowNumberBase: Int
 
     func makeNSViewController(context: Context) -> DataTableController {
         let controller = DataTableController(model: model)
@@ -28,8 +42,11 @@ struct DataTable: NSViewControllerRepresentable {
 
     func updateNSViewController(_ controller: DataTableController, context: Context) {
         controller.update(
-            showsRowNumbers: showsRowNumbers, fontSize: min(max(fontSize, 10), 20),
-            rowHeight: min(max(rowHeight, 24), 36), rowNumberBase: rowNumberBase)
+            input: input,
+            showsRowNumbers: showsRowNumbers,
+            fontSize: fontSize,
+            rowHeight: rowHeight,
+            rowNumberBase: rowNumberBase)
     }
 
     static func dismantleNSViewController(_ controller: DataTableController, coordinator: ()) {
@@ -58,10 +75,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private var popover: NSPopover?
     private var builtColumns = false
     private var applyingColumns = false
-    private var displayedInput: TablePresentation.Input?
-    private var displayedView: GewuView? { displayedInput?.rows }
+    private var columnByIdentifier: [NSUserInterfaceItemIdentifier: ColumnId] = [:]
+    private var displayedInput: DocumentModel.TableInput?
+    private var displayedView: GewuOrderedView? { displayedInput?.ordered }
     private var viewportRows: NSRange?
-    private var viewportColumns: [UInt32] = []
+    private var viewportColumns: [ColumnId] = []
     private var showsNumbers: Bool?
     private var reloading = false
     private var textSize: CGFloat = 12
@@ -75,11 +93,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         rows = loader ?? TableRowLoader()
         super.init(nibName: nil, bundle: nil)
         rows.onLoad = { [weak self] view, block, columns in
-            guard let self, self.displayedView === view, self.model.applied.rowView === view else { return }
+            guard let self, self.displayedView === view, self.model.ordered === view else { return }
             self.display(block, columns: columns)
         }
         rows.onError = { [weak self] view, error in
-            guard let self, self.displayedView === view, self.model.applied.rowView === view else { return }
+            guard let self, self.displayedView === view, self.model.ordered === view else { return }
             self.model.reportError(error, prefix: "Could not load rows: ")
         }
     }
@@ -87,10 +105,20 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    private func identifier(for id: ColumnId) -> NSUserInterfaceItemIdentifier {
+        NSUserInterfaceItemIdentifier("c\(id.raw)")
+    }
+
+    private func columnId(_ column: NSTableColumn) -> ColumnId? {
+        columnByIdentifier[column.identifier]
+    }
+
     /// Predict the visible region after row-count and column-layout changes.
     /// Include one bordering row for fractional scrolling and AppKit's clipping.
-    private func viewport(for view: GewuView, spec: QuerySpec, sameLayout: Bool) -> TableRowLoader.Viewport {
-        let count = Int(clamping: view.rowCount())
+    private func viewport(
+        for ordered: GewuOrderedView, columns visibleCols: [ColumnId], sameLayout: Bool
+    ) -> TableRowLoader.Viewport {
+        let count = Int(clamping: ordered.rowCount())
         let clip = scroll.contentView.bounds
         let stride = table.rowHeight + table.intercellSpacing.height
         let y = max(0, min(clip.minY, CGFloat(count) * stride - clip.height))
@@ -98,31 +126,33 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let last = min(count, Int(ceil((y + clip.height) / stride)) + 1)
         let rows = min(first, count)..<max(min(first, count), last)
         if sameLayout {
-            let columns = table.columnIndexes(in: clip).compactMap { index -> UInt32? in
+            let columns = table.columnIndexes(in: clip).compactMap { index -> ColumnId? in
                 let column = table.tableColumns[index]
-                guard !column.isHidden, let source = columnIndex(column) else { return nil }
-                return UInt32(source)
+                guard !column.isHidden else { return nil }
+                return columnId(column)
             }
             return .init(rows: rows, columns: columns)
         }
         let gutterWidth = showsNumbers == true ? gutter.fittedWidth : 0
-        let widths = spec.columns.map { col in
-            table.tableColumn(withIdentifier: .init("c\(col.column)"))?.width ?? 140
+        let widths = visibleCols.map { col in
+            table.tableColumn(withIdentifier: identifier(for: col))?.width ?? 140
         }
         let totalWidth = widths.reduce(gutterWidth, +)
         let x = max(0, min(clip.minX, totalWidth - clip.width))
         var edge = gutterWidth
-        var columns: [UInt32] = []
-        for (col, width) in zip(spec.columns, widths) {
-            if edge + width > x && edge < x + clip.width { columns.append(col.column) }
+        var columns: [ColumnId] = []
+        for (col, width) in zip(visibleCols, widths) {
+            if edge + width > x && edge < x + clip.width { columns.append(col) }
             edge += width
         }
         return .init(rows: rows, columns: columns)
     }
 
-    func loadViewport(in view: GewuView, spec: QuerySpec) async throws -> TableRowLoader.Snapshot {
-        let sameLayout = displayedInput?.spec.columns.map(\.column) == spec.columns.map(\.column)
-        return try await rows.snapshot(of: view) { viewport(for: view, spec: spec, sameLayout: sameLayout) }
+    func loadViewport(in ordered: GewuOrderedView, columns: [ColumnId]) async throws -> TableRowLoader.Snapshot {
+        let sameLayout = displayedInput?.visibleColumns == columns
+        return try await rows.snapshot(of: ordered) {
+            viewport(for: ordered, columns: columns, sameLayout: sameLayout)
+        }
     }
 
     func commit(_ snapshot: TableRowLoader.Snapshot) {
@@ -130,8 +160,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         closePopover()
         stopFitting()
         let rowCountChanged = displayedView?.rowCount() != snapshot.view.rowCount()
-        let input = model.tablePresentation.input
-        let columnsChanged = displayedInput?.spec.columns.map(\.column) != input.spec.columns.map(\.column)
+        let input = model.tableInput
+        let columnsChanged = displayedInput?.visibleColumns != input.visibleColumns
         reloading = true
         rows.install(snapshot)
         updateColumns(input)
@@ -202,14 +232,22 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         view = root
         buildColumns(model.info)
         builtColumns = true
-        rows.reset(to: model.tablePresentation.input.rows)
-        updateColumns(model.tablePresentation.input)
+        let initial = model.tableInput
+        rows.reset(to: initial.ordered)
+        updateColumns(initial)
         table.noteNumberOfRowsChanged()
     }
 
     /// SwiftUI updates presentation; replacing row data goes through commit.
-    func update(showsRowNumbers: Bool, fontSize: CGFloat = 12, rowHeight: CGFloat = 28, rowNumberBase: Int = 0) {
+    func update(
+        input: DocumentModel.TableInput? = nil,
+        showsRowNumbers: Bool,
+        fontSize: CGFloat = 12,
+        rowHeight: CGFloat = 28,
+        rowNumberBase: Int = 0
+    ) {
         loadViewIfNeeded()
+        let resolvedInput = input ?? model.tableInput
         let info = model.info
         let findChanged =
             findRevision != model.find.revision || highlightRevision != model.find.highlightRevision
@@ -239,7 +277,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             fitGutter(info)
             gutter.needsDisplay = true
         }
-        updateColumns(model.tablePresentation.input, restyle: presentationChanged)
+        let columnsChanged = displayedInput?.visibleColumns != resolvedInput.visibleColumns
+        updateColumns(resolvedInput, restyle: presentationChanged)
+        if columnsChanged {
+            table.layoutSubtreeIfNeeded()
+        }
         if presentationChanged || findChanged {
             refreshVisibleCells(restyle: presentationChanged)
         }
@@ -248,51 +290,75 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         fitVisibleColumns()
     }
 
-    private func updateColumns(_ input: TablePresentation.Input, restyle: Bool = false) {
+    private func applyColumnLayout(_ visible: [ColumnId]) {
+        applyingColumns = true
+        let visibleSet = Set(visible)
+        for column in table.tableColumns {
+            if let id = columnId(column) { column.isHidden = !visibleSet.contains(id) }
+        }
+        for (offset, id) in visible.enumerated() {
+            let from = table.column(withIdentifier: identifier(for: id))
+            if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
+        }
+        applyingColumns = false
+    }
+
+    func syncColumns() {
+        guard builtColumns, displayedColumns != model.visibleColumns else { return }
+        applyColumnLayout(model.visibleColumns)
+        table.layoutSubtreeIfNeeded()
+        updateViewport()
+        requestHighlights()
+    }
+
+    private func updateColumns(_ input: DocumentModel.TableInput, restyle: Bool = false) {
         let previous = displayedInput
         displayedInput = input
-        let visible = input.spec.columns.map(\.column)
-        if previous?.spec.columns.map(\.column) != visible {
-            applyingColumns = true
-            let visibleSet = Set(visible)
-            for column in table.tableColumns {
-                if let i = columnIndex(column) { column.isHidden = !visibleSet.contains(UInt32(i)) }
-            }
-            for (offset, column) in visible.enumerated() {
-                let from = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
-                if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
-            }
-            applyingColumns = false
+        let visible = input.visibleColumns
+        if previous?.visibleColumns != visible {
+            applyColumnLayout(visible)
         }
         if previous != input || restyle {
-            let columns = Dictionary(uniqueKeysWithValues: input.spec.columns.map { ($0.column, $0) })
-            let oldColumns = Dictionary(uniqueKeysWithValues: (previous?.spec.columns ?? []).map { ($0.column, $0) })
-            let multipleSortKeys = input.spec.columns.filter { $0.sort != nil }.count > 1
-            let hadMultipleSortKeys = (previous?.spec.columns.filter { $0.sort != nil }.count ?? 0) > 1
+            let filters = Dictionary(uniqueKeysWithValues: input.filters.map { ($0.column, $0.filter) })
+            let oldFilters = Dictionary(uniqueKeysWithValues: (previous?.filters ?? []).map { ($0.column, $0.filter) })
+            let sorts = Dictionary(
+                uniqueKeysWithValues: input.sorts.enumerated().map { ($1.column, (sort: $1, priority: $0)) })
+            let oldSorts = Dictionary(
+                uniqueKeysWithValues: (previous?.sorts ?? []).enumerated().map { ($1.column, (sort: $1, priority: $0)) }
+            )
+            let multipleSortKeys = input.sorts.count > 1
+            let hadMultipleSortKeys = (previous?.sorts.count ?? 0) > 1
             for column in table.tableColumns {
-                guard let i = columnIndex(column), let header = column.headerCell as? ColumnHeaderCell else { continue }
+                guard let id = columnId(column),
+                    let info = model.columnInfo[id],
+                    let header = column.headerCell as? ColumnHeaderCell
+                else { continue }
+                let oldSort = oldSorts[id]
+                let newSort = sorts[id]
                 if previous != nil, !restyle,
-                    oldColumns[UInt32(i)] == columns[UInt32(i)], multipleSortKeys == hadMultipleSortKeys,
-                    (previous?.selectedColumn == i) == (input.selectedColumn == i),
-                    (previous?.inspectedColumn == i) == (input.inspectedColumn == i)
+                    oldFilters[id] == filters[id],
+                    oldSort?.sort == newSort?.sort,
+                    oldSort?.priority == newSort?.priority,
+                    multipleSortKeys == hadMultipleSortKeys,
+                    (previous?.selectedColumn == id) == (input.selectedColumn == id),
+                    (previous?.inspectedColumn == id) == (input.inspectedColumn == id)
                 {
                     continue
                 }
                 header.textSize = textSize
-                let filter = columns[UInt32(i)]?.filter
+                let filter = filters[id]
                 header.filtered = filter != nil
-                header.subtitle = model.info.columns[i].displayType
+                header.subtitle = info.displayType
                 column.headerToolTip =
-                    "\(model.info.columns[i].name): \(model.info.columns[i].technicalType)"
+                    "\(info.name): \(info.technicalType)"
                     + (filter.map { "\n\($0.detailSummary)" } ?? "")
                     + "\nClick to cycle sorting; Shift-click for multiple keys. Use the funnel to filter."
                     + "\nDrag to reorder; double-click a divider to fit the column."
-                header.inspected = input.inspectedColumn == i
-                header.active = input.selectedColumn == i
-                let sort = columns[UInt32(i)]?.sort
-                header.sorted = sort != nil
-                header.sortPriority = multipleSortKeys ? (sort.map { Int($0.priority) + 1 } ?? 0) : 0
-                header.sortAscending = !(sort?.descending ?? false)
+                header.inspected = input.inspectedColumn == id
+                header.active = input.selectedColumn == id
+                header.sorted = newSort != nil
+                header.sortPriority = multipleSortKeys ? (newSort.map { $0.priority + 1 } ?? 0) : 0
+                header.sortAscending = !(newSort?.sort.descending ?? false)
             }
             table.headerView?.needsDisplay = true
         }
@@ -332,10 +398,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             rows.updateViewport(rows: 0..<0, columns: [])
             return
         }
-        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> UInt32? in
+        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> ColumnId? in
             let column = table.tableColumns[index]
-            guard !column.isHidden, let source = columnIndex(column) else { return nil }
-            return UInt32(source)
+            guard !column.isHidden else { return nil }
+            return columnId(column)
         }
         if viewportRows != visibleRows || viewportColumns != columns {
             refreshVisibleCells(restyle: true, enteringViewport: true)
@@ -366,8 +432,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         rowHeader.resizingMask = []
         table.addTableColumn(rowHeader)
         fitGutter(info)
-        for (i, column) in info.columns.enumerated() {
-            let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
+        for column in info.columns {
+            let itemId = identifier(for: column.id)
+            columnByIdentifier[itemId] = column.id
+            let c = NSTableColumn(identifier: itemId)
             let header = ColumnHeaderCell(textCell: column.name)
             header.textSize = textSize
             header.subtitle = column.displayType
@@ -391,12 +459,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    private func columnIndex(_ column: NSTableColumn) -> Int? {
-        let id = column.identifier.rawValue
-        return id.hasPrefix("c") ? Int(id.dropFirst()) : nil
-    }
-
-    private func display(_ block: RowBlock, columns: [UInt32]) {
+    private func display(_ block: RowBlock, columns: [ColumnId]) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
         let start = max(Int(block.start), visible.location)
@@ -404,11 +467,11 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard start < end else { return }
         let visibleColumns = table.columnIndexes(in: table.visibleRect)
         for (offset, column) in columns.enumerated() {
-            let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
+            let index = table.column(withIdentifier: identifier(for: column))
             guard visibleColumns.contains(index) else { continue }
             for row in start..<end {
                 if let cell = table.view(atColumn: index, row: row, makeIfNecessary: true) as? MatchCellView {
-                    render(cell, column: Int(column), row: row, block: block, offset: offset)
+                    render(cell, column: column, row: row, block: block, offset: offset)
                 }
             }
         }
@@ -425,10 +488,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
         for index in table.columnIndexes(in: table.visibleRect) {
-            guard let column = columnIndex(table.tableColumns[index]) else { continue }
+            guard let column = columnId(table.tableColumns[index]) else { continue }
             for row in visible.location..<(visible.location + visible.length) {
                 if enteringViewport, let viewportRows, NSLocationInRange(row, viewportRows),
-                    viewportColumns.contains(UInt32(column))
+                    viewportColumns.contains(column)
                 {
                     continue
                 }
@@ -437,10 +500,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
                 if cell.boundView !== displayedView {
                     bind(cell, column: column, row: row)
-                } else if cell.isLoading, let block = rows.block(for: row, column: UInt32(column)) {
+                } else if cell.isLoading, let block = rows.block(for: row, column: column) {
                     render(cell, column: column, row: row, block: block)
                 } else {
-                    let kind = model.kinds[column]
+                    let kind = model.columnInfo[column]?.valueCategory ?? .text
                     if restyle {
                         cell.updateStyle(
                             font: cell.muted && !cell.isLoading ? fonts.null : fonts.font(for: kind),
@@ -451,7 +514,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                     cell.updateFind(
                         query: hit && kind == .text ? model.find.activeQuery : nil,
                         wholeMatch: hit && kind != .text,
-                        current: current?.displayRow == UInt64(row) && current?.column == UInt32(column))
+                        current: current?.displayRow == UInt64(row) && current?.column == column)
                 }
             }
         }
@@ -478,7 +541,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let tableColumn, let col = columnIndex(tableColumn) else { return nil }
+        guard let tableColumn, let col = columnId(tableColumn) else { return nil }
         let cell =
             (table.makeView(withIdentifier: tableColumn.identifier, owner: self) as? MatchCellView)
             ?? makeCell(identifier: tableColumn.identifier)
@@ -486,22 +549,22 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         return cell
     }
 
-    private func bind(_ cell: MatchCellView, column: Int, row: Int) {
+    private func bind(_ cell: MatchCellView, column: ColumnId, row: Int) {
         cell.boundView = displayedView
-        if let block = rows.block(for: row, column: UInt32(column)) {
+        if let block = rows.block(for: row, column: column) {
             render(cell, column: column, row: row, block: block)
         } else {
-            let kind = model.kinds[column]
+            let kind = model.columnInfo[column]?.valueCategory ?? .text
             cell.isLoading = true
             cell.configure(text: "…", font: fonts.font(for: kind), alignment: kind.alignment, muted: true)
         }
     }
 
-    private func render(_ cell: MatchCellView, column: Int, row: Int, block: RowBlock, offset: Int = 0) {
+    private func render(_ cell: MatchCellView, column: ColumnId, row: Int, block: RowBlock, offset: Int = 0) {
         guard row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
             return
         }
-        let kind = model.kinds[column]
+        let kind = model.columnInfo[column]?.valueCategory ?? .text
         let index = (row - Int(block.start)) * Int(block.nCols) + offset
         let hit = model.find.isMatch(row: row, column: column)
         let current = model.find.currentMatch
@@ -511,7 +574,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         cell.configure(
             text: text ?? "null", font: text == nil ? fonts.null : fonts.font(for: kind), alignment: kind.alignment,
             query: hit && kind == .text ? model.find.activeQuery : nil, wholeMatch: hit && kind != .text,
-            current: current?.displayRow == UInt64(row) && current?.column == UInt32(column), muted: text == nil)
+            current: current?.displayRow == UInt64(row) && current?.column == column, muted: text == nil)
     }
 
     private func makeCell(identifier: NSUserInterfaceItemIdentifier) -> MatchCellView {
@@ -536,15 +599,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private struct CellContent {
         let row: Int
-        let column: Int
+        let column: ColumnId
         let text: String?
     }
 
     private func cellContent(row: Int, index: Int) -> CellContent? {
         guard row >= 0, index >= 0, index < table.tableColumns.count,
-            let column = columnIndex(table.tableColumns[index])
+            let column = columnId(table.tableColumns[index])
         else { return nil }
-        if let block = rows.block(for: row, column: UInt32(column)),
+        if let block = rows.block(for: row, column: column),
             row >= Int(block.start), row < Int(block.start) + Int(block.nRows)
         {
             return CellContent(row: row, column: column, text: block.cells[row - Int(block.start)])
@@ -580,13 +643,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             ("Analyze Column", #selector(analyzeMenuColumn(_:))),
         ] {
             if action == #selector(clearMenuColumnFilter(_:)),
-                !model.appliedFilterColumns.contains(UInt32(content.column))
+                !model.appliedFilterColumns.contains(content.column)
             {
                 continue
             }
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
-            item.representedObject = UInt32(content.column)
+            item.representedObject = content.column
             menu.addItem(item)
         }
         return menu
@@ -608,13 +671,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func showCell(_ content: CellContent) {
         closePopover()
-        let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(content.column)"))
+        let index = table.column(withIdentifier: identifier(for: content.column))
         guard index >= 0 else { return }
         let panel = NSPopover()
         panel.behavior = .transient
         panel.contentViewController = NSHostingController(
             rootView: CellPreview(
-                name: model.info.columns[content.column].name, text: content.text))
+                name: model.columnInfo[content.column]?.name ?? "", text: content.text))
         panel.show(relativeTo: table.frameOfCell(atColumn: index, row: content.row), of: table, preferredEdge: .maxY)
         popover = panel
     }
@@ -631,9 +694,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableView(_ tableView: NSTableView, sizeToFitWidthOfColumn column: Int) -> CGFloat {
-        if let source = columnIndex(table.tableColumns[column]) {
+        if let source = columnId(table.tableColumns[column]) {
             // Start after AppKit finishes its divider resize notification.
-            DispatchQueue.main.async { [weak self] in self?.fitColumns([UInt32(source)], automatic: false) }
+            DispatchQueue.main.async { [weak self] in self?.fitColumns([source], automatic: false) }
         }
         return table.tableColumns[column].width
     }
@@ -641,19 +704,19 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func tableViewColumnDidResize(_ notification: Notification) {
         guard !applyingWidths,
             let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
-            let source = columnIndex(column)
+            let source = columnId(column)
         else { return }
-        widths.manual(UInt32(source))
+        widths.manual(source)
     }
 
     private func fitVisibleColumns() {
         guard builtColumns, !fittingAutomatically, view.window != nil, displayedView != nil else { return }
-        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> UInt32? in
+        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> ColumnId? in
             let col = table.tableColumns[index]
-            guard !col.isHidden, let source = columnIndex(col), widths.needsAutomatic(UInt32(source)) else {
+            guard !col.isHidden, let source = columnId(col), widths.needsAutomatic(source) else {
                 return nil
             }
-            return UInt32(source)
+            return source
         }
         if columns.isEmpty {
             if firstWidthsPending {
@@ -665,14 +728,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         fitColumns(columns, automatic: true)
     }
 
-    private func fitColumns(_ columns: [UInt32], automatic: Bool) {
-        guard let view = displayedView, !columns.isEmpty else { return }
+    private func fitColumns(_ columns: [ColumnId], automatic: Bool) {
+        guard let ordered = displayedView, !columns.isEmpty else { return }
         if automatic { fittingAutomatically = true } else { fitTask?.cancel() }
         let tickets = columns.map { widths.begin($0) }
         let rows = table.rows(in: table.visibleRect)
         let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
-        let inputs = columns.map { column in
-            let info = model.info.columns[Int(column)]
+        let inputs: [ColumnWidthMeasurement.Input] = columns.compactMap { column in
+            guard let info = model.columnInfo[column] else { return nil }
             let key = RowCache.Key(start: Int(start) / RowCache.blockSize * RowCache.blockSize, column: column)
             let sample = self.rows.cachedBlock(for: key).map { Array($0.cells.prefix(32)) }
             return ColumnWidthMeasurement.Input(
@@ -693,14 +756,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
             }
             do {
-                let result: [UInt32: CGFloat] = try await withTaskCancellationHandler {
+                let result: [ColumnId: CGFloat] = try await withTaskCancellationHandler {
                     try Task.checkCancellation()
                     return try await withCheckedThrowingContinuation { continuation in
                         worker.async {
                             do {
                                 continuation.resume(
                                     returning: try ColumnWidthMeasurement.measure(
-                                        view: view, columns: inputs, start: start, fontSize: fontSize,
+                                        ordered: ordered, columns: inputs, start: start, fontSize: fontSize,
                                         maximum: automatic ? 420 : 600, cancellation: cancellation))
                             } catch { continuation.resume(throwing: error) }
                         }
@@ -710,14 +773,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
                 try Task.checkCancellation()
                 guard let self else { return }
-                guard self.displayedView === view, self.textSize == fontSize else {
+                guard self.displayedView === ordered, self.textSize == fontSize else {
                     for ticket in tickets { self.widths.abandon(ticket) }
                     return
                 }
                 self.applyingWidths = true
                 defer { self.applyingWidths = false }
                 for ticket in tickets where self.widths.accept(ticket) {
-                    if let column = self.table.tableColumn(withIdentifier: .init("c\(ticket.column)")),
+                    if let column = self.table.tableColumn(withIdentifier: self.identifier(for: ticket.column)),
                         let width = result[ticket.column]
                     {
                         column.width = width
@@ -726,8 +789,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             } catch {
                 guard let self else { return }
                 for ticket in tickets { self.widths.abandon(ticket) }
-                if Task.isCancelled, self.displayedView === view { continueFitting = false }
-                if !Task.isCancelled, !(error is CancellationError), self.displayedView === view {
+                if Task.isCancelled, self.displayedView === ordered { continueFitting = false }
+                if !Task.isCancelled, !(error is CancellationError), self.displayedView === ordered {
                     continueFitting = false
                     self.model.reportError(error, prefix: "Could not fit columns: ")
                 }
@@ -737,20 +800,20 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
-        guard let column = columnIndex(tableColumn) else { return }
+        guard let column = columnId(tableColumn) else { return }
         let multiple = (table.headerView as? FilterHeaderView)?.sortingMultiple ?? false
         DispatchQueue.main.async { [weak self] in
             self?.model.selectedColumn = column
-            self?.model.cycleSort(column: UInt32(column), multiple: multiple)
+            self?.model.cycleSort(column: column, multiple: multiple)
         }
     }
 
     private func columnMenu(at index: Int) -> NSMenu? {
-        guard index >= 0, index < table.tableColumns.count, let column = columnIndex(table.tableColumns[index]) else {
+        guard index >= 0, index < table.tableColumns.count, let column = columnId(table.tableColumns[index]) else {
             return nil
         }
         let menu = NSMenu()
-        let sort = model.spec.columns.first { $0.column == UInt32(column) }?.sort
+        let sort = model.draftSort(for: column)
         for (title, action) in [
             ("Analyze Column", #selector(analyzeMenuColumn(_:))),
             ("Filter Column…", #selector(filterMenuColumn(_:))),
@@ -772,15 +835,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 continue
             }
             if action == #selector(clearMenuColumnSort(_:)), sort == nil { continue }
-            if action == #selector(clearMenuAllSorting(_:)), model.sortedColumns.isEmpty { continue }
+            if action == #selector(clearMenuAllSorting(_:)), model.draftSorts.isEmpty { continue }
             if action == #selector(clearMenuColumnFilter(_:)),
-                !model.appliedFilterColumns.contains(UInt32(column))
+                !model.appliedFilterColumns.contains(column)
             {
                 continue
             }
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
-            item.representedObject = UInt32(column)
+            item.representedObject = column
             if action == #selector(sortMenuAscending(_:)), sort?.descending == false { item.state = .on }
             if action == #selector(sortMenuDescending(_:)), sort?.descending == true { item.state = .on }
             menu.addItem(item)
@@ -789,45 +852,47 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     @objc private func analyzeMenuColumn(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.inspectColumn(Int(column)) }
+        if let column = item.representedObject as? ColumnId { model.inspectColumn(column) }
     }
     @objc private func sortMenuAscending(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.setSortDirection(column: column, descending: false) }
+        if let column = item.representedObject as? ColumnId {
+            model.setSortDirection(column: column, descending: false)
+        }
     }
     @objc private func sortMenuDescending(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.setSortDirection(column: column, descending: true) }
+        if let column = item.representedObject as? ColumnId { model.setSortDirection(column: column, descending: true) }
     }
     @objc private func fitMenuColumn(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { fitColumns([column], automatic: false) }
+        if let column = item.representedObject as? ColumnId { fitColumns([column], automatic: false) }
     }
     @objc private func fitMenuAll(_ item: NSMenuItem) { fitColumns(displayedColumns, automatic: false) }
     @objc private func customizeMenuColumns(_ item: NSMenuItem) { model.showsColumns = true }
 
     @objc private func filterMenuColumn(_ item: NSMenuItem) {
-        guard let column = item.representedObject as? UInt32 else { return }
-        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+        guard let column = item.representedObject as? ColumnId else { return }
+        showFilter(at: table.column(withIdentifier: identifier(for: column)))
     }
     @objc private func hideMenuColumn(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { hideColumn(column, in: model) }
+        if let column = item.representedObject as? ColumnId { hideColumn(column, in: model) }
     }
     @objc private func clearMenuColumnSort(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.removeSort(column: column) }
+        if let column = item.representedObject as? ColumnId { model.removeSort(column: column) }
     }
     @objc private func clearMenuAllSorting(_ item: NSMenuItem) { model.clearSort() }
     @objc private func clearMenuColumnFilter(_ item: NSMenuItem) {
-        if let column = item.representedObject as? UInt32 { model.setFilter(nil, column: column) }
+        if let column = item.representedObject as? ColumnId { model.setFilter(nil, column: column) }
     }
 
     @objc private func tableClicked(_ sender: Any?) { selectColumn(at: table.clickedColumn) }
     private func selectColumn(at index: Int) {
-        guard index >= 0, index < table.tableColumns.count, let column = columnIndex(table.tableColumns[index]) else {
+        guard index >= 0, index < table.tableColumns.count, let column = columnId(table.tableColumns[index]) else {
             return
         }
         model.selectedColumn = column
     }
 
-    func scrollToColumn(_ column: Int, focus: Bool = false) {
-        let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)"))
+    func scrollToColumn(_ column: ColumnId, focus: Bool = false) {
+        let index = table.column(withIdentifier: identifier(for: column))
         guard index >= 0 else { return }
         table.scrollColumnToVisible(index)
         if focus { table.window?.makeFirstResponder(table) }
@@ -851,36 +916,37 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let row = Int(match.displayRow)
         table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         table.scrollRowToVisible(row)
-        scrollToColumn(Int(match.column))
+        scrollToColumn(match.column)
         requestHighlights()
     }
 
     func showSelectedColumnFilter() {
-        guard let column = model.selectedColumn,
-            let index = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "c\(column)" })
-        else { return }
+        guard let column = model.selectedColumn else { return }
+        let index = table.column(withIdentifier: identifier(for: column))
+        guard index >= 0 else { return }
         showFilter(at: index)
     }
 
-    func showColumnFilter(_ column: UInt32) {
-        guard model.appliedSpec.columns.contains(where: { $0.column == column }) else { return }
-        scrollToColumn(Int(column))
-        showFilter(at: table.column(withIdentifier: NSUserInterfaceItemIdentifier("c\(column)")))
+    func showColumnFilter(_ column: ColumnId) {
+        guard model.visibleColumns.contains(column) else { return }
+        scrollToColumn(column)
+        showFilter(at: table.column(withIdentifier: identifier(for: column)))
     }
 
-    var displayedColumns: [UInt32] {
-        table.tableColumns.filter { !$0.isHidden }.compactMap(columnIndex).map(UInt32.init)
+    var displayedColumns: [ColumnId] {
+        table.tableColumns.filter { !$0.isHidden }.compactMap(columnId)
     }
 
     private func showFilter(at index: Int) {
         guard let header = table.headerView,
-            index >= 0, index < table.tableColumns.count, let col = columnIndex(table.tableColumns[index])
+            index >= 0, index < table.tableColumns.count,
+            let column = columnId(table.tableColumns[index]),
+            let info = model.columnInfo[column]
         else { return }
         closePopover()
-        let column = UInt32(col)
         let content = ColumnFilterView(
-            viewer: model.viewer, column: column, info: model.info.columns[col],
-            current: model.spec.columns.first { $0.column == column }?.filter
+            viewer: model.viewer, info: info,
+            current: model.draftFilter(for: column)
         ) { [weak self] filters in
             self?.closePopover()
             self?.model.setFilter(filters, column: column)
@@ -901,9 +967,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard !table.selectedRowIndexes.isEmpty else { return }
         let columns = displayedColumns
         model.copying.copy(
-            view: model.view,
+            ordered: model.ordered,
             rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
-            names: columns.map { model.info.columns[Int($0)].name })
+            names: columns.map { model.columnInfo[$0]?.name ?? "" })
     }
 }
 

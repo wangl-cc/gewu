@@ -8,7 +8,7 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use super::{Histogram, Output, RangeBounds};
-use crate::{col_view::ColView, scalar::Bound, stats::Result, AxisScale};
+use crate::{col_view::ColView, row_ids::RowSlice, scalar::Bound, stats::Result, AxisScale};
 
 pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
     let array = view.array();
@@ -73,14 +73,14 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
 
 fn positive_extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     positive: impl Fn(T::Native) -> bool,
 ) -> Option<(T::Native, T::Native)>
 where
     T::Native: PartialOrd,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         let value = array.is_valid(row).then(|| array.value(row));
         if let Some(value) = value.filter(|&v| positive(v)) {
             extrema = Some(match extrema {
@@ -122,7 +122,7 @@ fn cuts<N: Copy + PartialOrd>(
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
 ) -> Result<H>
 where
@@ -171,7 +171,7 @@ where
 
 fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
@@ -241,7 +241,7 @@ where
 
 fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     bins: usize,
 ) -> Result<H>
 where
@@ -348,11 +348,11 @@ fn with_domain(bin_edges: Vec<f64>, min: &Bound, max: &Bound) -> Histogram {
 
 fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     mut histogram: Histogram,
     classify: impl Fn(T::Native) -> Class,
 ) -> Histogram {
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         if array.is_valid(row) {
             match classify(array.value(row)) {
                 Class::Bin(bin) => histogram.counts[bin] += 1,
@@ -441,10 +441,7 @@ mod tests {
             let mut matched = vec![false; view.array().len()];
             predicate.evaluate(0..view.array().len(), &mut matched);
             assert_eq!(
-                view.rows()
-                    .iter()
-                    .filter(|&&row| matched[row as usize])
-                    .count() as u64,
+                view.rows().iter().filter(|&row| matched[row]).count() as u64,
                 expected
             );
             for (membership, matched) in memberships.iter_mut().zip(matched) {

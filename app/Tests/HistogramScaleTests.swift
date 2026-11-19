@@ -9,12 +9,13 @@ struct HistogramScaleTests {
         try "value\n-1\n0\n1\n10\n100\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
-        let view = document.view()
-        let viewer = Viewer(dataset: document, view: view, spec: QuerySpec(columns: []))
+        let filtered = document.unfiltered()
+        let viewer = Viewer(dataset: document, filtered: filtered, ordered: filtered.unsorted())
+        let col0 = document.info().columns[0]
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                dataset: document, viewer: viewer, column: 0,
+                column: col0, dataset: document, viewer: viewer,
                 expanded: InspectorSection.distribution.mask,
                 bins: 2, scale: scale)
             guard let histogram = model.distribution else {
@@ -25,7 +26,7 @@ struct HistogramScaleTests {
             #expect(histogram.nonPositiveCount == (scale == .log10 ? 2 : 0))
             #expect(histogram.counts.reduce(0, +) == (scale == .log10 ? 3 : 5))
         }
-        #expect(view.rowCount() == 5)
+        #expect(filtered.rowCount() == 5)
     }
 
     @Test

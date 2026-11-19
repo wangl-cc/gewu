@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{AnalysisCapabilities, ColumnInfo, FileMetadata, FileType, GewuError};
+use crate::{ColumnFilter, ColumnId, ColumnInfo, FileMetadata, FileType, GewuError};
 
 #[derive(uniffi::Record)]
 pub struct DatasetInfo {
@@ -69,32 +69,39 @@ impl GewuDataset {
         }))
     }
 
-    pub fn query(&self, spec: crate::QuerySpec) -> Result<Arc<crate::GewuView>, GewuError> {
-        Ok(Arc::new(crate::GewuView {
-            inner: self.inner.query(&spec.into())?,
-        }))
-    }
-
     pub fn info(&self) -> DatasetInfo {
         self.inner.info().into()
     }
 
-    pub fn analysis_capabilities(&self, column: u32) -> Result<AnalysisCapabilities, GewuError> {
-        Ok(self.inner.analysis_capabilities(column)?.into())
+    pub fn column_id(&self, name: String) -> Option<ColumnId> {
+        self.inner.column_id(&name).map(Into::into)
     }
 
-    pub fn column_structure(&self, column: u32) -> Result<Vec<crate::AnalysisField>, GewuError> {
+    pub fn column_structure(
+        &self,
+        column: ColumnId,
+    ) -> Result<Vec<crate::AnalysisField>, GewuError> {
         Ok(self
             .inner
-            .column_structure(column)?
+            .column_structure(column.into())?
             .into_iter()
             .map(Into::into)
             .collect())
     }
 
-    pub fn view(&self) -> Arc<crate::GewuView> {
-        Arc::new(crate::GewuView {
-            inner: self.inner.view(),
+    pub fn unfiltered(&self) -> Arc<crate::GewuFilteredView> {
+        Arc::new(crate::GewuFilteredView {
+            inner: self.inner.unfiltered(),
         })
+    }
+
+    pub fn filter(
+        &self,
+        filters: Vec<ColumnFilter>,
+    ) -> Result<Arc<crate::GewuFilteredView>, GewuError> {
+        let filters: Vec<core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
+        Ok(Arc::new(crate::GewuFilteredView {
+            inner: self.inner.filter(&filters)?,
+        }))
     }
 }

@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{numeric::Numeric, AxisScale};
-use crate::{format, stats::Result};
+use crate::{format, row_ids::RowSlice, stats::Result, ColumnId};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -58,9 +58,9 @@ pub struct ScatterResult {
 
 /// Scan a borrowed view for a bounded scatter sample.
 pub(crate) fn analyze(
-    x: Option<(u32, &ArrayRef)>,
-    y: (u32, &ArrayRef),
-    rows: &[u32],
+    x: Option<(ColumnId, &ArrayRef)>,
+    y: (ColumnId, &ArrayRef),
+    rows: RowSlice<'_>,
     limit: u32,
     x_scale: AxisScale,
     y_scale: AxisScale,
@@ -103,7 +103,7 @@ pub(crate) fn analyze(
     let mut sample = BinaryHeap::with_capacity(limit);
     let mut eligible_rows = 0;
     let mut non_positive_rows = 0;
-    for &row in rows {
+    for row in rows.iter_u32() {
         let xv = read_x
             .as_ref()
             .map_or(Some(f64::from(row)), |get| get(row as usize));
@@ -181,10 +181,12 @@ mod tests {
     fn axis_kinds_describe_the_snapshot_even_without_points() {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1]));
         let timestamps: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![0]));
+        let c0 = ColumnId::new(0);
+        let c1 = ColumnId::new(1);
         let result = analyze(
-            Some((0, &dates)),
-            (1, &timestamps),
-            &[],
+            Some((c0, &dates)),
+            (c1, &timestamps),
+            RowSlice::Selected(&[]),
             8,
             AxisScale::Linear,
             AxisScale::Linear,
@@ -195,8 +197,8 @@ mod tests {
         assert_eq!(result.y_axis_kind, ScatterAxisKind::DateTime);
         let result = analyze(
             None,
-            (0, &dates),
-            &[0],
+            (c0, &dates),
+            RowSlice::All(1),
             8,
             AxisScale::Linear,
             AxisScale::Linear,
@@ -209,7 +211,7 @@ mod tests {
             (AxisScale::Linear, AxisScale::Log10),
         ] {
             assert!(matches!(
-                analyze(None, (0, &dates), &[0], 8, x, y),
+                analyze(None, (c0, &dates), RowSlice::All(1), 8, x, y),
                 Err(crate::AnalysisError::UnsupportedOperation { .. }
                     | crate::AnalysisError::UnsupportedAxisScale { .. })
             ));
@@ -238,21 +240,15 @@ mod tests {
             Some(0.0),
             None,
         ]));
+        let c0 = ColumnId::new(0);
+        let c1 = ColumnId::new(1);
         for (xs, ys, eligible, excluded) in [
             (AxisScale::Linear, AxisScale::Linear, 4, 0),
             (AxisScale::Log10, AxisScale::Linear, 2, 2),
             (AxisScale::Linear, AxisScale::Log10, 1, 3),
             (AxisScale::Log10, AxisScale::Log10, 1, 3),
         ] {
-            let result = analyze(
-                Some((0, &x)),
-                (1, &y),
-                &(0..8).collect::<Vec<_>>(),
-                8,
-                xs,
-                ys,
-            )
-            .unwrap();
+            let result = analyze(Some((c0, &x)), (c1, &y), RowSlice::All(8), 8, xs, ys).unwrap();
             assert_eq!(
                 (result.eligible_rows, result.non_positive_rows),
                 (eligible, excluded)
@@ -272,18 +268,19 @@ mod tests {
                 -1
             }
         })));
-        let make = |rows: Vec<u32>| {
+        let c0 = ColumnId::new(0);
+        let make = |rows: RowSlice<'_>| {
             analyze(
                 None,
-                (0, &array),
-                &rows,
+                (c0, &array),
+                rows,
                 5,
                 AxisScale::Linear,
                 AxisScale::Log10,
             )
             .unwrap()
         };
-        let result = make((0..1000).collect());
+        let result = make(RowSlice::All(1000));
         assert_eq!((result.eligible_rows, result.non_positive_rows), (10, 990));
         assert!(result.eligible_rows > result.points.len() as u64);
         assert_eq!(result.points.len(), 5);
@@ -297,8 +294,9 @@ mod tests {
                 .map(|p| p.source_row)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(result), ids(make((0..1000).rev().collect())));
-        let empty = make((0..990).collect());
+        let rev: Vec<u32> = (0..1000).rev().collect();
+        assert_eq!(ids(result), ids(make(RowSlice::Selected(&rev))));
+        let empty = make(RowSlice::All(990));
         assert_eq!((empty.eligible_rows, empty.non_positive_rows), (0, 990));
         assert!(empty.points.is_empty() && empty.eligible_rows == 0);
     }
@@ -319,10 +317,12 @@ mod tests {
             4.0,
             5.5,
         ]));
+        let c0 = ColumnId::new(0);
+        let c1 = ColumnId::new(1);
         let result = analyze(
-            Some((0, &x)),
-            (1, &y),
-            &[4, 3, 2, 1, 0],
+            Some((c0, &x)),
+            (c1, &y),
+            RowSlice::Selected(&[4, 3, 2, 1, 0]),
             8,
             AxisScale::Linear,
             AxisScale::Linear,
@@ -341,8 +341,8 @@ mod tests {
         assert_eq!((result.points[0].y, result.points[1].y), (1.5, 5.5));
         let row_axis = analyze(
             None,
-            (1, &y),
-            &[4, 0],
+            (c1, &y),
+            RowSlice::Selected(&[4, 0]),
             8,
             AxisScale::Linear,
             AxisScale::Linear,
@@ -356,8 +356,8 @@ mod tests {
             assert!(matches!(
                 analyze(
                     None,
-                    (1, &y),
-                    &[0],
+                    (c1, &y),
+                    RowSlice::Selected(&[0]),
                     limit,
                     AxisScale::Linear,
                     AxisScale::Linear,
@@ -369,8 +369,8 @@ mod tests {
         assert!(matches!(
             analyze(
                 None,
-                (0, &text),
-                &[0],
+                (c0, &text),
+                RowSlice::All(1),
                 1,
                 AxisScale::Linear,
                 AxisScale::Linear,
@@ -378,18 +378,19 @@ mod tests {
             Err(crate::AnalysisError::UnsupportedOperation { .. })
         ));
         let many: ArrayRef = Arc::new(Int64Array::from_iter_values(0..20000));
-        let sample = |rows: Vec<u32>| {
+        let sample = |rows: RowSlice<'_>| {
             analyze(
                 None,
-                (0, &many),
-                &rows,
+                (c0, &many),
+                rows,
                 64,
                 AxisScale::Linear,
                 AxisScale::Linear,
             )
         };
-        let first = sample((0..20000).collect()).unwrap();
-        let reversed = sample((0..20000).rev().collect()).unwrap();
+        let first = sample(RowSlice::All(20000)).unwrap();
+        let rev: Vec<u32> = (0..20000).rev().collect();
+        let reversed = sample(RowSlice::Selected(&rev)).unwrap();
         assert!(first.eligible_rows > first.points.len() as u64);
         assert_eq!((first.eligible_rows, first.points.len()), (20000, 64));
         assert_eq!(

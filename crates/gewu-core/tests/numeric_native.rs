@@ -7,15 +7,17 @@ use arrow::array::{
     Int8Array, RecordBatch, Time32MillisecondArray, TimestampMicrosecondArray, UInt16Array,
     UInt32Array, UInt64Array, UInt8Array,
 };
-use gewu_core::{Error, Filter, NumericStatistics, QuerySpec, ValueSummary};
+use gewu_core::{
+    ColumnFilter, ColumnId, Error, Filter, FilteredView, NumericStatistics, ValueSummary,
+};
 use parquet::arrow::ArrowWriter;
 
-fn statistics(doc: &std::sync::Arc<gewu_core::View>) -> NumericStatistics {
-    doc.analyze_statistics(0).unwrap()
+fn statistics(doc: &Arc<FilteredView>) -> NumericStatistics {
+    doc.statistics(ColumnId::from_raw(0)).unwrap()
 }
 
-fn values(doc: &std::sync::Arc<gewu_core::View>) -> ValueSummary {
-    doc.analyze_values(0).unwrap()
+fn values(doc: &Arc<FilteredView>) -> ValueSummary {
+    doc.values(ColumnId::from_raw(0)).unwrap()
 }
 
 fn document(array: ArrayRef) -> Arc<gewu_core::Dataset> {
@@ -32,20 +34,25 @@ fn check_range(
     min: Option<String>,
     max: Option<String>,
     expected: &[u64],
-) -> Arc<gewu_core::View> {
-    let spec = QuerySpec::single(0, Filter::range(min, max, false));
-    let view = doc.query(&spec).unwrap();
+) -> Arc<FilteredView> {
+    let c0 = ColumnId::from_raw(0);
+    let filters = [ColumnFilter {
+        column: c0,
+        filter: Filter::range(min, max, false),
+    }];
+    let filtered = doc.filter(&filters).unwrap();
     assert_eq!(
-        view.rows(0, 100, &[0]).unwrap().source_rows,
+        filtered.unsorted().rows(0, 100, &[c0]).unwrap().source_rows,
         expected,
-        "type {:?}, spec {spec:?}",
+        "type {:?}, filters {filters:?}",
         doc.schema().field(0).data_type()
     );
-    view
+    filtered
 }
 
 #[test]
 fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
+    let c0 = ColumnId::from_raw(0);
     macro_rules! check {
         ($array:ty, $native:ty) => {{
             let doc = document(Arc::new(<$array>::from(vec![
@@ -77,10 +84,10 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
             check_range(&doc, Some(outside), None, &[]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(&QuerySpec::single(
-                        0,
-                        Filter::range(Some((input).to_owned()), None, false)
-                    )),
+                    doc.filter(&[ColumnFilter {
+                        column: c0,
+                        filter: Filter::range(Some((input).to_owned()), None, false),
+                    }]),
                     Err(Error::Filter(_))
                 ));
             }
@@ -94,6 +101,7 @@ fn signed_native_ranges_handle_fractional_and_out_of_domain_bounds() {
 
 #[test]
 fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
+    let c0 = ColumnId::from_raw(0);
     macro_rules! check {
         ($array:ty, $native:ty) => {{
             let doc = document(Arc::new(<$array>::from(vec![
@@ -119,10 +127,10 @@ fn unsigned_native_ranges_do_not_saturate_impossible_bounds() {
             check_range(&doc, Some(max), None, &[3]);
             for input in ["inf", "-inf", "NaN", "invalid"] {
                 assert!(matches!(
-                    doc.query(&QuerySpec::single(
-                        0,
-                        Filter::range(Some((input).to_owned()), None, false)
-                    )),
+                    doc.filter(&[ColumnFilter {
+                        column: c0,
+                        filter: Filter::range(Some((input).to_owned()), None, false),
+                    }]),
                     Err(Error::Filter(_))
                 ));
             }
@@ -185,14 +193,15 @@ fn large_integer_ranges_keep_exact_values_and_domain_edges() {
         &[0, 1, 2, 3],
     );
 
-    signed.query(&QuerySpec::default()).unwrap();
-    unsigned.query(&QuerySpec::default()).unwrap();
-    assert_eq!(values(&signed.view()).distinct_count, 4);
-    assert_eq!(values(&unsigned.view()).distinct_count, 4);
+    signed.filter(&[]).unwrap();
+    unsigned.filter(&[]).unwrap();
+    assert_eq!(values(&signed.unfiltered()).distinct_count, 4);
+    assert_eq!(values(&unsigned.unfiltered()).distinct_count, 4);
 }
 
 #[test]
 fn float32_range_compares_without_rounding_the_query_to_float32() {
+    let c0 = ColumnId::from_raw(0);
     let doc = document(Arc::new(Float32Array::from(vec![
         Some(0.1),
         Some(1.0),
@@ -210,16 +219,17 @@ fn float32_range_compares_without_rounding_the_query_to_float32() {
     check_range(&doc, Some(("inf").to_owned()), None, &[4]);
     check_range(&doc, None, Some(("-inf").to_owned()), &[3]);
     assert!(matches!(
-        doc.query(&QuerySpec::single(
-            0,
-            Filter::range(Some(("NaN").to_owned()), None, false)
-        )),
+        doc.filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some(("NaN").to_owned()), None, false),
+        }]),
         Err(Error::Filter(_))
     ));
 }
 
 #[test]
 fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
+    let c0 = ColumnId::from_raw(0);
     let integers = document(Arc::new(Int8Array::from(vec![
         Some(0),
         Some(1),
@@ -232,17 +242,17 @@ fn raw_numeric_filters_preserve_precision_independently_of_axis_projection() {
 
     check_range(&integers, Some(("128").to_owned()), None, &[]);
     assert!(matches!(
-        integers.query(&QuerySpec::single(
-            0,
-            Filter::range(Some(("not a number").to_owned()), None, false)
-        )),
+        integers.filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some(("not a number").to_owned()), None, false),
+        }]),
         Err(Error::Filter(_))
     ));
     assert!(integers
-        .query(&QuerySpec::single(
-            0,
-            Filter::range(Some(("not a number").to_owned()), None, false)
-        ))
+        .filter(&[ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some(("not a number").to_owned()), None, false),
+        }])
         .is_err());
 
     let floats = document(Arc::new(Float32Array::from(vec![0.0, 0.1, 1.0])));
@@ -299,6 +309,7 @@ fn float64_ranges_compare_large_integer_bounds_exactly() {
 
 #[test]
 fn float32_summary_and_histogram_follow_selected_rows() {
+    let c0 = ColumnId::from_raw(0);
     let doc = document(Arc::new(Float32Array::from(vec![
         Some(1.0),
         Some(2.0),
@@ -306,7 +317,8 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         Some(f32::NAN),
         None,
     ])));
-    let summary = statistics(&doc.view());
+    let unfiltered = doc.unfiltered();
+    let summary = statistics(&unfiltered);
     assert_eq!(summary.nan_count, 1);
     assert_eq!(
         (
@@ -317,29 +329,32 @@ fn float32_summary_and_histogram_follow_selected_rows() {
         ),
         (Some("1.0"), Some("3.0"), Some(2.0), Some(1.0))
     );
-    let histogram = doc
-        .view()
-        .filter_distribution(0, 2, gewu_core::AxisScale::Linear)
+    let histogram = unfiltered
+        .filter_distribution(c0, 2, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(histogram.counts, [1, 2]);
     assert_eq!(
         (
-            doc.view().count_nulls(0).unwrap(),
+            unfiltered.count_nulls(c0).unwrap(),
             summary.nan_count,
-            doc.view().row_count()
+            unfiltered.row_count()
         ),
         (1, 1, 5)
     );
 
-    let doc = check_range(&doc, Some(("2").to_owned()), None, &[1, 2]);
-    let summary = statistics(&doc);
+    let filtered = check_range(&doc, Some(("2").to_owned()), None, &[1, 2]);
+    let summary = statistics(&filtered);
     assert_eq!(
-        (doc.row_count(), values(&doc).distinct_count, summary.mean),
+        (
+            filtered.row_count(),
+            values(&filtered).distinct_count,
+            summary.mean
+        ),
         (2, 2, Some(2.5))
     );
-    let histogram = doc
-        .analyze_distribution(0, 2, gewu_core::AxisScale::Linear)
+    let histogram = filtered
+        .distribution(c0, 2, gewu_core::AxisScale::Linear)
         .unwrap();
     assert_eq!((histogram.lo, histogram.hi), (Some(2.0), Some(3.0)));
     assert_eq!(histogram.counts, [1, 1]);
@@ -347,6 +362,7 @@ fn float32_summary_and_histogram_follow_selected_rows() {
 
 #[test]
 fn temporal_range_summary_and_histogram_keep_physical_units() {
+    let c0 = ColumnId::from_raw(0);
     let arrays: [ArrayRef; 3] = [
         Arc::new(Date32Array::from(vec![Some(0), Some(1), Some(2), None])),
         Arc::new(Time32MillisecondArray::from(vec![
@@ -362,20 +378,20 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
     ];
     for array in arrays {
         let doc = document(array);
-        let summary = statistics(&doc.view());
+        let unfiltered = doc.unfiltered();
+        let summary = statistics(&unfiltered);
         assert_eq!(
-            (values(&doc.view()).distinct_count, summary.mean),
+            (values(&unfiltered).distinct_count, summary.mean),
             (3, Some(1.0))
         );
-        let histogram = doc
-            .view()
-            .filter_distribution(0, 10, gewu_core::AxisScale::Linear)
+        let histogram = unfiltered
+            .filter_distribution(c0, 10, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let cells = doc.view().rows(1, 2, &[0]).unwrap().cells;
+        let cells = unfiltered.unsorted().rows(1, 2, &[c0]).unwrap().cells;
         let min = cells[0].clone().unwrap();
         let max = cells[1].clone().unwrap();
         assert_eq!(
@@ -409,7 +425,7 @@ fn decimal_summary_and_ranges_distinguish_adjacent_large_coefficients() {
     ];
     for array in arrays {
         let doc = document(array);
-        assert_eq!(values(&doc.view()).distinct_count, 2);
+        assert_eq!(values(&doc.unfiltered()).distinct_count, 2);
         // Chart coordinates may round, but filter endpoints remain exact.
 
         check_range(&doc, Some((base + 1).to_string()), None, &[1]);

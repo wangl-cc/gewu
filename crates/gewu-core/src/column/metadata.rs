@@ -2,7 +2,7 @@
 
 use arrow::datatypes::DataType;
 
-use super::{predicate, Column, ColumnCapabilities};
+use super::{predicate, Column, ColumnCapabilities, ColumnId};
 use crate::{
     stats,
     types::{display_type, value_type},
@@ -47,24 +47,28 @@ impl ValueCategory {
 /// Display information and supported operations for one column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnInfo {
+    pub id: ColumnId,
     pub name: String,
     pub value_category: ValueCategory,
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
     pub capabilities: ColumnCapabilities,
+    pub analysis: crate::AnalysisCapabilities,
 }
 
 impl ColumnInfo {
-    pub(super) fn from_column(column: &Column) -> Self {
+    pub(super) fn from_column(id: ColumnId, column: &Column) -> Self {
         let data_type = column.array.data_type();
         Self {
+            id,
             name: column.name.clone(),
             value_category: ValueCategory::from_arrow(data_type),
             display_type: display_type(data_type),
             technical_type: data_type.to_string(),
             nullable: column.nullable,
             capabilities: ColumnCapabilities::from_arrow(data_type),
+            analysis: crate::stats::capabilities(data_type),
         }
     }
 }
@@ -109,7 +113,9 @@ mod tests {
             ),
         ] {
             let column = Column::new("value", new_null_array(&data_type, 1)).unwrap();
-            let info = column.info();
+            let id = ColumnId::new(3);
+            let info = column.info(id);
+            assert_eq!(info.id, id);
             assert_eq!(info.name, "value");
             assert_eq!(info.value_category, category);
             assert_eq!(info.display_type, label);
@@ -119,6 +125,7 @@ mod tests {
                 info.capabilities.text_match,
                 matches!(data_type, DataType::Utf8)
             );
+            assert_eq!(info.analysis, crate::stats::capabilities(&data_type));
         }
     }
 }

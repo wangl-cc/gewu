@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray};
-use gewu_core::{Filter, QuerySpec};
+use gewu_core::{ColumnFilter, ColumnId, Filter};
 use parquet::arrow::ArrowWriter;
 
 fn document() -> Arc<gewu_core::Dataset> {
@@ -51,53 +51,71 @@ fn contains(include_nulls: bool) -> Filter {
     Filter::contains("ALPHA".into(), false, include_nulls)
 }
 
-fn rows(doc: &Arc<gewu_core::Dataset>, spec: QuerySpec) -> Vec<u64> {
-    let view = doc.query(&spec).unwrap();
-    view.rows(0, 20, &[0, 1]).unwrap().source_rows
+fn rows(doc: &Arc<gewu_core::Dataset>, filters: &[ColumnFilter]) -> Vec<u64> {
+    let view = doc.filter(filters).unwrap().unsorted();
+    view.rows(0, 20, &[ColumnId::from_raw(0), ColumnId::from_raw(1)])
+        .unwrap()
+        .source_rows
 }
 
 #[test]
 fn range_null_policy_keeps_nulls_without_matching_nan_or_outside_values() {
     let doc = document();
+    let c0 = ColumnId::from_raw(0);
     for (filter, expected) in [
         (range(false), vec![1, 2, 6]),
         (range(true), vec![0, 1, 2, 4, 6]),
         (Filter::exact(vec![], false, true), vec![0, 4]),
         (Filter::exact(vec![], true, false), vec![1, 2, 3, 5, 6]),
     ] {
-        assert_eq!(rows(&doc, QuerySpec::single(0, filter)), expected);
+        assert_eq!(rows(&doc, &[ColumnFilter { column: c0, filter }]), expected);
     }
 }
 
 #[test]
 fn contains_null_policy_preserves_case_matching_and_only_nulls() {
     let doc = document();
+    let c1 = ColumnId::from_raw(1);
     for (filter, expected) in [
         (contains(false), vec![1, 3, 4, 5]),
         (contains(true), vec![0, 1, 3, 4, 5, 6]),
         (Filter::contains("ALPHA".into(), true, true), vec![0, 6]),
         (Filter::exact(vec![], false, true), vec![0, 6]),
     ] {
-        assert_eq!(rows(&doc, QuerySpec::single(1, filter)), expected);
+        assert_eq!(rows(&doc, &[ColumnFilter { column: c1, filter }]), expected);
     }
 }
 
 #[test]
 fn included_nulls_still_obey_other_column_filters() {
     let doc = document();
+    let (c0, c1, c2, c3) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(1),
+        ColumnId::from_raw(2),
+        ColumnId::from_raw(3),
+    );
     for (filter, expected) in [(range(true), vec![0, 1]), (contains(true), vec![0, 1, 5])] {
         let col = if matches!(filter.condition, gewu_core::FilterCondition::Range { .. }) {
-            0
+            c0
         } else {
-            1
+            c1
         };
         assert_eq!(
-            rows(
-                &doc,
-                QuerySpec::single(col, filter)
-                    .with_filter(2, Filter::exact(vec!["A".into()], false, false))
-                    .with_filter(3, Filter::contains("needle".into(), false, false),),
-            ),
+            rows(&doc, &[
+                ColumnFilter {
+                    column: col,
+                    filter
+                },
+                ColumnFilter {
+                    column: c2,
+                    filter: Filter::exact(vec!["A".into()], false, false),
+                },
+                ColumnFilter {
+                    column: c3,
+                    filter: Filter::contains("needle".into(), false, false),
+                },
+            ]),
             expected
         );
     }
@@ -106,16 +124,17 @@ fn included_nulls_still_obey_other_column_filters() {
 #[test]
 fn exact_values_combine_with_an_independent_null_policy() {
     let doc = document();
+    let c1 = ColumnId::from_raw(1);
     for (values, include_nulls, expected) in [
         (vec![], true, vec![0, 6]),
         (vec!["alpha".into()], false, vec![1, 4]),
         (vec!["beta".into()], true, vec![0, 2, 6]),
     ] {
         assert_eq!(
-            rows(
-                &doc,
-                QuerySpec::single(1, Filter::exact(values, false, include_nulls))
-            ),
+            rows(&doc, &[ColumnFilter {
+                column: c1,
+                filter: Filter::exact(values, false, include_nulls),
+            }]),
             expected
         );
     }
@@ -124,16 +143,27 @@ fn exact_values_combine_with_an_independent_null_policy() {
 #[test]
 fn choices_count_included_nulls_and_respect_all_filters() {
     let doc = document();
-    let spec = QuerySpec::single(0, range(true))
-        .with_filter(2, Filter::exact(vec!["A".into()], false, false))
-        .with_filter(3, Filter::contains("needle".into(), false, false));
-    let values = doc
-        .query(&spec)
-        .unwrap()
-        .filter_choices(2)
-        .unwrap()
-        .values
-        .unwrap();
+    let (c0, c2, c3) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(2),
+        ColumnId::from_raw(3),
+    );
+    let filters = [
+        ColumnFilter {
+            column: c0,
+            filter: range(true),
+        },
+        ColumnFilter {
+            column: c2,
+            filter: Filter::exact(vec!["A".into()], false, false),
+        },
+        ColumnFilter {
+            column: c3,
+            filter: Filter::contains("needle".into(), false, false),
+        },
+    ];
+    let filtered = doc.filter(&filters).unwrap();
+    let values = filtered.filter_choices(c2).unwrap().values.unwrap();
     assert_eq!(
         values
             .iter()
@@ -143,7 +173,7 @@ fn choices_count_included_nulls_and_respect_all_filters() {
     );
 
     // All filters leave source rows 0 and 1: null and one finite value.
-    let choices = doc.query(&spec).unwrap().filter_choices(0).unwrap();
+    let choices = filtered.filter_choices(c0).unwrap();
     let values = choices.values.unwrap();
     assert_eq!(
         values.iter().map(|value| value.count).sum::<u64>() + choices.null_count,

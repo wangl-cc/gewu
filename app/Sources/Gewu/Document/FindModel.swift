@@ -21,7 +21,7 @@ final class FindModel: ObservableObject {
     private static let maxHighlightRows = findLimits().maxHighlightRows
 
     private var session: FindSession?
-    private var columns: [UInt32] = []
+    private var columns: [ColumnId] = []
     private var request: UInt64 = 0
     private var navigationRequest: UInt64 = 0
     private var highlightRequest: UInt64 = 0
@@ -63,7 +63,7 @@ final class FindModel: ObservableObject {
     /// old session; an obsolete delayed task never calls cancel on the new one.
     /// `cursor` keeps the current cell when only the captured column order changed.
     func update(
-        view: GewuView, columns: [UInt32], cursor: CellMatch? = nil,
+        ordered: GewuOrderedView, columns: [ColumnId], cursor: CellMatch? = nil,
         debounce: Bool = false
     ) {
         invalidate()
@@ -71,7 +71,7 @@ final class FindModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let session: FindSession
         do {
-            session = try view.find(query: trimmed, columns: columns)
+            session = try ordered.find(query: trimmed, columns: columns)
         } catch {
             onError?(error, "Find error: ")
             return
@@ -188,9 +188,9 @@ final class FindModel: ObservableObject {
         }
     }
 
-    func isMatch(row: Int, column: Int) -> Bool {
+    func isMatch(row: Int, column: ColumnId) -> Bool {
         guard let highlight, row >= Int(highlight.start), row < Int(highlight.start) + Int(highlight.nRows),
-            let scopeColumn = columns.firstIndex(of: UInt32(column))
+            let scopeColumn = columns.firstIndex(of: column)
         else { return false }
         let index = (row - Int(highlight.start)) * columns.count + scopeColumn
         return index < highlight.matched.count && highlight.matched[index]

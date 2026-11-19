@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Date32Array, Int32Array, RecordBatch, StringArray};
-use gewu_core::{CellMatch, Error, Filter, QuerySpec, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE};
+use gewu_core::{
+    CellMatch, ColumnFilter, ColumnId, ColumnSort, Error, Filter, OrderedView,
+    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+};
 use parquet::arrow::ArrowWriter;
 
 fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
@@ -16,9 +19,9 @@ fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu
     (file, dataset)
 }
 
-fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::View>) {
+fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<OrderedView>) {
     let (file, dataset) = dataset(columns);
-    (file, dataset.view())
+    (file, dataset.unfiltered().unsorted())
 }
 
 #[test]
@@ -28,7 +31,13 @@ fn arbitrary_find_text_is_not_a_typed_input_error() {
         ("flag", Arc::new(BooleanArray::from(vec![true, false]))),
         ("date", Arc::new(Date32Array::from(vec![0, 1]))),
     ]);
-    let find = doc.find("not a typed value", &[0, 1, 2]).unwrap();
+    let find = doc
+        .find("not a typed value", &[
+            ColumnId::from_raw(0),
+            ColumnId::from_raw(1),
+            ColumnId::from_raw(2),
+        ])
+        .unwrap();
     assert!(find.next(None, 10).unwrap().is_empty());
 }
 
@@ -37,7 +46,8 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let len = 100_020;
     let values: ArrayRef = Arc::new(StringArray::from_iter_values((0..len).map(|_| "hit")));
     let (_file, doc) = document(vec![("value", values)]);
-    let find = doc.find("hit", &[0]).unwrap();
+    let c0 = ColumnId::from_raw(0);
+    let find = doc.find("hit", &[c0]).unwrap();
 
     let mut cursor = None;
     let mut expected = 0;
@@ -50,7 +60,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
         for hit in page.iter() {
             assert_eq!(hit, &CellMatch {
                 display_row: expected,
-                column: 0,
+                column: c0,
             });
             expected += 1;
         }
@@ -73,7 +83,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
         for hit in page.iter().rev() {
             assert_eq!(hit, &CellMatch {
                 display_row: expected,
-                column: 0,
+                column: c0,
             });
             expected = expected.saturating_sub(1);
         }
@@ -95,35 +105,45 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let labels: ArrayRef = Arc::new(StringArray::from(vec!["12", "other", "needle", "needle"]));
     let keep: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false, true]));
     let (_file, doc) = dataset(vec![("number", numbers), ("label", labels), ("keep", keep)]);
+    let (c0, c1, c2) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(1),
+        ColumnId::from_raw(2),
+    );
     let view = doc
-        .query(
-            &QuerySpec::single(2, Filter::exact(vec!["true".into()], false, false))
-                .with_sort(0, true, 0),
-        )
+        .filter(&[ColumnFilter {
+            column: c2,
+            filter: Filter::exact(vec!["true".into()], false, false),
+        }])
+        .unwrap()
+        .sort(&[ColumnSort {
+            column: c0,
+            descending: true,
+        }])
         .unwrap();
-    let find = view.find("12", &[0, 1]).unwrap();
+    let find = view.find("12", &[c0, c1]).unwrap();
     assert_eq!(find.next(None, 10).unwrap(), vec![
         CellMatch {
             display_row: 0,
-            column: 1,
+            column: c1,
         },
         CellMatch {
             display_row: 1,
-            column: 0,
+            column: c0,
         },
         CellMatch {
             display_row: 2,
-            column: 0,
+            column: c0,
         },
     ]);
     let highlight = find.highlight(0, 3).unwrap();
     assert_eq!(highlight.n_cols, 2);
     assert_eq!(highlight.matched, [false, true, true, false, true, false]);
     assert_eq!(doc.n_rows(), 4);
-    assert_eq!(view.rows(0, 3, &[0]).unwrap().source_rows, [0, 1, 3]);
+    assert_eq!(view.rows(0, 3, &[c0]).unwrap().source_rows, [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
-    doc.query(&QuerySpec::default()).unwrap();
+    let _other = doc.unfiltered();
     assert_eq!(find.highlight(0, 3).unwrap().matched, highlight.matched);
 }
 
@@ -131,17 +151,19 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
 fn find_rejects_invalid_scopes_queries_and_highlight_sizes() {
     let values: ArrayRef = Arc::new(StringArray::from_iter_values(["a", "b"]));
     let (_file, doc) = document(vec![("value", values)]);
-    for columns in [vec![0, 0], vec![0, 1]] {
+    let c0 = ColumnId::from_raw(0);
+    let c1 = ColumnId::from_raw(1);
+    for columns in [vec![c0, c0], vec![c0, c1]] {
         assert!(matches!(
             doc.find("a", &columns),
             Err(Error::Column(_) | Error::Find(_))
         ));
     }
     assert!(matches!(
-        doc.find("   ", &[0]),
+        doc.find("   ", &[c0]),
         Err(Error::Column(_) | Error::Find(_))
     ));
-    let find = doc.find("a", &[0]).unwrap();
+    let find = doc.find("a", &[c0]).unwrap();
     for count in [0, MAX_FIND_HIGHLIGHT_ROWS + 1] {
         assert!(matches!(
             find.highlight(0, count),
@@ -159,49 +181,51 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     let first: ArrayRef = Arc::new(StringArray::from(vec!["hit", "hit"]));
     let second: ArrayRef = Arc::new(StringArray::from(vec!["hit", "hit"]));
     let (_file, doc) = document(vec![("first", first), ("second", second)]);
-    let find = doc.find("hit", &[1, 0]).unwrap();
+    let c0 = ColumnId::from_raw(0);
+    let c1 = ColumnId::from_raw(1);
+    let find = doc.find("hit", &[c1, c0]).unwrap();
     assert_eq!(find.next(None, 3).unwrap(), [
         CellMatch {
             display_row: 0,
-            column: 1,
+            column: c1,
         },
         CellMatch {
             display_row: 0,
-            column: 0,
+            column: c0,
         },
         CellMatch {
             display_row: 1,
-            column: 1,
+            column: c1,
         },
     ]);
-    // Cursor columns are source indexes, not positions in the scope order.
+    // Cursor columns are source IDs, not positions in the scope order.
     let after = find.next(
         Some(&CellMatch {
             display_row: 0,
-            column: 1,
+            column: c1,
         }),
         2,
     );
     assert_eq!(after.unwrap(), [
         CellMatch {
             display_row: 0,
-            column: 0,
+            column: c0,
         },
         CellMatch {
             display_row: 1,
-            column: 1,
+            column: c1,
         },
     ]);
     let before = find.previous(
         Some(&CellMatch {
             display_row: 1,
-            column: 0,
+            column: c0,
         }),
         1,
     );
     assert_eq!(before.unwrap(), [CellMatch {
         display_row: 1,
-        column: 1,
+        column: c1,
     }]);
     assert_eq!(find.highlight(0, 1).unwrap().matched, [true, true]);
 }

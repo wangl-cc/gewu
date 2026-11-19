@@ -13,7 +13,9 @@ use arrow::{
     datatypes::SchemaRef,
 };
 
-use crate::Result;
+#[cfg(any(feature = "parquet", feature = "csv"))]
+use crate::row_ids::RowWindow;
+use crate::{row_ids::RowSlice, Result};
 
 #[cfg(feature = "csv")]
 pub(crate) mod delimited;
@@ -278,24 +280,21 @@ mod tests {
 pub(crate) struct ExportData<'a> {
     pub schema: &'a SchemaRef,
     pub columns: &'a [ArrayRef],
-    pub rows: &'a [u32],
+    pub rows: RowSlice<'a>,
 }
 
 #[cfg(any(feature = "parquet", feature = "csv"))]
 impl ExportData<'_> {
     /// Borrow contiguous source rows; gather sorted/filtered rows only for the
     /// current bounded chunk. Neither codec needs a whole-column copy.
-    fn batch(self, rows: &[u32]) -> Result<RecordBatch, crate::InternalError> {
-        let columns = if let Some(&first) = rows
-            .first()
-            .filter(|_| rows.windows(2).all(|pair| pair[1] == pair[0] + 1))
-        {
+    fn batch(self, rows: RowWindow<'_>) -> Result<RecordBatch, crate::InternalError> {
+        let columns = if let Some(range) = rows.contiguous_range() {
             self.columns
                 .iter()
-                .map(|array| array.slice(first as usize, rows.len()))
+                .map(|array| array.slice(range.start, range.len()))
                 .collect()
         } else {
-            let indices = arrow::array::UInt32Array::from(rows.to_vec());
+            let indices = arrow::array::UInt32Array::from_iter_values(rows.iter_u32());
             self.columns
                 .iter()
                 .map(|array| arrow::compute::take(array.as_ref(), &indices, None))

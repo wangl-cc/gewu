@@ -6,13 +6,15 @@
 
 mod error;
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use arrow::array::ArrayRef;
 pub use error::FindError;
 use regex::RegexBuilder;
 
-use crate::{column::predicate::compile_find, execution::predicate::Predicate};
+use crate::{
+    column::predicate::compile_find, execution::predicate::Predicate, row_ids::RowIds, ColumnId,
+};
 
 type Result<T> = std::result::Result<T, FindError>;
 
@@ -27,8 +29,8 @@ const FIND_BATCH_ROWS: usize = 1024;
 pub struct CellMatch {
     /// Zero-based row offset in the captured view, not a source row number.
     pub display_row: u64,
-    /// Source schema column index.
-    pub column: u32,
+    /// Source schema column ID.
+    pub column: ColumnId,
 }
 
 /// Cell match flags for a bounded block of display rows.
@@ -46,8 +48,8 @@ pub struct FindHighlight {
 ///
 /// The snapshot shares Arrow buffers and row IDs with its document.
 pub struct Find {
-    columns: Vec<(u32, ArrayRef)>,
-    rows: Arc<[u32]>,
+    columns: Vec<(ColumnId, ArrayRef)>,
+    rows: RowIds,
     query: String,
     matcher: regex::Regex,
 }
@@ -61,8 +63,8 @@ struct FindScratch {
 
 impl Find {
     pub(crate) fn new(
-        columns: Vec<(u32, ArrayRef)>,
-        rows: Arc<[u32]>,
+        columns: Vec<(ColumnId, ArrayRef)>,
+        rows: RowIds,
         query: String,
     ) -> Result<Self> {
         let query = query.trim().to_owned();
@@ -186,19 +188,28 @@ impl Find {
         display_rows: Range<usize>,
         scratch: &mut FindScratch,
     ) {
-        scratch.source_rows.clear();
-        scratch
-            .source_rows
-            .extend(self.rows[display_rows].iter().map(|&row| row as usize));
-        let n_rows = scratch.source_rows.len();
+        let window = self
+            .rows
+            .as_slice()
+            .window(display_rows.start, display_rows.end);
+        let n_rows = window.len();
         let n_columns = self.columns.len();
         scratch.matched.clear();
         scratch.matched.resize(n_rows * n_columns, false);
         scratch.column_hits.clear();
         scratch.column_hits.resize(n_rows, false);
+        let contiguous = window.contiguous_range();
+        if contiguous.is_none() {
+            scratch.source_rows.clear();
+            scratch.source_rows.extend(window.iter());
+        }
         for (column, predicate) in predicates.iter().enumerate() {
             if let Some(predicate) = predicate {
-                predicate.evaluate(&scratch.source_rows, &mut scratch.column_hits);
+                if let Some(range) = contiguous.clone() {
+                    predicate.evaluate(range, &mut scratch.column_hits);
+                } else {
+                    predicate.evaluate(&scratch.source_rows, &mut scratch.column_hits);
+                }
             } else {
                 scratch.column_hits.fill(false);
             }

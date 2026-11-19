@@ -113,7 +113,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AxisScale, Dataset, Error, View};
+    use crate::{AxisScale, ColumnId, Dataset, Error, FilteredView};
 
     fn dataset(array: &ArrayRef) -> Arc<Dataset> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
@@ -128,8 +128,8 @@ mod tests {
         })
     }
 
-    fn view(array: &ArrayRef) -> Arc<View> {
-        dataset(array).view()
+    fn view(array: &ArrayRef) -> Arc<FilteredView> {
+        dataset(array).unfiltered()
     }
 
     #[test]
@@ -185,21 +185,16 @@ mod tests {
         let text = view(&array);
         let number = view(&(Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef));
         let binary = view(&(Arc::new(arrow::array::BinaryArray::from_vec(vec![b"x"])) as ArrayRef));
+        let c0 = ColumnId::new(0);
+        assert!(matches!(text.statistics(c0), Err(Error::Analysis(_))));
+        assert!(matches!(number.lengths(c0, 10), Err(Error::Analysis(_))));
+        assert!(matches!(binary.values(c0), Err(Error::Analysis(_))));
         assert!(matches!(
-            text.analyze_statistics(0),
+            dataset(&array).column_structure(c0),
             Err(Error::Analysis(_))
         ));
-        assert!(matches!(
-            number.analyze_lengths(0, 10),
-            Err(Error::Analysis(_))
-        ));
-        assert!(matches!(binary.analyze_values(0), Err(Error::Analysis(_))));
-        assert!(matches!(
-            dataset(&array).column_structure(0),
-            Err(Error::Analysis(_))
-        ));
-        assert_eq!(text.count_nulls(0).unwrap(), 0);
-        assert_eq!(number.analyze_statistics(0).unwrap().mean, Some(1.0));
+        assert_eq!(text.count_nulls(c0).unwrap(), 0);
+        assert_eq!(number.statistics(c0).unwrap().mean, Some(1.0));
     }
 
     #[test]
@@ -210,20 +205,16 @@ mod tests {
         ));
         let numbers = view(&numbers);
         let text = view(&text);
+        let c0 = ColumnId::new(0);
         assert!(matches!(
-            numbers.analyze_distribution(0, 0, AxisScale::Linear),
+            numbers.distribution(c0, 0, AxisScale::Linear),
             Err(Error::Analysis(_))
         ));
-        assert!(matches!(
-            text.analyze_lengths(0, 0),
-            Err(Error::Analysis(_))
-        ));
+        assert!(matches!(text.lengths(c0, 0), Err(Error::Analysis(_))));
         for bins in [10, 20] {
             for histogram in [
-                numbers
-                    .analyze_distribution(0, bins, AxisScale::Linear)
-                    .unwrap(),
-                text.analyze_lengths(0, bins).unwrap().histogram,
+                numbers.distribution(c0, bins, AxisScale::Linear).unwrap(),
+                text.lengths(c0, bins).unwrap().histogram,
             ] {
                 assert_eq!(histogram.counts.len(), bins as usize);
                 assert_eq!(histogram.counts.iter().sum::<u64>(), 100);
@@ -235,17 +226,18 @@ mod tests {
     fn distribution_rejects_unsupported_types_and_logarithmic_temporal_axes() {
         let text: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
         let dates: ArrayRef = Arc::new(arrow::array::Date32Array::from(vec![1, 2]));
+        let c0 = ColumnId::new(0);
         assert!(matches!(
-            view(&text).analyze_distribution(0, 2, AxisScale::Linear),
+            view(&text).distribution(c0, 2, AxisScale::Linear),
             Err(Error::Analysis(_))
         ));
         assert!(matches!(
-            view(&dates).analyze_distribution(0, 2, AxisScale::Log10),
+            view(&dates).distribution(c0, 2, AxisScale::Log10),
             Err(Error::Analysis(_))
         ));
         assert_eq!(
             view(&dates)
-                .analyze_distribution(0, 2, AxisScale::Linear)
+                .distribution(c0, 2, AxisScale::Linear)
                 .unwrap()
                 .counts
                 .iter()
@@ -256,6 +248,7 @@ mod tests {
 
     #[test]
     fn statistics_reports_non_finite_values_without_misleading_moments() {
+        let c0 = ColumnId::new(0);
         for values in [vec![Some(f64::INFINITY)], vec![
             Some(1.0),
             Some(f64::INFINITY),
@@ -263,7 +256,7 @@ mod tests {
             None,
         ]] {
             let array: ArrayRef = Arc::new(Float64Array::from(values));
-            let statistics = view(&array).analyze_statistics(0).unwrap();
+            let statistics = view(&array).statistics(c0).unwrap();
             assert_eq!(statistics.infinite_count, 1);
             assert_eq!(statistics.nan_count, u64::from(array.len() > 1));
             assert_eq!((statistics.mean, statistics.std_dev), (None, None));
@@ -281,9 +274,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let null_count = view(&array).count_nulls(0).unwrap();
+        let c0 = ColumnId::new(0);
+        let null_count = view(&array).count_nulls(c0).unwrap();
         assert_eq!(null_count, 2);
-        let summary = view(&array).analyze_values(0).unwrap();
+        let summary = view(&array).values(c0).unwrap();
         assert_eq!(summary.distinct_count, 2);
         assert_eq!(
             summary
@@ -310,12 +304,13 @@ mod tests {
                 "uint64",
             ),
         ];
+        let c0 = ColumnId::new(0);
         for (data_type, label) in types {
             let array = new_null_array(
                 &DataType::Struct(vec![Field::new("child", data_type.clone(), false)].into()),
                 0,
             );
-            let fields = dataset(&array).column_structure(0).unwrap();
+            let fields = dataset(&array).column_structure(c0).unwrap();
             assert_eq!(fields, vec![AnalysisField {
                 name: "child".into(),
                 display_type: label.into(),
@@ -328,6 +323,7 @@ mod tests {
     #[test]
     fn structural_capabilities_use_type_metadata() {
         let field = Arc::new(Field::new("child", DataType::Int32, true));
+        let c0 = ColumnId::new(0);
         for data_type in [
             DataType::List(field.clone()),
             DataType::Struct(vec![field.clone()].into()),
@@ -337,7 +333,7 @@ mod tests {
             assert!(!support.statistics);
             assert!(!support.values);
             let array = new_null_array(&data_type, 0);
-            let fields = dataset(&array).column_structure(0).unwrap();
+            let fields = dataset(&array).column_structure(c0).unwrap();
             assert_eq!(fields.len(), 1);
             assert_eq!(
                 (

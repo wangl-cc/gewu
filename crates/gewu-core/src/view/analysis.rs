@@ -1,17 +1,17 @@
-//! Typed column and scatter analyses over an immutable view.
+//! Typed column and scatter analyses over an immutable [`FilteredView`].
 
-use super::View;
+use super::FilteredView;
 use crate::{
-    col_view::ColView, stats, AxisScale, Histogram, LengthSummary, NumericStatistics, Result,
-    ValueSummary,
+    col_view::ColView, stats, AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics,
+    Result, ValueSummary,
 };
 
-impl View {
+impl FilteredView {
     /// Bounded scatter sample over this immutable view.
-    pub fn analyze_scatter(
+    pub fn scatter(
         &self,
-        x_column: Option<u32>,
-        y_column: u32,
+        x_column: Option<ColumnId>,
+        y_column: ColumnId,
         limit: u32,
         x_scale: AxisScale,
         y_scale: AxisScale,
@@ -21,27 +21,27 @@ impl View {
             .transpose()?;
         let y = (y_column, self.column_array(y_column)?);
         Ok(stats::scatter::analyze(
-            x, y, &self.rows, limit, x_scale, y_scale,
+            x,
+            y,
+            self.rows.as_slice(),
+            limit,
+            x_scale,
+            y_scale,
         )?)
     }
 
     /// Logical missing-value count in the requested view.
-    pub fn count_nulls(&self, column: u32) -> Result<u64> {
+    pub fn count_nulls(&self, column: ColumnId) -> Result<u64> {
         Ok(stats::count_nulls(self.col(column)?))
     }
 
     /// Native numeric statistics over the requested view. Execute off the UI thread.
-    pub fn analyze_statistics(&self, column: u32) -> Result<NumericStatistics> {
+    pub fn statistics(&self, column: ColumnId) -> Result<NumericStatistics> {
         Ok(self.with_analysis_view(column, stats::analyze_statistics)?)
     }
 
     /// Numeric distribution; bins must be positive and the scale supported by the column.
-    pub fn analyze_distribution(
-        &self,
-        column: u32,
-        bins: u32,
-        scale: AxisScale,
-    ) -> Result<Histogram> {
+    pub fn distribution(&self, column: ColumnId, bins: u32, scale: AxisScale) -> Result<Histogram> {
         Ok(self.with_analysis_view(column, |view| {
             validate_bins(bins)?;
             if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {
@@ -55,12 +55,12 @@ impl View {
     }
 
     /// Estimated non-null cardinality and recounted candidate frequencies.
-    pub fn analyze_values(&self, column: u32) -> Result<ValueSummary> {
+    pub fn values(&self, column: ColumnId) -> Result<ValueSummary> {
         Ok(self.with_analysis_view(column, stats::analyze_values)?)
     }
 
     /// Length statistics and a linear histogram; bins must be positive.
-    pub fn analyze_lengths(&self, column: u32, bins: u32) -> Result<LengthSummary> {
+    pub fn lengths(&self, column: ColumnId, bins: u32) -> Result<LengthSummary> {
         Ok(self.with_analysis_view(column, |view| {
             validate_bins(bins)?;
             stats::analyze_lengths(view, bins)
@@ -69,7 +69,7 @@ impl View {
 
     fn with_analysis_view<T>(
         &self,
-        column: u32,
+        column: ColumnId,
         compute: impl FnOnce(ColView<'_>) -> stats::Result<T>,
     ) -> stats::Result<T> {
         compute(self.col(column)?)

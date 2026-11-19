@@ -1,21 +1,16 @@
 use arrow::datatypes::DataType;
 use thiserror::Error;
 
-use crate::InternalError;
+use crate::{ColumnId, InternalError};
 
 #[derive(Debug, Error)]
 pub enum ColumnError {
     #[error("column {column} does not exist in a dataset with {column_count} columns")]
-    NotFound { column: u32, column_count: u32 },
+    NotFound { column: ColumnId, column_count: u32 },
     #[error("duplicate column {column} in {operation:?}")]
     Duplicate {
         operation: ColumnOperation,
-        column: u32,
-    },
-    #[error("column order {actual:?} must be a permutation of {expected:?}")]
-    InvalidOrder {
-        expected: Vec<u32>,
-        actual: Vec<u32>,
+        column: ColumnId,
     },
     #[error("{operation:?} requires at least one selected column")]
     EmptySelection { operation: ColumnOperation },
@@ -25,7 +20,8 @@ pub enum ColumnError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnOperation {
-    Query,
+    Filter,
+    Sort,
     Find,
     Export,
 }

@@ -4,6 +4,9 @@ import Testing
 
 @Suite
 struct FindModelTests {
+    private static let c0 = ColumnId(raw: 0)
+    private static let c1 = ColumnId(raw: 1)
+
     @Test @MainActor
     func emptyInvalidationDoesNotPublishDisplayChanges() {
         let find = FindModel()
@@ -22,8 +25,8 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
         let document = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: document, view: document.view())
-        let originalView = model.view
+        let model = DocumentModel(url: path, dataset: document)
+        let originalView = model.ordered
 
         model.find.query = "old"
         model.updateFind(debounce: true)
@@ -32,16 +35,16 @@ struct FindModelTests {
         try await waitUntil { model.find.hasMatches != nil }
 
         #expect(model.find.currentMatch?.displayRow == 1)
-        #expect(model.find.currentMatch?.column == 1)
-        #expect(model.view === originalView)
-        #expect(model.view.rowCount() == 3)
+        #expect(model.find.currentMatch?.column == Self.c1)
+        #expect(model.ordered === originalView)
+        #expect(model.ordered.rowCount() == 3)
 
         model.find.requestHighlight(start: 0, count: 3)
         try await waitUntil { model.find.highlight != nil }
         #expect(model.find.highlight?.matched == [false, false, false, true, false, true])
-        #expect(model.find.isMatch(row: 1, column: 1))
-        #expect(!model.find.isMatch(row: 1, column: 0))
-        #expect(!model.find.isMatch(row: 0, column: 1))
+        #expect(model.find.isMatch(row: 1, column: Self.c1))
+        #expect(!model.find.isMatch(row: 1, column: Self.c0))
+        #expect(!model.find.isMatch(row: 0, column: Self.c1))
 
         model.findNext()
         try await waitUntil { model.find.currentMatch?.displayRow == 2 }
@@ -52,8 +55,8 @@ struct FindModelTests {
 
         model.find.query = "old"
         model.updateFind()
-        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.column == 0 }
-        #expect(model.view === originalView)
+        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.column == Self.c0 }
+        #expect(model.ordered === originalView)
         model.find.query = ""
         model.updateFind()
         #expect(model.find.currentMatch == nil && model.find.highlight == nil)
@@ -68,12 +71,12 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: path, dataset: dataset)
         model.find.query = "12"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
 
-        model.setSortDirection(column: 1, descending: true)
+        model.setSortDirection(column: Self.c1, descending: true)
         #expect(model.isBusy)
         model.find.query = "120"
         model.updateFind()
@@ -81,8 +84,8 @@ struct FindModelTests {
         try await waitUntil { !model.isBusy && model.find.hasMatches == true }
         #expect(model.errorMessage == nil)
         #expect(model.find.currentMatch?.displayRow == 0)
-        #expect(model.find.currentMatch?.column == 1)
-        #expect(model.view.rowCount() == 3)
+        #expect(model.find.currentMatch?.column == Self.c1)
+        #expect(model.ordered.rowCount() == 3)
         model.stop()
     }
 
@@ -93,7 +96,7 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         try "value\nnew\nold\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: path, dataset: dataset)
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
@@ -117,7 +120,7 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         try "value\nnew\nnew\nnew\nnew\nnew\nnew\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: path, dataset: dataset)
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
@@ -141,7 +144,7 @@ struct FindModelTests {
         let rows = (0..<40).map { _ in "new" }.joined(separator: "\n")
         try "value\n\(rows)\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: path, dataset: dataset)
         model.find.query = "new"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
@@ -159,16 +162,16 @@ struct FindModelTests {
         defer { try? FileManager.default.removeItem(at: path) }
         try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset, view: dataset.view())
+        let model = DocumentModel(url: path, dataset: dataset)
         model.find.query = "12"
         model.updateFind()
         try await waitUntil { model.find.currentMatch?.displayRow == 1 }
         model.findNext()
         #expect(model.find.currentMatch?.displayRow == 2)
 
-        model.reorderColumns([1, 0])
+        model.reorderColumns([Self.c1, Self.c0])
         #expect(model.find.currentMatch?.displayRow == 2)
-        #expect(model.find.currentMatch?.column == 1)
+        #expect(model.find.currentMatch?.column == Self.c1)
         #expect(!model.find.isFinding)
         #expect(model.errorMessage == nil)
         model.stop()

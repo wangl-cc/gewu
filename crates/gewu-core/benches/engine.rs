@@ -10,7 +10,7 @@
 use std::{hint::black_box, path::PathBuf, time::Duration};
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use gewu_core::{Filter, QuerySpec};
+use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Filter};
 
 fn bench_file() -> PathBuf {
     let path = std::env::var_os("GEWU_BENCH_FILE")
@@ -26,8 +26,8 @@ fn bench_file() -> PathBuf {
     path
 }
 
-fn col(doc: &std::sync::Arc<gewu_core::Dataset>, name: &str) -> u32 {
-    doc.column_index(name)
+fn col(doc: &std::sync::Arc<gewu_core::Dataset>, name: &str) -> ColumnId {
+    doc.column_id(name)
         .unwrap_or_else(|| panic!("bench file has no column {name:?}"))
 }
 
@@ -58,86 +58,126 @@ fn apply_view(c: &mut Criterion) {
     );
     let (amount, uuid, country) = (col(&doc, "amount"), col(&doc, "uuid"), col(&doc, "country"));
     // Build low-cardinality dictionaries once, so value filters measure filtering only.
-    doc.view().filter_choices(label).unwrap();
-    doc.view().filter_choices(country).unwrap();
+    let unfiltered = doc.unfiltered();
+    unfiltered.filter_choices(label).unwrap();
+    unfiltered.filter_choices(country).unwrap();
 
-    let cases: Vec<(&str, QuerySpec)> = vec![
-        ("no_filter", QuerySpec::default()),
+    let cases: Vec<(&str, Vec<ColumnFilter>, Vec<ColumnSort>)> = vec![
+        ("no_filter", vec![], vec![]),
         (
             "range_1",
-            QuerySpec::default().with_filter(
-                price,
-                Filter::range(Some("100".into()), Some("5000".into()), false),
-            ),
+            vec![ColumnFilter {
+                column: price,
+                filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+            }],
+            vec![],
         ),
         (
             "range_3",
-            QuerySpec::default()
-                .with_filter(
-                    price,
-                    Filter::range(Some("100".into()), Some("5000".into()), false),
-                )
-                .with_filter(
-                    score,
-                    Filter::range(Some("80".into()), Some("120".into()), false),
-                )
-                .with_filter(
-                    rating,
-                    Filter::range(Some("20".into()), Some("40".into()), false),
-                ),
+            vec![
+                ColumnFilter {
+                    column: price,
+                    filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+                },
+                ColumnFilter {
+                    column: score,
+                    filter: Filter::range(Some("80".into()), Some("120".into()), false),
+                },
+                ColumnFilter {
+                    column: rating,
+                    filter: Filter::range(Some("20".into()), Some("40".into()), false),
+                },
+            ],
+            vec![],
         ),
         (
             "in_values_label",
-            QuerySpec::default()
-                .with_filter(label, Filter::exact(vec!["cat".into()], false, false)),
+            vec![ColumnFilter {
+                column: label,
+                filter: Filter::exact(vec!["cat".into()], false, false),
+            }],
+            vec![],
         ),
         (
             "contains_city",
-            QuerySpec::default()
-                .with_filter(city, Filter::contains("city-12".into(), false, false)),
+            vec![ColumnFilter {
+                column: city,
+                filter: Filter::contains("city-12".into(), false, false),
+            }],
+            vec![],
         ),
         (
             "contains_label",
-            QuerySpec::default().with_filter(label, Filter::contains("o".into(), false, false)),
+            vec![ColumnFilter {
+                column: label,
+                filter: Filter::contains("o".into(), false, false),
+            }],
+            vec![],
         ),
         (
             "contains_country",
-            QuerySpec::default().with_filter(country, Filter::contains("a".into(), false, false)),
+            vec![ColumnFilter {
+                column: country,
+                filter: Filter::contains("a".into(), false, false),
+            }],
+            vec![],
         ),
         (
             "is_null_label",
-            QuerySpec::default().with_filter(label, Filter::exact(vec![], false, true)),
+            vec![ColumnFilter {
+                column: label,
+                filter: Filter::exact(vec![], false, true),
+            }],
+            vec![],
         ),
-        ("sort_price", QuerySpec::new().with_sort(price, true, 0)),
-        (
-            "sort_city_price",
-            QuerySpec::new()
-                .with_sort(city, false, 0)
-                .with_sort(price, true, 1),
-        ),
+        ("sort_price", vec![], vec![ColumnSort {
+            column: price,
+            descending: true,
+        }]),
+        ("sort_city_price", vec![], vec![
+            ColumnSort {
+                column: city,
+                descending: false,
+            },
+            ColumnSort {
+                column: price,
+                descending: true,
+            },
+        ]),
         (
             "range_decimal",
-            QuerySpec::default().with_filter(
-                amount,
-                Filter::range(Some("50".into()), Some("500".into()), false),
-            ),
+            vec![ColumnFilter {
+                column: amount,
+                filter: Filter::range(Some("50".into()), Some("500".into()), false),
+            }],
+            vec![],
         ),
-        ("sort_uuid", QuerySpec::new().with_sort(uuid, false, 0)),
+        ("sort_uuid", vec![], vec![ColumnSort {
+            column: uuid,
+            descending: false,
+        }]),
         (
             "range_then_sort",
-            QuerySpec::default()
-                .with_filter(
-                    price,
-                    Filter::range(Some("100".into()), Some("5000".into()), false),
-                )
-                .with_sort(score, false, 0),
+            vec![ColumnFilter {
+                column: price,
+                filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+            }],
+            vec![ColumnSort {
+                column: score,
+                descending: false,
+            }],
         ),
     ];
 
     let mut g = c.benchmark_group("apply_view");
     g.sample_size(20).measurement_time(Duration::from_secs(5));
-    for (name, spec) in &cases {
-        g.bench_function(*name, |b| b.iter(|| doc.query(black_box(spec)).unwrap()));
+    for (name, filters, sorts) in &cases {
+        g.bench_function(*name, |b| {
+            b.iter(|| {
+                let filtered = doc.filter(black_box(filters)).unwrap();
+                filtered.sort(black_box(sorts)).unwrap()
+            })
+        });
     }
     g.finish();
 }
@@ -146,10 +186,10 @@ fn rows(c: &mut Criterion) {
     let doc = gewu_core::Dataset::open(bench_file())
         .map(std::sync::Arc::new)
         .unwrap();
-    let columns: Vec<u32> = (0..doc.info().columns.len() as u32).collect();
+    let columns: Vec<ColumnId> = doc.info().columns.iter().map(|c| c.id).collect();
     let mut g = c.benchmark_group("rows");
 
-    let plain = doc.query(&QuerySpec::default()).unwrap();
+    let plain = doc.unfiltered().unsorted();
     g.bench_function("block_256_all_columns", |b| {
         b.iter(|| plain.rows(1_000_000, 256, &columns).unwrap())
     });
@@ -172,10 +212,10 @@ fn facets(c: &mut Criterion) {
         col(&doc, "id"),
         col(&doc, "price"),
     );
-    let other_filter = QuerySpec::single(
-        price,
-        Filter::range(Some("100".into()), Some("5000".into()), false),
-    );
+    let other_filter = vec![ColumnFilter {
+        column: price,
+        filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+    }];
 
     let mut g = c.benchmark_group("facets");
     g.sample_size(10).measurement_time(Duration::from_secs(8));
@@ -195,16 +235,16 @@ fn facets(c: &mut Criterion) {
                         .map(std::sync::Arc::new)
                         .unwrap()
                 },
-                |doc| doc.view().filter_choices(column).unwrap(),
+                |doc| doc.unfiltered().filter_choices(column).unwrap(),
                 BatchSize::PerIteration,
             )
         });
     }
     // Hot: index cached; counts only rows passing the other columns' filters.
-    doc.view().filter_choices(city).unwrap();
+    doc.unfiltered().filter_choices(city).unwrap();
     g.bench_function("choices_hot_city_filtered", |b| {
         b.iter(|| {
-            doc.query(&other_filter)
+            doc.filter(&other_filter)
                 .unwrap()
                 .filter_choices(city)
                 .unwrap()
@@ -213,16 +253,19 @@ fn facets(c: &mut Criterion) {
 
     g.bench_function("histogram_price", |b| {
         b.iter(|| {
-            doc.view()
+            doc.unfiltered()
                 .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
                 .map(|result| result.expect("histogram domain").histogram)
                 .unwrap()
         })
     });
-    let label_filter = QuerySpec::single(label, Filter::exact(vec![], true, false));
+    let label_filter = vec![ColumnFilter {
+        column: label,
+        filter: Filter::exact(vec![], true, false),
+    }];
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {
-            doc.query(&label_filter)
+            doc.filter(&label_filter)
                 .unwrap()
                 .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
                 .map(|result| result.expect("histogram domain").histogram)
@@ -230,10 +273,8 @@ fn facets(c: &mut Criterion) {
         })
     });
 
-    doc.query(&QuerySpec::default()).unwrap();
-
     g.bench_function("statistics_price", |b| {
-        b.iter(|| doc.view().analyze_statistics(price).unwrap())
+        b.iter(|| doc.unfiltered().statistics(price).unwrap())
     });
     g.finish();
 }
@@ -247,7 +288,7 @@ fn inspector_values(c: &mut Criterion) {
     for name in ["label", "id", "uuid"] {
         let column = col(&doc, name);
         group.bench_function(name, |b| {
-            b.iter(|| doc.view().analyze_values(column).unwrap())
+            b.iter(|| doc.unfiltered().values(column).unwrap())
         });
     }
     group.finish();
