@@ -16,180 +16,176 @@ struct TableExecutionTests {
         return try GewuDataset.open(path: path.path)
     }
 
+    private static func source(_ block: Int) -> TileKey { TileKey(block: block, column: nil) }
+    private static func tile(_ block: Int, _ column: ColumnId) -> TileKey { TileKey(block: block, column: column) }
+
+    @MainActor
+    private static func gatedLoader(
+        byteLimit: Int = 8 * 1024 * 1024, tileByteLimit: Int = 1024 * 1024
+    ) -> (TableRowLoader, AsyncStream<PendingTableRead>, AsyncStream<PendingTableRead>.Continuation) {
+        let reads = AsyncStream<PendingTableRead>.makeStream()
+        let loader = TableRowLoader(byteLimit: byteLimit, tileByteLimit: tileByteLimit) { view, tiles in
+            try await withCheckedThrowingContinuation { continuation in
+                reads.continuation.yield(.init(view: view, tiles: tiles, continuation: continuation))
+            }
+        }
+        return (loader, reads.stream, reads.continuation)
+    }
+
     @Test @MainActor
     static func snapshotKeepsCoveredRowsAndReadsOnlyNewColumns() async throws {
         let view = try dataset().unfiltered().unsorted()
         var viewport = TableRowLoader.Viewport(rows: 0..<2, columns: [c0])
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let loader = TableRowLoader { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(.init(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
-        defer { reads.continuation.finish() }
-        var requests = reads.stream.makeAsyncIterator()
+        let (loader, stream, reads) = gatedLoader()
+        defer { reads.finish() }
+        var requests = stream.makeAsyncIterator()
         let pending = Task { try await loader.snapshot(of: view) { viewport } }
         let first = try #require(await requests.next())
-        #expect(first.columns == [c0])
+        #expect(first.tiles == [source(0), tile(0, c0)])
         viewport = .init(rows: 1..<3, columns: [c0, c2])
         first.finish()
         let second = try #require(await requests.next())
-        #expect(second.columns == [c2])
+        #expect(second.tiles == [tile(0, c2)])
         second.finish()
         let snapshot = try await pending.value
-        #expect(snapshot.viewport == viewport && snapshot.pages.count == 2)
+        #expect(snapshot.viewport == viewport && Set(snapshot.tiles.keys) == [source(0), tile(0, c0), tile(0, c2)])
     }
 
     @Test @MainActor
     static func failedColumnReadAllowsOtherColumnsInSameView() async throws {
         let view = try dataset().unfiltered().unsorted()
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let loader = TableRowLoader { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(.init(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
+        let (loader, stream, reads) = gatedLoader()
         defer {
             loader.stop()
-            reads.continuation.finish()
+            reads.finish()
         }
         loader.reset(to: view)
-        var requests = reads.stream.makeAsyncIterator()
+        var requests = stream.makeAsyncIterator()
         loader.updateViewport(rows: 0..<2, columns: [c0])
         let first = try #require(await requests.next())
         loader.updateViewport(rows: 0..<2, columns: [c0, c1])
         first.continuation.resume(throwing: CocoaError(.fileReadCorruptFile))
         let next = try #require(await requests.next())
-        #expect(next.columns == [c1])
+        #expect(next.tiles == [tile(0, c1)])
         next.finish()
     }
 
     @Test @MainActor
-    static func loaderBatchesVisibleColumnsAndReusesCache() async throws {
+    static func loaderBatchesMissingTilesAndReusesCache() async throws {
         let view = try dataset().unfiltered().unsorted()
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(
-                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
+        let (loader, stream, reads) = gatedLoader()
+        let delivered = AsyncStream<TableTiles>.makeStream()
         defer {
             loader.stop()
-            reads.continuation.finish()
+            reads.finish()
             delivered.continuation.finish()
         }
-        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onLoad = { _, tiles in delivered.continuation.yield(tiles) }
         loader.onError = { _, error in Issue.record(error) }
         loader.reset(to: view)
-        var requests = reads.stream.makeAsyncIterator()
-        var blocks = delivered.stream.makeAsyncIterator()
-        #expect(loader.block(for: 0, column: c0) == nil)
+        var requests = stream.makeAsyncIterator()
+        var batches = delivered.stream.makeAsyncIterator()
+        #expect(loader.tile(for: 0, column: c0) == nil)
         loader.updateViewport(rows: 0..<3, columns: [c0, c1, c0])
         let first = try #require(await requests.next())
-        #expect(first.start == 0 && first.columns == [c0, c1])
+        #expect(first.tiles == [source(0), tile(0, c0), tile(0, c1)], "One read, deduplicated columns")
         first.finish()
-        #expect(try #require(await blocks.next()).cells == ["1", "first", "2", "second", "3", "third"])
-        #expect(loader.block(for: 1, column: c0)?.cells == ["1", "2", "3"])
-        #expect(loader.block(for: 1, column: c1)?.cells == ["first", "second", "third"])
-        #expect(loader.block(for: 1, column: nil)?.sourceRows == [0, 1, 2])
-        // Replanning adds only the missing column; cached cells never enqueue reads.
+        let batch = try #require(await batches.next())
+        #expect(batch.cells[tile(0, c1)]?.columnTexts(0) == ["first", "second", "third"])
+        #expect(batch.sourceRows[0] == [0, 1, 2])
+        #expect(loader.tile(for: 1, column: c0).map { $0.text.columnTexts(0) } == ["1", "2", "3"])
+        #expect(loader.tile(for: 2, column: c1).map { $0.text.cell(row: $0.row, column: 0) } == "third")
+        #expect(loader.tile(for: 3, column: c1) == nil, "Rows past the end are not cached cells")
+        #expect(loader.sourceRow(for: 1) == 1)
+        #expect(loader.cachedTileCount == 3)
+        // Replanning reads only the missing tile; cached cells never enqueue reads.
         loader.updateViewport(rows: 1..<3, columns: [c1, c0, c2])
         let added = try #require(await requests.next())
-        #expect(added.start == 0 && added.columns == [c2])
+        #expect(added.tiles == [tile(0, c2)])
         added.finish()
-        #expect(try #require(await blocks.next()).cells == ["10", "20", "30"])
+        #expect(try #require(await batches.next()).cells[tile(0, c2)]?.columnTexts(0) == ["10", "20", "30"])
     }
 
     @Test @MainActor
-    static func loaderPrioritizesLatestViewportAndDoesNotRepeatOversizedReads() async throws {
+    static func loaderPrioritizesLatestViewportAndOversizedTilesAffectOnlyThemselves() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
-        try ("value\n" + (0..<300).map(String.init).joined(separator: "\n"))
+        let long = String(repeating: "x", count: 4096)
+        try ("value,long\n" + (0..<300).map { "\($0),\($0 == 200 ? long : "s")" }.joined(separator: "\n"))
             .write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader(cache: RowCache(cellLimit: 1)) { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(
-                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
+        let longColumn = ColumnId(raw: 1)
+        let (loader, stream, reads) = gatedLoader(tileByteLimit: 2048)
+        let delivered = AsyncStream<TableTiles>.makeStream()
         defer {
             loader.stop()
-            reads.continuation.finish()
+            reads.finish()
             delivered.continuation.finish()
         }
-        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onLoad = { _, tiles in delivered.continuation.yield(tiles) }
         loader.onError = { _, error in Issue.record(error) }
-        var requests = reads.stream.makeAsyncIterator()
-        var blocks = delivered.stream.makeAsyncIterator()
+        var requests = stream.makeAsyncIterator()
+        var batches = delivered.stream.makeAsyncIterator()
         loader.reset(to: view)
-        loader.updateViewport(rows: 0..<100, columns: [c0])
+        loader.updateViewport(rows: 0..<10, columns: [c0])
         let first = try #require(await requests.next())
-        #expect(first.start == 0)
-        // The block at 64 was demanded, but must not delay this new viewport.
-        loader.updateViewport(rows: 192..<200, columns: [c0])
+        // Demand moves before the read completes; the next read targets it.
+        loader.updateViewport(rows: 192..<202, columns: [c0, longColumn])
         first.finish()
         let current = try #require(await requests.next())
-        #expect(current.start == 192)
+        #expect(current.tiles == [source(3), tile(3, c0), tile(3, longColumn)])
         current.finish()
-        #expect(try #require(await blocks.next()).start == 192)
-        #expect(loader.block(for: 192, column: c0) == nil, "Oversized blocks are delivered without retaining them")
-        loader.updateViewport(rows: 192..<200, columns: [c0])
-        loader.updateViewport(rows: 256..<260, columns: [c0])
+        #expect(try #require(await batches.next()).sourceRows.keys.sorted() == [0])
+        let batch = try #require(await batches.next())
+        #expect(batch.cells[tile(3, longColumn)]?.cell(row: 8, column: 0) == long, "Delivered for display")
+        #expect(loader.tile(for: 200, column: longColumn) == nil, "The oversized tile is not retained")
+        #expect(loader.tile(for: 200, column: c0) != nil, "Other tiles in the batch stay cached")
+        #expect(loader.sourceRow(for: 200) == 200)
+        loader.updateViewport(rows: 192..<202, columns: [c0, longColumn])
+        loader.updateViewport(rows: 256..<260, columns: [c0, longColumn])
         let next = try #require(await requests.next())
-        #expect(next.start == 256, "A completed oversized block must not start an endless reread loop")
+        #expect(next.tiles.first == source(4), "A completed oversized tile must not start an endless reread loop")
         next.finish()
-        #expect(try #require(await blocks.next()).start == 256)
+        #expect(try #require(await batches.next()).sourceRows[4] != nil)
     }
 
     @Test @MainActor
-    static func loaderBoundsWideReadsAndClampsRows() async throws {
+    static func loaderReadsWideViewportsInOneCallAndClampsRows() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("wide-viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
-        let header = (0..<20).map { "c\($0)" }.joined(separator: ",")
-        let line = (0..<20).map(String.init).joined(separator: ",")
+        let header = (0..<65).map { "c\($0)" }.joined(separator: ",")
+        let line = (0..<65).map(String.init).joined(separator: ",")
         try "\(header)\n\(line)\n".write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(
-                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
+        let columns = (0..<65).map { ColumnId(raw: UInt32($0)) }
+        let (loader, stream, reads) = gatedLoader()
+        let delivered = AsyncStream<TableTiles>.makeStream()
         defer {
             loader.stop()
-            reads.continuation.finish()
+            reads.finish()
             delivered.continuation.finish()
         }
-        loader.onLoad = { _, block, _ in delivered.continuation.yield(block) }
+        loader.onLoad = { _, tiles in delivered.continuation.yield(tiles) }
         loader.onError = { _, error in Issue.record(error) }
-        var requests = reads.stream.makeAsyncIterator()
-        var blocks = delivered.stream.makeAsyncIterator()
+        var requests = stream.makeAsyncIterator()
+        var batches = delivered.stream.makeAsyncIterator()
         loader.reset(to: view)
-        loader.updateViewport(rows: 0..<500, columns: (0..<20).map { ColumnId(raw: UInt32($0)) })
+        loader.updateViewport(rows: 0..<500, columns: columns)
         let first = try #require(await requests.next())
-        #expect(first.columns == (0..<16).map { ColumnId(raw: UInt32($0)) })
+        #expect(first.tiles == [source(0)] + columns.map { tile(0, $0) })
         first.finish()
-        #expect(try #require(await blocks.next()).nRows == 1)
-        let second = try #require(await requests.next())
-        #expect(second.start == 0 && second.columns == (16..<20).map { ColumnId(raw: UInt32($0)) })
-        second.finish()
-        #expect(try #require(await blocks.next()).nCols == 4)
-        #expect(loader.block(for: 0, column: ColumnId(raw: 19))?.cells == ["19"])
-        #expect(loader.block(for: 0, column: nil)?.sourceRows == [0])
+        let batch = try #require(await batches.next())
+        let last = try #require(batch.cells[tile(0, ColumnId(raw: 64))])
+        #expect(last.nRows == 1 && last.nCols == 1 && last.utf8Chunks == [Data("64".utf8)])
+        #expect(loader.tile(for: 0, column: ColumnId(raw: 63)).map { $0.text.columnTexts(0) } == ["63"])
+        #expect(loader.sourceRow(for: 0) == 0)
         // A source-only viewport also works without formatting any cells.
         loader.reset(to: view)
         loader.updateViewport(rows: 0..<500, columns: [])
         let source = try #require(await requests.next())
-        #expect(source.start == 0 && source.columns.isEmpty)
+        #expect(source.tiles == [Self.source(0)])
         source.finish()
-        #expect(try #require(await blocks.next()).sourceRows == [0])
+        #expect(try #require(await batches.next()).sourceRows == [0: [0]])
     }
 
     @Test @MainActor
@@ -198,26 +194,20 @@ struct TableExecutionTests {
         let filtered = dataset.unfiltered()
         let original = filtered.unsorted()
         let replacement = try filtered.sort(sorts: [ColumnSort(column: c0, descending: true)])
-        let reads = AsyncStream<PendingTableRead>.makeStream()
-        let delivered = AsyncStream<RowBlock>.makeStream()
-        let loader = TableRowLoader { view, start, columns in
-            try await withCheckedThrowingContinuation { continuation in
-                reads.continuation.yield(
-                    PendingTableRead(view: view, start: start, columns: columns, continuation: continuation))
-            }
-        }
+        let (loader, stream, reads) = gatedLoader()
+        let delivered = AsyncStream<TableTiles>.makeStream()
         defer {
             loader.stop()
-            reads.continuation.finish()
+            reads.finish()
             delivered.continuation.finish()
         }
-        loader.onLoad = { view, block, _ in
+        loader.onLoad = { view, tiles in
             #expect(view === replacement, "Old reads must not update the new table")
-            delivered.continuation.yield(block)
+            delivered.continuation.yield(tiles)
         }
         loader.onError = { _, error in Issue.record(error) }
-        var requests = reads.stream.makeAsyncIterator()
-        var blocks = delivered.stream.makeAsyncIterator()
+        var requests = stream.makeAsyncIterator()
+        var batches = delivered.stream.makeAsyncIterator()
         loader.reset(to: original)
         loader.updateViewport(rows: 0..<3, columns: [c0])
         let oldRead = try #require(await requests.next())
@@ -226,36 +216,95 @@ struct TableExecutionTests {
         let newRead = try #require(await requests.next())
         oldRead.finish()  // Simulate an FFI read completing after cancellation.
         newRead.finish()
-        #expect(try #require(await blocks.next()).cells == ["3", "2", "1"])
-        #expect(loader.block(for: 0, column: c0)?.sourceRows == [2, 1, 0])
+        #expect(try #require(await batches.next()).cells[tile(0, c0)]?.columnTexts(0) == ["3", "2", "1"])
+        #expect(loader.sourceRow(for: 0) == 2)
     }
 
-    static func block(_ values: [String?], start: Int = 0, columns: Int = 1) -> RowBlock {
-        RowBlock(
-            start: UInt64(start), nRows: UInt32(values.count / columns), nCols: UInt32(columns),
-            cells: values, sourceRows: (0..<(values.count / columns)).map(UInt64.init))
+    @Test @MainActor
+    static func installedSnapshotReplacesOtherVersions() async throws {
+        let dataset = try dataset()
+        let filtered = dataset.unfiltered()
+        let original = filtered.unsorted()
+        let replacement = try filtered.sort(sorts: [ColumnSort(column: c0, descending: true)])
+        let loader = TableRowLoader { view, tiles in try TableTiles(reading: view, tiles: tiles) }
+        defer { loader.stop() }
+        let viewport = TableRowLoader.Viewport(rows: 0..<3, columns: [c0])
+        loader.install(try await loader.snapshot(of: original) { viewport })
+        #expect(loader.tile(for: 0, column: c0)?.text.cell(row: 0, column: 0) == "1")
+        let next = try await loader.snapshot(of: replacement) { viewport }
+        #expect(loader.tile(for: 0, column: c0)?.text.cell(row: 0, column: 0) == "1", "Preparing keeps the display")
+        loader.install(next)
+        #expect(loader.tile(for: 0, column: c0)?.text.cell(row: 0, column: 0) == "3")
+        #expect(loader.cachedTileCount == 2, "Tiles of the previous View are released")
+    }
+
+    static func text(_ values: [String?], columns: Int = 1) -> CellText {
+        let rows = values.count / columns
+        var utf8 = Data()
+        var offsets: [UInt64] = [0]
+        var validity = Data(repeating: 0, count: (values.count + 7) / 8)
+        for column in 0..<columns {
+            for row in 0..<rows {
+                if let value = values[row * columns + column] {
+                    utf8.append(contentsOf: value.utf8)
+                    let index = column * rows + row
+                    validity[index / 8] |= 1 << (index % 8)
+                }
+                offsets.append(UInt64(utf8.count).littleEndian)
+            }
+        }
+        return CellText(
+            nRows: UInt32(rows), nCols: UInt64(columns), utf8Chunks: [utf8],
+            offsets: offsets.withUnsafeBytes { Data($0) }, validity: validity)
     }
 
     @Test
-    static func cacheBudgets() throws {
-        let cache = RowCache(byteLimit: 256, cellLimit: 3)
-        let a = RowCache.Key(start: 0, column: c0)
-        let b = RowCache.Key(start: 0, column: c1)
-        let c = RowCache.Key(start: 64, column: c0)
-        #expect(cache.insert(block(["first", nil]), for: a))
-        #expect(cache.insert(block(["second"]), for: b))
-        #expect(cache.block(for: a)?.cells == ["first", nil])
-        #expect(cache.insert(block(["third"]), for: c))
-        #expect(cache.block(for: b) == nil, "Evict least recently used column block")
-        #expect(cache.block(for: a) != nil, "Same row block in another column must stay distinct")
-        #expect(
-            !cache.insert(block([String(repeating: "界", count: 100)]), for: b), "Use UTF-8 bytes, not character count")
-        #expect(cache.byteCount <= 256 && cache.cellCount <= 3)
-        let metadata = RowBlock(
-            start: 0, nRows: 4, nCols: 0, cells: [], sourceRows: [0, 1, 2, 3])
-        #expect(!cache.insert(metadata, for: .init(start: 0, column: nil)), "Source-only blocks consume cell budget")
-        cache.clear()
-        #expect(cache.byteCount == 0 && cache.cellCount == 0 && cache.block(for: a) == nil)
+    static func packedTextSurvivesTheBindings() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-text-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let values = ["é", "", "界🦀", "three", "", "five", "six", "seven", "", "\u{FEFF}last"]
+        let csv = "number,text\n" + values.enumerated().map { "\($0.offset),\($0.element)" }.joined(separator: "\n")
+        try csv.write(to: path, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        let block = try view.cellText(start: 0, count: 64, columns: [c1, c0])
+        #expect(view.sourceRows(start: 0, count: 64) == (0..<10).map(UInt64.init))
+        for (row, value) in values.enumerated() {
+            #expect(block.cell(row: row, column: 0) == (value.isEmpty ? nil : value))
+            #expect(block.cell(row: row, column: 1) == String(row))
+        }
+    }
+
+    @Test
+    static func packedTextDecodesAcrossTransportChunks() {
+        let text = Array("a界bc".utf8)
+        let offsets = [0, 1, 4, 6, 6, 6].map { UInt64($0).littleEndian }
+        let cells = CellText(
+            nRows: 5, nCols: 1, utf8Chunks: [Data(text[0..<3]), Data(text[3..<6])],
+            offsets: offsets.withUnsafeBytes { Data($0) },
+            validity: Data([0b01111]))
+        #expect(cells.texts == ["a", "界", "bc", "", nil])
+    }
+
+    @Test
+    static func lruEvictsLeastRecentlyUsedWithinBudgets() {
+        let cache = LRUCache<Int, String>(costLimit: 10, entryCostLimit: 4)
+        #expect(cache.insert("a", for: 1, cost: 3))
+        #expect(cache.insert("b", for: 2, cost: 3))
+        #expect(cache.insert("c", for: 3, cost: 3))
+        #expect(cache.value(for: 1) == "a", "Reading marks 1 most recent")
+        #expect(cache.insert("d", for: 4, cost: 3))
+        #expect(!cache.contains(2) && cache.contains(1) && cache.totalCost == 9)
+        #expect(!cache.insert("huge", for: 5, cost: 5), "An entry over its limit is not retained")
+        #expect(cache.count == 3, "An oversized entry evicts nothing")
+        #expect(!cache.insert("huge", for: 1, cost: 5) && !cache.contains(1), "It still replaces a stale value")
+        #expect(cache.insert("e", for: 3, cost: 4) && cache.value(for: 3) == "e" && cache.totalCost == 7)
+        for key in 10..<1000 { cache.insert("\(key)", for: key, cost: 1) }
+        #expect(cache.count == 10 && cache.totalCost == 10 && cache.value(for: 999) == "999")
+        cache.removeAll { $0 % 2 == 0 }
+        #expect(cache.count == 5 && cache.totalCost == 5 && cache.value(for: 991) == "991")
+        #expect(cache.insert("z", for: 0, cost: 1) && cache.count == 6, "Freed slots are reused")
+        cache.removeAll()
+        #expect(cache.count == 0 && cache.totalCost == 0 && cache.value(for: 991) == nil)
     }
 
     @Test
@@ -267,9 +316,9 @@ struct TableExecutionTests {
             start, count, selected in
             #expect(count <= 64 && selected.count <= 64)
             requests += 1
-            return block(
+            return text(
                 (start..<(start + count)).flatMap { row in selected.map { "\(row):\($0.raw)" } },
-                start: start, columns: selected.count)
+                columns: selected.count)
         }
         let lines = result.split(separator: "\n")
         #expect(lines.count == 68 && requests == 9)
@@ -278,13 +327,13 @@ struct TableExecutionTests {
         let quoted = try CopyText.format(
             rows: [0..<1], columns: [c0, c1, c2, ColumnId(raw: 3)], names: ["a", "b", "c", "d"]
         ) { _, _, _ in
-            block(["tab\tvalue", "line\nvalue", "a\"b", nil], columns: 4)
+            text(["tab\tvalue", "line\nvalue", "a\"b", nil], columns: 4)
         }
         #expect(quoted == "a\tb\tc\td\n\"tab\tvalue\"\t\"line\nvalue\"\t\"a\"\"b\"\t")
         let withoutHeader = try CopyText.format(
             rows: [0..<2], columns: [c0], names: ["value"], includeHeaders: false
         ) { _, _, _ in
-            block([nil, "second"])
+            text([nil, "second"])
         }
         #expect(withoutHeader == "\nsecond", "An empty first data row must survive when headers are excluded")
     }
@@ -314,24 +363,24 @@ struct TableExecutionTests {
         let filtered = dataset.unfiltered()
         let view = filtered.unsorted()
         let reader = TableRowReader()
-        let source = try await reader.read(view, start: 2, count: 4, columns: [])
-        #expect(source.cells.isEmpty && source.sourceRows == [2, 3, 4, 5])
+        let source = try await reader.read(view, tiles: [source(2)])
+        #expect(source.cells.isEmpty && source.sourceRows == [2: [128, 129]])
         var calls = 0
         let copied = try CopyText.format(rows: [0..<130], columns: [c1, c0], names: ["label", "value"]) {
             start, count, columns in
             calls += 1
             if calls == 2 {
                 let other = try filtered.sort(sorts: [ColumnSort(column: c0, descending: true)])
-                #expect(try other.rows(start: 0, count: 1, columns: [c0]).sourceRows == [129])
+                #expect(other.sourceRows(start: 0, count: 1) == [129])
             }
-            return try view.rows(start: UInt64(start), count: UInt32(count), columns: columns)
+            return try view.cellText(start: UInt64(start), count: UInt32(count), columns: columns)
         }
         #expect(calls == 3)
         #expect(copied.hasSuffix("row129\t129"))
-        #expect(try await reader.read(view, start: 0, count: 1, columns: [c0]).sourceRows == [0])
+        #expect(try await reader.read(view, tiles: [tile(0, c0)]).cells[tile(0, c0)]?.nRows == 64)
         let work = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await reader.read(view, start: 0, count: 64, columns: [c0])
+            return try await reader.read(view, tiles: [tile(0, c0)])
         }
         do {
             _ = try await work.value
@@ -340,17 +389,22 @@ struct TableExecutionTests {
     }
 }
 
+extension CellText {
+    func columnTexts(_ column: Int) -> [String?] {
+        (0..<Int(nRows)).map { cell(row: $0, column: column) }
+    }
+
+    var texts: [String?] {
+        (0..<Int(nRows)).flatMap { row in (0..<Int(nCols)).map { cell(row: row, column: $0) } }
+    }
+}
+
 private struct PendingTableRead: Sendable {
     let view: GewuOrderedView
-    let start: Int
-    let columns: [ColumnId]
-    let continuation: CheckedContinuation<RowBlock, Error>
+    let tiles: [TileKey]
+    let continuation: CheckedContinuation<TableTiles, Error>
 
     func finish() {
-        continuation.resume(
-            with: Result {
-                try view.rows(
-                    start: UInt64(start), count: UInt32(RowCache.blockSize), columns: columns)
-            })
+        continuation.resume(with: Result { try TableTiles(reading: view, tiles: tiles) })
     }
 }

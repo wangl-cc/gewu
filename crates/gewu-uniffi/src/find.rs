@@ -136,7 +136,7 @@ mod tests {
         let highlight = find.highlight(0, 3).unwrap();
         assert_eq!(highlight.matched, [false, true, false, false, false, true]);
         assert_eq!(find.previous(None, 1).unwrap()[0].display_row, 2);
-        assert!(doc.rows(0, 10, vec![c0]).unwrap().source_rows.len() == 3);
+        assert!(doc.source_rows(0, 10).len() == 3);
         std::fs::remove_file(source).unwrap();
     }
 }

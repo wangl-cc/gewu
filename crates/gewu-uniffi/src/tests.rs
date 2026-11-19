@@ -68,9 +68,9 @@ fn typed_filters_compile_and_execute_across_ffi() {
             }))
             .unwrap();
         let ordered = filtered.unsorted();
-        let rows = ordered.rows(0, 10, vec![id_col]).unwrap();
-        assert_eq!(rows.source_rows, [1]);
-        assert_eq!(rows.cells, [Some("9007199254740993".into())]);
+        let rows = ordered.cell_text(0, 10, vec![id_col]).unwrap();
+        assert_eq!(ordered.source_rows(0, 10), [1]);
+        assert_eq!(rows.utf8_chunks, [b"9007199254740993"]);
     }
     std::fs::remove_file(source).unwrap();
 }
@@ -152,10 +152,10 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert_eq!(
         filtered
             .unsorted()
-            .rows(0, 10, vec![label_col])
+            .cell_text(0, 10, vec![label_col])
             .unwrap()
-            .cells,
-        [Some("dog".into())]
+            .utf8_chunks,
+        [b"dog"]
     );
     let sorted_desc = doc
         .unfiltered()
@@ -164,10 +164,43 @@ fn text_filter_modes_and_choices_cross_ffi() {
             descending: true,
         }])
         .unwrap();
-    assert_eq!(
-        sorted_desc.rows(0, 2, vec![label_col]).unwrap().source_rows,
-        [1, 0]
-    );
+    let batch = sorted_desc
+        .read_tiles(
+            vec![RowSpan { start: 0, count: 2 }, RowSpan {
+                start: 1,
+                count: 64,
+            }],
+            vec![
+                CellTile {
+                    column: label_col,
+                    start: 1,
+                    count: 64,
+                },
+                CellTile {
+                    column: id_col,
+                    start: 0,
+                    count: 64,
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(batch.source_rows, [vec![1, 0], vec![0]]);
+    let [label, id] = batch.cells.try_into().ok().unwrap();
+    assert_eq!((label.n_rows, label.n_cols), (1, 1));
+    assert_eq!(label.utf8_chunks, [b"cat"]);
+    assert_eq!(id.utf8_chunks, [b"2010"]);
+    let offsets: Vec<u8> = [0u64, 2, 4]
+        .into_iter()
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    assert_eq!(id.offsets, offsets);
+    assert!(sorted_desc
+        .read_tiles(vec![], vec![CellTile {
+            column: ColumnId { raw: 99 },
+            start: 0,
+            count: 1,
+        }])
+        .is_err());
     std::fs::remove_file(source).unwrap();
 }
 
@@ -281,10 +314,10 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 selected
                     .unfiltered()
                     .unsorted()
-                    .rows(0, 1, vec![selected_label])
+                    .cell_text(0, 1, vec![selected_label])
                     .unwrap()
-                    .cells,
-                [Some("cat".into())]
+                    .utf8_chunks,
+                [b"cat"]
             );
             let filtered = selected
                 .filter(filter_single(selected_label, Filter {

@@ -169,8 +169,8 @@ fn failed_apply_keeps_the_old_view() {
     }];
     assert!(doc.filter(&bad).is_err());
     assert_eq!(
-        doc.unfiltered().unsorted().rows(0, 6, &[c0]).unwrap().cells,
-        before.rows(0, 6, &[c0]).unwrap().cells
+        doc.unfiltered().unsorted().cell_text(0, 6, &[c0]).unwrap(),
+        before.cell_text(0, 6, &[c0]).unwrap()
     );
     std::fs::remove_file(path).ok();
 }
@@ -188,7 +188,7 @@ fn unknown_column_is_an_argument_error() {
         Err(Error::Column(_))
     ));
     let v = filtered.unsorted();
-    assert!(matches!(v.rows(0, 1, &[c9]), Err(Error::Column(_))));
+    assert!(matches!(v.cell_text(0, 1, &[c9]), Err(Error::Column(_))));
     std::fs::remove_file(path).ok();
 }
 

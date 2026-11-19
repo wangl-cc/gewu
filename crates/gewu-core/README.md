@@ -14,7 +14,7 @@ Core separates state into a three-layer unidirectional model: `Dataset` → `Fil
 
 - `dataset.filter(filters)` validates `&[ColumnFilter]`, filters the **full Dataset**, and returns an independent `Arc<FilteredView>` (empty filter lists return `dataset.unfiltered()` with zero row-ID allocation). Relaxing a filter can therefore recover rows absent from previous views.
 - `filtered.sort(sorts)` validates `&[ColumnSort]` (slice order defines sort priority), sorts `filtered`'s row selection independently, and returns an `Arc<OrderedView>` without mutating `filtered` (empty sort lists return `filtered.unsorted()`, sharing the same `RowIds`).
-- `ordered.rows(start, count, columns)` returns formatted `RowBlock` cells and source row IDs from that `OrderedView`. Explicit `&[ColumnId]` arguments specify which columns are formatted and in what order.
+- `ordered.cell_text(start, count, columns)` packs formatted text into one UTF-8 buffer in the requested column order. `ordered.cell_tiles(tiles)` formats each `CellTile` (one column over a row range) into its own single-column `CellText`, so callers can retain tiles independently. Read source row indices separately with `ordered.source_rows(start, count)`.
 - `ordered.find(query, columns)` captures shared `RowIds` and column arrays for bounded navigation and highlighting over `&[ColumnId]`.
 - `ordered.export(columns, format)` captures shared data and `&[ColumnId]` projection for a single-use export with progress, cancellation and atomic destination replacement; `ordered.nested_export_columns(columns)` inspects nested types without scanning.
 
@@ -115,7 +115,7 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [view/](src/view) | `FilteredView` (row membership, analysis, sorting) and `OrderedView` (rows, Find, export). |
 | [row_ids.rs](src/row_ids.rs) | Zero-allocation `RowIds`, `RowSlice` and `RowWindow` selections shared across views, Find and export. |
 | [col_view.rs](src/col_view.rs) | Borrowed `Column` and `RowSlice` projections used by analysis and filter candidates. |
-| [view/rows.rs](src/view/rows.rs) | `RowBlock` and formatted reads from a bound `OrderedView`. |
+| [view/rows.rs](src/view/rows.rs) | `CellText`, `CellTile` reads and source row indices from a bound `OrderedView`. |
 | [view/analysis.rs](src/view/analysis.rs) | Order-independent typed analyses and scatter calculation on `FilteredView`. |
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and range distributions on `FilteredView`. |
 | [view/find.rs](src/view/find.rs) | Cell Find snapshot capture on `OrderedView`. |

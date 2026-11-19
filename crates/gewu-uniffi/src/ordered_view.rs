@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{ColumnId, FileType, FindSession, GewuError, GewuExport, RowBlock};
+use crate::{
+    CellText, CellTile, ColumnId, FileType, FindSession, GewuError, GewuExport, RowSpan, TileBatch,
+};
 
 #[derive(uniffi::Object)]
 pub struct GewuOrderedView {
@@ -16,14 +18,36 @@ impl GewuOrderedView {
         self.inner.row_count()
     }
 
-    pub fn rows(
+    pub fn cell_text(
         &self,
         start: u64,
         count: u32,
         columns: Vec<ColumnId>,
-    ) -> Result<RowBlock, GewuError> {
+    ) -> Result<CellText, GewuError> {
         let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(self.inner.rows(start, count, &columns)?.into())
+        Ok(self.inner.cell_text(start, count, &columns)?.into())
+    }
+
+    pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
+        self.inner.source_rows(start, count)
+    }
+
+    /// Read every missing viewport tile in one call. Each cell tile has its own
+    /// text buffer, so a long value only enlarges the tile that contains it.
+    pub fn read_tiles(
+        &self,
+        rows: Vec<RowSpan>,
+        cells: Vec<CellTile>,
+    ) -> Result<TileBatch, GewuError> {
+        let cells: Vec<core::CellTile> = cells.into_iter().map(Into::into).collect();
+        let cells = self.inner.cell_tiles(&cells)?;
+        Ok(TileBatch {
+            source_rows: rows
+                .iter()
+                .map(|span| self.inner.source_rows(span.start, span.count))
+                .collect(),
+            cells: cells.into_iter().map(Into::into).collect(),
+        })
     }
 
     pub fn find(

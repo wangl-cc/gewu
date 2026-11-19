@@ -87,14 +87,15 @@ mod delimited {
             .unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.schema().field(1).data_type(), &DataType::Float64);
-        assert_eq!(
-            doc.unfiltered()
-                .unsorted()
-                .rows(0, 2, &[ColumnId::from_raw(0)])
-                .unwrap()
-                .cells,
-            [Some("9007199254740993".into()), Some("1.5".into())]
-        );
+        let block = doc
+            .unfiltered()
+            .unsorted()
+            .cell_text(0, 2, &[ColumnId::from_raw(0)])
+            .unwrap();
+        assert_eq!([block.cell(0, 0), block.cell(1, 0)], [
+            Some("9007199254740993"),
+            Some("1.5")
+        ]);
     }
 
     #[test]
@@ -119,7 +120,7 @@ mod delimited {
             assert_eq!(doc.schema().field(1).data_type(), &DataType::Boolean);
             assert_eq!(doc.schema().field(2).data_type(), &DataType::Float64);
             let cols: Vec<ColumnId> = (0..4).map(ColumnId::from_raw).collect();
-            let rows = doc.unfiltered().unsorted().rows(0, 2, &cols).unwrap();
+            let rows = doc.unfiltered().unsorted().cell_text(0, 2, &cols).unwrap();
             assert_eq!(rows.cell(0, 0), Some("7"));
             assert_eq!(rows.cell(0, 1), Some("true"));
             assert_eq!(rows.cell(0, 2), Some("1.25"));
@@ -150,7 +151,7 @@ mod delimited {
         let rows = doc
             .unfiltered()
             .unsorted()
-            .rows(69_999, 2, &[ColumnId::from_raw(0)])
+            .cell_text(69_999, 2, &[ColumnId::from_raw(0)])
             .unwrap();
         assert_eq!(rows.cell(0, 0), Some("1"));
         assert_eq!(rows.cell(1, 0), Some("late text"));
@@ -230,10 +231,9 @@ mod delimited {
                 reloaded
                     .unfiltered()
                     .unsorted()
-                    .rows(0, 2, &[c0, c1])
-                    .unwrap()
-                    .cells,
-                doc.rows(0, 2, &[c1, c0]).unwrap().cells
+                    .cell_text(0, 2, &[c0, c1])
+                    .unwrap(),
+                doc.cell_text(0, 2, &[c1, c0]).unwrap()
             );
         }
         let empty = dataset
@@ -339,7 +339,7 @@ mod xlsx {
         assert_eq!(
             doc.unfiltered()
                 .unsorted()
-                .rows(0, 1, &[c1])
+                .cell_text(0, 1, &[c1])
                 .unwrap()
                 .cell(0, 0),
             Some("雪\nline")
@@ -355,13 +355,19 @@ mod xlsx {
             .unwrap();
         assert_eq!(raw.info().row_count, 2);
         assert_eq!(raw.schema().field(0).name(), "column_1");
+        let block = raw
+            .unfiltered()
+            .unsorted()
+            .cell_text(0, 2, &[c0, c1])
+            .unwrap();
         assert_eq!(
-            raw.unfiltered()
-                .unsorted()
-                .rows(0, 2, &[c0, c1])
-                .unwrap()
-                .cells,
-            ["10.0", "20.0", "30.0", "40.0"].map(|s| Some(s.to_owned()))
+            [
+                block.cell(0, 0),
+                block.cell(0, 1),
+                block.cell(1, 0),
+                block.cell(1, 1)
+            ],
+            ["10.0", "20.0", "30.0", "40.0"].map(Some)
         );
         assert_eq!(raw.info().metadata, FileMetadata::Xlsx {
             sheet: "Raw".into(),
@@ -417,10 +423,9 @@ mod xlsx {
             reloaded
                 .unfiltered()
                 .unsorted()
-                .rows(0, 2, &[c0, c1])
-                .unwrap()
-                .cells,
-            doc.rows(0, 2, &[c1, c2]).unwrap().cells
+                .cell_text(0, 2, &[c0, c1])
+                .unwrap(),
+            doc.cell_text(0, 2, &[c1, c2]).unwrap()
         );
         let empty = dataset
             .filter(&[ColumnFilter {

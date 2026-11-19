@@ -1,15 +1,16 @@
 import AppKit
-import Combine
+import Observation
 
 /// A copy captures row ranges, display order and an immutable View, independent of the
 /// viewport cache. Only the final pasteboard commit runs on the main actor.
 @MainActor
-final class CopyModel: ObservableObject {
-    @Published private(set) var isCopying = false
-    @Published private(set) var message: String?
-    private var task: Task<String, Error>?
-    private var request: UInt64 = 0
-    private let reportError: (Error, String) -> Void
+@Observable
+final class CopyModel {
+    private(set) var isCopying = false
+    private(set) var message: String?
+    @ObservationIgnored private var task: Task<String, Error>?
+    @ObservationIgnored private var request: UInt64 = 0
+    @ObservationIgnored private let reportError: (Error, String) -> Void
 
     init(reportError: @escaping (Error, String) -> Void) { self.reportError = reportError }
 
@@ -23,7 +24,7 @@ final class CopyModel: ObservableObject {
         let work = Task.detached(priority: .userInitiated) {
             try CopyText.format(rows: rows, columns: columns, names: names, includeHeaders: includeHeaders) {
                 start, count, columns in
-                try ordered.rows(start: UInt64(start), count: UInt32(count), columns: columns)
+                try ordered.cellText(start: UInt64(start), count: UInt32(count), columns: columns)
             }
         }
         task = work
@@ -63,7 +64,7 @@ final class CopyModel: ObservableObject {
 enum CopyText {
     static func format(
         rows: [Range<Int>], columns: [ColumnId], names: [String], includeHeaders: Bool = true,
-        fetch: (Int, Int, [ColumnId]) throws -> RowBlock
+        fetch: (Int, Int, [ColumnId]) throws -> CellText
     ) throws -> String {
         var result = includeHeaders ? names.map(escaped).joined(separator: "\t") : ""
         var hasLine = includeHeaders
@@ -83,8 +84,7 @@ enum CopyText {
                     for row in 0..<count {
                         try Task.checkCancellation()
                         if first > 0 { lines[row] += "\t" }
-                        let base = row * selected.count
-                        lines[row] += block.cells[base..<(base + selected.count)].map { escaped($0 ?? "") }
+                        lines[row] += selected.indices.map { escaped(block.cell(row: row, column: $0) ?? "") }
                             .joined(separator: "\t")
                     }
                 }

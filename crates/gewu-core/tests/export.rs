@@ -318,10 +318,9 @@ fn parquet_export_honors_explicit_compression() {
         reopened
             .unfiltered()
             .unsorted()
-            .rows(0, 5, &[c0, c1])
-            .unwrap()
-            .cells,
-        doc.rows(0, 5, &[c0, c1]).unwrap().cells
+            .cell_text(0, 5, &[c0, c1])
+            .unwrap(),
+        doc.cell_text(0, 5, &[c0, c1]).unwrap()
     );
 }
 

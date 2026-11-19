@@ -53,9 +53,7 @@ fn contains(include_nulls: bool) -> Filter {
 
 fn rows(doc: &Arc<gewu_core::Dataset>, filters: &[ColumnFilter]) -> Vec<u64> {
     let view = doc.filter(filters).unwrap().unsorted();
-    view.rows(0, 20, &[ColumnId::from_raw(0), ColumnId::from_raw(1)])
-        .unwrap()
-        .source_rows
+    view.source_rows(0, 20)
 }
 
 #[test]

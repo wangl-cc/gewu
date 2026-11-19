@@ -15,7 +15,7 @@ mod filter;
 mod find;
 mod rows;
 
-pub use rows::RowBlock;
+pub use rows::{CellText, CellTile};
 
 /// Filtered row projection over an immutable [`Dataset`].
 /// Owns row membership and provides column analysis, filter metadata, and sorting.
@@ -193,8 +193,8 @@ mod tests {
         assert!(matches!(empty_sort.rows, RowIds::All(12_000)));
 
         // Works across rows, stats, find, and export.
-        let block = unsorted.rows(0, 3, &[c0, c1]).unwrap();
-        assert_eq!(block.source_rows, [0, 1, 2]);
+        let block = unsorted.cell_text(0, 3, &[c0, c1]).unwrap();
+        assert_eq!(unsorted.source_rows(0, 3), [0, 1, 2]);
         assert_eq!(block.cell(0, 0), Some("0"));
         assert_eq!(block.cell(1, 1), Some("odd"));
 
@@ -247,9 +247,7 @@ mod tests {
         let unsort_2 = filtered.sort(&[]).unwrap();
         assert!(unsort_1.rows.ptr_eq(&filtered.rows));
         assert!(unsort_2.rows.ptr_eq(&filtered.rows));
-        assert_eq!(unsort_1.rows(0, 3, &[c0]).unwrap().source_rows, [
-            11997, 11998, 11999
-        ]);
+        assert_eq!(unsort_1.source_rows(0, 3), [11997, 11998, 11999]);
 
         let desc = filtered
             .sort(&[ColumnSort {
@@ -270,16 +268,10 @@ mod tests {
             ])
             .unwrap();
 
-        assert_eq!(desc.rows(0, 3, &[c0]).unwrap().source_rows, [
-            11999, 11998, 11997
-        ]);
-        assert_eq!(by_label_then_num.rows(0, 3, &[c0]).unwrap().source_rows, [
-            11998, 11999, 11997
-        ]);
+        assert_eq!(desc.source_rows(0, 3), [11999, 11998, 11997]);
+        assert_eq!(by_label_then_num.source_rows(0, 3), [11998, 11999, 11997]);
         // Original filtered and unsorted views remain unaffected.
-        assert_eq!(unsort_1.rows(0, 3, &[c0]).unwrap().source_rows, [
-            11997, 11998, 11999
-        ]);
+        assert_eq!(unsort_1.source_rows(0, 3), [11997, 11998, 11999]);
     }
 
     #[test]
@@ -345,9 +337,7 @@ mod tests {
         drop(filtered);
         drop(ds);
         assert_eq!(ordered.row_count(), 2);
-        assert_eq!(ordered.rows(0, 2, &[c0]).unwrap().source_rows, [
-            11999, 11998
-        ]);
+        assert_eq!(ordered.source_rows(0, 2), [11999, 11998]);
         assert_eq!(find.next(None, 10).unwrap()[0].display_row, 0);
     }
 

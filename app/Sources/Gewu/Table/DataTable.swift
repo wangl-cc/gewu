@@ -92,9 +92,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         self.model = model
         rows = loader ?? TableRowLoader()
         super.init(nibName: nil, bundle: nil)
-        rows.onLoad = { [weak self] view, block, columns in
+        rows.onLoad = { [weak self] view, tiles in
             guard let self, self.displayedView === view, self.model.ordered === view else { return }
-            self.display(block, columns: columns)
+            self.display(tiles)
         }
         rows.onError = { [weak self] view, error in
             guard let self, self.displayedView === view, self.model.ordered === view else { return }
@@ -169,7 +169,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         if rowCountChanged { table.noteNumberOfRowsChanged() }
         if rowCountChanged || columnsChanged { table.layoutSubtreeIfNeeded() }
         // A retained offscreen cell binds to this View when it next enters the viewport.
-        for page in snapshot.pages { display(page.block, columns: page.columns) }
+        display(snapshot.tiles)
         viewportRows = NSRange(snapshot.viewport.rows)
         viewportColumns = snapshot.viewport.columns
         gutter.needsDisplay = true
@@ -420,9 +420,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func buildColumns(_ info: DatasetInfo) {
         gutter.label = { [weak self] row in
-            guard let self, let block = self.rows.block(for: row, column: nil) else { return nil }
-            let r = row - Int(block.start)
-            return r >= 0 && r < Int(block.nRows) ? formatRowNumber(block.sourceRows[r], base: self.rowNumberBase) : nil
+            guard let self, let source = self.rows.sourceRow(for: row) else { return nil }
+            return formatRowNumber(source, base: self.rowNumberBase)
         }
         let rowHeader = NSTableColumn(identifier: rowHeaderID)
         rowHeader.headerCell = ColumnHeaderCell(textCell: "")
@@ -459,25 +458,29 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    private func display(_ block: RowBlock, columns: [ColumnId]) {
+    /// Render tiles directly, including tiles too large for the cache.
+    private func display(_ tiles: TableTiles) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
-        let start = max(Int(block.start), visible.location)
-        let end = min(Int(block.start) + Int(block.nRows), visible.location + visible.length)
-        guard start < end else { return }
+        let visibleRows = visible.location..<(visible.location + visible.length)
         let visibleColumns = table.columnIndexes(in: table.visibleRect)
-        for (offset, column) in columns.enumerated() {
+        for (key, text) in tiles.cells {
+            guard let column = key.column else { continue }
+            let rows = key.rows.clamped(to: visibleRows)
             let index = table.column(withIdentifier: identifier(for: column))
-            guard visibleColumns.contains(index) else { continue }
-            for row in start..<end {
+            guard !rows.isEmpty, visibleColumns.contains(index) else { continue }
+            for row in rows {
                 if let cell = table.view(atColumn: index, row: row, makeIfNecessary: true) as? MatchCellView {
-                    render(cell, column: column, row: row, block: block, offset: offset)
+                    render(cell, column: column, row: row, text: text.cell(row: row - key.start, column: 0))
                 }
             }
         }
+        guard !tiles.sourceRows.isEmpty else { return }
         gutter.needsDisplay = true
-        if let row = model.selectedDisplayRow, row >= Int(block.start), row < Int(block.start) + Int(block.nRows) {
-            let source = block.sourceRows[row - Int(block.start)]
+        if let row = model.selectedDisplayRow, let rows = tiles.sourceRows[row / TileKey.rowCount],
+            row % TileKey.rowCount < rows.count
+        {
+            let source = rows[row % TileKey.rowCount]
             if model.selectedSourceRow != source { model.selectedSourceRow = source }
         }
     }
@@ -500,8 +503,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
                 if cell.boundView !== displayedView {
                     bind(cell, column: column, row: row)
-                } else if cell.isLoading, let block = rows.block(for: row, column: column) {
-                    render(cell, column: column, row: row, block: block)
+                } else if cell.isLoading, let cached = rows.tile(for: row, column: column) {
+                    render(cell, column: column, row: row, text: cached.text.cell(row: cached.row, column: 0))
                 } else {
                     let kind = model.columnInfo[column]?.valueCategory ?? .text
                     if restyle {
@@ -551,8 +554,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func bind(_ cell: MatchCellView, column: ColumnId, row: Int) {
         cell.boundView = displayedView
-        if let block = rows.block(for: row, column: column) {
-            render(cell, column: column, row: row, block: block)
+        if let cached = rows.tile(for: row, column: column) {
+            render(cell, column: column, row: row, text: cached.text.cell(row: cached.row, column: 0))
         } else {
             let kind = model.columnInfo[column]?.valueCategory ?? .text
             cell.isLoading = true
@@ -560,17 +563,12 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    private func render(_ cell: MatchCellView, column: ColumnId, row: Int, block: RowBlock, offset: Int = 0) {
-        guard row >= Int(block.start), row < Int(block.start) + Int(block.nRows) else {
-            return
-        }
+    private func render(_ cell: MatchCellView, column: ColumnId, row: Int, text: String?) {
         let kind = model.columnInfo[column]?.valueCategory ?? .text
-        let index = (row - Int(block.start)) * Int(block.nCols) + offset
         let hit = model.find.isMatch(row: row, column: column)
         let current = model.find.currentMatch
         cell.boundView = displayedView
         cell.isLoading = false
-        let text = block.cells[index]
         cell.configure(
             text: text ?? "null", font: text == nil ? fonts.null : fonts.font(for: kind), alignment: kind.alignment,
             query: hit && kind == .text ? model.find.activeQuery : nil, wholeMatch: hit && kind != .text,
@@ -607,10 +605,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard row >= 0, index >= 0, index < table.tableColumns.count,
             let column = columnId(table.tableColumns[index])
         else { return nil }
-        if let block = rows.block(for: row, column: column),
-            row >= Int(block.start), row < Int(block.start) + Int(block.nRows)
-        {
-            return CellContent(row: row, column: column, text: block.cells[row - Int(block.start)])
+        if let cached = rows.tile(for: row, column: column) {
+            return CellContent(row: row, column: column, text: cached.text.cell(row: cached.row, column: 0))
         }
         // Large values can be displayed without being retained by the row cache.
         guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView,
@@ -736,8 +732,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
         let inputs: [ColumnWidthMeasurement.Input] = columns.compactMap { column in
             guard let info = model.columnInfo[column] else { return nil }
-            let key = RowCache.Key(start: Int(start) / RowCache.blockSize * RowCache.blockSize, column: column)
-            let sample = self.rows.cachedBlock(for: key).map { Array($0.cells.prefix(32)) }
+            let sample = self.rows.tile(for: Int(start), column: column)?.text
             return ColumnWidthMeasurement.Input(
                 column: column, name: info.name,
                 type: info.displayType, text: info.valueCategory == .text, sample: sample)
@@ -905,11 +900,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         gutter.needsDisplay = true
         let row = table.selectedRow
         model.selectedDisplayRow = row >= 0 ? row : nil
-        if row >= 0, let block = rows.block(for: row, column: nil), row - Int(block.start) < block.sourceRows.count {
-            model.selectedSourceRow = block.sourceRows[row - Int(block.start)]
-        } else {
-            model.selectedSourceRow = nil
-        }
+        model.selectedSourceRow = rows.sourceRow(for: row)
     }
 
     func navigateToMatch(_ match: CellMatch) {

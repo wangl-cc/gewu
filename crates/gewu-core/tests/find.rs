@@ -140,7 +140,7 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     assert_eq!(highlight.n_cols, 2);
     assert_eq!(highlight.matched, [false, true, true, false, true, false]);
     assert_eq!(doc.n_rows(), 4);
-    assert_eq!(view.rows(0, 3, &[c0]).unwrap().source_rows, [0, 1, 3]);
+    assert_eq!(view.source_rows(0, 3), [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
     let _other = doc.unfiltered();

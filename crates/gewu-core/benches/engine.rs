@@ -191,7 +191,22 @@ fn rows(c: &mut Criterion) {
 
     let plain = doc.unfiltered().unsorted();
     g.bench_function("block_256_all_columns", |b| {
-        b.iter(|| plain.rows(1_000_000, 256, &columns).unwrap())
+        b.iter(|| plain.cell_text(1_000_000, 256, &columns).unwrap())
+    });
+
+    // The table's viewport read: one 64-row tile per column and block.
+    let tiles: Vec<_> = columns
+        .iter()
+        .flat_map(|&column| {
+            (0..4).map(move |block| gewu_core::CellTile {
+                column,
+                start: 1_000_000 + block * 64,
+                count: 64,
+            })
+        })
+        .collect();
+    g.bench_function("tiles_256_all_columns", |b| {
+        b.iter(|| plain.cell_tiles(&tiles).unwrap())
     });
 
     let find = plain.find("2024-03", &columns).unwrap();

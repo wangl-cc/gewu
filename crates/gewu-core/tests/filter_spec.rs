@@ -116,12 +116,8 @@ fn invalid_text_leaves_the_applied_view_intact() {
         )))
     ));
     assert_eq!(
-        doc.unfiltered()
-            .unsorted()
-            .rows(0, 10, &[c0])
-            .unwrap()
-            .cells,
-        before.rows(0, 10, &[c0]).unwrap().cells
+        doc.unfiltered().unsorted().cell_text(0, 10, &[c0]).unwrap(),
+        before.cell_text(0, 10, &[c0]).unwrap()
     );
 }
 
@@ -205,7 +201,7 @@ fn high_cardinality_exact_text_filters_do_not_require_a_value_index() {
         }])
         .unwrap()
         .unsorted();
-    assert_eq!(view.rows(0, 10, &[c0]).unwrap().source_rows, [100_000]);
+    assert_eq!(view.source_rows(0, 10), [100_000]);
 }
 
 #[test]
@@ -262,7 +258,7 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
             }])
             .unwrap()
             .unsorted();
-        assert_eq!(view.rows(0, 10, &[c0]).unwrap().source_rows, expected);
+        assert_eq!(view.source_rows(0, 10), expected);
     }
 }
 
@@ -307,9 +303,7 @@ fn candidate_values_round_trip_large_integers_decimals_and_zoned_timestamps() {
                 }])
                 .unwrap()
                 .unsorted();
-            assert_eq!(view.rows(0, 10, &[column]).unwrap().source_rows, [
-                row as u64
-            ]);
+            assert_eq!(view.source_rows(0, 10), [row as u64]);
         }
     }
 }

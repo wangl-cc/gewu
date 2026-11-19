@@ -336,7 +336,7 @@ private struct ActiveFiltersView: View {
 }
 
 private struct CopyStatus: View {
-    @ObservedObject var copying: CopyModel
+    let copying: CopyModel
 
     var body: some View {
         if copying.isCopying {

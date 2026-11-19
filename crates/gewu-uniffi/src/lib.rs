@@ -42,6 +42,6 @@ pub use ordered_view::GewuOrderedView;
 pub use query::{ColumnFilter, ColumnSort};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use view::RowBlock;
+pub use view::{CellText, CellTile, RowSpan, TileBatch};
 
 uniffi::setup_scaffolding!();

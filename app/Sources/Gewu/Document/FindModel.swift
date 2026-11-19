@@ -134,7 +134,7 @@ final class FindModel: ObservableObject {
 
     func stop() { invalidate() }
 
-    /// Fetch only flags for the visible rows. Formatted RowCache blocks are not
+    /// Fetch only flags for the visible rows. Cached table tiles are not
     /// invalidated when this query or its highlight result changes.
     func requestHighlight(start: UInt64, count: UInt32) {
         guard let session, count > 0 else { return }
