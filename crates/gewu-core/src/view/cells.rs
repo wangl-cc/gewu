@@ -102,8 +102,8 @@ mod tests {
     use super::*;
     use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
 
-    /// Ten rows sorted by `number` descending: `text` and `number` columns.
-    fn sorted_view() -> Arc<OrderedView> {
+    #[test]
+    fn packed_text_keeps_byte_offsets_nulls_and_requested_order() {
         let strings = StringArray::from(vec![
             Some("é"),
             None,
@@ -134,20 +134,15 @@ mod tests {
             format: FileType::Csv,
             metadata: FileMetadata::Delimited,
         });
-        dataset
-            .unfiltered()
-            .sort(&[ColumnSort {
-                column: ColumnId::from_raw(1),
-                descending: true,
-            }])
-            .unwrap()
-    }
-
-    #[test]
-    fn packed_text_keeps_byte_offsets_nulls_and_requested_order() {
-        let ordered = sorted_view();
         let text = ColumnId::from_raw(0);
         let number = ColumnId::from_raw(1);
+        let ordered = dataset
+            .unfiltered()
+            .sort(&[ColumnSort {
+                column: number,
+                descending: true,
+            }])
+            .unwrap();
         let block = ordered.cell_text(1, 64, &[number, text]).unwrap();
         assert_eq!(ordered.source_rows(1, 64), [8, 7, 6, 5, 4, 3, 2, 1, 0]);
         assert_eq!(block.cell(0, 0), Some("8"));

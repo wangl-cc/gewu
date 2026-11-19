@@ -96,12 +96,12 @@ final class TableRowLoader {
 
     /// Each View gets a version. A tile can only be found under the version of
     /// the View it was read from, so a replaced View's tiles are never shown.
-    struct CacheKey: Hashable {
+    private struct CacheKey: Hashable {
         let version: UInt64
         let tile: TileKey
     }
 
-    enum Tile {
+    private enum Tile {
         case cells(CellText)
         case sourceRows([UInt64])
 
@@ -139,7 +139,6 @@ final class TableRowLoader {
     }
 
     var cachedTileCount: Int { cache.count }
-    var cachedBytes: Int { cache.totalCost }
 
     private func nextVersion() -> UInt64 {
         lastVersion &+= 1
@@ -241,15 +240,11 @@ final class TableRowLoader {
 
     private func record(_ tiles: TableTiles, keys: [TileKey], version: UInt64) {
         delivered.formUnion(keys)
-        for (block, rows) in tiles.sourceRows {
-            cache.insert(
-                .sourceRows(rows), for: CacheKey(version: version, tile: TileKey(block: block, column: nil)),
-                cost: Tile.sourceRows(rows).cost)
-        }
-        for (key, text) in tiles.cells {
-            let tile = Tile.cells(text)
+        func insert(_ tile: Tile, for key: TileKey) {
             cache.insert(tile, for: CacheKey(version: version, tile: key), cost: tile.cost)
         }
+        for (block, rows) in tiles.sourceRows { insert(.sourceRows(rows), for: TileKey(block: block, column: nil)) }
+        for (key, text) in tiles.cells { insert(.cells(text), for: key) }
     }
 
     private func loadNext() {
