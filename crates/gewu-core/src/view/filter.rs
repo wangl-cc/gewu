@@ -1,5 +1,7 @@
 //! Filter editor candidates and distributions over visible rows.
 
+use arrow::buffer::BooleanBuffer;
+
 use super::FilteredView;
 use crate::{
     col_view::ColView,
@@ -18,7 +20,7 @@ impl FilteredView {
         let view = self.col(column)?;
         if predicate::supports_equals(view.data_type()) {
             if let Some(dictionary) = view.column().dictionary()? {
-                return dictionary_choices(view, dictionary);
+                return dictionary_choices(view, dictionary, self.selection_mask());
             }
         }
         Ok(FilterChoices {
@@ -46,8 +48,15 @@ impl FilteredView {
     }
 }
 
-fn dictionary_choices(view: ColView<'_>, dictionary: &Dictionary) -> Result<FilterChoices> {
-    let tally = tally_candidates(view, dictionary);
+fn dictionary_choices(
+    view: ColView<'_>,
+    dictionary: &Dictionary,
+    selection: Option<&BooleanBuffer>,
+) -> Result<FilterChoices> {
+    let tally = match selection {
+        Some(mask) if !view.is_complete() => tally_rows(mask.set_indices(), dictionary),
+        _ => tally_candidates(view, dictionary),
+    };
     let values = dictionary
         .labels()
         .iter()
@@ -74,9 +83,14 @@ fn tally_candidates(view: ColView<'_>, dictionary: &Dictionary) -> Tally {
             null_count: dictionary.null_count(),
         };
     }
+    tally_rows(view.rows().iter(), dictionary)
+}
+
+/// Count the dictionary codes of the given source rows.
+fn tally_rows(rows: impl Iterator<Item = usize>, dictionary: &Dictionary) -> Tally {
     let mut counts = [0u64; 256];
     let mut null_count = 0u64;
-    for row in view.rows().iter() {
+    for row in rows {
         if dictionary.is_null(row) {
             null_count += 1;
         } else {

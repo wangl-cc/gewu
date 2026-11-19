@@ -20,7 +20,7 @@ pub use error::{ColumnError, ColumnOperation, FilterError, FilterKind, ValuePars
 pub use id::ColumnId;
 pub use metadata::{ColumnInfo, ValueCategory};
 
-use crate::{execution::predicate::Predicate, types, FileError, Filter};
+use crate::{execution::predicate::Selector, types, FileError, Filter};
 
 pub(crate) type Result<T> = std::result::Result<T, ColumnError>;
 
@@ -111,10 +111,7 @@ impl Column {
         ColumnInfo::from_column(id, self)
     }
 
-    pub(crate) fn compile_filter<'a>(
-        &'a self,
-        filter: &Filter,
-    ) -> predicate::Result<Predicate<'a>> {
+    pub(crate) fn compile_filter<'a>(&'a self, filter: &Filter) -> predicate::Result<Selector<'a>> {
         predicate::compile_filter(self, filter)
     }
 }

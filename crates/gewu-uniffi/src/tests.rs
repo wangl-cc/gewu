@@ -157,6 +157,21 @@ fn text_filter_modes_and_choices_cross_ffi() {
             .cells,
         [Some("dog".into())]
     );
+    // The label editor's facet drops only the label filter.
+    let facet = filtered.facet(label_col).unwrap();
+    let labels: Vec<_> = facet
+        .filter_choices(label_col)
+        .unwrap()
+        .values
+        .unwrap()
+        .into_iter()
+        .map(|c| c.value)
+        .collect();
+    assert_eq!(labels, ["cat", "dog"]);
+    assert!(std::sync::Arc::ptr_eq(
+        &filtered.facet(id_col).unwrap().inner,
+        &filtered.inner
+    ));
     let sorted_desc = doc
         .unfiltered()
         .sort(vec![ColumnSort {

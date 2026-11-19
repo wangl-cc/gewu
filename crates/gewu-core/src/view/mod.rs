@@ -14,14 +14,19 @@ mod export;
 mod filter;
 mod find;
 mod rows;
+mod selection;
 
 pub use rows::RowBlock;
+pub(crate) use selection::FilterSelection;
 
-/// Filtered row projection over an immutable [`Dataset`].
-/// Owns row membership and provides column analysis, filter metadata, and sorting.
+/// Immutable snapshot of filters applied to a [`Dataset`].
+/// Owns the selected rows and the information needed to derive facets.
+/// Provides column analysis, filter metadata, and sorting.
 pub struct FilteredView {
     dataset: Arc<Dataset>,
     rows: RowIds,
+    /// Filter bitmaps behind `rows`; empty for an unfiltered view.
+    selection: FilterSelection,
 }
 
 /// Ordered row projection over an immutable [`Dataset`].
@@ -38,14 +43,41 @@ impl FilteredView {
         Arc::new(Self {
             dataset,
             rows: RowIds::All(n_rows),
+            selection: FilterSelection::default(),
         })
     }
 
-    pub(crate) fn selected(dataset: Arc<Dataset>, rows: Vec<u32>) -> Arc<Self> {
+    /// A view of the rows selected by `selection`'s bitmaps, materializing their row IDs once.
+    pub(crate) fn selected(dataset: Arc<Dataset>, selection: FilterSelection) -> Arc<Self> {
+        let Some(mask) = selection.mask() else {
+            return Self::all(dataset);
+        };
+        let rows = RowIds::Selected(FilterSelection::row_ids(mask).into());
         Arc::new(Self {
             dataset,
-            rows: RowIds::Selected(rows.into()),
+            rows,
+            selection,
         })
+    }
+
+    /// Derive a view of the source rows matching all filters in this snapshot
+    /// except the one on `column`. The result may include rows absent from `self`.
+    /// Returns the same view if `column` has no filter. Calling `facet` on the
+    /// derived view removes another filter without restoring the first.
+    pub fn facet(self: &Arc<Self>, column: ColumnId) -> Result<Arc<Self>> {
+        self.dataset.column(column)?;
+        if !self.selection.constrains(column) {
+            return Ok(self.clone());
+        }
+        Ok(Self::selected(
+            self.dataset.clone(),
+            self.selection.without(column),
+        ))
+    }
+
+    /// Selection bitmap over all source rows, or `None` when every row is selected.
+    pub(crate) fn selection_mask(&self) -> Option<&arrow::buffer::BooleanBuffer> {
+        self.selection.mask()
     }
 
     pub fn row_count(&self) -> u64 {
@@ -280,6 +312,54 @@ mod tests {
         assert_eq!(unsort_1.rows(0, 3, &[c0]).unwrap().source_rows, [
             11997, 11998, 11999
         ]);
+    }
+
+    #[test]
+    fn facet_drops_only_its_own_condition_and_matches_refiltering() {
+        let ds = dataset();
+        let c0 = ds.column_id("number").unwrap();
+        let c1 = ds.column_id("label").unwrap();
+        let number = ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some("100".into()), Some("9000".into()), false),
+        };
+        let label = ColumnFilter {
+            column: c1,
+            filter: Filter::exact(vec!["odd".into()], false, false),
+        };
+        let filtered = ds.filter(&[number.clone(), label.clone()]).unwrap();
+        assert_eq!(filtered.row_count(), 4_450);
+
+        let source_rows = |view: &FilteredView| view.rows.as_slice().iter().collect::<Vec<_>>();
+        let number_facet = filtered.facet(c0).unwrap();
+        assert_eq!(
+            source_rows(&number_facet),
+            source_rows(&ds.filter(std::slice::from_ref(&label)).unwrap())
+        );
+        let label_facet = filtered.facet(c1).unwrap();
+        assert_eq!(
+            source_rows(&label_facet),
+            source_rows(&ds.filter(std::slice::from_ref(&number)).unwrap())
+        );
+        let choices = label_facet.filter_choices(c1).unwrap().values.unwrap();
+        assert_eq!(choices.iter().map(|c| c.count).collect::<Vec<_>>(), [
+            4_451, 4_450
+        ]);
+
+        // An unfiltered column keeps the view; the last condition yields all rows.
+        let only_number = ds.filter(std::slice::from_ref(&number)).unwrap();
+        assert!(Arc::ptr_eq(&only_number.facet(c1).unwrap(), &only_number));
+        assert!(matches!(
+            only_number.facet(c0).unwrap().rows,
+            RowIds::All(12_000)
+        ));
+        assert!(matches!(
+            number_facet.facet(c1).unwrap().rows,
+            RowIds::All(12_000)
+        ));
+        let unfiltered = ds.unfiltered();
+        assert!(Arc::ptr_eq(&unfiltered.facet(c0).unwrap(), &unfiltered));
+        assert!(unfiltered.facet(ColumnId::new(9)).is_err());
     }
 
     #[test]

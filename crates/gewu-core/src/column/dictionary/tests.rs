@@ -65,13 +65,21 @@ fn predicates_match_null_and_values() {
     let dictionary = Arc::new(Dictionary::build(&a).unwrap().unwrap());
     let mut hits = [false; 3];
     dictionary
-        .matching_codes(&vec![false; dictionary.values().len()], false, true)
+        .matching_codes(
+            &BooleanBuffer::new_unset(dictionary.values().len()),
+            false,
+            true,
+        )
         .evaluate(0..3, &mut hits);
     assert_eq!(hits, [false, true, false]);
 
     let mut hits = [false; 3];
     dictionary
-        .matching_codes(&vec![false; dictionary.values().len()], true, false)
+        .matching_codes(
+            &BooleanBuffer::new_unset(dictionary.values().len()),
+            true,
+            false,
+        )
         .evaluate(0..3, &mut hits);
     assert_eq!(hits, [true, false, true]);
 }
@@ -135,7 +143,7 @@ fn native_dictionary_value_width_does_not_matter() {
 }
 
 #[test]
-fn predicates_cover_ranges_indices_and_incoming_masks() {
+fn matching_codes_select_ranges_and_unaligned_sub_ranges() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![
         Some("b"),
         None,
@@ -144,25 +152,19 @@ fn predicates_cover_ranges_indices_and_incoming_masks() {
     ]));
     let dictionary = Arc::new(Dictionary::build(&a).unwrap().unwrap());
     let code_b = dictionary.code_at(0);
-    let mut selected = vec![false; dictionary.values().len()];
-    selected[code_b as usize] = true;
+    let selected =
+        BooleanBuffer::collect_bool(dictionary.values().len(), |code| code == code_b as usize);
     let predicate = dictionary.matching_codes(&selected, false, false);
 
     let mut range_hits = [false; 4];
     predicate.evaluate(0..4, &mut range_hits);
     assert_eq!(range_hits, [true, false, false, true]);
 
-    // Rows selected out of order by index.
-    let rows = [3usize, 1, 2, 0];
-    let mut index_hits = [false; 4];
-    predicate.evaluate(rows.as_slice(), &mut index_hits);
-    assert_eq!(index_hits, [true, false, false, true]);
-
-    // Incoming mask intersects existing matches.
-    let mut matched = [true; 4];
-    let mut scratch = [false; 4];
-    predicate.intersect(0..4, &mut matched, &mut scratch);
-    assert_eq!(matched, [true, false, false, true]);
+    // Selection bitmaps agree, including over an unaligned sub-range.
+    let bits: Vec<bool> = predicate.select(0..4).iter().collect();
+    assert_eq!(bits, [true, false, false, true]);
+    let bits: Vec<bool> = predicate.select(1..4).iter().collect();
+    assert_eq!(bits, [false, false, true]);
 }
 
 #[test]
