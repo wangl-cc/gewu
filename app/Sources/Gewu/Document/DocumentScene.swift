@@ -339,11 +339,7 @@ private struct CopyStatus: View {
     let copying: CopyModel
 
     var body: some View {
-        if copying.isCopying {
-            ProgressView().controlSize(.small)
-            Text("Copying selection…")
-            Button("Cancel Copy") { copying.cancel() }.buttonStyle(.borderless)
-        } else if let message = copying.message {
+        if let message = copying.message {
             Text(message).lineLimit(1)
         }
     }

@@ -201,6 +201,35 @@ fn text_filter_modes_and_choices_cross_ffi() {
             count: 1,
         }])
         .is_err());
+    let selected = |format| {
+        sorted_desc
+            .export_rows(
+                vec![RowSpan { start: 1, count: 5 }],
+                vec![label_col, id_col],
+                format,
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        selected(crate::FileType::Tsv)
+            .write_text(true, 1024)
+            .unwrap(),
+        b"label\tid\ncat\t10\n"
+    );
+    assert!(matches!(
+        selected(crate::FileType::Tsv).write_text(false, 2),
+        Err(GewuError::Limit {
+            kind: crate::LimitErrorKind::TextBytes { limit: 2 },
+            ..
+        })
+    ));
+    assert!(matches!(
+        selected(crate::FileType::Parquet).write_text(true, 1024),
+        Err(GewuError::Export {
+            kind: crate::ExportErrorKind::TextFormat { .. },
+            ..
+        })
+    ));
     std::fs::remove_file(source).unwrap();
 }
 

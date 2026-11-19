@@ -956,11 +956,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     @objc func copy(_ sender: Any?) {
         guard !table.selectedRowIndexes.isEmpty else { return }
-        let columns = displayedColumns
         model.copying.copy(
-            ordered: model.ordered,
-            rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
-            names: columns.map { model.columnInfo[$0]?.name ?? "" })
+            ordered: model.ordered, rows: Array(table.selectedRowIndexes.rangeView), columns: displayedColumns)
     }
 }
 

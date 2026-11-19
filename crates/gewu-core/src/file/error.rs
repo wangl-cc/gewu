@@ -83,6 +83,10 @@ pub enum ExportError {
     FormatDisabled { format: crate::FileType },
     #[error("this export has already been started")]
     AlreadyStarted,
+    #[error("{format} cannot be written as text; use CSV or TSV")]
+    TextFormat { format: crate::FileType },
+    #[error("the text exceeds the limit of {limit} bytes; export to a file instead")]
+    TextTooLarge { limit: u64 },
     #[error("XLSX export has {actual} data rows, exceeding the limit of {limit}")]
     XlsxRows { actual: u64, limit: u64 },
     #[error("XLSX export has {actual} columns, exceeding the limit of {limit}")]

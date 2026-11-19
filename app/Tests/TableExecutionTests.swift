@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 
 /// Tests App table and copy behavior through the real Core bindings.
 @Suite
@@ -307,76 +309,41 @@ struct TableExecutionTests {
         #expect(cache.count == 0 && cache.totalCost == 0 && cache.value(for: 991) == nil)
     }
 
-    @Test
-    static func copyOrderAndEscaping() throws {
-        let columns = Array((0..<130).reversed()).map { ColumnId(raw: UInt32($0)) }
-        let ranges = [2..<4, 100..<165]
-        var requests = 0
-        let result = try CopyText.format(rows: ranges, columns: columns, names: columns.map { "h\($0.raw)" }) {
-            start, count, selected in
-            #expect(count <= 64 && selected.count <= 64)
-            requests += 1
-            return text(
-                (start..<(start + count)).flatMap { row in selected.map { "\(row):\($0.raw)" } },
-                columns: selected.count)
-        }
-        let lines = result.split(separator: "\n")
-        #expect(lines.count == 68 && requests == 9)
-        #expect(lines[1].split(separator: "\t").first == "2:129")
-        #expect(lines.last?.split(separator: "\t").last == "164:0")
-        let quoted = try CopyText.format(
-            rows: [0..<1], columns: [c0, c1, c2, ColumnId(raw: 3)], names: ["a", "b", "c", "d"]
-        ) { _, _, _ in
-            text(["tab\tvalue", "line\nvalue", "a\"b", nil], columns: 4)
-        }
-        #expect(quoted == "a\tb\tc\td\n\"tab\tvalue\"\t\"line\nvalue\"\t\"a\"\"b\"\t")
-        let withoutHeader = try CopyText.format(
-            rows: [0..<2], columns: [c0], names: ["value"], includeHeaders: false
-        ) { _, _, _ in
-            text([nil, "second"])
-        }
-        #expect(withoutHeader == "\nsecond", "An empty first data row must survive when headers are excluded")
+    @Test @MainActor
+    static func copyPutsSelectedRowsOnThePasteboardAsTSV() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("copy-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try "number,label\n1,first\n2,\"tab\tvalue\"\n3,third\n4,fourth\n".write(
+            to: path, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        let pasteboard = NSPasteboard(name: .init("gewu-copy-test-\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        var errors: [Error] = []
+        let model = CopyModel(pasteboard: pasteboard) { error, _ in errors.append(error) }
+        // A newer copy cancels the unfinished one; only its rows are published.
+        model.copy(ordered: view, rows: [0..<4], columns: [c0])
+        model.copy(ordered: view, rows: [0..<2, 3..<9], columns: [c1, c0])
+        for _ in 0..<200 where model.message == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(errors.isEmpty && model.message == "Copied selection")
+        let expected = "label\tnumber\nfirst\t1\n\"tab\tvalue\"\t2\nfourth\t4\n"
+        #expect(pasteboard.string(forType: .string) == expected)
+        #expect(
+            pasteboard.data(forType: .init(UTType.tabSeparatedText.identifier)).map {
+                String(decoding: $0, as: UTF8.self)
+            } == expected)
     }
 
     @Test
-    static func copyCancellation() async throws {
-        let task = Task.detached {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try CopyText.format(rows: [0..<1_000_000], columns: [c0], names: ["a"]) { _, _, _ in
-                Issue.record("Cancelled copy must not fetch")
-                throw CancellationError()
-            }
-        }
-        do {
-            _ = try await task.value
-            Issue.record("Expected cancellation")
-        } catch is CancellationError {}
-    }
-
-    @Test
-    static func readsAndCopyRetainTheirCapturedView() async throws {
+    static func readerReadsSourceAndCellTilesAndHonorsCancellation() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-table-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let csv = "value,label\n" + (0..<130).map { "\($0),row\($0)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let filtered = dataset.unfiltered()
-        let view = filtered.unsorted()
+        let view = dataset.unfiltered().unsorted()
         let reader = TableRowReader()
         let source = try await reader.read(view, tiles: [source(2)])
         #expect(source.cells.isEmpty && source.sourceRows == [2: [128, 129]])
-        var calls = 0
-        let copied = try CopyText.format(rows: [0..<130], columns: [c1, c0], names: ["label", "value"]) {
-            start, count, columns in
-            calls += 1
-            if calls == 2 {
-                let other = try filtered.sort(sorts: [ColumnSort(column: c0, descending: true)])
-                #expect(other.sourceRows(start: 0, count: 1) == [129])
-            }
-            return try view.cellText(start: UInt64(start), count: UInt32(count), columns: columns)
-        }
-        #expect(calls == 3)
-        #expect(copied.hasSuffix("row129\t129"))
         #expect(try await reader.read(view, tiles: [tile(0, c0)]).cells[tile(0, c0)]?.nRows == 64)
         let work = Task {
             withUnsafeCurrentTask { $0?.cancel() }

@@ -11,8 +11,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use gewu_core::{
-    ColumnFilter, ColumnId, ColumnSort, Error, ExportOptions, FileType, Filter, OrderedView,
-    ParquetCompression,
+    ColumnFilter, ColumnId, ColumnSort, Error, ExportError, ExportOptions, FileType, Filter,
+    OrderedView, ParquetCompression,
 };
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 use tempfile::TempDir;
@@ -231,6 +231,45 @@ fn delimited_export_uses_snapshot_row_order_column_order_and_exact_values() {
         assert_eq!(export.progress().rows_written, 4);
         assert_eq!(export.progress().total_rows, 4);
     }
+}
+
+#[test]
+fn text_export_of_selected_rows_uses_line_feeds_optional_header_and_a_byte_limit() {
+    let (_directory, dataset) = sample();
+    let doc = filtered(&dataset);
+    let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
+    // Display rows 0 and 2..4, plus a range past the end that is clipped away.
+    let ranges = [0..1, 2..9, 40..50];
+    let text = |header| {
+        let export = doc.export_rows(&ranges, &[c1, c0], FileType::Tsv).unwrap();
+        let bytes = export.write_text(header, 1 << 20).unwrap();
+        assert_eq!(export.progress().total_rows, 3);
+        String::from_utf8(bytes).unwrap()
+    };
+    let body = concat!(
+        "\t9007199254740993\n",
+        "\"a,\"\"雪\"\"\nline\"\t3\n",
+        "\"tab\tcell\rtail\"\t2\n",
+    );
+    assert_eq!(text(false), body);
+    assert_eq!(text(true), format!("\"text,\"\"name\"\tid\n{body}"));
+
+    let export = doc.export_rows(&ranges, &[c1, c0], FileType::Tsv).unwrap();
+    assert!(matches!(
+        export.write_text(true, 16),
+        Err(Error::Export(ExportError::TextTooLarge { limit: 16 }))
+    ));
+    let export = doc.export_rows(&ranges, &[c0], FileType::Parquet).unwrap();
+    assert!(matches!(
+        export.write_text(true, 1 << 20),
+        Err(Error::Export(ExportError::TextFormat { .. }))
+    ));
+    let export = doc.export_rows(&ranges, &[c0], FileType::Csv).unwrap();
+    export.cancel();
+    assert!(matches!(
+        export.write_text(true, 1 << 20),
+        Err(Error::Cancelled)
+    ));
 }
 
 #[test]

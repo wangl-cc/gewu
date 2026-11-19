@@ -1,14 +1,48 @@
 //! Capture validated export snapshots from an [`OrderedView`].
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, ops::Range, sync::Arc};
 
 use super::OrderedView;
-use crate::{ColumnId, Export, FileType, Result};
+use crate::{row_ids::RowIds, ColumnId, Export, FileType, Result};
 
 impl OrderedView {
     /// Capture a view and column order for export without copying its cells or
     /// row indices. The returned job remains valid when the current view changes.
     pub fn export(&self, columns: &[ColumnId], format: FileType) -> Result<Export> {
+        self.capture_export(self.rows.clone(), columns, format)
+    }
+
+    /// Like [`Self::export`], limited to display-row ranges in order, such as
+    /// a table selection. Ranges are clipped to the available rows. Only the
+    /// selected source row indices are copied; cells are not.
+    pub fn export_rows(
+        &self,
+        ranges: &[Range<u64>],
+        columns: &[ColumnId],
+        format: FileType,
+    ) -> Result<Export> {
+        let len = self.rows.len() as u64;
+        let slice = self.rows.as_slice();
+        let mut rows = Vec::new();
+        for range in ranges {
+            let start = range.start.min(len);
+            let end = range.end.min(len).max(start);
+            rows.extend(
+                slice
+                    .window(start as usize, end as usize)
+                    .iter()
+                    .map(|row| row as u32),
+            );
+        }
+        self.capture_export(RowIds::Selected(rows.into()), columns, format)
+    }
+
+    fn capture_export(
+        &self,
+        rows: RowIds,
+        columns: &[ColumnId],
+        format: FileType,
+    ) -> Result<Export> {
         format.require_enabled()?;
         if columns.is_empty() {
             return Err(crate::ColumnError::EmptySelection {
@@ -54,7 +88,7 @@ impl OrderedView {
             self.dataset.source_path.clone(),
             schema,
             arrays,
-            self.rows.clone(),
+            rows,
             format,
         ))
     }

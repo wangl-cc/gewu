@@ -62,6 +62,14 @@ impl GewuExport {
         })?)
     }
 
+    /// Write CSV or TSV text into memory with LF line endings and an optional
+    /// header, failing once it would exceed `byte_limit` bytes. Slow for large
+    /// selections: call off the main thread.
+    pub fn write_text(&self, header: bool, byte_limit: u64) -> Result<Vec<u8>, GewuError> {
+        let limit = usize::try_from(byte_limit).unwrap_or(usize::MAX);
+        Ok(self.inner.write_text(header, limit)?)
+    }
+
     pub fn cancel(&self) {
         self.inner.cancel();
     }

@@ -344,9 +344,9 @@ pub(crate) fn write(
         #[cfg(feature = "parquet")]
         FileType::Parquet => parquet::write(file, options.parquet_compression, data, progress),
         #[cfg(feature = "csv")]
-        FileType::Csv => delimited::write(file, b',', data, progress),
+        FileType::Csv => delimited::write(file, b',', delimited::Layout::FILE, data, progress),
         #[cfg(feature = "csv")]
-        FileType::Tsv => delimited::write(file, b'\t', data, progress),
+        FileType::Tsv => delimited::write(file, b'\t', delimited::Layout::FILE, data, progress),
         #[cfg(feature = "xlsx")]
         FileType::Xlsx => xlsx::write(file, data, progress),
         #[allow(unreachable_patterns)]
@@ -356,4 +356,70 @@ pub(crate) fn write(
         }
     };
     result.map_err(|error| ExportError::encode(format, error))
+}
+
+/// Write CSV or TSV text into memory for the clipboard: LF line endings, an
+/// optional header, and at most `byte_limit` bytes.
+#[cfg_attr(
+    not(feature = "csv"),
+    expect(unused_variables, reason = "Delimited text requires the csv feature")
+)]
+pub(crate) fn write_text(
+    format: FileType,
+    header: bool,
+    byte_limit: usize,
+    data: ExportData<'_>,
+    progress: WriteProgress<'_>,
+) -> Result<Vec<u8>, ExportError> {
+    #[cfg(feature = "csv")]
+    {
+        let delimiter = match format {
+            FileType::Csv => b',',
+            FileType::Tsv => b'\t',
+            _ => return Err(ExportError::TextFormat { format }),
+        };
+        let mut sink = LimitedBuffer {
+            bytes: Vec::new(),
+            limit: byte_limit,
+            exceeded: false,
+        };
+        let layout = delimited::Layout {
+            header,
+            line_feed_only: true,
+        };
+        let result = delimited::write(&mut sink, delimiter, layout, data, progress);
+        if sink.exceeded {
+            return Err(ExportError::TextTooLarge {
+                limit: byte_limit as u64,
+            });
+        }
+        result.map_err(|error| ExportError::encode(format, error))?;
+        Ok(sink.bytes)
+    }
+    #[cfg(not(feature = "csv"))]
+    Err(ExportError::FormatDisabled { format })
+}
+
+/// Fails the first write that would grow the buffer past `limit`.
+#[cfg(feature = "csv")]
+struct LimitedBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+#[cfg(feature = "csv")]
+impl std::io::Write for LimitedBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + buf.len() > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("text export exceeds its byte limit"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

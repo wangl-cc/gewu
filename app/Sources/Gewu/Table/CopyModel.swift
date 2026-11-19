@@ -1,107 +1,71 @@
 import AppKit
 import Observation
+import UniformTypeIdentifiers
 
-/// A copy captures row ranges, display order and an immutable View, independent of the
-/// viewport cache. Only the final pasteboard commit runs on the main actor.
+/// Copying is a TSV export of the selected display rows into memory. The export
+/// captures an immutable View, so later queries do not change what is copied.
+/// A copy is fast or exceeds `byteLimit`; it shows no progress, and a newer
+/// copy cancels an unfinished one.
 @MainActor
 @Observable
 final class CopyModel {
-    private(set) var isCopying = false
+    /// Larger selections belong in an exported file, not on the pasteboard.
+    static let byteLimit: UInt64 = 64 * 1024 * 1024
+
     private(set) var message: String?
-    @ObservationIgnored private var task: Task<String, Error>?
+    @ObservationIgnored private var job: GewuExport?
     @ObservationIgnored private var request: UInt64 = 0
+    @ObservationIgnored private let pasteboard: NSPasteboard
     @ObservationIgnored private let reportError: (Error, String) -> Void
 
-    init(reportError: @escaping (Error, String) -> Void) { self.reportError = reportError }
+    init(pasteboard: NSPasteboard = .general, reportError: @escaping (Error, String) -> Void) {
+        self.pasteboard = pasteboard
+        self.reportError = reportError
+    }
 
-    func copy(ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId], names: [String]) {
+    func copy(ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId]) {
         cancel()
-        request &+= 1
-        let mine = request
-        isCopying = true
         message = nil
-        let includeHeaders = UserDefaults.standard.object(forKey: "CopyIncludesHeaders") as? Bool ?? true
-        let work = Task.detached(priority: .userInitiated) {
-            try CopyText.format(rows: rows, columns: columns, names: names, includeHeaders: includeHeaders) {
-                start, count, columns in
-                try ordered.cellText(start: UInt64(start), count: UInt32(count), columns: columns)
-            }
+        let job: GewuExport
+        do {
+            job = try ordered.exportRows(
+                ranges: rows.map { RowSpan(start: UInt64($0.lowerBound), count: UInt32(clamping: $0.count)) },
+                columns: columns, format: .tsv)
+        } catch {
+            reportError(error, "Could not copy: ")
+            return
         }
-        task = work
+        self.job = job
+        let mine = request
+        let header = UserDefaults.standard.object(forKey: "CopyIncludesHeaders") as? Bool ?? true
+        let limit = Self.byteLimit
         Task { [weak self] in
-            do {
-                let text = try await work.value
-                guard let self, self.request == mine else { return }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try job.writeText(header: header, byteLimit: limit) }
+            }.value
+            guard let self, self.request == mine else { return }
+            self.job = nil
+            switch result {
+            case .success(let text):
+                let item = NSPasteboardItem()
+                item.setData(text, forType: .string)
+                item.setData(text, forType: NSPasteboard.PasteboardType(UTType.tabSeparatedText.identifier))
+                self.pasteboard.clearContents()
+                self.pasteboard.writeObjects([item])
                 self.message = "Copied selection"
-                self.isCopying = false
-                self.task = nil
-            } catch {
-                guard let self, self.request == mine else { return }
-                self.isCopying = false
-                self.task = nil
-                if error is CancellationError {
-                    self.message = "Copy cancelled"
-                } else {
-                    self.reportError(error, "Could not copy: ")
-                }
+            case .failure(GewuError.Cancelled):
+                break
+            case .failure(GewuError.Limit(kind: .textBytes, _)):
+                self.message = "Selection is too large to copy; use File > Export…"
+            case .failure(let error):
+                self.reportError(error, "Could not copy: ")
             }
         }
     }
 
     func cancel() {
-        task?.cancel()
-        task = nil
+        job?.cancel()
+        job = nil
         request &+= 1
-        if isCopying { message = "Copy cancelled" }
-        isCopying = false
-    }
-}
-
-/// Bounded FFI batches, with cancellation between batches and individual rows.
-/// The final TSV necessarily occupies memory proportional to the selection.
-enum CopyText {
-    static func format(
-        rows: [Range<Int>], columns: [ColumnId], names: [String], includeHeaders: Bool = true,
-        fetch: (Int, Int, [ColumnId]) throws -> CellText
-    ) throws -> String {
-        var result = includeHeaders ? names.map(escaped).joined(separator: "\t") : ""
-        var hasLine = includeHeaders
-        for range in rows {
-            var start = range.lowerBound
-            while start < range.upperBound {
-                try Task.checkCancellation()
-                let count = min(64, range.upperBound - start)
-                var lines = Array(repeating: "", count: count)
-                for first in stride(from: 0, to: columns.count, by: 64) {
-                    try Task.checkCancellation()
-                    let selected = Array(columns[first..<min(first + 64, columns.count)])
-                    let block = try fetch(start, count, selected)
-                    guard Int(block.nRows) == count, Int(block.nCols) == selected.count else {
-                        throw GewuError.Internal(message: "The selected rows could not be read completely.")
-                    }
-                    for row in 0..<count {
-                        try Task.checkCancellation()
-                        if first > 0 { lines[row] += "\t" }
-                        lines[row] += selected.indices.map { escaped(block.cell(row: row, column: $0) ?? "") }
-                            .joined(separator: "\t")
-                    }
-                }
-                for line in lines {
-                    if hasLine { result += "\n" }
-                    result += line
-                    hasLine = true
-                }
-                start += count
-            }
-        }
-        try Task.checkCancellation()
-        return result
-    }
-
-    private static func escaped(_ value: String) -> String {
-        value.contains(where: { "\t\n\r\"".contains($0) })
-            ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : value
     }
 }

@@ -78,6 +78,26 @@ impl GewuOrderedView {
         Ok(Arc::new(self.inner.export(&columns, format.into())?.into()))
     }
 
+    /// Export only the given display-row ranges, in order, such as a table
+    /// selection. Ranges are clipped to the available rows.
+    pub fn export_rows(
+        &self,
+        ranges: Vec<RowSpan>,
+        columns: Vec<ColumnId>,
+        format: FileType,
+    ) -> Result<Arc<GewuExport>, GewuError> {
+        let ranges: Vec<_> = ranges
+            .iter()
+            .map(|span| span.start..span.start.saturating_add(u64::from(span.count)))
+            .collect();
+        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
+        Ok(Arc::new(
+            self.inner
+                .export_rows(&ranges, &columns, format.into())?
+                .into(),
+        ))
+    }
+
     pub fn nested_export_columns(&self, columns: Vec<ColumnId>) -> Result<Vec<String>, GewuError> {
         let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
         Ok(self.inner.nested_export_columns(&columns)?)

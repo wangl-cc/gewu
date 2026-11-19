@@ -140,6 +140,26 @@ impl Export {
         Ok(())
     }
 
+    /// Write CSV or TSV text into memory, for example for the clipboard.
+    /// Lines end with LF and the header row is optional. Fails with
+    /// [`ExportError::TextTooLarge`](crate::ExportError::TextTooLarge) as
+    /// soon as the text would exceed `byte_limit`, before writing the rest.
+    /// Other formats return [`ExportError::TextFormat`](crate::ExportError::TextFormat).
+    /// Single-use and cancellable, like [`Self::write`].
+    pub fn write_text(&self, header: bool, byte_limit: usize) -> Result<Vec<u8>> {
+        if self.started.swap(true, Ordering::Relaxed) {
+            return Err(crate::ExportError::AlreadyStarted.into());
+        }
+        self.check_cancelled()?;
+        Ok(super::write_text(
+            self.format,
+            header,
+            byte_limit,
+            self.data(),
+            self.write_progress(),
+        )?)
+    }
+
     fn data(&self) -> ExportData<'_> {
         ExportData {
             schema: &self.schema,
