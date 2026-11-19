@@ -143,7 +143,8 @@ impl FilteredView {
     }
 
     pub(crate) fn col(&self, column: ColumnId) -> Result<ColView<'_>, crate::ColumnError> {
-        Ok(ColView::new(self.column(column)?, self.rows.as_slice()))
+        Ok(ColView::new(self.column(column)?, self.rows.as_slice())
+            .with_mask(self.selection.mask()))
     }
 }
 

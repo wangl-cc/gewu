@@ -104,29 +104,29 @@ pub(crate) fn analyze(
     // Columnar scan: convert fixed-size chunks of the selection to f64 (nulls
     // become NaN and are rejected with other non-finite values), then sample
     // by source row.
-    let selection = Selection::from(rows);
     let read_x = x.as_ref().map(|(_, a)| Numeric::new(a).unwrap());
     let read_y = Numeric::new(y.1).unwrap();
-    let len = selection.len();
+    let len = rows.len();
     let chunk = SCAN_CHUNK.min(len);
     let (mut xs, mut ys) = (vec![0.0; chunk], vec![0.0; chunk]);
     let mut sample = BinaryHeap::with_capacity(limit);
     let mut eligible_rows = 0;
     let mut non_positive_rows = 0;
     for start in (0..len).step_by(SCAN_CHUNK) {
-        let n = SCAN_CHUNK.min(len - start);
-        let window = selection.window(start, n);
+        let window = rows.window(start, (start + SCAN_CHUNK).min(len));
+        let n = window.len();
+        let selection = Selection::from(window);
         let (xs, ys) = (&mut xs[..n], &mut ys[..n]);
-        read_y.write_f64(&window, ys);
+        read_y.write_f64(&selection, ys);
         match read_x {
-            Some(read_x) => read_x.write_f64(&window, xs),
+            Some(read_x) => read_x.write_f64(&selection, xs),
             None => {
-                for (offset, x) in xs.iter_mut().enumerate() {
-                    *x = window.row(offset) as f64;
+                for (x, row) in xs.iter_mut().zip(window.iter()) {
+                    *x = row as f64;
                 }
             }
         }
-        for (offset, (&xv, &yv)) in xs.iter().zip(ys.iter()).enumerate() {
+        for ((&xv, &yv), row) in xs.iter().zip(ys.iter()).zip(window.iter()) {
             if !xv.is_finite() || !yv.is_finite() {
                 continue;
             }
@@ -137,7 +137,7 @@ pub(crate) fn analyze(
                 continue;
             }
             eligible_rows += 1;
-            let row = window.row(offset) as u32;
+            let row = row as u32;
             let key = (priority(row), row);
             if sample.len() < limit {
                 sample.push(key);

@@ -336,4 +336,59 @@ mod tests {
             assert_eq!(fields[0].technical_type, "Int32");
         }
     }
+
+    /// A filtered view scans its bitmap; every analysis must match the same
+    /// rows scanned as explicit row IDs.
+    #[test]
+    fn bitmap_selections_match_row_selections_for_every_analysis() {
+        use crate::col_view::test::Fixture;
+        let n = 1000_usize;
+        let value = |i: usize| (i * 7919 % 613) as f64 - 100.0;
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_iter(
+                (0..n).map(|i| (i % 11 != 0).then(|| value(i))),
+            )),
+            Arc::new(arrow::array::Int64Array::from_iter(
+                (0..n).map(|i| (i % 13 != 0).then(|| value(i) as i64)),
+            )),
+            Arc::new(StringArray::from_iter(
+                (0..n).map(|i| (i % 17 != 0).then(|| format!("s{}é", i % 300))),
+            )),
+        ];
+        let rows: Vec<u32> = (0..n as u32).filter(|row| row % 3 != 1).collect();
+        for array in arrays {
+            let by_rows = Fixture::new(&array, rows.clone());
+            let by_mask = Fixture::masked(&array, rows.clone());
+            let (r, m) = (by_rows.view(), by_mask.view());
+            assert!(matches!(m.selection(), crate::col_view::Selection::Mask(_)));
+            let debug = |view| {
+                format!(
+                    "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                    super::count_nulls(view),
+                    crate::stats::analyze_statistics(view)
+                        .map(|s| format!("{s:?}"))
+                        .ok(),
+                    crate::stats::counts_scaled(view, 7, AxisScale::Linear).ok(),
+                    crate::stats::counts_scaled(view, 7, AxisScale::Log10).ok(),
+                    crate::stats::build_scaled(view, 7, AxisScale::Linear).ok(),
+                    crate::stats::analyze_values(view).ok(),
+                    crate::stats::analyze_lengths(view, 7).ok(),
+                )
+            };
+            assert_eq!(debug(r), debug(m), "{}", array.data_type());
+            let scatter = |view: crate::col_view::ColView<'_>| {
+                crate::stats::scatter::analyze(
+                    None,
+                    (ColumnId::new(0), view.array()),
+                    view.rows(),
+                    64,
+                    AxisScale::Linear,
+                    AxisScale::Linear,
+                )
+                .map(|s| format!("{s:?}"))
+                .ok()
+            };
+            assert_eq!(scatter(r), scatter(m));
+        }
+    }
 }

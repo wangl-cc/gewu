@@ -148,18 +148,31 @@ fn write_f64<T: ArrowPrimitiveType>(
                 }
             }
         }
-        Selection::Rows(rows) => {
-            for (out, &row) in out.iter_mut().zip(rows.iter()) {
-                *out = as_float(values[row as usize]);
-            }
-            if let Some(nulls) = nulls {
-                for (out, &row) in out.iter_mut().zip(rows.iter()) {
-                    if nulls.is_null(row as usize) {
-                        *out = f64::NAN;
-                    }
-                }
-            }
-        }
+        Selection::Rows(rows) => write_rows(
+            values,
+            nulls,
+            rows.iter().map(|&row| row as usize),
+            out,
+            as_float,
+        ),
+        Selection::Mask(mask) => write_rows(values, nulls, mask.set_indices(), out, as_float),
+    }
+}
+
+/// Gather `rows` into `out` as `f64`, writing NaN for nulls.
+#[inline]
+fn write_rows<N: Copy>(
+    values: &[N],
+    nulls: Option<&arrow::buffer::NullBuffer>,
+    rows: impl Iterator<Item = usize>,
+    out: &mut [f64],
+    as_float: impl Fn(N) -> f64,
+) {
+    for (out, row) in out.iter_mut().zip(rows) {
+        *out = match nulls {
+            Some(nulls) if nulls.is_null(row) => f64::NAN,
+            _ => as_float(values[row]),
+        };
     }
 }
 

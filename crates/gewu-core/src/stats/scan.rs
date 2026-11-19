@@ -3,8 +3,8 @@
 //! Each helper matches the selection and the presence of nulls once, then
 //! runs a monomorphic loop: contiguous ranges read the native values slice
 //! (and walk set validity bits when nulls exist); explicit rows index the
-//! slice directly. Callbacks receive source rows, so results can address the
-//! original column without materializing a copy.
+//! slice directly; bitmaps are ANDed with the validity bitmap first. Callbacks receive source rows,
+//! so results can address the original column without materializing a copy.
 
 use arrow::{
     array::{Array, PrimitiveArray},
@@ -53,6 +53,8 @@ pub(crate) fn for_each_valid_row(
                 }
             }
         }
+        (Selection::Mask(mask), None) => mask.set_indices().for_each(f),
+        (Selection::Mask(mask), Some(nulls)) => (*mask & nulls.inner()).set_indices().for_each(f),
     }
 }
 
@@ -74,6 +76,9 @@ pub(crate) fn null_count(nulls: Option<&NullBuffer>, selection: &Selection<'_>) 
             .iter()
             .map(|&row| u64::from(nulls.is_null(row as usize)))
             .sum(),
+        Selection::Mask(mask) => {
+            (mask.count_set_bits() - (*mask & nulls.inner()).count_set_bits()) as u64
+        }
     }
 }
 
@@ -94,15 +99,18 @@ mod tests {
     #[test]
     fn null_counts_and_valid_rows_follow_each_selection_kind() {
         let nulls = NullBuffer::from(vec![true, false, true, false, true]);
+        let mask = arrow::buffer::BooleanBuffer::from(vec![false, true, true, true, false]);
         let selections = [
             Selection::Range(0..5),
             Selection::Range(1..4),
             Selection::Rows(&[4, 3, 1]),
+            Selection::Mask(&mask),
         ];
         for (selection, nulls_seen, valid) in [
             (&selections[0], 2, vec![0, 2, 4]),
             (&selections[1], 2, vec![2]),
             (&selections[2], 2, vec![4]),
+            (&selections[3], 2, vec![2]),
         ] {
             assert_eq!(
                 null_count(Some(&nulls), selection),
@@ -112,6 +120,9 @@ mod tests {
             let mut rows = Vec::new();
             for_each_valid_row(Some(&nulls), selection, |row| rows.push(row));
             assert_eq!(rows, valid, "{selection:?}");
+            let mut all = Vec::new();
+            for_each_valid_row(None, selection, |row| all.push(row));
+            assert_eq!(all.len(), selection.len(), "{selection:?}");
             assert_eq!(null_count(None, selection), 0);
         }
     }

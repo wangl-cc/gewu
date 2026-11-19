@@ -303,19 +303,15 @@ fn encoded(view: ColView<'_>, dictionary: &Dictionary) -> Result<ValueSummary> {
             }
             counts
         }
-        Selection::Rows(rows) => {
+        selection => {
             let mut counts = vec![0_u64; n];
-            for &row in rows {
-                let index = row as usize;
-                if nulls.is_some_and(|nulls| nulls.is_null(index)) {
-                    continue;
-                }
-                let code = codes[index] as usize;
+            crate::stats::scan::for_each_valid_row(nulls, &selection, |row| {
+                let code = codes[row] as usize;
                 if counts[code] == 0 {
-                    first[code] = row;
+                    first[code] = row as u32;
                 }
                 counts[code] += 1;
-            }
+            });
             counts
         }
     };
