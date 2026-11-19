@@ -4,8 +4,8 @@
 //! Dataset and View handles share immutable data.
 
 mod analysis;
-mod cells;
 mod column;
+mod column_segment;
 mod dataset;
 mod error;
 mod export;
@@ -24,8 +24,8 @@ pub use analysis::{
     AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
     ValueFrequency, ValueSummary,
 };
-pub use cells::{CellText, CellTile, RowSpan, TileBatch};
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
+pub use column_segment::{ColumnSpan, FormattedColumnSegment, RowSpan, SegmentBatch};
 pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::{
     AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,

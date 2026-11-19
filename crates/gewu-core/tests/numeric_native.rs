@@ -391,9 +391,9 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let block = unfiltered.unsorted().cell_text(1, 2, &[c0]).unwrap();
-        let min = block.cell(0, 0).unwrap();
-        let max = block.cell(1, 0).unwrap();
+        let segment = unfiltered.unsorted().format_column(c0, 1, 2).unwrap();
+        let min = segment.cell(0).unwrap();
+        let max = segment.cell(1).unwrap();
         assert_eq!(
             summary.mean_label.as_deref(),
             Some(min),

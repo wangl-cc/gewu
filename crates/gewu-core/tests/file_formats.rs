@@ -87,12 +87,12 @@ mod delimited {
             .unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.schema().field(1).data_type(), &DataType::Float64);
-        let block = doc
+        let segment = doc
             .unfiltered()
             .unsorted()
-            .cell_text(0, 2, &[ColumnId::from_raw(0)])
+            .format_column(ColumnId::from_raw(0), 0, 2)
             .unwrap();
-        assert_eq!([block.cell(0, 0), block.cell(1, 0)], [
+        assert_eq!([segment.cell(0), segment.cell(1)], [
             Some("9007199254740993"),
             Some("1.5")
         ]);
@@ -119,16 +119,18 @@ mod delimited {
             assert_eq!(doc.schema().field(0).data_type(), &DataType::Int64);
             assert_eq!(doc.schema().field(1).data_type(), &DataType::Boolean);
             assert_eq!(doc.schema().field(2).data_type(), &DataType::Float64);
-            let cols: Vec<ColumnId> = (0..4).map(ColumnId::from_raw).collect();
-            let rows = doc.unfiltered().unsorted().cell_text(0, 2, &cols).unwrap();
-            assert_eq!(rows.cell(0, 0), Some("7"));
-            assert_eq!(rows.cell(0, 1), Some("true"));
-            assert_eq!(rows.cell(0, 2), Some("1.25"));
+            let view = doc.unfiltered().unsorted();
+            let rows: Vec<_> = (0..4)
+                .map(|c| view.format_column(ColumnId::from_raw(c), 0, 2).unwrap())
+                .collect();
+            assert_eq!(rows[0].cell(0), Some("7"));
+            assert_eq!(rows[1].cell(0), Some("true"));
+            assert_eq!(rows[2].cell(0), Some("1.25"));
             assert_eq!(
-                rows.cell(0, 3),
+                rows[3].cell(0),
                 Some(format!("雪{delimiter}\"quoted\"\nline").as_str())
             );
-            assert_eq!(rows.cell(1, 2), None);
+            assert_eq!(rows[2].cell(1), None);
             assert_disabled_exports(&doc);
         }
     }
@@ -151,10 +153,10 @@ mod delimited {
         let rows = doc
             .unfiltered()
             .unsorted()
-            .cell_text(69_999, 2, &[ColumnId::from_raw(0)])
+            .format_column(ColumnId::from_raw(0), 69_999, 2)
             .unwrap();
-        assert_eq!(rows.cell(0, 0), Some("1"));
-        assert_eq!(rows.cell(1, 0), Some("late text"));
+        assert_eq!(rows.cell(0), Some("1"));
+        assert_eq!(rows.cell(1), Some("late text"));
     }
 
     #[test]
@@ -227,14 +229,13 @@ mod delimited {
             assert_eq!(reloaded.info().row_count, 2);
             assert_eq!(reloaded.schema().field(0).name(), "label");
             assert_eq!(reloaded.schema().field(1).name(), "id");
-            assert_eq!(
-                reloaded
-                    .unfiltered()
-                    .unsorted()
-                    .cell_text(0, 2, &[c0, c1])
-                    .unwrap(),
-                doc.cell_text(0, 2, &[c1, c0]).unwrap()
-            );
+            let reloaded = reloaded.unfiltered().unsorted();
+            for (exported, original) in [(c0, c1), (c1, c0)] {
+                assert_eq!(
+                    reloaded.format_column(exported, 0, 2).unwrap(),
+                    doc.format_column(original, 0, 2).unwrap()
+                );
+            }
         }
         let empty = dataset
             .filter(&[ColumnFilter {
@@ -339,9 +340,9 @@ mod xlsx {
         assert_eq!(
             doc.unfiltered()
                 .unsorted()
-                .cell_text(0, 1, &[c1])
+                .format_column(c1, 0, 1)
                 .unwrap()
-                .cell(0, 0),
+                .cell(0),
             Some("雪\nline")
         );
         assert_disabled_exports(&doc);
@@ -355,18 +356,13 @@ mod xlsx {
             .unwrap();
         assert_eq!(raw.info().row_count, 2);
         assert_eq!(raw.schema().field(0).name(), "column_1");
-        let block = raw
-            .unfiltered()
-            .unsorted()
-            .cell_text(0, 2, &[c0, c1])
-            .unwrap();
+        let view = raw.unfiltered().unsorted();
+        let (first, second) = (
+            view.format_column(c0, 0, 2).unwrap(),
+            view.format_column(c1, 0, 2).unwrap(),
+        );
         assert_eq!(
-            [
-                block.cell(0, 0),
-                block.cell(0, 1),
-                block.cell(1, 0),
-                block.cell(1, 1)
-            ],
+            [first.cell(0), second.cell(0), first.cell(1), second.cell(1)],
             ["10.0", "20.0", "30.0", "40.0"].map(Some)
         );
         assert_eq!(raw.info().metadata, FileMetadata::Xlsx {
@@ -419,14 +415,13 @@ mod xlsx {
         let reloaded = gewu_core::Dataset::open(&destination)
             .map(std::sync::Arc::new)
             .unwrap();
-        assert_eq!(
-            reloaded
-                .unfiltered()
-                .unsorted()
-                .cell_text(0, 2, &[c0, c1])
-                .unwrap(),
-            doc.cell_text(0, 2, &[c1, c2]).unwrap()
-        );
+        let reloaded = reloaded.unfiltered().unsorted();
+        for (exported, original) in [(c0, c1), (c1, c2)] {
+            assert_eq!(
+                reloaded.format_column(exported, 0, 2).unwrap(),
+                doc.format_column(original, 0, 2).unwrap()
+            );
+        }
         let empty = dataset
             .filter(&[ColumnFilter {
                 column: c1,

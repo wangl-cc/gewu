@@ -4,7 +4,8 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    CellText, CellTile, ColumnId, FileType, FindSession, GewuError, GewuExport, RowSpan, TileBatch,
+    ColumnId, ColumnSpan, FileType, FindSession, FormattedColumnSegment, GewuError, GewuExport,
+    RowSpan, SegmentBatch,
 };
 
 #[derive(uniffi::Object)]
@@ -18,43 +19,41 @@ impl GewuOrderedView {
         self.inner.row_count()
     }
 
-    pub fn cell_text(
+    /// Format one column at display rows `start..start + count`, clipped to
+    /// the available rows.
+    pub fn format_column(
         &self,
+        column: ColumnId,
         start: u64,
         count: u32,
-        columns: Vec<ColumnId>,
-    ) -> Result<CellText, GewuError> {
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(self.inner.cell_text(start, count, &columns)?.into())
+    ) -> Result<FormattedColumnSegment, GewuError> {
+        self.inner
+            .format_column(column.into(), start, count)?
+            .try_into()
     }
 
     pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
         self.inner.source_rows(start, count)
     }
 
-    /// Read every missing viewport tile in one call. Each cell tile has its own
-    /// text buffer, so a long value only enlarges the tile that contains it.
-    pub fn read_tiles(
+    /// Read a viewport's source rows and column segments in one call. The App
+    /// decides which segments to read and cache; Core formats each one. An
+    /// unknown column fails the whole call without a partial result.
+    pub fn read_segments(
         &self,
         rows: Vec<RowSpan>,
-        cells: Vec<CellTile>,
-    ) -> Result<TileBatch, GewuError> {
-        // Swift decides which tiles to read and cache; Core formats each one.
-        let cells = cells
+        segments: Vec<ColumnSpan>,
+    ) -> Result<SegmentBatch, GewuError> {
+        let segments = segments
             .iter()
-            .map(|tile| {
-                let text = self
-                    .inner
-                    .cell_text(tile.start, tile.count, &[tile.column.into()])?;
-                Ok(text.into())
-            })
-            .collect::<Result<_, GewuError>>()?;
-        Ok(TileBatch {
+            .map(|span| self.format_column(span.column, span.start, span.count))
+            .collect::<Result<_, _>>()?;
+        Ok(SegmentBatch {
             source_rows: rows
                 .iter()
                 .map(|span| self.inner.source_rows(span.start, span.count))
                 .collect(),
-            cells,
+            segments,
         })
     }
 

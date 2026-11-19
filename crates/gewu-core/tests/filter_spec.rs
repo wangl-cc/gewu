@@ -116,8 +116,11 @@ fn invalid_text_leaves_the_applied_view_intact() {
         )))
     ));
     assert_eq!(
-        doc.unfiltered().unsorted().cell_text(0, 10, &[c0]).unwrap(),
-        before.cell_text(0, 10, &[c0]).unwrap()
+        doc.unfiltered()
+            .unsorted()
+            .format_column(c0, 0, 10)
+            .unwrap(),
+        before.format_column(c0, 0, 10).unwrap()
     );
 }
 

@@ -14,7 +14,7 @@ struct TablePresentationTests {
         let model = try makeModel(csv: "number,label\n1,first\n2,\(longLabel)\n3,third\n")
         let original = model.ordered
         let requests = AsyncStream<PendingViewportRead>.makeStream()
-        let loader = gatedLoader(original: original, requests: requests.continuation, tileByteLimit: 256)
+        let loader = gatedLoader(original: original, requests: requests.continuation, segmentByteLimit: 256)
         let controller = DataTableController(model: model, loader: loader)
         model.table = controller
         defer {
@@ -135,12 +135,12 @@ struct TablePresentationTests {
 
     private func gatedLoader(
         original: GewuOrderedView, requests: AsyncStream<PendingViewportRead>.Continuation,
-        tileByteLimit: Int = 1024 * 1024
-    ) -> TableRowLoader {
-        TableRowLoader(tileByteLimit: tileByteLimit) { view, tiles in
-            if view === original { return try TableTiles(reading: view, tiles: tiles) }
+        segmentByteLimit: Int = 1024 * 1024
+    ) -> TableSegmentLoader {
+        TableSegmentLoader(segmentByteLimit: segmentByteLimit) { view, keys in
+            if view === original { return try TableSegments(reading: view, keys: keys) }
             return try await withCheckedThrowingContinuation { continuation in
-                requests.yield(.init(view: view, tiles: tiles, continuation: continuation))
+                requests.yield(.init(view: view, keys: keys, continuation: continuation))
             }
         }
     }
@@ -166,12 +166,14 @@ struct TablePresentationTests {
                 table.tableColumns[$0].identifier.rawValue.hasPrefix("c")
             }
             let columns = indexes.map { ColumnId(raw: UInt32(table.tableColumns[$0].identifier.rawValue.dropFirst())!) }
-            let expected = try model.ordered.cellText(
-                start: UInt64(visible.location), count: UInt32(visible.length), columns: columns)
+            let expected = try columns.map {
+                try model.ordered.formatColumn(
+                    column: $0, start: UInt64(visible.location), count: UInt32(visible.length))
+            }
             for (r, row) in (visible.location..<(visible.location + visible.length)).enumerated() {
                 for (c, column) in columns.enumerated() {
                     let value = try cell(table, column: column, row: row)
-                    #expect(!value.isLoading && value.textField?.stringValue == expected.cell(row: r, column: c))
+                    #expect(!value.isLoading && value.textField?.stringValue == expected[c].cell(row: r))
                 }
             }
         }
@@ -223,13 +225,13 @@ struct TablePresentationTests {
         #expect(updates.withLock { $0 } == 1, "Assigning an unchanged header selection must not republish it")
     }
 
-    @Test func pureColumnVisibilityWithoutConditionsPreservesOrderedViewAndTileCache() async throws {
+    @Test func pureColumnVisibilityWithoutConditionsPreservesOrderedViewAndSegmentCache() async throws {
         let model = try makeModel(csv: "a,b,c\n1,first,10\n2,second,20\n3,third,30\n")
         let originalOrdered = model.ordered
         let requests = AsyncStream<PendingViewportRead>.makeStream()
-        let loader = TableRowLoader { view, tiles in
+        let loader = TableSegmentLoader { view, keys in
             try await withCheckedThrowingContinuation { continuation in
-                requests.continuation.yield(.init(view: view, tiles: tiles, continuation: continuation))
+                requests.continuation.yield(.init(view: view, keys: keys, continuation: continuation))
             }
         }
         let controller = DataTableController(model: model, loader: loader)
@@ -245,13 +247,13 @@ struct TablePresentationTests {
         let number = try cell(table, column: Self.c0, row: 0)
         let label = try cell(table, column: Self.c1, row: 0)
         try await waitUntil { !number.isLoading && !label.isLoading }
-        #expect(loader.tile(for: 0, column: Self.c0).map { $0.text.columnTexts(0) } == ["1", "2", "3"])
+        #expect(loader.segment(for: 0, column: Self.c0).map { $0.segment.texts } == ["1", "2", "3"])
 
-        // Hiding c1 and re-showing c1 synchronously keeps `model.ordered ===` and preserves cached tiles.
+        // Hiding c1 and re-showing c1 synchronously keeps `model.ordered ===` and preserves cached segments.
         model.removeColumn(Self.c1)
         #expect(!model.isBusy && model.ordered === originalOrdered)
         controller.update(showsRowNumbers: true)
-        #expect(loader.tile(for: 0, column: Self.c0).map { $0.text.columnTexts(0) } == ["1", "2", "3"])
+        #expect(loader.segment(for: 0, column: Self.c0).map { $0.segment.texts } == ["1", "2", "3"])
         let remaining = try cell(table, column: Self.c0, row: 0)
         #expect(!remaining.isLoading && remaining.textField?.stringValue == "1")
 
@@ -261,7 +263,7 @@ struct TablePresentationTests {
         let restored = try cell(table, column: Self.c1, row: 0)
         #expect(!restored.isLoading && restored.textField?.stringValue == "first")
         #expect(
-            loader.tile(for: 0, column: Self.c1).map { $0.text.columnTexts(0) } == [
+            loader.segment(for: 0, column: Self.c1).map { $0.segment.texts } == [
                 "first", "second", "third",
             ])
     }
@@ -288,11 +290,11 @@ struct TablePresentationTests {
         model.setSortDirection(column: Self.c0, descending: false)
         try await waitUntil { !model.isBusy }
         #expect(model.appliedSort(for: Self.c0)?.descending == false)
-        #expect(try model.ordered.cellText(start: 0, count: 3, columns: [Self.c0]).texts == ["1", "2", "3"])
+        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["1", "2", "3"])
         model.clearSort()
         try await waitUntil { !model.isBusy }
         #expect(model.viewer.appliedSorts.isEmpty)
-        #expect(try model.ordered.cellText(start: 0, count: 3, columns: [Self.c0]).texts == ["1", "2", "3"])
+        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["1", "2", "3"])
         #expect(model.errorMessage == nil)
     }
 
@@ -421,12 +423,14 @@ struct TablePresentationTests {
             try #require(visible.location != NSNotFound && visible.length > 0)
             let last = min(table.numberOfRows, visible.location + visible.length) - 1
             for row in [visible.location, last] {
-                let expected = try model.ordered.cellText(start: UInt64(row), count: 1, columns: [Self.c0, Self.c1])
+                let expected = try [Self.c0, Self.c1].map {
+                    try model.ordered.formatColumn(column: $0, start: UInt64(row), count: 1).cell(row: 0)
+                }
                 let number = try cell(table, column: Self.c0, row: row)
                 let label = try cell(table, column: Self.c1, row: row)
                 try await waitUntil { !number.isLoading && !label.isLoading }
-                #expect(number.textField?.stringValue == expected.cell(row: 0, column: 0))
-                #expect(label.textField?.stringValue == expected.cell(row: 0, column: 1))
+                #expect(number.textField?.stringValue == expected[0])
+                #expect(label.textField?.stringValue == expected[1])
             }
         }
 
@@ -572,13 +576,13 @@ private struct TablePresentationTimeout: Error {}
 
 private struct PendingViewportRead: Sendable {
     let view: GewuOrderedView
-    let tiles: [TileKey]
-    let continuation: CheckedContinuation<TableTiles, Error>
+    let keys: [BlockKey]
+    let continuation: CheckedContinuation<TableSegments, Error>
 
-    var start: Int { tiles.map(\.start).min() ?? 0 }
-    var columns: [ColumnId] { tiles.compactMap(\.column) }
+    var start: Int { keys.map(\.start).min() ?? 0 }
+    var columns: [ColumnId] { keys.compactMap(\.column) }
 
     func finish() {
-        continuation.resume(with: Result { try TableTiles(reading: view, tiles: tiles) })
+        continuation.resume(with: Result { try TableSegments(reading: view, keys: keys) })
     }
 }

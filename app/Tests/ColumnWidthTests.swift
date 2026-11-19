@@ -62,7 +62,7 @@ struct ColumnWidthTests {
         let bogus = ColumnId(raw: 99)
         let cached = ColumnWidthMeasurement.Input(
             column: bogus, name: "value", type: "Text", text: true,
-            sample: TableExecutionTests.text(["cached value"]))
+            sample: TableExecutionTests.segment(["cached value"]))
         let widths = try ColumnWidthMeasurement.measure(
             ordered: ordered, columns: [cached], start: 0, fontSize: 12, maximum: 600, cancellation: .init())
         #expect(widths[bogus] != nil)

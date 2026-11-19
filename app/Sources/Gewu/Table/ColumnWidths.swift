@@ -74,7 +74,7 @@ enum ColumnWidthMeasurement {
         let type: String
         let text: Bool
         /// Cached single-column text near the viewport, if any.
-        var sample: CellText? = nil
+        var sample: FormattedColumnSegment? = nil
     }
 
     /// Runs on a serial worker. Limit UTF-16 input before grapheme processing so
@@ -90,7 +90,7 @@ enum ColumnWidthMeasurement {
         }
         for column in columns {
             try cancellation.check()
-            let sample = try column.sample ?? ordered.cellText(start: start, count: 32, columns: [column.column])
+            let sample = try column.sample ?? ordered.formatColumn(column: column.column, start: start, count: 32)
             var size =
                 max(
                     width(column.name, font: .systemFont(ofSize: fontSize, weight: .semibold)),
@@ -98,8 +98,8 @@ enum ColumnWidthMeasurement {
             let font =
                 column.text
                 ? NSFont.systemFont(ofSize: fontSize) : .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
-            for row in 0..<min(32, Int(sample.nRows)) {
-                size = max(size, width(sample.cell(row: row, column: 0) ?? "null", font: font) + 20)
+            for row in 0..<min(32, Int(sample.rowCount)) {
+                size = max(size, width(sample.cell(row: row) ?? "null", font: font) + 20)
             }
             result[column.column] = min(max(size, 80), maximum)
         }

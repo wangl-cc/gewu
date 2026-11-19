@@ -87,8 +87,9 @@ enum ViewSmoke {
                 ])
         check(InspectorSection.values.mask == 8)
 
-        let page = try sorted.cellText(start: 0, count: 1, columns: [labelCol, idCol])
-        check(page.cell(row: 0, column: 0) == "three" && page.cell(row: 0, column: 1) == "3")
+        let label = try sorted.formatColumn(column: labelCol, start: 0, count: 1)
+        let id = try sorted.formatColumn(column: idCol, start: 0, count: 1)
+        check(label.cell(row: 0) == "three" && id.cell(row: 0) == "3")
         let restored = dataset!.unfiltered()
         check(restored.rowCount() == 3)
         check(originalOrdered.sourceRows(start: 0, count: 3) == [0, 1, 2])

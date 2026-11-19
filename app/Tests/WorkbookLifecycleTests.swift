@@ -79,7 +79,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == decomposed)
         let decomposedDocument = try #require(model.document)
-        let decomposedRows = try decomposedDocument.ordered.cellText(start: 0, count: 1, columns: [ColumnId(raw: 0)])
+        let decomposedRows = try decomposedDocument.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
         #expect(decomposedRows.texts == ["decomposed"])
 
         model.selectSheet(composed)
@@ -88,7 +88,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == composed)
         let composedDocument = try #require(model.document)
-        let composedRows = try composedDocument.ordered.cellText(start: 0, count: 1, columns: [ColumnId(raw: 0)])
+        let composedRows = try composedDocument.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
         #expect(composedRows.texts == ["composed"])
     }
 
@@ -194,7 +194,7 @@ struct WorkbookLifecycleTests {
         model.open()
         await settled(model)
         #expect(model.document?.ordered.rowCount() == 2 && !model.hasHeader)
-        let first = try model.document?.ordered.cellText(start: 0, count: 1, columns: [ColumnId(raw: 0)])
+        let first = try model.document?.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
         #expect(first?.texts == ["1"])
         try await presentationContracts(#require(model.document))
         model.reopen(hasHeader: true)
@@ -215,7 +215,7 @@ struct WorkbookLifecycleTests {
         workbook.selectSheet(.init(rawValue: "Last"))
         await settled(workbook)
         #expect(!workbook.hasHeader && workbook.selectedSheet?.rawValue == "Last")
-        let rows = try #require(workbook.document).ordered.cellText(start: 0, count: 1, columns: [ColumnId(raw: 0)])
+        let rows = try #require(workbook.document).ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
         #expect(rows.texts == ["column_3"], "Worksheet changes must retain the header option")
     }
 

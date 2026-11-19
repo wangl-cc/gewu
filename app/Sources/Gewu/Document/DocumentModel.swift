@@ -421,7 +421,7 @@ final class DocumentModel {
                 }
                 try Task.checkCancellation()
                 guard let self else { return }
-                var prepared: TableRowLoader.Snapshot?
+                var prepared: TableSegmentLoader.Snapshot?
                 while let table = self.table {
                     let columns = self.draftVisibleColumns
                     let snapshot = try await table.loadViewport(in: nextOrdered, columns: columns)
@@ -461,7 +461,7 @@ final class DocumentModel {
         visibleColumns: [ColumnId],
         filtered: GewuFilteredView?,
         ordered: GewuOrderedView,
-        rows: TableRowLoader.Snapshot?
+        rows: TableSegmentLoader.Snapshot?
     ) {
         if let filtered {
             viewer.apply(filtered: filtered, ordered: ordered, filters: target.filters, sorts: target.sorts)

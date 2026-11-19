@@ -10,12 +10,12 @@ use crate::{
 };
 
 mod analysis;
-mod cells;
+mod column_segment;
 mod export;
 mod filter;
 mod find;
 
-pub use cells::CellText;
+pub use column_segment::FormattedColumnSegment;
 
 /// Filtered row projection over an immutable [`Dataset`].
 /// Owns row membership and provides column analysis, filter metadata, and sorting.
@@ -193,10 +193,12 @@ mod tests {
         assert!(matches!(empty_sort.rows, RowIds::All(12_000)));
 
         // Works across rows, stats, find, and export.
-        let block = unsorted.cell_text(0, 3, &[c0, c1]).unwrap();
         assert_eq!(unsorted.source_rows(0, 3), [0, 1, 2]);
-        assert_eq!(block.cell(0, 0), Some("0"));
-        assert_eq!(block.cell(1, 1), Some("odd"));
+        assert_eq!(unsorted.format_column(c0, 0, 3).unwrap().cell(0), Some("0"));
+        assert_eq!(
+            unsorted.format_column(c1, 0, 3).unwrap().cell(1),
+            Some("odd")
+        );
 
         assert_eq!(unfiltered.count_nulls(c0).unwrap(), 0);
         assert_eq!(unfiltered.statistics(c0).unwrap().mean, Some(5999.5));

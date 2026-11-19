@@ -190,17 +190,13 @@ fn rows(c: &mut Criterion) {
     let mut g = c.benchmark_group("rows");
 
     let plain = doc.unfiltered().unsorted();
-    g.bench_function("block_256_all_columns", |b| {
-        b.iter(|| plain.cell_text(1_000_000, 256, &columns).unwrap())
-    });
-
-    // The table's viewport read: one 64-row tile per column and block.
-    g.bench_function("tiles_256_all_columns", |b| {
+    // The table's viewport read: one 64-row segment per column and block.
+    g.bench_function("segments_256_all_columns", |b| {
         b.iter(|| {
             for &column in &columns {
                 for block in 0..4 {
                     plain
-                        .cell_text(1_000_000 + block * 64, 64, &[column])
+                        .format_column(column, 1_000_000 + block * 64, 64)
                         .unwrap();
                 }
             }

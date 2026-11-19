@@ -61,7 +61,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private let table = ContextTableView()
     private let scroll = NSScrollView()
     private lazy var gutter = RowGutterView(table: table)
-    private let rows: TableRowLoader
+    private let segments: TableSegmentLoader
     private var fitTask: Task<Void, Never>?
     private var findRevision: UInt64?
     private var highlightRevision: UInt64?
@@ -88,15 +88,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     private let rowHeaderID = NSUserInterfaceItemIdentifier("rowHeader")
     private let rowViewID = NSUserInterfaceItemIdentifier("stripedRow")
 
-    init(model: DocumentModel, loader: TableRowLoader? = nil) {
+    init(model: DocumentModel, loader: TableSegmentLoader? = nil) {
         self.model = model
-        rows = loader ?? TableRowLoader()
+        segments = loader ?? TableSegmentLoader()
         super.init(nibName: nil, bundle: nil)
-        rows.onLoad = { [weak self] view, tiles in
+        segments.onLoad = { [weak self] view, loaded in
             guard let self, self.displayedView === view, self.model.ordered === view else { return }
-            self.display(tiles)
+            self.display(loaded)
         }
-        rows.onError = { [weak self] view, error in
+        segments.onError = { [weak self] view, error in
             guard let self, self.displayedView === view, self.model.ordered === view else { return }
             self.model.reportError(error, prefix: "Could not load rows: ")
         }
@@ -117,7 +117,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     /// Include one bordering row for fractional scrolling and AppKit's clipping.
     private func viewport(
         for ordered: GewuOrderedView, columns visibleCols: [ColumnId], sameLayout: Bool
-    ) -> TableRowLoader.Viewport {
+    ) -> TableSegmentLoader.Viewport {
         let count = Int(clamping: ordered.rowCount())
         let clip = scroll.contentView.bounds
         let stride = table.rowHeight + table.intercellSpacing.height
@@ -148,14 +148,14 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         return .init(rows: rows, columns: columns)
     }
 
-    func loadViewport(in ordered: GewuOrderedView, columns: [ColumnId]) async throws -> TableRowLoader.Snapshot {
+    func loadViewport(in ordered: GewuOrderedView, columns: [ColumnId]) async throws -> TableSegmentLoader.Snapshot {
         let sameLayout = displayedInput?.visibleColumns == columns
-        return try await rows.snapshot(of: ordered) {
+        return try await segments.snapshot(of: ordered) {
             viewport(for: ordered, columns: columns, sameLayout: sameLayout)
         }
     }
 
-    func commit(_ snapshot: TableRowLoader.Snapshot) {
+    func commit(_ snapshot: TableSegmentLoader.Snapshot) {
         loadViewIfNeeded()
         closePopover()
         stopFitting()
@@ -163,13 +163,13 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let input = model.tableInput
         let columnsChanged = displayedInput?.visibleColumns != input.visibleColumns
         reloading = true
-        rows.install(snapshot)
+        segments.install(snapshot)
         updateColumns(input)
         table.deselectAll(nil)
         if rowCountChanged { table.noteNumberOfRowsChanged() }
         if rowCountChanged || columnsChanged { table.layoutSubtreeIfNeeded() }
         // A retained offscreen cell binds to this View when it next enters the viewport.
-        display(snapshot.tiles)
+        display(snapshot.segments)
         viewportRows = NSRange(snapshot.viewport.rows)
         viewportColumns = snapshot.viewport.columns
         gutter.needsDisplay = true
@@ -233,7 +233,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         buildColumns(model.info)
         builtColumns = true
         let initial = model.tableInput
-        rows.reset(to: initial.ordered)
+        segments.reset(to: initial.ordered)
         updateColumns(initial)
         table.noteNumberOfRowsChanged()
     }
@@ -395,7 +395,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard builtColumns, !reloading, !applyingColumns else { return }
         let visibleRows = table.rows(in: table.visibleRect)
         guard visibleRows.location != NSNotFound else {
-            rows.updateViewport(rows: 0..<0, columns: [])
+            segments.updateViewport(rows: 0..<0, columns: [])
             return
         }
         let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> ColumnId? in
@@ -408,7 +408,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             viewportRows = visibleRows
             viewportColumns = columns
         }
-        rows.updateViewport(
+        segments.updateViewport(
             rows: visibleRows.location..<(visibleRows.location + visibleRows.length), columns: columns)
     }
 
@@ -420,7 +420,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func buildColumns(_ info: DatasetInfo) {
         gutter.label = { [weak self] row in
-            guard let self, let source = self.rows.sourceRow(for: row) else { return nil }
+            guard let self, let source = self.segments.sourceRow(for: row) else { return nil }
             return formatRowNumber(source, base: self.rowNumberBase)
         }
         let rowHeader = NSTableColumn(identifier: rowHeaderID)
@@ -458,29 +458,29 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    /// Render tiles directly, including tiles too large for the cache.
-    private func display(_ tiles: TableTiles) {
+    /// Render segments directly, including segments too large for the cache.
+    private func display(_ loaded: TableSegments) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
         let visibleRows = visible.location..<(visible.location + visible.length)
         let visibleColumns = table.columnIndexes(in: table.visibleRect)
-        for (key, text) in tiles.cells {
+        for (key, segment) in loaded.segments {
             guard let column = key.column else { continue }
             let rows = key.rows.clamped(to: visibleRows)
             let index = table.column(withIdentifier: identifier(for: column))
             guard !rows.isEmpty, visibleColumns.contains(index) else { continue }
             for row in rows {
                 if let cell = table.view(atColumn: index, row: row, makeIfNecessary: true) as? MatchCellView {
-                    render(cell, column: column, row: row, text: text.cell(row: row - key.start, column: 0))
+                    render(cell, column: column, row: row, text: segment.cell(row: row - key.start))
                 }
             }
         }
-        guard !tiles.sourceRows.isEmpty else { return }
+        guard !loaded.sourceRows.isEmpty else { return }
         gutter.needsDisplay = true
-        if let row = model.selectedDisplayRow, let rows = tiles.sourceRows[row / TileKey.rowCount],
-            row % TileKey.rowCount < rows.count
+        if let row = model.selectedDisplayRow, let rows = loaded.sourceRows[row / BlockKey.rowCount],
+            row % BlockKey.rowCount < rows.count
         {
-            let source = rows[row % TileKey.rowCount]
+            let source = rows[row % BlockKey.rowCount]
             if model.selectedSourceRow != source { model.selectedSourceRow = source }
         }
     }
@@ -503,8 +503,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
                 if cell.boundView !== displayedView {
                     bind(cell, column: column, row: row)
-                } else if cell.isLoading, let cached = rows.tile(for: row, column: column) {
-                    render(cell, column: column, row: row, text: cached.text.cell(row: cached.row, column: 0))
+                } else if cell.isLoading, let cached = segments.segment(for: row, column: column) {
+                    render(cell, column: column, row: row, text: cached.segment.cell(row: cached.row))
                 } else {
                     let kind = model.columnInfo[column]?.valueCategory ?? .text
                     if restyle {
@@ -524,7 +524,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     func stopLoading() {
-        rows.stop()
+        segments.stop()
         stopFitting()
     }
 
@@ -554,8 +554,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     private func bind(_ cell: MatchCellView, column: ColumnId, row: Int) {
         cell.boundView = displayedView
-        if let cached = rows.tile(for: row, column: column) {
-            render(cell, column: column, row: row, text: cached.text.cell(row: cached.row, column: 0))
+        if let cached = segments.segment(for: row, column: column) {
+            render(cell, column: column, row: row, text: cached.segment.cell(row: cached.row))
         } else {
             let kind = model.columnInfo[column]?.valueCategory ?? .text
             cell.isLoading = true
@@ -605,8 +605,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard row >= 0, index >= 0, index < table.tableColumns.count,
             let column = columnId(table.tableColumns[index])
         else { return nil }
-        if let cached = rows.tile(for: row, column: column) {
-            return CellContent(row: row, column: column, text: cached.text.cell(row: cached.row, column: 0))
+        if let cached = segments.segment(for: row, column: column) {
+            return CellContent(row: row, column: column, text: cached.segment.cell(row: cached.row))
         }
         // Large values can be displayed without being retained by the row cache.
         guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView,
@@ -732,7 +732,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
         let inputs: [ColumnWidthMeasurement.Input] = columns.compactMap { column in
             guard let info = model.columnInfo[column] else { return nil }
-            let sample = self.rows.tile(for: Int(start), column: column)?.text
+            let sample = self.segments.segment(for: Int(start), column: column)?.segment
             return ColumnWidthMeasurement.Input(
                 column: column, name: info.name,
                 type: info.displayType, text: info.valueCategory == .text, sample: sample)
@@ -900,7 +900,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         gutter.needsDisplay = true
         let row = table.selectedRow
         model.selectedDisplayRow = row >= 0 ? row : nil
-        model.selectedSourceRow = rows.sourceRow(for: row)
+        model.selectedSourceRow = segments.sourceRow(for: row)
     }
 
     func navigateToMatch(_ match: CellMatch) {

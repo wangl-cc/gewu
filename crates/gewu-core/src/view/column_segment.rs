@@ -1,76 +1,73 @@
-//! Formatted cell text and source row indices.
+//! Formatted text for one column over consecutive display rows, and source
+//! row indices.
 
 use std::fmt::Write;
 
 use super::OrderedView;
-use crate::{format, ColumnId, Result};
+use crate::{format, ColumnId, InternalError, Result};
 
-/// Formatted cells packed in column order into a shared UTF-8 buffer.
+/// Display text for one column over consecutive display rows, packed into one
+/// UTF-8 buffer. Callers decide which segments to read and how to cache them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CellText {
-    n_rows: u32,
-    n_cols: usize,
+pub struct FormattedColumnSegment {
     text: String,
-    offsets: Vec<u64>,
+    /// One offset per row plus the final end offset.
+    offsets: Vec<u32>,
+    /// One bit per row, starting with the low bit; unset is null.
     validity: Vec<u8>,
 }
 
-impl CellText {
+impl FormattedColumnSegment {
     pub fn row_count(&self) -> u32 {
-        self.n_rows
+        (self.offsets.len() - 1) as u32
     }
 
-    pub fn column_count(&self) -> usize {
-        self.n_cols
-    }
-
-    /// Read a cell by its position in the request.
-    pub fn cell(&self, row: u32, col: usize) -> Option<&str> {
-        if row >= self.n_rows || col >= self.n_cols {
-            return None;
-        }
-        let index = col * self.n_rows as usize + row as usize;
-        if self.validity[index / 8] & (1 << (index % 8)) == 0 {
+    /// Text of a row relative to the segment start; `None` for null or out of range.
+    pub fn cell(&self, row: u32) -> Option<&str> {
+        let row = row as usize;
+        if row + 1 >= self.offsets.len() || self.validity[row / 8] & (1 << (row % 8)) == 0 {
             return None;
         }
         self.text
-            .get(self.offsets[index] as usize..self.offsets[index + 1] as usize)
+            .get(self.offsets[row] as usize..self.offsets[row + 1] as usize)
     }
 
-    /// Transfer UTF-8 bytes, cell offsets (including the final end offset),
-    /// and a validity bitmap with the first cell in the low bit.
-    pub fn into_parts(self) -> (Vec<u8>, Vec<u64>, Vec<u8>) {
+    /// Transfer UTF-8 bytes, row offsets (including the final end offset), and
+    /// a validity bitmap with the first row in the low bit.
+    pub fn into_parts(self) -> (Vec<u8>, Vec<u32>, Vec<u8>) {
         (self.text.into_bytes(), self.offsets, self.validity)
     }
 }
 
 impl OrderedView {
-    /// Format cells at display positions in the requested column order.
-    pub fn cell_text(&self, start: u64, count: u32, columns: &[ColumnId]) -> Result<CellText> {
+    /// Format one column at display rows `start..start + count`, clipped to
+    /// the available rows. Fails for an unknown column, and if the segment's
+    /// text exceeds the 4 GiB its 32-bit offsets can address.
+    pub fn format_column(
+        &self,
+        column: ColumnId,
+        start: u64,
+        count: u32,
+    ) -> Result<FormattedColumnSegment> {
         let window = self.row_window(start, count);
-        let n_cells = window.len() * columns.len();
+        let array = self.column(column)?.array();
+        let formatter = format::formatter(array.as_ref())?;
         let mut text = String::new();
-        let mut offsets = Vec::with_capacity(n_cells + 1);
-        let mut validity = vec![0; n_cells.div_ceil(8)];
+        let mut offsets = Vec::with_capacity(window.len() + 1);
+        let mut validity = vec![0; window.len().div_ceil(8)];
         offsets.push(0);
-        for &column in columns {
-            let array = self.column(column)?.array();
-            let formatter = format::formatter(array.as_ref())?;
-            for row in window.iter() {
-                if !array.is_null(row) {
-                    // Display retains Arrow's inline formatting errors.
-                    write!(text, "{}", formatter.value(row))
-                        .expect("formatting into String succeeds");
-                    let index = offsets.len() - 1;
-                    validity[index / 8] |= 1 << (index % 8);
-                }
-                offsets.push(text.len() as u64);
+        for (index, row) in window.iter().enumerate() {
+            if !array.is_null(row) {
+                // Display retains Arrow's inline formatting errors.
+                write!(text, "{}", formatter.value(row)).expect("formatting into String succeeds");
+                validity[index / 8] |= 1 << (index % 8);
             }
+            let end = u32::try_from(text.len()).map_err(|_| {
+                InternalError::Invariant("a formatted column segment exceeds 4 GiB".into())
+            })?;
+            offsets.push(end);
         }
-
-        Ok(CellText {
-            n_rows: window.len() as u32,
-            n_cols: columns.len(),
+        Ok(FormattedColumnSegment {
             text,
             offsets,
             validity,
@@ -103,7 +100,7 @@ mod tests {
     use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
 
     #[test]
-    fn packed_text_keeps_byte_offsets_nulls_and_requested_order() {
+    fn segments_keep_byte_offsets_nulls_and_display_order() {
         let strings = StringArray::from(vec![
             Some("é"),
             None,
@@ -143,10 +140,17 @@ mod tests {
                 descending: true,
             }])
             .unwrap();
-        let block = ordered.cell_text(1, 64, &[number, text]).unwrap();
         assert_eq!(ordered.source_rows(1, 64), [8, 7, 6, 5, 4, 3, 2, 1, 0]);
-        assert_eq!(block.cell(0, 0), Some("8"));
-        let actual: Vec<_> = (0..block.n_rows).map(|row| block.cell(row, 1)).collect();
+        assert_eq!(
+            ordered.format_column(number, 1, 1).unwrap().cell(0),
+            Some("8")
+        );
+        let segment = ordered.format_column(text, 1, 64).unwrap();
+        assert_eq!(segment.row_count(), 9, "clipped to the available rows");
+        assert_eq!(segment.cell(9), None);
+        let actual: Vec<_> = (0..segment.row_count())
+            .map(|row| segment.cell(row))
+            .collect();
         assert_eq!(actual, [
             None,
             Some(""),
