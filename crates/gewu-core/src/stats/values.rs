@@ -4,10 +4,7 @@
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 use arrow::{
-    array::{
-        downcast_dictionary_array, downcast_integer_array, downcast_temporal_array, Array, AsArray,
-        PrimitiveArray,
-    },
+    array::{downcast_dictionary_array, downcast_primitive_array, Array, AsArray, PrimitiveArray},
     datatypes::*,
 };
 use rapidhash::{v3::rapidhash_v3, RapidHashMap};
@@ -149,38 +146,13 @@ fn for_each_hash(
                 }
             });
         }, _ => unreachable!()),
-        Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => {
-            downcast_integer_array!(array => primitive(array, selection, &mut f), _ => unreachable!())
-        }
         Float16 => real(array.as_primitive::<Float16Type>(), selection, &mut f),
         Float32 => real(array.as_primitive::<Float32Type>(), selection, &mut f),
         Float64 => real(array.as_primitive::<Float64Type>(), selection, &mut f),
-        Decimal32(..) => primitive(array.as_primitive::<Decimal32Type>(), selection, &mut f),
-        Decimal64(..) => primitive(array.as_primitive::<Decimal64Type>(), selection, &mut f),
-        Decimal128(..) => primitive(array.as_primitive::<Decimal128Type>(), selection, &mut f),
-        Decimal256(..) => primitive(array.as_primitive::<Decimal256Type>(), selection, &mut f),
-        Duration(TimeUnit::Second) => primitive(
-            array.as_primitive::<DurationSecondType>(),
-            selection,
-            &mut f,
-        ),
-        Duration(TimeUnit::Millisecond) => primitive(
-            array.as_primitive::<DurationMillisecondType>(),
-            selection,
-            &mut f,
-        ),
-        Duration(TimeUnit::Microsecond) => primitive(
-            array.as_primitive::<DurationMicrosecondType>(),
-            selection,
-            &mut f,
-        ),
-        Duration(TimeUnit::Nanosecond) => primitive(
-            array.as_primitive::<DurationNanosecondType>(),
-            selection,
-            &mut f,
-        ),
-        Date32 | Date64 | Time32(_) | Time64(_) | Timestamp(..) => {
-            downcast_temporal_array!(array => primitive(array, selection, &mut f), _ => return Err(crate::InternalError::Invariant("unsupported temporal values".into()).into()))
+        // Integers, decimals, dates, times, timestamps and durations hash
+        // their native bytes.
+        data_type if data_type.is_primitive() => {
+            downcast_primitive_array!(array => primitive(array, selection, &mut f), _ => unreachable!())
         }
         Boolean => {
             let a = array.as_boolean();
@@ -515,6 +487,20 @@ mod tests {
             Arc::new(StringViewArray::from_iter(
                 ids.iter().map(|id| id.map(text)),
             )),
+            Arc::new(arrow::array::Float16Array::from_iter(
+                ids.iter()
+                    .map(|id| id.map(|id| half::f16::from_f32(id as f32))),
+            )),
+            Arc::new(
+                arrow::array::Decimal256Array::from_iter(
+                    ids.iter().map(|id| id.map(|id| i256::from(id as i64))),
+                )
+                .with_precision_and_scale(40, 1)
+                .unwrap(),
+            ),
+            Arc::new(arrow::array::DurationMillisecondArray::from_iter(
+                ids.iter().map(|id| id.map(|id| id as i64)),
+            )),
             // A native dictionary with more entries than the compact code space:
             // keys repeat entries, and two entries share one value.
             Arc::new(
@@ -550,6 +536,21 @@ mod tests {
             assert_eq!(summary.values[0].count, 2, "{}", array.data_type());
             assert_eq!(summary.values[1].count, 1, "{}", array.data_type());
         }
+        // A native dictionary of booleans larger than the code space hashes
+        // its two values once per entry.
+        let array: ArrayRef = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from_iter_values((0..600).map(|i| i % 300)),
+                Arc::new(BooleanArray::from_iter((0..300).map(|i| Some(i % 3 == 0)))),
+            )
+            .unwrap(),
+        );
+        let summary = analyze(crate::col_view::test::Fixture::all(&array).view()).unwrap();
+        assert_eq!(summary.distinct_count, 2);
+        assert_eq!(
+            (summary.values[0].label.as_str(), summary.values[0].count),
+            ("false", 400)
+        );
         // Low-cardinality storage types use exact codes, also over explicit
         // rows with nulls.
         let array: ArrayRef = Arc::new(BooleanArray::from(vec![

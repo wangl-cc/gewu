@@ -541,6 +541,16 @@ mod tests {
                     .unwrap(),
             ),
             Arc::new(
+                arrow::array::Decimal32Array::from(vec![0, 1, 999_999_999])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
+                arrow::array::Decimal64Array::from(vec![0, 1, 9_007_199_254_740_993])
+                    .with_precision_and_scale(18, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
                 Decimal256Array::from(vec![
                     -large,
                     i256::ZERO,

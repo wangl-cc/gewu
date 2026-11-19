@@ -827,6 +827,16 @@ mod tests {
                     .with_precision_and_scale(76, 4)
                     .unwrap(),
             ),
+            Arc::new(
+                arrow::array::Decimal32Array::from(vec![-1, 0, 1])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
+                arrow::array::Decimal64Array::from(vec![-1, 0, 1])
+                    .with_precision_and_scale(18, 2)
+                    .unwrap(),
+            ),
         ];
         for array in arrays {
             let result = verify_bins(Fixture::all(&array), 60);
