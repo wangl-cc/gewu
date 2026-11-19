@@ -39,15 +39,9 @@ impl GewuOrderedView {
         rows: Vec<RowSpan>,
         cells: Vec<CellTile>,
     ) -> Result<TileBatch, GewuError> {
+        let rows: Vec<core::RowSpan> = rows.into_iter().map(Into::into).collect();
         let cells: Vec<core::CellTile> = cells.into_iter().map(Into::into).collect();
-        let cells = self.inner.cell_tiles(&cells)?;
-        Ok(TileBatch {
-            source_rows: rows
-                .iter()
-                .map(|span| self.inner.source_rows(span.start, span.count))
-                .collect(),
-            cells: cells.into_iter().map(Into::into).collect(),
-        })
+        Ok(self.inner.read_tiles(&rows, &cells)?.into())
     }
 
     pub fn find(

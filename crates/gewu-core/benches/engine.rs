@@ -206,7 +206,7 @@ fn rows(c: &mut Criterion) {
         })
         .collect();
     g.bench_function("tiles_256_all_columns", |b| {
-        b.iter(|| plain.cell_tiles(&tiles).unwrap())
+        b.iter(|| plain.read_tiles(&[], &tiles).unwrap())
     });
 
     let find = plain.find("2024-03", &columns).unwrap();

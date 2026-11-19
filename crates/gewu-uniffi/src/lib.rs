@@ -4,6 +4,7 @@
 //! Dataset and View handles share immutable data.
 
 mod analysis;
+mod cells;
 mod column;
 mod dataset;
 mod error;
@@ -18,12 +19,12 @@ mod scale;
 mod scatter;
 #[cfg(test)]
 mod tests;
-mod view;
 
 pub use analysis::{
     AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
     ValueFrequency, ValueSummary,
 };
+pub use cells::{CellText, CellTile, RowSpan, TileBatch};
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
 pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::{
@@ -42,6 +43,5 @@ pub use ordered_view::GewuOrderedView;
 pub use query::{ColumnFilter, ColumnSort};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use view::{CellText, CellTile, RowSpan, TileBatch};
 
 uniffi::setup_scaffolding!();

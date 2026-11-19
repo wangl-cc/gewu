@@ -1,4 +1,4 @@
-//! Formatted cell text and source row indices.
+//! Formatted cell text, batched viewport tiles and source row indices.
 
 use std::fmt::Write;
 
@@ -46,12 +46,28 @@ impl CellText {
     }
 }
 
+/// Consecutive display rows whose source indices a [`TileBatch`] returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RowSpan {
+    pub start: u64,
+    pub count: u32,
+}
+
 /// One column over consecutive display rows, the unit of a batched viewport read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellTile {
     pub column: ColumnId,
     pub start: u64,
     pub count: u32,
+}
+
+/// Results of [`OrderedView::read_tiles`], in request order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TileBatch {
+    /// Source row indices for each requested [`RowSpan`].
+    pub source_rows: Vec<Vec<u64>>,
+    /// One single-column [`CellText`] for each requested [`CellTile`].
+    pub cells: Vec<CellText>,
 }
 
 impl OrderedView {
@@ -67,11 +83,21 @@ impl OrderedView {
         Ok(text.finish())
     }
 
-    /// Format each tile into its own [`CellText`] with one column, in request
-    /// order. Each tile is clipped to the available rows independently, so
-    /// callers can retain or discard tiles without sharing a text buffer.
-    /// Validates every column before formatting.
-    pub fn cell_tiles(&self, tiles: &[CellTile]) -> Result<Vec<CellText>> {
+    /// Read a viewport's source rows and cell tiles together. Each cell tile is
+    /// formatted into its own single-column [`CellText`] and clipped to the
+    /// available rows independently, so callers can retain or discard tiles
+    /// without sharing a text buffer. Validates every column before formatting.
+    pub fn read_tiles(&self, rows: &[RowSpan], cells: &[CellTile]) -> Result<TileBatch> {
+        Ok(TileBatch {
+            cells: self.cell_tiles(cells)?,
+            source_rows: rows
+                .iter()
+                .map(|span| self.source_rows(span.start, span.count))
+                .collect(),
+        })
+    }
+
+    fn cell_tiles(&self, tiles: &[CellTile]) -> Result<Vec<CellText>> {
         for tile in tiles {
             self.column(tile.column)?;
         }
@@ -250,14 +276,22 @@ mod tests {
             start,
             count,
         };
-        let tiles = ordered
-            .cell_tiles(&[
-                tile(number, 8, 4),
-                tile(text, 0, 4),
-                tile(number, 0, 2),
-                tile(text, 64, 4),
-            ])
+        let batch = ordered
+            .read_tiles(
+                &[RowSpan { start: 8, count: 4 }, RowSpan {
+                    start: 0,
+                    count: 2,
+                }],
+                &[
+                    tile(number, 8, 4),
+                    tile(text, 0, 4),
+                    tile(number, 0, 2),
+                    tile(text, 64, 4),
+                ],
+            )
             .unwrap();
+        assert_eq!(batch.source_rows, [vec![1, 0], vec![9, 8]]);
+        let tiles = &batch.cells;
         assert!(tiles.iter().all(|t| t.column_count() == 1));
         assert_eq!(cells(&tiles[0]), [Some("1"), Some("0")], "clipped to rows");
         assert_eq!(cells(&tiles[1]), [Some("nine"), None, Some(""), None]);
@@ -267,7 +301,7 @@ mod tests {
         let (bytes, offsets, _) = tiles[2].clone().into_parts();
         assert_eq!((bytes, offsets), (b"98".to_vec(), vec![0, 1, 2]));
         assert!(ordered
-            .cell_tiles(&[tile(text, 0, 1), tile(ColumnId::from_raw(9), 0, 1)])
+            .read_tiles(&[], &[tile(text, 0, 1), tile(ColumnId::from_raw(9), 0, 1)])
             .is_err());
     }
 }

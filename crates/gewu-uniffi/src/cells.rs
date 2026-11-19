@@ -1,4 +1,4 @@
-//! Packed formatted cell text from an immutable view.
+//! Packed formatted cell text and batched viewport tiles.
 
 use crate::ColumnId;
 
@@ -51,6 +51,15 @@ pub struct CellTile {
     pub count: u32,
 }
 
+impl From<RowSpan> for gewu_core::RowSpan {
+    fn from(span: RowSpan) -> Self {
+        Self {
+            start: span.start,
+            count: span.count,
+        }
+    }
+}
+
 impl From<CellTile> for gewu_core::CellTile {
     fn from(tile: CellTile) -> Self {
         Self {
@@ -68,4 +77,13 @@ pub struct TileBatch {
     pub source_rows: Vec<Vec<u64>>,
     /// One single-column [`CellText`] for each requested [`CellTile`].
     pub cells: Vec<CellText>,
+}
+
+impl From<gewu_core::TileBatch> for TileBatch {
+    fn from(batch: gewu_core::TileBatch) -> Self {
+        Self {
+            source_rows: batch.source_rows,
+            cells: batch.cells.into_iter().map(Into::into).collect(),
+        }
+    }
 }

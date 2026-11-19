@@ -10,12 +10,12 @@ use crate::{
 };
 
 mod analysis;
+mod cells;
 mod export;
 mod filter;
 mod find;
-mod rows;
 
-pub use rows::{CellText, CellTile};
+pub use cells::{CellText, CellTile, RowSpan, TileBatch};
 
 /// Filtered row projection over an immutable [`Dataset`].
 /// Owns row membership and provides column analysis, filter metadata, and sorting.
