@@ -15,7 +15,7 @@ mod export;
 mod filter;
 mod find;
 
-pub use cells::{CellText, CellTile, RowSpan, TileBatch};
+pub use cells::CellText;
 
 /// Filtered row projection over an immutable [`Dataset`].
 /// Owns row membership and provides column analysis, filter metadata, and sorting.

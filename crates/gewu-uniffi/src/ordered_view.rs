@@ -39,9 +39,23 @@ impl GewuOrderedView {
         rows: Vec<RowSpan>,
         cells: Vec<CellTile>,
     ) -> Result<TileBatch, GewuError> {
-        let rows: Vec<core::RowSpan> = rows.into_iter().map(Into::into).collect();
-        let cells: Vec<core::CellTile> = cells.into_iter().map(Into::into).collect();
-        Ok(self.inner.read_tiles(&rows, &cells)?.into())
+        // Swift decides which tiles to read and cache; Core formats each one.
+        let cells = cells
+            .iter()
+            .map(|tile| {
+                let text = self
+                    .inner
+                    .cell_text(tile.start, tile.count, &[tile.column.into()])?;
+                Ok(text.into())
+            })
+            .collect::<Result<_, GewuError>>()?;
+        Ok(TileBatch {
+            source_rows: rows
+                .iter()
+                .map(|span| self.inner.source_rows(span.start, span.count))
+                .collect(),
+            cells,
+        })
     }
 
     pub fn find(
