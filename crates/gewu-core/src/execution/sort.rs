@@ -297,31 +297,57 @@ impl ByteKey {
 /// bytes too.
 fn sort_bytes<A: Bytes>(rows: &mut [u32], array: &A, descending: bool) -> Vec<Range<usize>> {
     let valid = partition_nulls(rows, array.nulls());
-    let mut keys: Vec<ByteKey> = rows[..valid]
+    // Distinct leading words are common (IDs), so sort compact
+    // `(first eight bytes, row)` pairs, then order each tied run by the full
+    // value. Runs arrive in source order, so the stable second pass keeps the
+    // tie-break. Wider keys exist only for one tied run at a time.
+    let mut pairs: Vec<(u64, u32)> = rows[..valid]
         .iter()
-        .map(|&row| ByteKey::new(array.bytes(row as usize), row))
+        .map(|&row| (prefix_word(array.bytes(row as usize)), row))
         .collect();
-    // Distinct leading words are common (IDs), so sort by the first eight
-    // bytes alone, then order each tied run by the full value. Runs arrive
-    // in source order, so the stable second pass keeps the tie-break.
     if descending {
-        keys.sort_unstable_by(|a, b| b.prefix[0].cmp(&a.prefix[0]).then(a.row.cmp(&b.row)));
+        pairs.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     } else {
-        keys.sort_unstable_by(|a, b| a.prefix[0].cmp(&b.prefix[0]).then(a.row.cmp(&b.row)));
+        pairs.sort_unstable();
     }
-    for run in equal_runs(&keys, |a, b| a.prefix[0] == b.prefix[0]) {
-        let run = &mut keys[run];
+    for (slot, &(_, row)) in rows.iter_mut().zip(&pairs) {
+        *slot = row;
+    }
+    let tied = equal_runs(&pairs, |a, b| a.0 == b.0);
+    drop(pairs);
+    let mut runs = Vec::new();
+    let mut keys = Vec::new();
+    for Range { start, end } in tied {
+        keys.clear();
+        keys.extend(
+            rows[start..end]
+                .iter()
+                .map(|&row| ByteKey::new(array.bytes(row as usize), row)),
+        );
         if descending {
-            run.sort_by(|a, b| b.value_cmp(a, array));
+            keys.sort_by(|a, b| b.value_cmp(a, array));
         } else {
-            run.sort_by(|a, b| a.value_cmp(b, array));
+            keys.sort_by(|a, b| a.value_cmp(b, array));
         }
+        for (slot, key) in rows[start..end].iter_mut().zip(&keys) {
+            *slot = key.row;
+        }
+        runs.extend(
+            equal_runs(&keys, |a, b| a.value_cmp(b, array).is_eq())
+                .into_iter()
+                .map(|run| run.start + start..run.end + start),
+        );
     }
-    for (slot, key) in rows.iter_mut().zip(&keys) {
-        *slot = key.row;
-    }
-    let runs = equal_runs(&keys, |a, b| a.value_cmp(b, array).is_eq());
     with_null_run(runs, valid, rows.len())
+}
+
+/// Big-endian first eight bytes, zero padded: the leading word of [`ByteKey`].
+#[inline]
+fn prefix_word(bytes: &[u8]) -> u64 {
+    let mut buf = [0u8; 8];
+    let n = bytes.len().min(8);
+    buf[..n].copy_from_slice(&bytes[..n]);
+    u64::from_be_bytes(buf)
 }
 
 /// Encode every key once with Arrow's row format and sort by bytes. Falls
