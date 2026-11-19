@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use super::{numeric::Numeric, AxisScale};
-use crate::{format, row_ids::RowSlice, stats::Result, ColumnId};
+use crate::{col_view::Selection, format, row_ids::RowSlice, stats::Result, ColumnId};
 
 /// Scatter uses the native numeric accessor for approximate coordinates.
 pub(crate) fn supports(data_type: &DataType) -> bool {
@@ -56,6 +56,9 @@ pub struct ScatterResult {
     pub points: Vec<ScatterPoint>,
 }
 
+/// Rows converted to `f64` per scan step, bounding scratch memory.
+const SCAN_CHUNK: usize = 4096;
+
 /// Scan a borrowed view for a bounded scatter sample.
 pub(crate) fn analyze(
     x: Option<(ColumnId, &ArrayRef)>,
@@ -98,32 +101,49 @@ pub(crate) fn analyze(
     }
     let limit = limit as usize;
 
-    let read_x = x.as_ref().map(|(_, a)| Numeric::new(a).unwrap().accessor());
-    let read_y = Numeric::new(y.1).unwrap().accessor();
+    // Columnar scan: convert fixed-size chunks of the selection to f64 (nulls
+    // become NaN and are rejected with other non-finite values), then sample
+    // by source row.
+    let selection = Selection::from(rows);
+    let read_x = x.as_ref().map(|(_, a)| Numeric::new(a).unwrap());
+    let read_y = Numeric::new(y.1).unwrap();
+    let len = selection.len();
+    let chunk = SCAN_CHUNK.min(len);
+    let (mut xs, mut ys) = (vec![0.0; chunk], vec![0.0; chunk]);
     let mut sample = BinaryHeap::with_capacity(limit);
     let mut eligible_rows = 0;
     let mut non_positive_rows = 0;
-    for row in rows.iter_u32() {
-        let xv = read_x
-            .as_ref()
-            .map_or(Some(f64::from(row)), |get| get(row as usize));
-        let (Some(xv), Some(yv)) = (xv, read_y(row as usize)) else {
-            continue;
-        };
-        if !xv.is_finite() || !yv.is_finite() {
-            continue;
+    for start in (0..len).step_by(SCAN_CHUNK) {
+        let n = SCAN_CHUNK.min(len - start);
+        let window = selection.window(start, n);
+        let (xs, ys) = (&mut xs[..n], &mut ys[..n]);
+        read_y.write_f64(&window, ys);
+        match read_x {
+            Some(read_x) => read_x.write_f64(&window, xs),
+            None => {
+                for (offset, x) in xs.iter_mut().enumerate() {
+                    *x = window.row(offset) as f64;
+                }
+            }
         }
-        if (x_scale == AxisScale::Log10 && xv <= 0.0) || (y_scale == AxisScale::Log10 && yv <= 0.0)
-        {
-            non_positive_rows += 1;
-            continue;
-        }
-        eligible_rows += 1;
-        let key = (priority(row), row);
-        if sample.len() < limit {
-            sample.push(key);
-        } else if sample.peek().is_some_and(|largest| key < *largest) {
-            *sample.peek_mut().unwrap() = key;
+        for (offset, (&xv, &yv)) in xs.iter().zip(ys.iter()).enumerate() {
+            if !xv.is_finite() || !yv.is_finite() {
+                continue;
+            }
+            if (x_scale == AxisScale::Log10 && xv <= 0.0)
+                || (y_scale == AxisScale::Log10 && yv <= 0.0)
+            {
+                non_positive_rows += 1;
+                continue;
+            }
+            eligible_rows += 1;
+            let row = window.row(offset) as u32;
+            let key = (priority(row), row);
+            if sample.len() < limit {
+                sample.push(key);
+            } else if sample.peek().is_some_and(|largest| key < *largest) {
+                *sample.peek_mut().unwrap() = key;
+            }
         }
     }
     let mut ids = sample.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
@@ -133,18 +153,25 @@ pub(crate) fn analyze(
         .map(|(_, a)| format::formatter(a.as_ref()))
         .transpose()?;
     let yf = format::formatter(y.1.as_ref())?;
+    let read = |numeric: Numeric<'_>, row: usize| {
+        let mut value = 0.0;
+        numeric.write_f64(
+            &Selection::Range(row..row + 1),
+            std::slice::from_mut(&mut value),
+        );
+        value
+    };
     let mut points = Vec::with_capacity(ids.len());
     for row in ids {
+        let index = row as usize;
         points.push(ScatterPoint {
             source_row: u64::from(row),
-            x: read_x
-                .as_ref()
-                .map_or(f64::from(row), |get| get(row as usize).unwrap()),
-            y: read_y(row as usize).unwrap(),
+            x: read_x.map_or(f64::from(row), |numeric| read(numeric, index)),
+            y: read(read_y, index),
             x_label: xf
                 .as_ref()
-                .map_or_else(|| row.to_string(), |f| f.value(row as usize).to_string()),
-            y_label: yf.value(row as usize).to_string(),
+                .map_or_else(|| row.to_string(), |f| f.value(index).to_string()),
+            y_label: yf.value(index).to_string(),
         });
     }
     Ok(ScatterResult {

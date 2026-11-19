@@ -1,28 +1,27 @@
 //! Native extrema and moments, with scalar conversion for mean and variance.
 
-use arrow::{
-    array::{Array, PrimitiveArray},
-    datatypes::ArrowPrimitiveType,
-};
+use arrow::{array::PrimitiveArray, datatypes::ArrowPrimitiveType};
 
 use super::{IntegerColumn, RealColumn, RealType};
+use crate::col_view::Selection;
 
 impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
     T::Native: Into<i128>,
 {
-    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>) -> NumericSummary {
-        summarize(self.0, rows, |v| v.into() as f64)
+    pub(super) fn summarize(self, selection: &Selection<'_>) -> NumericSummary {
+        summarize(self.0, selection, |v| v.into() as f64)
     }
 }
 
 impl<'a, T: RealType> RealColumn<'a, T> {
-    pub(super) fn summarize(self, rows: impl Iterator<Item = usize>) -> NumericSummary {
-        summarize(self.array, rows, |v| T::as_float(v, self.scale))
+    pub(super) fn summarize(self, selection: &Selection<'_>) -> NumericSummary {
+        summarize(self.array, selection, |v| T::as_float(v, self.scale))
     }
 }
 
-/// Numeric results before formatting extrema and applying display policies.
+/// Numeric results before formatting extrema and applying display
+/// policies.
 #[derive(Default)]
 pub(super) struct NumericSummary {
     pub mean: Option<f64>,
@@ -35,7 +34,7 @@ pub(super) struct NumericSummary {
 
 fn summarize<T, F>(
     array: &PrimitiveArray<T>,
-    rows: impl Iterator<Item = usize>,
+    selection: &Selection<'_>,
     as_float: F,
 ) -> NumericSummary
 where
@@ -49,15 +48,11 @@ where
     // (value, row) of the smallest and largest so far.
     let mut min: Option<(T::Native, usize)> = None;
     let mut max: Option<(T::Native, usize)> = None;
-    for row in rows {
-        if array.is_null(row) {
-            continue;
-        }
-        let native = array.value(row);
+    crate::stats::scan::for_each_valid(array, selection, |row, native| {
         let value = as_float(native);
         if value.is_nan() {
             summary.nan_count += 1;
-            continue;
+            return;
         }
         infinite_count += u64::from(value.is_infinite());
         // Welford in power-of-two units keeps differences and squared differences
@@ -83,7 +78,7 @@ where
         if max.is_none_or(|(max, _)| native > max) {
             max = Some((native, row));
         }
-    }
+    });
     if n > 0 {
         summary.mean = Some(mean * scale);
         summary.std_dev = Some(if n > 1 {
@@ -110,7 +105,7 @@ mod tests {
 
     fn summary(values: &[f64]) -> NumericSummary {
         let array = Float64Array::from(values.to_vec());
-        RealColumn::new(&array).summarize(0..values.len())
+        RealColumn::new(&array).summarize(&Selection::Range(0..values.len()))
     }
 
     #[test]

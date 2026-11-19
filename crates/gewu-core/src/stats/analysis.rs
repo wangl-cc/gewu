@@ -5,17 +5,7 @@ use arrow::{array::Array, datatypes::DataType};
 use crate::{col_view::ColView, stats::Result, types, types::display_type};
 
 pub(crate) fn count_nulls(view: ColView<'_>) -> u64 {
-    match view.array().logical_nulls() {
-        None => 0,
-        Some(nulls) if view.is_complete() => nulls.null_count() as u64,
-        Some(nulls) => {
-            let mut count = 0;
-            for row in view.iter() {
-                count += u64::from(nulls.is_null(row));
-            }
-            count
-        }
-    }
+    super::scan::null_count(view.array().logical_nulls().as_ref(), &view.selection())
 }
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.

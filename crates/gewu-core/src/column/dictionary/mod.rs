@@ -421,6 +421,15 @@ impl Dictionary {
         self.codes[row]
     }
 
+    /// Per-row value codes; meaningful only where [`Self::nulls`] is valid.
+    pub(crate) fn codes(&self) -> &[u8] {
+        &self.codes
+    }
+
+    pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
+    }
+
     pub(crate) fn all_counts(&self) -> &[u64] {
         &self.all_counts
     }

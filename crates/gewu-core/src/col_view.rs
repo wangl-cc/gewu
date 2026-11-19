@@ -1,5 +1,7 @@
 //! A column and the source rows selected by an immutable view.
 
+use std::ops::Range;
+
 use arrow::{array::ArrayRef, datatypes::DataType};
 
 use crate::{column::Column, row_ids::RowSlice};
@@ -31,6 +33,7 @@ impl<'a> ColView<'a> {
         self.array().data_type()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.rows.len()
     }
@@ -39,13 +42,62 @@ impl<'a> ColView<'a> {
         matches!(self.rows, RowSlice::All(_)) || self.rows.len() == self.array().len()
     }
 
-    /// Iterate source rows for order-independent scans. A complete view can
-    /// use contiguous addressing even when its display rows are sorted.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + 'a {
+    /// Source rows for order-independent scans. A complete view is the
+    /// contiguous range even when its display rows are sorted.
+    pub(crate) fn selection(&self) -> Selection<'a> {
         if self.is_complete() {
-            RowSlice::All(self.array().len()).iter()
+            Selection::Range(0..self.array().len())
         } else {
-            self.rows.iter()
+            Selection::from(self.rows)
+        }
+    }
+}
+
+/// The source rows a columnar scan reads, independent of display order.
+///
+/// Analyses take a column plus a `Selection` and dispatch on the variant once
+/// per scan (see `stats::scan`), so each inner loop is monomorphic: a
+/// contiguous range reads native slices and the validity bitmap directly,
+/// explicit rows gather by index. A bitmap selection can be added as another
+/// variant without changing the analyses.
+#[derive(Clone, Debug)]
+pub(crate) enum Selection<'a> {
+    /// Contiguous source rows.
+    Range(Range<usize>),
+    /// Explicit source rows, scanned in this order.
+    Rows(&'a [u32]),
+}
+
+impl Selection<'_> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Range(range) => range.len(),
+            Self::Rows(rows) => rows.len(),
+        }
+    }
+
+    /// Positions `start..start + len` of this selection, in scan order.
+    pub(crate) fn window(&self, start: usize, len: usize) -> Self {
+        match self {
+            Self::Range(range) => Self::Range(range.start + start..range.start + start + len),
+            Self::Rows(rows) => Self::Rows(&rows[start..start + len]),
+        }
+    }
+
+    /// Source row at scan position `index`.
+    pub(crate) fn row(&self, index: usize) -> usize {
+        match self {
+            Self::Range(range) => range.start + index,
+            Self::Rows(rows) => rows[index] as usize,
+        }
+    }
+}
+
+impl<'a> From<RowSlice<'a>> for Selection<'a> {
+    fn from(rows: RowSlice<'a>) -> Self {
+        match rows {
+            RowSlice::All(n) => Self::Range(0..n),
+            RowSlice::Selected(rows) => Self::Rows(rows),
         }
     }
 }

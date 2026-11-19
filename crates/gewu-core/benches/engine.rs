@@ -343,6 +343,70 @@ fn facet_open(c: &mut Criterion) {
     g.finish();
 }
 
+/// Column inspector analyses on the whole file and on a ~50% filtered view.
+fn inspector_stats(c: &mut Criterion) {
+    let doc = gewu_core::Dataset::open(bench_file())
+        .map(std::sync::Arc::new)
+        .unwrap();
+    let price = col(&doc, "price");
+    let filtered = doc
+        .filter(&[ColumnFilter {
+            column: price,
+            filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+        }])
+        .unwrap();
+    let full = doc.unfiltered();
+    let mut group = c.benchmark_group("inspector_stats");
+    group.sample_size(10);
+    for (suffix, view) in [("", &full), ("_filtered", &filtered)] {
+        for name in ["price", "updated", "amount"] {
+            let column = col(&doc, name);
+            group.bench_function(format!("statistics_{name}{suffix}"), |b| {
+                b.iter(|| view.statistics(column).unwrap())
+            });
+        }
+        for name in ["price", "lognormal"] {
+            let column = col(&doc, name);
+            group.bench_function(format!("distribution_{name}{suffix}"), |b| {
+                b.iter(|| {
+                    view.distribution(column, 60, gewu_core::AxisScale::Linear)
+                        .unwrap()
+                })
+            });
+        }
+        for name in ["label", "country", "uuid", "visits"] {
+            let column = col(&doc, name);
+            group.bench_function(format!("values_{name}{suffix}"), |b| {
+                b.iter(|| view.values(column).unwrap())
+            });
+        }
+        for name in ["note", "tags"] {
+            let column = col(&doc, name);
+            group.bench_function(format!("lengths_{name}{suffix}"), |b| {
+                b.iter(|| view.lengths(column, 60).unwrap())
+            });
+        }
+        let label = col(&doc, "label");
+        group.bench_function(format!("count_nulls_label{suffix}"), |b| {
+            b.iter(|| view.count_nulls(label).unwrap())
+        });
+        let score = col(&doc, "score");
+        group.bench_function(format!("scatter_price_score{suffix}"), |b| {
+            b.iter(|| {
+                view.scatter(
+                    Some(price),
+                    score,
+                    4096,
+                    gewu_core::AxisScale::Linear,
+                    gewu_core::AxisScale::Linear,
+                )
+                .unwrap()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     open,
@@ -350,6 +414,7 @@ criterion_group!(
     rows,
     facets,
     inspector_values,
-    facet_open
+    facet_open,
+    inspector_stats
 );
 criterion_main!(benches);

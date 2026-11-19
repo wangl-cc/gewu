@@ -8,11 +8,15 @@ use arrow::{
 use num_traits::ToPrimitive;
 
 use super::{Histogram, Output, RangeBounds};
-use crate::{col_view::ColView, row_ids::RowSlice, scalar::Bound, stats::Result, AxisScale};
+use crate::{
+    col_view::{ColView, Selection},
+    scalar::Bound,
+    stats::{scan::for_each_valid, Result},
+    AxisScale,
+};
 
 pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
     let array = view.array();
-    let rows = view.rows();
     if bins == 0 {
         return Err(crate::AnalysisError::InvalidBinCount {
             operation: crate::AnalysisOperation::Distribution,
@@ -28,16 +32,17 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
         });
     }
     let bins = bins as usize;
+    let selection = &view.selection();
     match array.data_type() {
         t if t.is_integer() => {
-            downcast_integer_array!(array => integer(array, rows, bins), _ => unreachable!("integer dispatch"))
+            downcast_integer_array!(array => integer(array, selection, bins), _ => unreachable!("integer dispatch"))
         }
-        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), rows, bins),
-        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), rows, bins),
-        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), rows, bins),
+        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), selection, bins),
+        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), selection, bins),
+        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), selection, bins),
         DataType::Decimal32(_, scale) => decimal(
             array.as_primitive::<Decimal32Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |v| i256::from_i128(i128::from(v)),
@@ -45,7 +50,7 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
         ),
         DataType::Decimal64(_, scale) => decimal(
             array.as_primitive::<Decimal64Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |v| i256::from_i128(i128::from(v)),
@@ -53,7 +58,7 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
         ),
         DataType::Decimal128(_, scale) => decimal(
             array.as_primitive::<Decimal128Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             i256::from_i128,
@@ -61,7 +66,7 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
         ),
         DataType::Decimal256(_, scale) => decimal(
             array.as_primitive::<Decimal256Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |v| v,
@@ -73,16 +78,15 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
 
 fn positive_extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     positive: impl Fn(T::Native) -> bool,
 ) -> Option<(T::Native, T::Native)>
 where
     T::Native: PartialOrd,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for row in rows.iter() {
-        let value = array.is_valid(row).then(|| array.value(row));
-        if let Some(value) = value.filter(|&v| positive(v)) {
+    for_each_valid(array, selection, |_, value| {
+        if positive(value) {
             extrema = Some(match extrema {
                 Some((lo, hi)) => (
                     if value < lo { value } else { lo },
@@ -91,7 +95,7 @@ where
                 None => (value, value),
             });
         }
-    }
+    });
     extrema
 }
 
@@ -122,17 +126,18 @@ fn cuts<N: Copy + PartialOrd>(
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
 ) -> Result<H>
 where
     T::Native: Into<i128> + TryFrom<i128> + Ord,
 {
-    let extrema = positive_extrema(array, rows, |value| value.into() > 0);
+    let extrema = positive_extrema(array, selection, |value| value.into() > 0);
     let Some((min, max)) = extrema else {
-        return H::finish(count(array, rows, empty(), |_| Class::NonPositive), || {
-            Ok(Vec::new())
-        });
+        return H::finish(
+            count(array, selection, empty(), |_| Class::NonPositive),
+            || Ok(Vec::new()),
+        );
     };
     let (lo, hi) = ((min.into() as f64).log10(), (max.into() as f64).log10());
     let cuts = cuts(min, max, lo, hi, bins, |value| {
@@ -152,13 +157,18 @@ where
         ((max.into() + 1) as f64).log10(),
         cuts.iter().map(|&value| (value.into() as f64).log10()),
     );
-    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
-        if value.into() <= 0 {
-            Class::NonPositive
-        } else {
-            Class::Bin(cuts.partition_point(|&cut| cut <= value))
-        }
-    });
+    let histogram = count(
+        array,
+        selection,
+        with_domain(edges, &lower, &upper),
+        |value| {
+            if value.into() <= 0 {
+                Class::NonPositive
+            } else {
+                Class::Bin(cuts.partition_point(|&cut| cut <= value))
+            }
+        },
+    );
     H::finish(histogram, || {
         finite_ranges(&cuts, lower, upper, bound, |value| {
             let previous = T::Native::try_from(value.into() - 1)
@@ -171,7 +181,7 @@ where
 
 fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
@@ -180,11 +190,12 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Ord,
 {
-    let extrema = positive_extrema(array, rows, |value| widen(value) > i256::ZERO);
+    let extrema = positive_extrema(array, selection, |value| widen(value) > i256::ZERO);
     let Some((min, max)) = extrema else {
-        return H::finish(count(array, rows, empty(), |_| Class::NonPositive), || {
-            Ok(Vec::new())
-        });
+        return H::finish(
+            count(array, selection, empty(), |_| Class::NonPositive),
+            || Ok(Vec::new()),
+        );
     };
     let (min_coefficient, max_coefficient) = (widen(min), widen(max));
     // Work in coefficient space: the decimal scale only shifts the log axis.
@@ -221,13 +232,18 @@ where
         ),
         cuts.iter().map(|&value| log_value(widen(value))),
     );
-    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
-        if widen(value) <= i256::ZERO {
-            Class::NonPositive
-        } else {
-            Class::Bin(cuts.partition_point(|&cut| cut <= value))
-        }
-    });
+    let histogram = count(
+        array,
+        selection,
+        with_domain(edges, &lower, &upper),
+        |value| {
+            if widen(value) <= i256::ZERO {
+                Class::NonPositive
+            } else {
+                Class::Bin(cuts.partition_point(|&cut| cut <= value))
+            }
+        },
+    );
     H::finish(histogram, || {
         finite_ranges(&cuts, lower, upper, bound, |value| {
             Ok(Bound::from_decimal(
@@ -241,19 +257,19 @@ where
 
 fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
 ) -> Result<H>
 where
     T::Native: Into<f64> + PartialOrd,
 {
-    let extrema = positive_extrema(array, rows, |value| {
+    let extrema = positive_extrema(array, selection, |value| {
         let value = value.into();
         value > 0.0 && value.is_finite()
     });
     let Some((min, max)) = extrema else {
         return H::finish(
-            count(array, rows, empty(), |value| {
+            count(array, selection, empty(), |value| {
                 classify_float(value.into(), &[])
             }),
             || Ok(Vec::new()),
@@ -273,9 +289,12 @@ where
         hi.next_up()
     };
     let edges = plot_edges(lo, display_hi, cuts.iter().map(|value| value.log10()));
-    let histogram = count(array, rows, with_domain(edges, &lower, &upper), |value| {
-        classify_float(value.into(), &cuts)
-    });
+    let histogram = count(
+        array,
+        selection,
+        with_domain(edges, &lower, &upper),
+        |value| classify_float(value.into(), &cuts),
+    );
     H::finish(histogram, || {
         finite_ranges(&cuts, lower, upper, bound, |value| bound(value.next_down()))
     })
@@ -348,20 +367,16 @@ fn with_domain(bin_edges: Vec<f64>, min: &Bound, max: &Bound) -> Histogram {
 
 fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     mut histogram: Histogram,
     classify: impl Fn(T::Native) -> Class,
 ) -> Histogram {
-    for row in rows.iter() {
-        if array.is_valid(row) {
-            match classify(array.value(row)) {
-                Class::Bin(bin) => histogram.counts[bin] += 1,
-                Class::NonPositive => histogram.non_positive_count += 1,
-                Class::Infinite => histogram.infinite_count += 1,
-                Class::NaN => {}
-            }
-        }
-    }
+    for_each_valid(array, selection, |_, value| match classify(value) {
+        Class::Bin(bin) => histogram.counts[bin] += 1,
+        Class::NonPositive => histogram.non_positive_count += 1,
+        Class::Infinite => histogram.infinite_count += 1,
+        Class::NaN => {}
+    });
     histogram
 }
 
