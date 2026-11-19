@@ -1,23 +1,5 @@
 import Foundation
 
-/// Per-request cancellation flag checked before a queued synchronous FFI call starts.
-final class CancelFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-
-    func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
-    }
-
-    var isCancelled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return cancelled
-    }
-}
-
 /// The worker reads this before starting a queued synchronous FFI call.
 final class RequestGate: @unchecked Sendable {
     private let lock = NSLock()

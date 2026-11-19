@@ -445,7 +445,9 @@ final class DocumentModel {
                 self.submitted = nil
                 self.draftFilters = self.viewer.appliedFilters
                 self.draftSorts = self.viewer.appliedSorts
+                let columnsReverted = self.draftVisibleColumns != self.visibleColumns
                 self.draftVisibleColumns = self.visibleColumns
+                if columnsReverted { self.table?.syncColumns() }
                 if !error.isCancellation { self.reportError(error) }
                 self.updateFind()
             }
@@ -494,7 +496,9 @@ final class DocumentModel {
         viewer.close()
         draftFilters = viewer.appliedFilters
         draftSorts = viewer.appliedSorts
+        let columnsReverted = draftVisibleColumns != visibleColumns
         draftVisibleColumns = visibleColumns
+        if columnsReverted { table?.syncColumns() }
         find.stop()
         export.stop()
         copying.cancel()

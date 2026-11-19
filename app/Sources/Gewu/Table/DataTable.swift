@@ -290,21 +290,33 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         fitVisibleColumns()
     }
 
+    private func applyColumnLayout(_ visible: [ColumnId]) {
+        applyingColumns = true
+        let visibleSet = Set(visible)
+        for column in table.tableColumns {
+            if let id = columnId(column) { column.isHidden = !visibleSet.contains(id) }
+        }
+        for (offset, id) in visible.enumerated() {
+            let from = table.column(withIdentifier: identifier(for: id))
+            if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
+        }
+        applyingColumns = false
+    }
+
+    func syncColumns() {
+        guard builtColumns, displayedColumns != model.visibleColumns else { return }
+        applyColumnLayout(model.visibleColumns)
+        table.layoutSubtreeIfNeeded()
+        updateViewport()
+        requestHighlights()
+    }
+
     private func updateColumns(_ input: DocumentModel.TableInput, restyle: Bool = false) {
         let previous = displayedInput
         displayedInput = input
         let visible = input.visibleColumns
         if previous?.visibleColumns != visible {
-            applyingColumns = true
-            let visibleSet = Set(visible)
-            for column in table.tableColumns {
-                if let id = columnId(column) { column.isHidden = !visibleSet.contains(id) }
-            }
-            for (offset, id) in visible.enumerated() {
-                let from = table.column(withIdentifier: identifier(for: id))
-                if from != offset + 1 { table.moveColumn(from, toColumn: offset + 1) }
-            }
-            applyingColumns = false
+            applyColumnLayout(visible)
         }
         if previous != input || restyle {
             let filters = Dictionary(uniqueKeysWithValues: input.filters.map { ($0.column, $0.filter) })

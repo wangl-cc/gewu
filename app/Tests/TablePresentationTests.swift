@@ -497,12 +497,48 @@ struct TablePresentationTests {
         #expect(!exposed.isLoading && exposed.textField?.stringValue == "215")
     }
 
-    private func makeModel(csv: String = "number,label\n1,first\n2,second\n3,third\n") throws -> DocumentModel {
+    @Test func failedQueryRestoresDraggedNativeTableColumns() async throws {
+        let queryWorker = OperationQueue()
+        queryWorker.isSuspended = true
+        defer { queryWorker.isSuspended = false }
+        let model = try makeModel(queryWorker: queryWorker)
+        let controller = DataTableController(model: model)
+        model.table = controller
+        defer { model.stop() }
+        let table = try prepareTable(controller)
+        let initial = try cell(table, column: Self.c0, row: 0)
+        try await waitUntil { !initial.isLoading }
+        #expect(controller.displayedColumns == [Self.c0, Self.c1])
+
+        // Queue a query that will fail once the worker resumes.
+        model.setFilter(Filter(condition: .range(min: "invalid", max: nil), includeNulls: false), column: Self.c0)
+        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
+            await Task.yield()
+        }
+
+        // Simulate dragging column c1 ahead of c0 while the failing query is in flight.
+        table.moveColumn(2, toColumn: 1)
+        #expect(controller.displayedColumns == [Self.c1, Self.c0])
+        #expect(model.draftVisibleColumns == [Self.c1, Self.c0])
+        #expect(model.visibleColumns == [Self.c0, Self.c1])
+
+        queryWorker.isSuspended = false
+        try await waitUntil { !model.isBusy }
+        #expect(model.errorMessage != nil)
+        #expect(model.visibleColumns == [Self.c0, Self.c1])
+        #expect(model.draftVisibleColumns == [Self.c0, Self.c1])
+        #expect(controller.displayedColumns == [Self.c0, Self.c1])
+    }
+
+    private func makeModel(
+        csv: String = "number,label\n1,first\n2,second\n3,third\n",
+        queryWorker: OperationQueue? = nil
+    ) throws -> DocumentModel {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("table-presentation-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try csv.write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        return DocumentModel(url: path, dataset: dataset)
+        return DocumentModel(url: path, dataset: dataset, queryWorker: queryWorker)
     }
 
     private func prepareTable(_ controller: DataTableController) throws -> NSTableView {
