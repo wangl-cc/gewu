@@ -1,7 +1,7 @@
 //! Nested Find compiles child predicates using
 //! borrowed parent and child selections, without decoding Arrow value payload.
 
-use std::{ops::Range, sync::OnceLock};
+use std::ops::Range;
 
 use arrow::{
     array::{downcast_dictionary_array, Array, ArrayRef, AsArray, OffsetSizeTrait},
@@ -113,29 +113,6 @@ pub(super) fn dictionary_find<'a>(
             child.evaluate(&keys, &mut matched);
             for (key, output) in output_rows.into_iter().enumerate() {
                 hits[output] = matched[key];
-            }
-        }))))
-    }, _ => unreachable!("dictionary type checked by caller"))
-}
-
-/// Explicit filters retain the established eager dictionary-value cache. This
-/// avoids changing their low-cardinality execution policy as part of Find.
-pub(super) fn dictionary<'a>(
-    array: &'a ArrayRef,
-    compile: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
-) -> Result<Option<Predicate<'a>>> {
-    downcast_dictionary_array!(array => {
-        let values = array.values();
-        let Some(child) = compile(values)? else { return Ok(None) };
-        let cached = OnceLock::<Vec<bool>>::new();
-        Ok(Some(Predicate::new(Box::new(move |rows, hits| {
-            let matched = cached.get_or_init(|| {
-                let mut matched = vec![false; values.len()];
-                child.evaluate(0..values.len(), &mut matched);
-                matched
-            });
-            for (index, row) in rows.iter().enumerate() {
-                hits[index] = array.is_valid(row) && matched[array.keys().value(row).as_usize()];
             }
         }))))
     }, _ => unreachable!("dictionary type checked by caller"))
