@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
 use thiserror::Error;
 
-use crate::{InternalError, IoError};
+use crate::{ColumnId, InternalError, IoError};
 
 #[derive(Debug, Error)]
 pub enum FileError {
@@ -71,7 +71,7 @@ pub enum ExportError {
     #[error("{format} cannot export nested columns {columns:?}; use Parquet to preserve them")]
     NestedColumns {
         format: crate::FileType,
-        columns: Vec<u32>,
+        columns: Vec<ColumnId>,
     },
     #[error("could not encode {format}: {source}")]
     Encode {

@@ -3,9 +3,9 @@ import SwiftUI
 /// The same native column chooser for analysis and chart axes.
 struct InspectorColumnPicker: NSViewRepresentable {
     let label: String
-    let columns: [(Int, String)]
+    let columns: [(ColumnId, String)]
     var emptySelectionTitle: String? = nil
-    @Binding var selection: Int?
+    @Binding var selection: ColumnId?
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
 
@@ -23,21 +23,23 @@ struct InspectorColumnPicker: NSViewRepresentable {
 
     func updateNSView(_ button: NSPopUpButton, context: Context) {
         context.coordinator.selection = $selection
-        var items = columns
+        var items: [(ColumnId?, String)] = columns.map { ($0.0, $0.1) }
         if emptySelectionTitle != nil || selection == nil {
-            items.insert((-1, emptySelectionTitle ?? "Select column"), at: 0)
+            items.insert((nil, emptySelectionTitle ?? "Select column"), at: 0)
         }
-        if button.itemArray.map({ $0.tag }) != items.map({ $0.0 })
-            || button.itemTitles != items.map({ $0.1 })
-        {
+        if context.coordinator.items != items.map(\.0) || button.itemTitles != items.map(\.1) {
             button.removeAllItems()
-            for (column, name) in items {
+            for (_, name) in items {
+                // Use NSMenuItem directly so duplicate titles or names matching the empty title are preserved.
                 let item = NSMenuItem(title: name, action: nil, keyEquivalent: "")
-                item.tag = column
                 button.menu?.addItem(item)
             }
+            context.coordinator.items = items.map(\.0)
         }
-        button.selectItem(withTag: selection ?? -1)
+        let index = context.coordinator.items.firstIndex(of: selection) ?? 0
+        if index < button.numberOfItems {
+            button.selectItem(at: index)
+        }
         button.setAccessibilityLabel(label)
         button.toolTip = button.titleOfSelectedItem
     }
@@ -47,12 +49,14 @@ struct InspectorColumnPicker: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject {
-        var selection: Binding<Int?>
-        init(selection: Binding<Int?>) { self.selection = selection }
+        var selection: Binding<ColumnId?>
+        var items: [ColumnId?] = []
+        init(selection: Binding<ColumnId?>) { self.selection = selection }
 
         @objc func selectColumn(_ sender: NSPopUpButton) {
-            guard let column = sender.selectedItem?.tag else { return }
-            selection.wrappedValue = column < 0 ? nil : column
+            let index = sender.indexOfSelectedItem
+            guard items.indices.contains(index) else { return }
+            selection.wrappedValue = items[index]
         }
     }
 }

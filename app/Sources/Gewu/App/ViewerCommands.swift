@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ViewerCommands: Commands {
     @ObservedObject var files: FileCoordinator
-    @FocusedObject private var model: DocumentModel?
+    @FocusedValue(DocumentModel.self) private var model
     @FocusedObject private var workbook: WorkbookModel?
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
     @Environment(\.openWindow) private var openWindow
@@ -75,7 +75,7 @@ struct ViewerCommands: Commands {
 }
 
 private struct FindNavigationCommands: View {
-    @ObservedObject var model: DocumentModel
+    let model: DocumentModel
     @ObservedObject var find: FindModel
 
     var body: some View {
@@ -89,14 +89,14 @@ private struct FindNavigationCommands: View {
 }
 
 private struct ExportCommand: View {
-    @ObservedObject var model: DocumentModel
+    let model: DocumentModel
     @ObservedObject var export: ExportModel
 
     var body: some View {
         Button("Export…") {
             guard model.canExport, let window = model.table?.view.window else { return }
             export.choose(
-                view: model.view, columns: model.appliedSpec.columns.map(\.column), source: model.url, window: window)
+                ordered: model.ordered, columns: model.visibleColumns, source: model.url, window: window)
         }
         .keyboardShortcut("e", modifiers: [.command, .shift])
         .disabled(!model.canExport)

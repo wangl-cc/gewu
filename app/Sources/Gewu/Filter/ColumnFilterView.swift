@@ -80,7 +80,6 @@ struct ColumnFilterDraft {
 
 struct ColumnFilterView: View {
     let viewer: Viewer
-    let column: UInt32
     let info: ColumnInfo
     let current: Filter?
     let onApply: (Filter?) -> Void
@@ -96,11 +95,10 @@ struct ColumnFilterView: View {
     @State private var retry = 0
 
     init(
-        viewer: Viewer, column: UInt32, info: ColumnInfo, current: Filter?,
+        viewer: Viewer, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
         self.viewer = viewer
-        self.column = column
         self.info = info
         self.current = current
         self.onApply = onApply
@@ -202,7 +200,7 @@ struct ColumnFilterView: View {
         do {
             // Choices decide whether value selection is offered and supply the null count.
             if info.capabilities.exact && choices == nil {
-                let result = try await viewer.filterChoices(column)
+                let result = try await viewer.filterChoices(info.id)
                 guard !Task.isCancelled else { return }
                 choices = result
                 if mode == nil {
@@ -211,7 +209,7 @@ struct ColumnFilterView: View {
                 }
             }
             if mode == .range {
-                let result = try await viewer.filterDistribution(column, bins: histogramBins, scale: histogramScale)
+                let result = try await viewer.filterDistribution(info.id, bins: histogramBins, scale: histogramScale)
                 guard !Task.isCancelled else { return }
                 distribution = result
                 draft.range.restoreLabels(from: result)

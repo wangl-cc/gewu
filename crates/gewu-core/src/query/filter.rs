@@ -1,13 +1,13 @@
 //! Text filter protocol. Parsing and physical execution belong to the column.
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
     pub condition: FilterCondition,
     /// Null handling is independent of value matching and exclusion.
     pub include_nulls: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterCondition {
     Range {
         min: Option<String>,

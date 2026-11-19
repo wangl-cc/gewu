@@ -269,9 +269,8 @@ pub(super) fn write(
     let mut output_row = 1;
     for chunk in data.rows.chunks(CHUNK_ROWS) {
         progress.check()?;
-        for &source_row in chunk {
+        for row in chunk.iter() {
             for (column, array) in data.columns.iter().enumerate() {
-                let row = source_row as usize;
                 let target_column = column as u16;
                 if nulls[column]
                     .as_ref()
@@ -489,7 +488,7 @@ mod tests {
             ExportData {
                 schema: &batch.schema(),
                 columns: batch.columns(),
-                rows: &[1, 0],
+                rows: crate::row_ids::RowSlice::Selected(&[1, 0]),
             },
             WriteProgress {
                 cancelled: &cancelled,
@@ -580,7 +579,7 @@ mod tests {
         let data = ExportData {
             schema: &schema,
             columns: batch.columns(),
-            rows: &[],
+            rows: crate::row_ids::RowSlice::Selected(&[]),
         };
         let progress = WriteProgress {
             cancelled: &cancelled,
@@ -596,7 +595,7 @@ mod tests {
             write(
                 file.as_file_mut(),
                 ExportData {
-                    rows: &excessive_rows,
+                    rows: crate::row_ids::RowSlice::Selected(&excessive_rows),
                     ..data
                 },
                 progress

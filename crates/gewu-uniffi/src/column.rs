@@ -2,6 +2,23 @@
 
 use gewu_core as core;
 
+#[derive(uniffi::Record, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ColumnId {
+    pub raw: u32,
+}
+
+impl From<core::ColumnId> for ColumnId {
+    fn from(id: core::ColumnId) -> Self {
+        Self { raw: id.into_raw() }
+    }
+}
+
+impl From<ColumnId> for core::ColumnId {
+    fn from(id: ColumnId) -> Self {
+        core::ColumnId::from_raw(id.raw)
+    }
+}
+
 /// Coarse value semantics for cell presentation. Use capabilities for operations.
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum ValueCategory {
@@ -44,23 +61,27 @@ impl From<core::ColumnCapabilities> for ColumnCapabilities {
 
 #[derive(uniffi::Record)]
 pub struct ColumnInfo {
+    pub id: ColumnId,
     pub name: String,
     pub value_category: ValueCategory,
     pub display_type: String,
     pub technical_type: String,
-    pub capabilities: ColumnCapabilities,
     pub nullable: bool,
+    pub capabilities: ColumnCapabilities,
+    pub analysis: crate::AnalysisCapabilities,
 }
 
 impl From<core::ColumnInfo> for ColumnInfo {
     fn from(column: core::ColumnInfo) -> Self {
         Self {
+            id: column.id.into(),
             name: column.name,
             value_category: column.value_category.into(),
             display_type: column.display_type,
             technical_type: column.technical_type,
-            capabilities: column.capabilities.into(),
             nullable: column.nullable,
+            capabilities: column.capabilities.into(),
+            analysis: column.analysis.into(),
         }
     }
 }

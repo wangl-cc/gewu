@@ -32,7 +32,7 @@ struct WindowPresentationTests {
         }
     }
 
-    @Test func filterFacetIgnoresOnlyTheEditedColumnsFilter() throws {
+    @Test func filterFacetIgnoresOnlyTheEditedColumnsFilter() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-facet-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "city,district\nbj,haidian\nbj,chaoyang\nsh,pudong\nsh,xuhui\n"
@@ -41,25 +41,31 @@ struct WindowPresentationTests {
         func exact(_ value: String) -> Filter {
             Filter(condition: .exact(values: [value], exclude: false), includeNulls: false)
         }
-        let spec = QuerySpec(columns: [
-            ColSpec(column: 0, sort: nil, filter: exact("bj")),
-            ColSpec(column: 1, sort: ColSort(priority: 0, descending: true), filter: exact("haidian")),
-        ])
-        let applied = try dataset.query(spec: spec)
-        #expect(applied.rowCount() == 1)
+        let c0 = ColumnId(raw: 0)
+        let c1 = ColumnId(raw: 1)
+        let filters = [
+            ColumnFilter(column: c0, filter: exact("bj")),
+            ColumnFilter(column: c1, filter: exact("haidian")),
+        ]
+        let filtered = try dataset.filter(filters: filters)
+        let ordered = try filtered.sort(sorts: [ColumnSort(column: c1, descending: true)])
+        #expect(ordered.rowCount() == 1)
 
         // The district editor keeps city = bj but not its own district = haidian.
-        let district = try FilterFacet(spec: spec, column: 1).resolve(dataset: dataset)
-        let choices = try district.filterChoices(column: 1)
+        let viewer = Viewer(
+            dataset: dataset, filtered: filtered, ordered: ordered, filters: filters,
+            sorts: [ColumnSort(column: c1, descending: true)])
+        let district = try await viewer.facet(c1)
+        let choices = try district.filterChoices(column: c1)
         #expect(choices.values?.map(\.label) == ["chaoyang", "haidian"])
 
-        // A column without its own filter reuses the applied view.
-        let cityOnly = QuerySpec(columns: [
-            ColSpec(column: 0, sort: nil, filter: exact("bj")),
-            ColSpec(column: 1, sort: nil, filter: nil),
-        ])
-        let facet = FilterFacet(spec: cityOnly, column: 1)
-        #expect(facet.usesAppliedView)
+        // A column without its own filter reuses the applied filtered view.
+        let cityOnlyFilters = [ColumnFilter(column: c0, filter: exact("bj"))]
+        let cityOnlyFiltered = try dataset.filter(filters: cityOnlyFilters)
+        let cityOnlyViewer = Viewer(
+            dataset: dataset, filtered: cityOnlyFiltered, ordered: cityOnlyFiltered.unsorted(),
+            filters: cityOnlyFilters)
+        #expect(try await cityOnlyViewer.facet(c1) === cityOnlyFiltered)
     }
 
     @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() throws {
@@ -69,11 +75,11 @@ struct WindowPresentationTests {
         try (["few_numbers,few_labels,many_numbers,many_labels"] + rows).joined(separator: "\n")
             .write(to: path, atomically: true, encoding: .utf8)
         let dataset = try GewuDataset.open(path: path.path)
-        let view = dataset.view()
+        let view = dataset.unfiltered()
         let expected: [FilterMode] = [.exact, .exact, .range, .text]
         for (index, column) in dataset.info().columns.enumerated() {
             #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
-            let choices = try view.filterChoices(column: UInt32(index))
+            let choices = try view.filterChoices(column: column.id)
             #expect(
                 FilterMode.initial(capabilities: column.capabilities, current: nil, choices: choices)
                     == expected[index])
@@ -94,10 +100,10 @@ struct WindowPresentationTests {
         // Value selection waits for choices and needs a complete list of values.
         let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)
         #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
-        let labels = try view.filterChoices(column: 1)
+        let labels = try view.filterChoices(column: ColumnId(raw: 1))
         #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)
         let manyLabels = dataset.info().columns[3].capabilities
-        let unlisted = try view.filterChoices(column: 3)
+        let unlisted = try view.filterChoices(column: ColumnId(raw: 3))
         #expect(unlisted.values == nil)
         #expect(FilterMode.initial(capabilities: manyLabels, current: selected, choices: unlisted) == .text)
     }
@@ -182,4 +188,45 @@ struct WindowPresentationTests {
         #expect(WorkbookModel(url: url, preferences: preferences).showsInspector)
     }
 
+    @Test func inspectorColumnPickerPreservesDuplicateAndSentinelColumnTitles() throws {
+        let c0 = ColumnId(raw: 0)
+        let c1 = ColumnId(raw: 1)
+        let c2 = ColumnId(raw: 2)
+        var selection: ColumnId?
+        let binding = Binding<ColumnId?>(get: { selection }, set: { selection = $0 })
+        let host = NSHostingController(
+            rootView: InspectorColumnPicker(
+                label: "X axis",
+                columns: [(c0, "dup"), (c1, "Source row"), (c2, "dup")],
+                emptySelectionTitle: "Source row",
+                selection: binding
+            ))
+        host.view.frame = NSRect(x: 0, y: 0, width: 240, height: 28)
+        host.view.layoutSubtreeIfNeeded()
+
+        func findPopUp(_ view: NSView) -> NSPopUpButton? {
+            if let button = view as? NSPopUpButton { return button }
+            for subview in view.subviews {
+                if let found = findPopUp(subview) { return found }
+            }
+            return nil
+        }
+
+        let button = try #require(findPopUp(host.view))
+        #expect(button.numberOfItems == 4)
+        #expect(button.itemTitles == ["Source row", "dup", "Source row", "dup"])
+
+        let action = try #require(button.action)
+        button.selectItem(at: 3)
+        _ = button.target?.perform(action, with: button)
+        #expect(selection == c2)
+
+        button.selectItem(at: 2)
+        _ = button.target?.perform(action, with: button)
+        #expect(selection == c1)
+
+        button.selectItem(at: 0)
+        _ = button.target?.perform(action, with: button)
+        #expect(selection == nil)
+    }
 }

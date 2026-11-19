@@ -20,11 +20,12 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
     writer.write(&batch).unwrap();
     writer.close().unwrap();
     let doc = gewu_core::Dataset::open(file.path())
-        .map(|dataset| std::sync::Arc::new(dataset).view())
+        .map(|dataset| std::sync::Arc::new(dataset).unfiltered().unsorted())
         .unwrap();
 
+    let c0 = gewu_core::ColumnId::from_raw(0);
     for (query, expected) in queries {
-        let find = doc.find(query, &[0]).unwrap();
+        let find = doc.find(query, &[c0]).unwrap();
         let hits = find.next(None, 256).unwrap();
         assert_eq!(
             hits.iter().map(|hit| hit.display_row).collect::<Vec<_>>(),

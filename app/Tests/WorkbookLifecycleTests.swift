@@ -16,7 +16,7 @@ struct WorkbookLifecycleTests {
     @Test(arguments: [false, true])
     @MainActor
     static func initialViewIsBuiltOffMainAndObsoleteResultsAreDiscarded(cancelBeforePublish: Bool) async throws {
-        let created = AsyncStream<GewuView>.makeStream()
+        let created = AsyncStream<GewuOrderedView>.makeStream()
         let release = DispatchSemaphore(value: 0)
         defer {
             release.signal()
@@ -27,11 +27,12 @@ struct WorkbookLifecycleTests {
             makeView: { dataset in
                 let offMain = !Thread.isMainThread
                 #expect(offMain, "Initial row-array allocation must run off the UI thread")
-                let view = dataset.view()
-                created.continuation.yield(view)
+                let filtered = dataset.unfiltered()
+                let ordered = filtered.unsorted()
+                created.continuation.yield(ordered)
                 // Avoid deadlocking the test if allocation regresses to the main thread.
                 if offMain { release.wait() }
-                return view
+                return (filtered, ordered)
             },
             didOpen: { _ in })
         defer { model.stop() }
@@ -50,7 +51,7 @@ struct WorkbookLifecycleTests {
         }
         release.signal()
         await settled(model)
-        #expect(model.document?.view === expected, "DocumentModel must use the worker's View, not allocate another")
+        #expect(model.document?.ordered === expected, "DocumentModel must use the worker's View, not allocate another")
     }
 
     @Test
@@ -78,7 +79,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == decomposed)
         let decomposedDocument = try #require(model.document)
-        let decomposedRows = try decomposedDocument.view.rows(start: 0, count: 1, columns: [0])
+        let decomposedRows = try decomposedDocument.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
         #expect(decomposedRows.cells == ["decomposed"])
 
         model.selectSheet(composed)
@@ -87,7 +88,7 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == composed)
         let composedDocument = try #require(model.document)
-        let composedRows = try composedDocument.view.rows(start: 0, count: 1, columns: [0])
+        let composedRows = try composedDocument.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
         #expect(composedRows.cells == ["composed"])
     }
 
@@ -128,7 +129,7 @@ struct WorkbookLifecycleTests {
         let original = try #require(model.document)
         #expect(model.selectedSheet?.rawValue == "First")
         original.find.query = "keep while loading"
-        original.chartY = 0
+        original.chartY = ColumnId(raw: 0)
 
         model.selectSheet(.init(rawValue: "Bad"))
         await settled(model)
@@ -149,7 +150,7 @@ struct WorkbookLifecycleTests {
         #expect(model.document?.find.query == "" && model.document?.chartY == nil)
         #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
         #expect(!probe.viewSheets.contains("Slow"), "A decode superseded before completion must not allocate row IDs")
-        #expect(model.document?.view !== original.view)
+        #expect(model.document?.ordered !== original.ordered)
 
         let last = model.document
         model.selectSheet(.init(rawValue: "Slow"))
@@ -190,13 +191,13 @@ struct WorkbookLifecycleTests {
         let model = WorkbookModel(url: csv, hasHeader: false, didOpen: { _ in })
         model.open()
         await settled(model)
-        #expect(model.document?.view.rowCount() == 2 && !model.hasHeader)
-        let first = try model.document?.view.rows(start: 0, count: 1, columns: [0])
+        #expect(model.document?.ordered.rowCount() == 2 && !model.hasHeader)
+        let first = try model.document?.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
         #expect(first?.cells == ["1"])
         try await presentationContracts(#require(model.document))
         model.reopen(hasHeader: true)
         await settled(model)
-        #expect(model.document?.view.rowCount() == 1 && model.hasHeader)
+        #expect(model.document?.ordered.rowCount() == 1 && model.hasHeader)
         #expect(model.document?.info.columns.first?.name == "1")
         let retained = model.document
         try FileManager.default.removeItem(at: csv)
@@ -212,7 +213,7 @@ struct WorkbookLifecycleTests {
         workbook.selectSheet(.init(rawValue: "Last"))
         await settled(workbook)
         #expect(!workbook.hasHeader && workbook.selectedSheet?.rawValue == "Last")
-        let rows = try #require(workbook.document).view.rows(start: 0, count: 1, columns: [0])
+        let rows = try #require(workbook.document).ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
         #expect(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
     }
 
@@ -223,7 +224,7 @@ struct WorkbookLifecycleTests {
         for base in [0, 1] {
             await chart.load(
                 viewer: document.viewer,
-                x: nil, y: 0, rowNumberBase: base)
+                x: nil, y: ColumnId(raw: 0), rowNumberBase: base)
             let point = try #require(chart.result).points[0]
             #expect(point.sourceRow == 0, "Presentation must not change source row identity")
             let label = formatRowNumber(point.sourceRow, base: base)
@@ -275,13 +276,14 @@ private final class OpenProbe: @unchecked Sendable {
         return views
     }
 
-    func makeView(_ dataset: GewuDataset) -> GewuView {
+    func makeView(_ dataset: GewuDataset) -> (filtered: GewuFilteredView, ordered: GewuOrderedView) {
         if case .xlsx(let sheet, _) = dataset.info().metadata {
             lock.lock()
             views.append(sheet)
             lock.unlock()
         }
-        return dataset.view()
+        let filtered = dataset.unfiltered()
+        return (filtered, filtered.unsorted())
     }
 
     func open(path: String, sheet: String?) throws -> GewuDataset {

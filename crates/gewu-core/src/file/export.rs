@@ -5,14 +5,14 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Mutex,
     },
 };
 
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 
 use super::{ExportData, WriteProgress};
-use crate::{ExportOptions, FileType, Result};
+use crate::{row_ids::RowIds, ExportOptions, FileType, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -28,7 +28,7 @@ pub struct Export {
     source: PathBuf,
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
-    rows: Arc<[u32]>,
+    rows: RowIds,
     format: FileType,
     started: AtomicBool,
     cancelled: AtomicBool,
@@ -43,7 +43,7 @@ impl Export {
         source: PathBuf,
         schema: SchemaRef,
         columns: Vec<ArrayRef>,
-        rows: Arc<[u32]>,
+        rows: RowIds,
         format: FileType,
     ) -> Self {
         Self {
@@ -144,7 +144,7 @@ impl Export {
         ExportData {
             schema: &self.schema,
             columns: &self.columns,
-            rows: &self.rows,
+            rows: self.rows.as_slice(),
         }
     }
 

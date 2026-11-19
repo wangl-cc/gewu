@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct InspectorSidebar: View {
-    @ObservedObject var model: DocumentModel
+    @Bindable var model: DocumentModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -11,7 +11,9 @@ struct InspectorSidebar: View {
                 .padding(.horizontal, 16).padding(.vertical, 10)
             if model.inspectorPage == .chart {
                 ScatterPanel(model: model)
-            } else if let column = model.inspectedColumn, model.info.columns.indices.contains(column) {
+            } else if let column = model.inspectedColumn, model.columnInfo[column] != nil,
+                model.visibleColumns.contains(column)
+            {
                 ColumnAnalysisView(model: model, column: column)
             } else {
                 ContentUnavailableView("No Columns", systemImage: "tablecells")
@@ -61,31 +63,32 @@ private struct InspectorPageControl: NSViewRepresentable {
 
 /// Only visible, expanded sections request work from Core.
 struct ColumnAnalysisView: View {
-    @ObservedObject var model: DocumentModel
-    let column: Int
-    @StateObject private var analysis = InspectorModel()
+    @Bindable var model: DocumentModel
+    let column: ColumnId
+    @State private var analysis = InspectorModel()
     @ObservedObject private var settings: InspectorSettings
     @State private var retry = 0
     @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
 
-    init(model: DocumentModel, column: Int) {
+    init(model: DocumentModel, column: ColumnId) {
         self.model = model
         self.column = column
         _settings = ObservedObject(wrappedValue: model.inspectorSettings)
     }
 
+    private var info: ColumnInfo? { model.columnInfo[column] }
+
     private var expanded: Int {
-        let distribution = (try? model.dataset.analysisCapabilities(column: UInt32(column)).distribution) ?? false
-        return settings.expanded(distribution: distribution)
+        settings.expanded(distribution: info?.analysis.distribution ?? false)
     }
 
     private var histogramScale: AxisScale {
-        settings.binningScale(logarithmic: model.info.columns[column].capabilities.logarithmic)
+        settings.binningScale(logarithmic: info?.capabilities.logarithmic ?? false)
     }
 
     private struct Request: Equatable {
-        let view: ObjectIdentifier
-        let column: Int
+        let filtered: ObjectIdentifier
+        let column: ColumnId
         let expanded: Int
         let retry: Int
         let histogramBins: UInt32
@@ -94,7 +97,7 @@ struct ColumnAnalysisView: View {
 
     private var request: Request {
         Request(
-            view: ObjectIdentifier(model.applied.rowView),
+            filtered: ObjectIdentifier(model.filtered),
             column: column, expanded: expanded, retry: retry, histogramBins: settings.histogramBins,
             histogramScale: histogramScale)
     }
@@ -104,18 +107,18 @@ struct ColumnAnalysisView: View {
             VStack(alignment: .leading, spacing: 6) {
                 InspectorColumnPicker(
                     label: "Analyzed column",
-                    columns: model.info.columns.indices.map { ($0, model.info.columns[$0].name) },
+                    columns: model.visibleColumns.compactMap { id in model.columnInfo[id].map { (id, $0.name) } },
                     selection: $model.inspectedColumn
                 )
-                Text(model.info.columns[column].displayType)
+                Text(info?.displayType ?? "")
                     .font(.caption).foregroundStyle(.secondary)
-                    .help(model.info.columns[column].technicalType)
+                    .help(info?.technicalType ?? "")
             }
             .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 12)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if analysis.matches(view: model.applied.rowView, column: UInt32(column)) {
+                    if analysis.matches(filtered: model.filtered, column: column) {
                         VStack(alignment: .leading, spacing: 6) {
                             detail("Rows", formatCount(analysis.rowCount))
                             if let count = analysis.nullCount {
@@ -148,10 +151,10 @@ struct ColumnAnalysisView: View {
             }
         }
         .task(id: request) {
+            guard let info else { return }
             await analysis.load(
-                dataset: model.dataset, viewer: model.viewer,
-                column: UInt32(column), expanded: expanded, bins: settings.histogramBins,
-                scale: histogramScale)
+                column: info, dataset: model.dataset, viewer: model.viewer,
+                expanded: expanded, bins: settings.histogramBins, scale: histogramScale)
         }
         .onDisappear { analysis.cancel() }
     }
@@ -185,7 +188,7 @@ struct ColumnAnalysisView: View {
                 } else if let mean = statistics.mean {
                     detail("Mean", decimal(mean))
                 }
-                if model.kinds.indices.contains(column), model.kinds[column] == .number, let sd = statistics.stdDev {
+                if info?.valueCategory == .number, let sd = statistics.stdDev {
                     detail("Std dev", decimal(sd))
                 }
                 if statistics.nanCount > 0 { detail("NaN", formatCount(statistics.nanCount)) }
@@ -241,7 +244,7 @@ struct ColumnAnalysisView: View {
             if settings.frequencyScale == .log10 { Text("· Log frequency") }
             Spacer(minLength: 0)
             Menu {
-                if section == .distribution, model.info.columns[column].capabilities.logarithmic {
+                if section == .distribution, info?.capabilities.logarithmic == true {
                     Picker("Bin spacing", selection: $settings.histogramScale) {
                         Text("Linear").tag(AxisScale.linear)
                         Text("Logarithmic").tag(AxisScale.log10)

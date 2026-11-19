@@ -2,13 +2,13 @@
 
 use gewu_core as core;
 
-use crate::GewuError;
+use crate::{ColumnId, GewuError};
 
 /// A matching cell and exclusive directional cursor in the captured view.
 #[derive(uniffi::Record, Clone, Copy)]
 pub struct CellMatch {
     pub display_row: u64,
-    pub column: u32,
+    pub column: ColumnId,
 }
 
 /// Row-major match flags in the Find session's captured column order.
@@ -81,7 +81,7 @@ impl From<core::CellMatch> for CellMatch {
     fn from(hit: core::CellMatch) -> Self {
         Self {
             display_row: hit.display_row,
-            column: hit.column,
+            column: hit.column.into(),
         }
     }
 }
@@ -90,7 +90,7 @@ impl From<CellMatch> for core::CellMatch {
     fn from(hit: CellMatch) -> Self {
         Self {
             display_row: hit.display_row,
-            column: hit.column,
+            column: hit.column.into(),
         }
     }
 }
@@ -123,19 +123,20 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-find-{}.csv", std::process::id()));
         std::fs::write(&source, "value,other\nhit,12\nmiss,120\nhit,12\n").unwrap();
-        let doc = GewuDataset::open(source.to_str().unwrap().to_owned())
-            .unwrap()
-            .view();
-        let find = doc.find("12".into(), vec![0, 1]).unwrap();
+        let dataset = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
+        let c0 = dataset.column_id("value".into()).unwrap();
+        let c1 = dataset.column_id("other".into()).unwrap();
+        let doc = dataset.unfiltered().unsorted();
+        let find = doc.find("12".into(), vec![c0, c1]).unwrap();
 
         let page = find.next(None, 2).unwrap();
         assert_eq!(page.len(), 2);
-        assert_eq!((page[0].display_row, page[0].column), (0, 1));
-        assert_eq!((page[1].display_row, page[1].column), (2, 1));
+        assert_eq!((page[0].display_row, page[0].column), (0, c1));
+        assert_eq!((page[1].display_row, page[1].column), (2, c1));
         let highlight = find.highlight(0, 3).unwrap();
         assert_eq!(highlight.matched, [false, true, false, false, false, true]);
         assert_eq!(find.previous(None, 1).unwrap()[0].display_row, 2);
-        assert!(doc.rows(0, 10, vec![0]).unwrap().source_rows.len() == 3);
+        assert!(doc.rows(0, 10, vec![c0]).unwrap().source_rows.len() == 3);
         std::fs::remove_file(source).unwrap();
     }
 }

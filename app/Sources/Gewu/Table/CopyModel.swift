@@ -13,7 +13,7 @@ final class CopyModel: ObservableObject {
 
     init(reportError: @escaping (Error, String) -> Void) { self.reportError = reportError }
 
-    func copy(view: GewuView, rows: [Range<Int>], columns: [UInt32], names: [String]) {
+    func copy(ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId], names: [String]) {
         cancel()
         request &+= 1
         let mine = request
@@ -23,7 +23,7 @@ final class CopyModel: ObservableObject {
         let work = Task.detached(priority: .userInitiated) {
             try CopyText.format(rows: rows, columns: columns, names: names, includeHeaders: includeHeaders) {
                 start, count, columns in
-                try view.rows(start: UInt64(start), count: UInt32(count), columns: columns)
+                try ordered.rows(start: UInt64(start), count: UInt32(count), columns: columns)
             }
         }
         task = work
@@ -62,8 +62,8 @@ final class CopyModel: ObservableObject {
 /// The final TSV necessarily occupies memory proportional to the selection.
 enum CopyText {
     static func format(
-        rows: [Range<Int>], columns: [UInt32], names: [String], includeHeaders: Bool = true,
-        fetch: (Int, Int, [UInt32]) throws -> RowBlock
+        rows: [Range<Int>], columns: [ColumnId], names: [String], includeHeaders: Bool = true,
+        fetch: (Int, Int, [ColumnId]) throws -> RowBlock
     ) throws -> String {
         var result = includeHeaders ? names.map(escaped).joined(separator: "\t") : ""
         var hasLine = includeHeaders

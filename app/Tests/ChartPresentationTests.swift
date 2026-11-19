@@ -36,17 +36,20 @@ struct ChartPresentationTests {
         try "x,y\n-1,10\n1,0\n10,100\n100,1000\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
-        let viewer = Viewer(dataset: document, view: document.view(), spec: QuerySpec(columns: []))
+        let filtered = document.unfiltered()
+        let viewer = Viewer(dataset: document, filtered: filtered, ordered: filtered.unsorted())
+        let c0 = ColumnId(raw: 0)
+        let c1 = ColumnId(raw: 1)
         let model = ScatterModel()
         await model.load(
-            viewer: viewer, x: 0, y: 1,
+            viewer: viewer, x: c0, y: c1,
             xScale: .log10, yScale: .log10)
         let result = try #require(model.result)
         #expect(model.xScale == .log10 && model.yScale == .log10)
         #expect(result.nonPositiveRows == 2 && result.points.map(\.sourceRow) == [2, 3])
         #expect(result.points[0].x == 10 && result.points[0].xLabel == "10")
         await model.load(
-            viewer: viewer, x: 0, y: 1)
+            viewer: viewer, x: c0, y: c1)
         #expect(model.xScale == .linear && model.yScale == .linear && model.result?.eligibleRows == 4)
     }
 
@@ -56,21 +59,27 @@ struct ChartPresentationTests {
         try "value\n1\n2\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let dataset = try GewuDataset.open(path: url.path)
-        let viewer = Viewer(dataset: dataset, view: dataset.view(), spec: QuerySpec(columns: []))
+        let filtered = dataset.unfiltered()
+        let worker = OperationQueue()
+        worker.isSuspended = true
+        defer { worker.isSuspended = false }
+        let viewer = Viewer(
+            dataset: dataset, filtered: filtered, ordered: filtered.unsorted(), analysisWorker: worker)
+        let c0 = ColumnId(raw: 0)
         let model = ScatterModel()
-        var task: Task<Void, Never>?
-        let observation = model.$loading.sink { loading in
-            if loading { task?.cancel() }
+        let task = Task { await model.load(viewer: viewer, x: nil, y: c0) }
+        while !model.loading || worker.operations.filter({ !$0.isFinished }).isEmpty {
+            await Task.yield()
         }
-        task = Task { await model.load(viewer: viewer, x: nil, y: 0) }
-        await task?.value
-        observation.cancel()
+        task.cancel()
+        worker.isSuspended = false
+        await task.value
         #expect(model.result == nil && !model.loading && model.error == nil)
-        await model.load(viewer: viewer, x: nil, y: 0)
+        await model.load(viewer: viewer, x: nil, y: c0)
         let replacement = try #require(model.result)
         let obsolete = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await model.load(viewer: viewer, x: nil, y: 0)
+            await model.load(viewer: viewer, x: nil, y: c0)
         }
         await obsolete.value
         #expect(model.result == replacement && model.totalRows == 2 && !model.loading)

@@ -102,7 +102,7 @@ private struct ImportOptionsView: View {
 }
 
 private struct LoadedDocumentView: View {
-    @ObservedObject var model: DocumentModel
+    @Bindable var model: DocumentModel
     @ObservedObject var workbook: WorkbookModel
     @ObservedObject private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
@@ -160,7 +160,7 @@ private struct LoadedDocumentView: View {
                 }.padding([.horizontal, .bottom], 20)
             }
         }
-        .focusedSceneObject(model)
+        .focusedSceneValue(model)
         .alert("Gewu", isPresented: $model.isErrorPresented) {
             Button("OK", role: .cancel) { model.isErrorPresented = false }
         } message: {
@@ -205,7 +205,7 @@ private struct LoadedDocumentView: View {
 }
 
 private struct DocumentStatus: View {
-    @ObservedObject var model: DocumentModel
+    let model: DocumentModel
     @ObservedObject var workbook: WorkbookModel
     @State private var showsFilters = false
     @State private var showsSorting = false
@@ -254,12 +254,12 @@ private struct DocumentStatus: View {
                 .popover(isPresented: $showsFilters, arrowEdge: .bottom) {
                     ActiveFiltersView(model: model) { column in
                         showsFilters = false
-                        model.selectedColumn = Int(column)
-                        model.table?.scrollToColumn(Int(column), focus: true)
+                        model.selectedColumn = column
+                        model.table?.scrollToColumn(column, focus: true)
                     }
                 }
             }
-            let sortCount = model.appliedSpec.columns.filter { $0.sort != nil }.count
+            let sortCount = model.viewer.appliedSorts.count
             if sortCount > 0 {
                 Text("·")
                 Button {
@@ -287,33 +287,33 @@ private struct DocumentStatus: View {
 }
 
 private struct ActiveFiltersView: View {
-    @ObservedObject var model: DocumentModel
-    let locate: (UInt32) -> Void
+    let model: DocumentModel
+    let locate: (ColumnId) -> Void
 
     var body: some View {
-        let columns = model.appliedSpec.columns.filter { $0.filter != nil }
+        let columns = model.viewer.appliedFilters
         VStack(alignment: .leading, spacing: 12) {
             Text("Active Filters").font(.headline)
             ScrollView {
                 VStack(spacing: 0) {
-                    ForEach(columns, id: \.column) { column in
-                        let name = model.info.columns[Int(column.column)].name
+                    ForEach(columns, id: \.column) { entry in
+                        let name = model.columnInfo[entry.column]?.name ?? ""
                         HStack(spacing: 12) {
                             Button {
-                                locate(column.column)
+                                locate(entry.column)
                             } label: {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(name).fontWeight(.medium).foregroundStyle(.primary)
-                                    Text(column.filter?.detailSummary ?? "")
+                                    Text(entry.filter.detailSummary)
                                         .font(.caption).foregroundStyle(.secondary).lineLimit(3)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .help("Show \(name) in the table\n\(column.filter?.detailSummary ?? "")")
+                            .help("Show \(name) in the table\n\(entry.filter.detailSummary)")
                             Button {
-                                model.setFilter(nil, column: column.column)
+                                model.setFilter(nil, column: entry.column)
                             } label: {
                                 Image(systemName: "xmark").foregroundStyle(.secondary)
                             }

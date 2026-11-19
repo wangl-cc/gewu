@@ -4,38 +4,38 @@ import Foundation
 /// scrolling replaces demand instead of appending work to a FIFO.
 @MainActor
 final class TableRowLoader {
-    typealias Read = @Sendable (GewuView, Int, [UInt32]) async throws -> RowBlock
+    typealias Read = @Sendable (GewuOrderedView, Int, [ColumnId]) async throws -> RowBlock
 
     struct Viewport: Equatable {
         let rows: Range<Int>
-        let columns: [UInt32]
+        let columns: [ColumnId]
     }
 
     struct Snapshot {
         struct Page {
             let block: RowBlock
-            let columns: [UInt32]
+            let columns: [ColumnId]
         }
-        let view: GewuView
+        let view: GewuOrderedView
         let viewport: Viewport
         let pages: [Page]
     }
 
-    /// The block is row-major, in the supplied source-column order. Even blocks
+    /// The block is row-major, in the supplied column order. Even blocks
     /// too large for the cache are delivered to the visible cells once.
-    var onLoad: ((GewuView, RowBlock, [UInt32]) -> Void)?
-    var onError: ((GewuView, Error) -> Void)?
+    var onLoad: ((GewuOrderedView, RowBlock, [ColumnId]) -> Void)?
+    var onError: ((GewuOrderedView, Error) -> Void)?
 
     private struct Request {
         let start: Int
-        let columns: [UInt32]
+        let columns: [ColumnId]
     }
 
     private let cache: RowCache
     private let read: Read
-    private var view: GewuView?
+    private var view: GewuOrderedView?
     private var visibleRows = 0..<0
-    private var visibleColumns: [UInt32] = []
+    private var visibleColumns: [ColumnId] = []
     // Completed demand, including uncached blocks, prevents cache pressure from
     // repeatedly loading the same viewport. Moving the viewport renews demand.
     private var delivered: Set<RowCache.Key> = []
@@ -46,15 +46,15 @@ final class TableRowLoader {
         self.cache = cache
         let reader = TableRowReader()
         self.read =
-            read ?? { view, start, columns in
-                let count = min(UInt64(RowCache.blockSize), view.rowCount() - UInt64(start))
-                return try await reader.read(view, start: UInt64(start), count: UInt32(count), columns: columns)
+            read ?? { ordered, start, columns in
+                let count = min(UInt64(RowCache.blockSize), ordered.rowCount() - UInt64(start))
+                return try await reader.read(ordered, start: UInt64(start), count: UInt32(count), columns: columns)
             }
     }
 
     /// Read only the target viewport, without invalidating the displayed cache.
     /// The temporary pages also allow oversized values to be committed together.
-    func snapshot(of view: GewuView, viewport: () -> Viewport) async throws -> Snapshot {
+    func snapshot(of ordered: GewuOrderedView, viewport: () -> Viewport) async throws -> Snapshot {
         var pages: [Snapshot.Page] = []
         var target = viewport()
         while true {
@@ -72,10 +72,10 @@ final class TableRowLoader {
                 for column in page.columns { ready.insert(.init(start: start, column: column)) }
             }
             let missing = Self.requests(in: target) { !ready.contains($0) }
-            if missing.isEmpty { return Snapshot(view: view, viewport: target, pages: pages) }
+            if missing.isEmpty { return Snapshot(view: ordered, viewport: target, pages: pages) }
             for request in missing {
                 try Task.checkCancellation()
-                let block = try await read(view, request.start, request.columns)
+                let block = try await read(ordered, request.start, request.columns)
                 pages.append(.init(block: block, columns: request.columns))
                 let latest = viewport()
                 if target != latest {
@@ -95,11 +95,10 @@ final class TableRowLoader {
         }
     }
 
-    func reset(to view: GewuView) {
+    func reset(to ordered: GewuOrderedView) {
         stop()
-        self.view = view
+        view = ordered
         cache.clear()
-
     }
 
     func stop() {
@@ -116,7 +115,7 @@ final class TableRowLoader {
         cache.block(for: key)
     }
 
-    func block(for row: Int, column: UInt32?) -> RowBlock? {
+    func block(for row: Int, column: ColumnId?) -> RowBlock? {
         guard row >= 0 else { return nil }
         let start = row / RowCache.blockSize * RowCache.blockSize
         if let block = cache.block(for: .init(start: start, column: column)) { return block }
@@ -130,13 +129,13 @@ final class TableRowLoader {
         return nil
     }
 
-    func updateViewport(rows: Range<Int>, columns: [UInt32]) {
+    func updateViewport(rows: Range<Int>, columns: [ColumnId]) {
         guard let view else { return }
         let count = Int(clamping: view.rowCount())
         let start = min(count, max(0, rows.lowerBound))
         let end = min(count, max(start, rows.upperBound))
         let rows = start..<end
-        var seen: Set<UInt32> = []
+        var seen: Set<ColumnId> = []
         let columns = columns.filter { seen.insert($0).inserted }
         if visibleRows != rows || visibleColumns != columns {
             // Installing a viewport includes bordering rows. Narrowing to the
@@ -181,7 +180,7 @@ final class TableRowLoader {
         return requests
     }
 
-    private func record(_ block: RowBlock, columns: [UInt32]) {
+    private func record(_ block: RowBlock, columns: [ColumnId]) {
         let start = Int(block.start)
         delivered.insert(.init(start: start, column: nil))
         let source = RowBlock(start: block.start, nRows: block.nRows, nCols: 0, cells: [], sourceRows: block.sourceRows)
@@ -230,10 +229,10 @@ final class TableRowLoader {
 /// Serializes table row reads off the main actor. Cancelled requests stop before
 /// entering the synchronous FFI call; width measurement has its own serial worker.
 actor TableRowReader {
-    func read(_ view: GewuView, start: UInt64, count: UInt32, columns: [UInt32]) throws
+    func read(_ ordered: GewuOrderedView, start: UInt64, count: UInt32, columns: [ColumnId]) throws
         -> RowBlock
     {
         try Task.checkCancellation()
-        return try view.rows(start: start, count: count, columns: columns)
+        return try ordered.rows(start: start, count: count, columns: columns)
     }
 }

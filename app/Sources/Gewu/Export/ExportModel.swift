@@ -21,11 +21,11 @@ final class ExportModel: ObservableObject {
 
     var isIdle: Bool { !choosingExport && progress == nil }
 
-    func choose(view: GewuView, columns: [UInt32], source: URL, window: NSWindow) {
+    func choose(ordered: GewuOrderedView, columns: [ColumnId], source: URL, window: NSWindow) {
         guard isIdle else { return }
         let nestedColumns: [String]
         do {
-            nestedColumns = try view.nestedExportColumns(columns: columns)
+            nestedColumns = try ordered.nestedExportColumns(columns: columns)
         } catch {
             reportError(error, "")
             return
@@ -44,7 +44,7 @@ final class ExportModel: ObservableObject {
         panel.title = "Export"
         panel.prompt = "Export"
         panel.message =
-            "Export \(formatCount(view.rowCount())) rows · visible columns in display order"
+            "Export \(formatCount(ordered.rowCount())) rows · visible columns in display order"
         panel.nameFieldStringValue =
             source.deletingPathExtension().lastPathComponent + "-export.\(defaultFormat.rawValue)"
         panel.allowedContentTypes = formats.map(\.contentType)
@@ -69,7 +69,7 @@ final class ExportModel: ObservableObject {
                 return
             }
             do {
-                let job = try view.export(
+                let job = try ordered.export(
                     columns: columns,
                     format: format.coreFormat)
                 self.startExport(job, to: destination, format: format, compression: selection.compression)

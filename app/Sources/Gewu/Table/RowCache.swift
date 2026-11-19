@@ -5,7 +5,7 @@ import Foundation
 final class RowCache {
     struct Key: Hashable {
         let start: Int
-        let column: UInt32?
+        let column: ColumnId?
     }
 
     static let blockSize = 64

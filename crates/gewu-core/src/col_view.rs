@@ -1,17 +1,17 @@
-//! A column and the source rows selected by an immutable View.
+//! A column and the source rows selected by an immutable view.
 
 use arrow::{array::ArrayRef, datatypes::DataType};
 
-use crate::column::Column;
+use crate::{column::Column, row_ids::RowSlice};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ColView<'a> {
     column: &'a Column,
-    rows: &'a [u32],
+    rows: RowSlice<'a>,
 }
 
 impl<'a> ColView<'a> {
-    pub(crate) fn new(column: &'a Column, rows: &'a [u32]) -> Self {
+    pub(crate) fn new(column: &'a Column, rows: RowSlice<'a>) -> Self {
         Self { column, rows }
     }
 
@@ -23,7 +23,7 @@ impl<'a> ColView<'a> {
         self.column.array()
     }
 
-    pub(crate) fn rows(&self) -> &[u32] {
+    pub(crate) fn rows(&self) -> RowSlice<'a> {
         self.rows
     }
 
@@ -36,44 +36,49 @@ impl<'a> ColView<'a> {
     }
 
     pub(crate) fn is_complete(&self) -> bool {
-        self.rows.len() == self.array().len()
+        matches!(self.rows, RowSlice::All(_)) || self.rows.len() == self.array().len()
     }
 
-    /// Iterate source rows for order-independent scans. A complete View can
+    /// Iterate source rows for order-independent scans. A complete view can
     /// use contiguous addressing even when its display rows are sorted.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        let (all, rows) = if self.is_complete() {
-            (0..self.array().len(), &[][..])
+    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + 'a {
+        if self.is_complete() {
+            RowSlice::All(self.array().len()).iter()
         } else {
-            (0..0, self.rows)
-        };
-        all.chain(rows.iter().map(|&row| row as usize))
+            self.rows.iter()
+        }
     }
 }
 
 #[cfg(test)]
 pub(crate) mod test {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::row_ids::RowIds;
 
     pub(crate) struct Fixture {
         column: Column,
-        rows: Vec<u32>,
+        rows: RowIds,
     }
 
     impl Fixture {
         pub(crate) fn all(array: &ArrayRef) -> Self {
-            Self::new(array, (0..array.len() as u32).collect())
+            Self {
+                column: Column::new("test", array.clone()).unwrap(),
+                rows: RowIds::All(array.len()),
+            }
         }
 
         pub(crate) fn new(array: &ArrayRef, rows: Vec<u32>) -> Self {
             Self {
                 column: Column::new("test", array.clone()).unwrap(),
-                rows,
+                rows: RowIds::Selected(Arc::from(rows)),
             }
         }
 
         pub(crate) fn view(&self) -> ColView<'_> {
-            ColView::new(&self.column, &self.rows)
+            ColView::new(&self.column, self.rows.as_slice())
         }
     }
 }

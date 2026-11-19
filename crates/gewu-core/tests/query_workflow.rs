@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec};
+use gewu_core::{ColumnFilter, ColumnId, Error, Filter};
 use parquet::arrow::ArrowWriter;
 
 #[test]
@@ -26,30 +26,44 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
     writer.write(&batch).unwrap();
     writer.close().unwrap();
     let doc = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
-    let spec = QuerySpec::default()
-        .with_filter(1, Filter::exact(vec!["2".into()], false, false))
-        .with_filter(
-            0,
-            Filter::range(Some("65530.5".into()), Some("131080".into()), false),
-        )
-        .with_filter(2, Filter::contains("keep".into(), false, false));
-    let view = doc.query(&spec).unwrap();
-    let rows = view.rows(0, len as u32, &[0, 1, 2]).unwrap();
+    let (c0, c1, c2) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(1),
+        ColumnId::from_raw(2),
+    );
+    let view = doc
+        .filter(&[
+            ColumnFilter {
+                column: c1,
+                filter: Filter::exact(vec!["2".into()], false, false),
+            },
+            ColumnFilter {
+                column: c0,
+                filter: Filter::range(Some("65530.5".into()), Some("131080".into()), false),
+            },
+            ColumnFilter {
+                column: c2,
+                filter: Filter::contains("keep".into(), false, false),
+            },
+        ])
+        .unwrap()
+        .unsorted();
+    let rows = view.rows(0, len as u32, &[c0, c1, c2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
         .map(|i| i as u64)
         .collect::<Vec<_>>();
     assert_eq!(rows.source_rows, expected);
 
-    let invalid = QuerySpec::single(
-        0,
-        Filter::range(Some("20".into()), Some("10".into()), false),
-    );
+    let invalid = [ColumnFilter {
+        column: c0,
+        filter: Filter::range(Some("20".into()), Some("10".into()), false),
+    }];
     assert!(matches!(
-        doc.query(&invalid),
+        doc.filter(&invalid),
         Err(Error::Filter(gewu_core::FilterError::ReversedRange { .. }))
     ));
-    assert_eq!(view.rows(0, 1, &[0]).unwrap().source_rows, expected[..1]);
+    assert_eq!(view.rows(0, 1, &[c0]).unwrap().source_rows, expected[..1]);
 }
 
 #[test]
@@ -70,24 +84,27 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
     writer.close().unwrap();
 
     let dataset = Arc::new(gewu_core::Dataset::open(file.path()).unwrap());
+    let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
     assert_eq!(dataset.n_rows(), len as usize);
+    assert_eq!(dataset.unfiltered().row_count() as usize, len as usize);
 
-    assert_eq!(dataset.view().row_count() as usize, len as usize);
+    // Pass filters in reverse cost order: expensive text search first, cheap range second.
+    let expensive_first = [
+        ColumnFilter {
+            column: c1,
+            filter: Filter::contains("match_target".into(), true, false),
+        },
+        ColumnFilter {
+            column: c0,
+            filter: Filter::range(Some("100".into()), Some("200".into()), false),
+        },
+    ];
 
-    // Pass filters in reverse cost order: expensive text search first, cheap range second, null
-    // check third
-    let expensive_first = gewu_core::QuerySpec::default()
-        .with_filter(1, Filter::contains("match_target".into(), true, false))
-        .with_filter(
-            0,
-            Filter::range(Some("100".into()), Some("200".into()), false),
-        );
-
-    let view = dataset.query(&expensive_first).unwrap();
+    let view = dataset.filter(&expensive_first).unwrap().unsorted();
     let expected: Vec<u64> = (100..=200)
         .filter(|i| i % 5 == 0)
         .map(|i| i as u64)
         .collect();
-    let rows = view.rows(0, 100, &[0]).unwrap();
+    let rows = view.rows(0, 100, &[c0]).unwrap();
     assert_eq!(rows.source_rows, expected);
 }

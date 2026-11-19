@@ -47,7 +47,9 @@ fn assert_disabled_exports(doc: &std::sync::Arc<gewu_core::Dataset>) {
     ] {
         if !format.is_enabled() {
             assert!(matches!(
-                doc.view().export(&[0], format),
+                doc.unfiltered()
+                    .unsorted()
+                    .export(&[gewu_core::ColumnId::from_raw(0)], format),
                 Err(Error::File(gewu_core::FileError::FormatDisabled { .. }))
             ));
         }
@@ -57,7 +59,7 @@ fn assert_disabled_exports(doc: &std::sync::Arc<gewu_core::Dataset>) {
 #[cfg(feature = "csv")]
 mod delimited {
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, QuerySpec};
+    use gewu_core::{ColumnFilter, ColumnId, ColumnSort, FileMetadata, Filter};
 
     use super::*;
 
@@ -71,7 +73,7 @@ mod delimited {
                 .map(std::sync::Arc::new)
                 .unwrap();
             assert_eq!(doc.info().row_count, 1);
-            assert_eq!(doc.column_index("PAR1_id"), Some(0));
+            assert_eq!(doc.column_id("PAR1_id"), Some(ColumnId::from_raw(0)));
         }
     }
 
@@ -85,10 +87,14 @@ mod delimited {
             .unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.schema().field(1).data_type(), &DataType::Float64);
-        assert_eq!(doc.view().rows(0, 2, &[0]).unwrap().cells, [
-            Some("9007199254740993".into()),
-            Some("1.5".into())
-        ]);
+        assert_eq!(
+            doc.unfiltered()
+                .unsorted()
+                .rows(0, 2, &[ColumnId::from_raw(0)])
+                .unwrap()
+                .cells,
+            [Some("9007199254740993".into()), Some("1.5".into())]
+        );
     }
 
     #[test]
@@ -112,7 +118,8 @@ mod delimited {
             assert_eq!(doc.schema().field(0).data_type(), &DataType::Int64);
             assert_eq!(doc.schema().field(1).data_type(), &DataType::Boolean);
             assert_eq!(doc.schema().field(2).data_type(), &DataType::Float64);
-            let rows = doc.view().rows(0, 2, &[0, 1, 2, 3]).unwrap();
+            let cols: Vec<ColumnId> = (0..4).map(ColumnId::from_raw).collect();
+            let rows = doc.unfiltered().unsorted().rows(0, 2, &cols).unwrap();
             assert_eq!(rows.cell(0, 0), Some("7"));
             assert_eq!(rows.cell(0, 1), Some("true"));
             assert_eq!(rows.cell(0, 2), Some("1.25"));
@@ -140,7 +147,11 @@ mod delimited {
             .unwrap();
         assert_eq!(doc.schema().field(0).data_type(), &DataType::Utf8);
         assert_eq!(doc.info().row_count, 70_001);
-        let rows = doc.view().rows(69_999, 2, &[0]).unwrap();
+        let rows = doc
+            .unfiltered()
+            .unsorted()
+            .rows(69_999, 2, &[ColumnId::from_raw(0)])
+            .unwrap();
         assert_eq!(rows.cell(0, 0), Some("1"));
         assert_eq!(rows.cell(1, 0), Some("late text"));
     }
@@ -162,7 +173,7 @@ mod delimited {
             .map(std::sync::Arc::new)
             .unwrap();
         assert_eq!(doc.info().format, FileType::Tsv);
-        assert_eq!(doc.column_index("label"), Some(1));
+        assert_eq!(doc.column_id("label"), Some(ColumnId::from_raw(1)));
         assert_eq!(doc.info().row_count, 1);
         assert!(matches!(
             gewu_core::Dataset::open_with_options(&path, &OpenOptions {
@@ -192,15 +203,21 @@ mod delimited {
         let dataset = gewu_core::Dataset::open(source)
             .map(std::sync::Arc::new)
             .unwrap();
+        let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
         let doc = dataset
-            .query(
-                &QuerySpec::single(0, Filter::range(Some("2".into()), None, false))
-                    .with_sort(0, true, 0),
-            )
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::range(Some("2".into()), None, false),
+            }])
+            .unwrap()
+            .sort(&[ColumnSort {
+                column: c0,
+                descending: true,
+            }])
             .unwrap();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("selected.{extension}"));
-            let export = doc.export(&[1, 0], format).unwrap();
+            let export = doc.export(&[c1, c0], format).unwrap();
             export.write(&path).unwrap();
             assert_eq!(export.progress().rows_written, 2);
             let reloaded = gewu_core::Dataset::open(path)
@@ -210,19 +227,29 @@ mod delimited {
             assert_eq!(reloaded.schema().field(0).name(), "label");
             assert_eq!(reloaded.schema().field(1).name(), "id");
             assert_eq!(
-                reloaded.view().rows(0, 2, &[0, 1]).unwrap().cells,
-                doc.rows(0, 2, &[1, 0]).unwrap().cells
+                reloaded
+                    .unfiltered()
+                    .unsorted()
+                    .rows(0, 2, &[c0, c1])
+                    .unwrap()
+                    .cells,
+                doc.rows(0, 2, &[c1, c0]).unwrap().cells
             );
         }
         let empty = dataset
-            .query(&QuerySpec::single(
-                1,
-                Filter::exact(vec!["absent-value".into()], false, false),
-            ))
-            .unwrap();
+            .filter(&[ColumnFilter {
+                column: c1,
+                filter: Filter::exact(vec!["absent-value".into()], false, false),
+            }])
+            .unwrap()
+            .unsorted();
         for (format, extension) in [(FileType::Csv, "csv"), (FileType::Tsv, "tsv")] {
             let path = directory.path().join(format!("empty.{extension}"));
-            empty.export(&[1, 0], format).unwrap().write(&path).unwrap();
+            empty
+                .export(&[c1, c0], format)
+                .unwrap()
+                .write(&path)
+                .unwrap();
             let reloaded = gewu_core::Dataset::open(path)
                 .map(std::sync::Arc::new)
                 .unwrap();
@@ -238,7 +265,7 @@ mod xlsx {
     use std::path::Path;
 
     use arrow::datatypes::DataType;
-    use gewu_core::{FileMetadata, Filter, QuerySpec};
+    use gewu_core::{ColumnFilter, ColumnId, ColumnSort, FileMetadata, Filter};
     use rust_xlsxwriter::Workbook;
 
     use super::*;
@@ -257,19 +284,19 @@ mod xlsx {
         let doc = gewu_core::Dataset::open(path)
             .map(std::sync::Arc::new)
             .unwrap();
+        let c0 = ColumnId::from_raw(0);
         assert_eq!(
             doc.schema().field(0).data_type(),
             &DataType::Duration(arrow::datatypes::TimeUnit::Millisecond)
         );
-        let h = doc
-            .view()
-            .filter_distribution(0, 3, gewu_core::AxisScale::Linear)
+        let unfiltered = doc.unfiltered();
+        let h = unfiltered
+            .filter_distribution(c0, 3, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram)
             .unwrap();
         assert_eq!(h.counts, [1, 0, 1]);
-        let histogram = doc
-            .view()
-            .analyze_distribution(0, 3, gewu_core::AxisScale::Linear)
+        let histogram = unfiltered
+            .distribution(c0, 3, gewu_core::AxisScale::Linear)
             .unwrap();
         assert_eq!(histogram, h);
     }
@@ -300,16 +327,21 @@ mod xlsx {
         let doc = gewu_core::Dataset::open(&path)
             .map(std::sync::Arc::new)
             .unwrap();
+        let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
         assert_eq!(doc.info().format, FileType::Xlsx);
         assert_eq!(doc.info().row_count, 2);
         assert_eq!(doc.info().metadata, FileMetadata::Xlsx {
             sheet: "数据".into(),
             sheets: vec!["数据".into(), "Raw".into()]
         });
-        assert_eq!(doc.column_index("label"), Some(1));
+        assert_eq!(doc.column_id("label"), Some(c1));
         assert_eq!(doc.schema().field(2).data_type(), &DataType::Boolean);
         assert_eq!(
-            doc.view().rows(0, 1, &[1]).unwrap().cell(0, 0),
+            doc.unfiltered()
+                .unsorted()
+                .rows(0, 1, &[c1])
+                .unwrap()
+                .cell(0, 0),
             Some("雪\nline")
         );
         assert_disabled_exports(&doc);
@@ -324,7 +356,11 @@ mod xlsx {
         assert_eq!(raw.info().row_count, 2);
         assert_eq!(raw.schema().field(0).name(), "column_1");
         assert_eq!(
-            raw.view().rows(0, 2, &[0, 1]).unwrap().cells,
+            raw.unfiltered()
+                .unsorted()
+                .rows(0, 2, &[c0, c1])
+                .unwrap()
+                .cells,
             ["10.0", "20.0", "30.0", "40.0"].map(|s| Some(s.to_owned()))
         );
         assert_eq!(raw.info().metadata, FileMetadata::Xlsx {
@@ -357,11 +393,20 @@ mod xlsx {
         let dataset = gewu_core::Dataset::open(source)
             .map(std::sync::Arc::new)
             .unwrap();
+        let (c0, c1, c2) = (
+            ColumnId::from_raw(0),
+            ColumnId::from_raw(1),
+            ColumnId::from_raw(2),
+        );
         let doc = dataset
-            .query(&QuerySpec::new().with_sort(0, false, 0))
+            .unfiltered()
+            .sort(&[ColumnSort {
+                column: c0,
+                descending: false,
+            }])
             .unwrap();
         let destination = directory.path().join("export.xlsx");
-        doc.export(&[1, 2], FileType::Xlsx)
+        doc.export(&[c1, c2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
@@ -369,17 +414,23 @@ mod xlsx {
             .map(std::sync::Arc::new)
             .unwrap();
         assert_eq!(
-            reloaded.view().rows(0, 2, &[0, 1]).unwrap().cells,
-            doc.rows(0, 2, &[1, 2]).unwrap().cells
+            reloaded
+                .unfiltered()
+                .unsorted()
+                .rows(0, 2, &[c0, c1])
+                .unwrap()
+                .cells,
+            doc.rows(0, 2, &[c1, c2]).unwrap().cells
         );
         let empty = dataset
-            .query(&QuerySpec::single(
-                1,
-                Filter::exact(vec!["absent-value".into()], false, false),
-            ))
-            .unwrap();
+            .filter(&[ColumnFilter {
+                column: c1,
+                filter: Filter::exact(vec!["absent-value".into()], false, false),
+            }])
+            .unwrap()
+            .unsorted();
         empty
-            .export(&[1, 2], FileType::Xlsx)
+            .export(&[c1, c2], FileType::Xlsx)
             .unwrap()
             .write(&destination)
             .unwrap();
@@ -399,17 +450,19 @@ mod xlsx {
         let doc = gewu_core::Dataset::open(source)
             .map(std::sync::Arc::new)
             .unwrap()
-            .view();
+            .unfiltered()
+            .unsorted();
+        let c0 = ColumnId::from_raw(0);
         let destination = directory.path().join("existing.xlsx");
         fs::write(&destination, "keep me").unwrap();
-        let export = doc.export(&[0], FileType::Xlsx).unwrap();
+        let export = doc.export(&[c0], FileType::Xlsx).unwrap();
         export.cancel();
         assert!(matches!(export.write(&destination), Err(Error::Cancelled)));
         assert_eq!(fs::read_to_string(destination).unwrap(), "keep me");
         let destination = directory.path().join("directory.xlsx");
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("keep"), "existing data").unwrap();
-        let export = doc.export(&[0], FileType::Xlsx).unwrap();
+        let export = doc.export(&[c0], FileType::Xlsx).unwrap();
         assert!(matches!(export.write(&destination), Err(Error::Io { .. })));
         assert_eq!(
             fs::read_to_string(destination.join("keep")).unwrap(),

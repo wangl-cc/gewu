@@ -5,7 +5,7 @@ use arrow::{
     datatypes::DataType,
 };
 
-use crate::{col_view::ColView, stats::Result, Histogram};
+use crate::{col_view::ColView, row_ids::RowSlice, stats::Result, Histogram};
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
@@ -90,7 +90,7 @@ pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
 
 fn summarize(
     array: &dyn Array,
-    rows: &[u32],
+    rows: RowSlice<'_>,
     unit: LengthUnit,
     bins: u32,
     length: impl Fn(usize) -> u64,
@@ -100,7 +100,7 @@ fn summarize(
     let mut sum = 0_u128;
     let mut empty_count = 0;
     let mut null_count = 0;
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         if array.is_null(row) {
             null_count += 1;
             continue;
@@ -150,7 +150,7 @@ fn summarize(
     histogram.hi = Some(hi);
     histogram.min_label = Some(min.to_string());
     histogram.max_label = Some(max.to_string());
-    for row in rows.iter().map(|&row| row as usize) {
+    for row in rows.iter() {
         if !array.is_null(row) {
             // Equivalent to the shared integer histogram's ceil-based cuts.
             let bin = (u128::from(length(row) - min) * bins as u128 / span) as usize;

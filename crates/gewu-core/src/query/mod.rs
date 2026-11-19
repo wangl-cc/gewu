@@ -1,9 +1,21 @@
-//! Query input specifications.
+//! Filter and sort input specifications.
 
-mod error;
 pub mod filter;
-pub(crate) mod spec;
 
-pub use error::QueryError;
 pub use filter::{Filter, FilterCondition, TextMatch};
-pub use spec::{ColSort, ColSpec, QuerySpec};
+
+use crate::ColumnId;
+
+/// Filter applied to a specific column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnFilter {
+    pub column: ColumnId,
+    pub filter: Filter,
+}
+
+/// Sort key applied to a specific column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnSort {
+    pub column: ColumnId,
+    pub descending: bool,
+}

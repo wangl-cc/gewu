@@ -5,7 +5,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{Error, Filter, QuerySpec};
+use gewu_core::{ColumnFilter, ColumnId, Error, Filter, FilteredView};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -52,7 +52,7 @@ fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Arc<gewu_core::Dataset>) {
     (path, doc)
 }
 
-fn labels_of(doc: &std::sync::Arc<gewu_core::View>, column: u32) -> Vec<(String, u64)> {
+fn labels_of(doc: &Arc<FilteredView>, column: ColumnId) -> Vec<(String, u64)> {
     let choices = doc.filter_choices(column).unwrap();
     let mut result = Vec::new();
     if choices.null_count > 0 {
@@ -69,29 +69,36 @@ fn labels_of(doc: &std::sync::Arc<gewu_core::View>, column: u32) -> Vec<(String,
     result
 }
 
-/// label in {cat, dog}, price >= 2, and a search for "a" (names a only;
-/// labels cat; no prices or ids contain it as a value).
-fn busy_spec() -> QuerySpec {
-    QuerySpec::default()
-        .with_filter(
-            1,
-            Filter::exact(vec!["cat".into(), "dog".into()], false, false),
-        )
-        .with_filter(2, Filter::range(Some("2.0".into()), None, false))
+/// label in {cat, dog}, price >= 2.
+fn busy_filters() -> Vec<ColumnFilter> {
+    vec![
+        ColumnFilter {
+            column: ColumnId::from_raw(1),
+            filter: Filter::exact(vec!["cat".into(), "dog".into()], false, false),
+        },
+        ColumnFilter {
+            column: ColumnId::from_raw(2),
+            filter: Filter::range(Some("2.0".into()), None, false),
+        },
+    ]
 }
 
 #[test]
 fn choices_include_only_visible_values() {
     let (path, doc) = sample("distinct");
-    let spec = busy_spec();
-    let view = doc.query(&spec).unwrap();
+    let (c0, c1, c2) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(1),
+        ColumnId::from_raw(2),
+    );
+    let view = doc.filter(&busy_filters()).unwrap();
 
     // Both filters apply to all candidate columns: rows a and f.
-    assert_eq!(labels_of(&view, 1), [("cat".into(), 1), ("dog".into(), 1),]);
-    let prices: Vec<String> = labels_of(&view, 2).into_iter().map(|(l, _)| l).collect();
+    assert_eq!(labels_of(&view, c1), [("cat".into(), 1), ("dog".into(), 1)]);
+    let prices: Vec<String> = labels_of(&view, c2).into_iter().map(|(l, _)| l).collect();
     assert_eq!(prices, ["3.5", "7.0"]);
     // name: both filters apply -> rows a, f
-    let names: Vec<String> = labels_of(&view, 0).into_iter().map(|(l, _)| l).collect();
+    let names: Vec<String> = labels_of(&view, c0).into_iter().map(|(l, _)| l).collect();
     assert_eq!(names, ["a", "f"]);
     std::fs::remove_file(path).ok();
 }
@@ -99,19 +106,25 @@ fn choices_include_only_visible_values() {
 #[test]
 fn choices_and_distribution_apply_column_filters() {
     let (path, doc) = sample("search");
+    let (c0, c1, c3) = (
+        ColumnId::from_raw(0),
+        ColumnId::from_raw(1),
+        ColumnId::from_raw(3),
+    );
     // "cat" matches labels of rows a and d.
-    let spec = QuerySpec::single(1, Filter::exact(vec!["cat".into()], false, false));
-    let view = doc.query(&spec).unwrap();
-    let names: Vec<String> = labels_of(&view, 0).into_iter().map(|(l, _)| l).collect();
+    let view = doc
+        .filter(&[ColumnFilter {
+            column: c1,
+            filter: Filter::exact(vec!["cat".into()], false, false),
+        }])
+        .unwrap();
+    let names: Vec<String> = labels_of(&view, c0).into_iter().map(|(l, _)| l).collect();
     assert_eq!(names, ["a", "d"]);
 
-    let h = doc
-        .query(&spec)
-        .unwrap()
-        .filter_distribution(3, 6, gewu_core::AxisScale::Linear)
+    let h = view
+        .filter_distribution(c3, 6, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
-    assert_eq!(h.counts.iter().sum::<u64>(), 2);
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
     std::fs::remove_file(path).ok();
 }
@@ -119,20 +132,22 @@ fn choices_and_distribution_apply_column_filters() {
 #[test]
 fn histogram_domain_and_counts_use_visible_rows() {
     let (path, doc) = sample("hist");
-    let spec = busy_spec().with_filter(3, Filter::range(Some("60".into()), None, false));
+    let (c2, c3) = (ColumnId::from_raw(2), ColumnId::from_raw(3));
+    let mut filters = busy_filters();
+    filters.push(ColumnFilter {
+        column: c3,
+        filter: Filter::range(Some("60".into()), None, false),
+    });
     // All filters apply: only row f remains.
-    let h = doc
-        .query(&spec)
-        .unwrap()
-        .filter_distribution(3, 6, gewu_core::AxisScale::Linear)
+    let view = doc.filter(&filters).unwrap();
+    let h = view
+        .filter_distribution(c3, 6, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 1);
     // The price domain contains only the visible value.
-    let h = doc
-        .query(&spec)
-        .unwrap()
-        .filter_distribution(2, 4, gewu_core::AxisScale::Linear)
+    let h = view
+        .filter_distribution(c2, 4, gewu_core::AxisScale::Linear)
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 1);
@@ -146,12 +161,16 @@ fn histogram_domain_and_counts_use_visible_rows() {
 #[test]
 fn failed_apply_keeps_the_old_view() {
     let (path, doc) = sample("failed");
-    let before = doc.view();
-    let bad = QuerySpec::single(0, Filter::range(Some("1".into()), None, false));
-    assert!(doc.query(&bad).is_err());
+    let c0 = ColumnId::from_raw(0);
+    let before = doc.unfiltered().unsorted();
+    let bad = [ColumnFilter {
+        column: c0,
+        filter: Filter::range(Some("1".into()), None, false),
+    }];
+    assert!(doc.filter(&bad).is_err());
     assert_eq!(
-        doc.view().rows(0, 6, &[0]).unwrap().cells,
-        before.rows(0, 6, &[0]).unwrap().cells
+        doc.unfiltered().unsorted().rows(0, 6, &[c0]).unwrap().cells,
+        before.rows(0, 6, &[c0]).unwrap().cells
     );
     std::fs::remove_file(path).ok();
 }
@@ -159,18 +178,17 @@ fn failed_apply_keeps_the_old_view() {
 #[test]
 fn unknown_column_is_an_argument_error() {
     let (path, doc) = sample("unknown");
+    let c9 = ColumnId::from_raw(9);
+    let filtered = doc.unfiltered();
+    assert!(matches!(filtered.filter_choices(c9), Err(Error::Column(_))));
     assert!(matches!(
-        doc.view().filter_choices(9),
-        Err(Error::Column(_))
-    ));
-    assert!(matches!(
-        doc.view()
-            .filter_distribution(9, 10, gewu_core::AxisScale::Linear)
+        filtered
+            .filter_distribution(c9, 10, gewu_core::AxisScale::Linear)
             .map(|result| result.expect("histogram domain").histogram),
         Err(Error::Column(_))
     ));
-    let v = doc.view();
-    assert!(matches!(v.rows(0, 1, &[9]), Err(Error::Column(_))));
+    let v = filtered.unsorted();
+    assert!(matches!(v.rows(0, 1, &[c9]), Err(Error::Column(_))));
     std::fs::remove_file(path).ok();
 }
 
@@ -187,13 +205,20 @@ fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
     })));
     let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
     let (path, doc) = write("many", &batch);
+    let c0 = ColumnId::from_raw(0);
 
-    let choices = doc.view().filter_choices(0).unwrap();
+    let choices = doc.unfiltered().filter_choices(c0).unwrap();
     assert!(choices.values.is_none());
     assert_eq!(choices.null_count, 0);
-    let by_value = QuerySpec::single(0, Filter::exact(vec!["x".into()], false, false));
-    assert_eq!(doc.query(&by_value).unwrap().row_count(), (n / 1000) as u64);
-    doc.query(&QuerySpec::all(1)).unwrap();
+    let by_value = [ColumnFilter {
+        column: c0,
+        filter: Filter::exact(vec!["x".into()], false, false),
+    }];
+    assert_eq!(
+        doc.filter(&by_value).unwrap().row_count(),
+        (n / 1000) as u64
+    );
+    doc.filter(&[]).unwrap();
 
     std::fs::remove_file(path).ok();
 }
@@ -201,7 +226,8 @@ fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
 #[test]
 fn value_analysis_excludes_nulls_and_recounts_candidates() {
     let (path, doc) = sample("summary");
-    let summary = doc.view().analyze_values(1).unwrap();
+    let c1 = ColumnId::from_raw(1);
+    let summary = doc.unfiltered().values(c1).unwrap();
     assert_eq!(summary.distinct_count, 3);
     let top: Vec<_> = summary
         .values
@@ -209,7 +235,7 @@ fn value_analysis_excludes_nulls_and_recounts_candidates() {
         .map(|v| (v.label.as_str(), v.count))
         .collect();
     assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
-    assert_eq!(doc.view().count_nulls(1).unwrap(), 1);
+    assert_eq!(doc.unfiltered().count_nulls(c1).unwrap(), 1);
     std::fs::remove_file(path).ok();
 }
 
@@ -223,7 +249,7 @@ fn min_and_max_leave_out_nan() {
     ]));
     let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
     let (path, doc) = write("nan", &batch);
-    let s = doc.view().analyze_statistics(0).unwrap();
+    let s = doc.unfiltered().statistics(ColumnId::from_raw(0)).unwrap();
     assert_eq!(s.nan_count, 1);
     assert_eq!(s.min_label.as_deref(), Some("-1.5"));
     assert_eq!(s.max_label.as_deref(), Some("2.0"));

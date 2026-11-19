@@ -4,7 +4,7 @@ import AppKit
 /// Manual changes and subsequent Fit commands invalidate older tickets.
 struct ColumnWidths {
     struct Ticket: Equatable {
-        let column: UInt32
+        let column: ColumnId
         let revision: UInt64
     }
     private struct Entry {
@@ -12,11 +12,11 @@ struct ColumnWidths {
         var settled = false
         var manual = false
     }
-    private var entries: [UInt32: Entry] = [:]
+    private var entries: [ColumnId: Entry] = [:]
 
-    func needsAutomatic(_ column: UInt32) -> Bool { !(entries[column]?.settled ?? false) }
+    func needsAutomatic(_ column: ColumnId) -> Bool { !(entries[column]?.settled ?? false) }
 
-    mutating func begin(_ column: UInt32) -> Ticket {
+    mutating func begin(_ column: ColumnId) -> Ticket {
         var entry = entries[column] ?? Entry()
         entry.revision &+= 1
         entry.settled = true
@@ -24,7 +24,7 @@ struct ColumnWidths {
         return Ticket(column: column, revision: entry.revision)
     }
 
-    mutating func manual(_ column: UInt32) {
+    mutating func manual(_ column: ColumnId) {
         _ = begin(column)
         entries[column]?.manual = true
     }
@@ -69,7 +69,7 @@ enum ColumnWidthMeasurement {
         }
     }
     struct Input: Sendable {
-        let column: UInt32
+        let column: ColumnId
         let name: String
         let type: String
         let text: Bool
@@ -79,17 +79,17 @@ enum ColumnWidthMeasurement {
     /// Runs on a serial worker. Limit UTF-16 input before grapheme processing so
     /// a single enormous composed character cannot make sampling unbounded.
     static func measure(
-        view: GewuView, columns: [Input], start: UInt64, fontSize: CGFloat,
+        ordered: GewuOrderedView, columns: [Input], start: UInt64, fontSize: CGFloat,
         maximum: CGFloat, cancellation: Request
-    ) throws -> [UInt32: CGFloat] {
-        var result: [UInt32: CGFloat] = [:]
+    ) throws -> [ColumnId: CGFloat] {
+        var result: [ColumnId: CGFloat] = [:]
         func width(_ text: String, font: NSFont) -> CGFloat {
             let sample = String(decoding: text.utf16.prefix(512), as: UTF16.self)
             return ceil((sample as NSString).size(withAttributes: [.font: font]).width)
         }
         for column in columns {
             try cancellation.check()
-            let cells = try column.sample ?? view.rows(start: start, count: 32, columns: [column.column]).cells
+            let cells = try column.sample ?? ordered.rows(start: start, count: 32, columns: [column.column]).cells
             var size =
                 max(
                     width(column.name, font: .systemFont(ofSize: fontSize, weight: .semibold)),

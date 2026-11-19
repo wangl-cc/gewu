@@ -144,7 +144,7 @@ mod tests {
         let data = ExportData {
             schema: &schema,
             columns: batch.columns(),
-            rows: &rows,
+            rows: crate::row_ids::RowSlice::Selected(&rows),
         };
         let progress = WriteProgress {
             cancelled: &cancelled,
@@ -190,7 +190,7 @@ mod tests {
         let data = ExportData {
             schema: &schema,
             columns: batch.columns(),
-            rows: &[0, 1],
+            rows: crate::row_ids::RowSlice::Selected(&[0, 1]),
         };
         let progress = WriteProgress {
             cancelled: &cancelled,

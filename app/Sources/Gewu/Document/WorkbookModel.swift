@@ -28,7 +28,7 @@ final class WorkbookModel: ObservableObject {
     private var attemptedSheet: WorksheetName?
     private let sheetNames: @Sendable (String) throws -> [String]
     private let openDocument: @Sendable (String, String?, Bool) throws -> GewuDataset
-    private let makeView: @Sendable (GewuDataset) -> GewuView
+    private let makeView: @Sendable (GewuDataset) -> (filtered: GewuFilteredView, ordered: GewuOrderedView)
     private let didOpen: @MainActor (URL) -> Void
 
     init(
@@ -39,7 +39,10 @@ final class WorkbookModel: ObservableObject {
         openDocument: @escaping @Sendable (String, String?, Bool) throws -> GewuDataset = { path, sheet, header in
             try GewuDataset.openWithOptions(path: path, sheet: sheet, hasHeader: header)
         },
-        makeView: @escaping @Sendable (GewuDataset) -> GewuView = { $0.view() },
+        makeView: @escaping @Sendable (GewuDataset) -> (filtered: GewuFilteredView, ordered: GewuOrderedView) = {
+            let filtered = $0.unfiltered()
+            return (filtered, filtered.unsorted())
+        },
         didOpen: @escaping @MainActor (URL) -> Void = { FileCoordinator.shared.recordRecent($0) }
     ) {
         self.url = url
@@ -126,8 +129,9 @@ final class WorkbookModel: ObservableObject {
                             let document = Result {
                                 let dataset = try openDocument(path, selected?.rawValue, header)
                                 guard gate.isCurrent(mine) else { throw CancellationError() }
-                                // The initial View allocates every row ID; keep it on the loading worker.
-                                return (dataset: dataset, view: makeView(dataset))
+                                // Keep initial handle creation off the main thread alongside dataset decoding.
+                                let view = makeView(dataset)
+                                return (dataset: dataset, filtered: view.filtered, ordered: view.ordered)
                             }
                             continuation.resume(
                                 returning: WorkbookRead(sheets: names, sheet: selected, document: document))
@@ -143,7 +147,8 @@ final class WorkbookModel: ObservableObject {
                 }
                 self.attemptedSheet = loaded.sheet
                 let opened = try loaded.document.get()
-                let next = DocumentModel(url: self.url, dataset: opened.dataset, view: opened.view)
+                let next = DocumentModel(
+                    url: self.url, dataset: opened.dataset, filtered: opened.filtered, ordered: opened.ordered)
                 self.document?.stop()
                 self.document = next
                 self.hasHeader = header
@@ -173,5 +178,5 @@ final class WorkbookModel: ObservableObject {
 private struct WorkbookRead: Sendable {
     let sheets: [WorksheetName]?
     let sheet: WorksheetName?
-    let document: Result<(dataset: GewuDataset, view: GewuView), Error>
+    let document: Result<(dataset: GewuDataset, filtered: GewuFilteredView, ordered: GewuOrderedView), Error>
 }

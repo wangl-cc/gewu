@@ -1,10 +1,13 @@
-//! Immutable row and column projections over shared source data.
+//! Immutable filtered and ordered views over shared source data.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
-use arrow::array::ArrayRef;
+use arrow::{array::ArrayRef, compute::SortOptions};
 
-use crate::{col_view::ColView, column::Column, Dataset, Result};
+use crate::{
+    col_view::ColView, column::Column, execution::sort::sort_rows, row_ids::RowIds, ColumnId,
+    ColumnSort, Dataset, Result,
+};
 
 mod analysis;
 mod export;
@@ -14,72 +17,124 @@ mod rows;
 
 pub use rows::RowBlock;
 
-/// A query result. Query conditions and current-window state belong to callers.
-pub struct View {
+/// Filtered row projection over an immutable [`Dataset`].
+/// Owns row membership and provides column analysis, filter metadata, and sorting.
+pub struct FilteredView {
     dataset: Arc<Dataset>,
-    columns: Box<[u32]>,
-    rows: Arc<[u32]>,
+    rows: RowIds,
 }
 
-impl View {
+/// Ordered row projection over an immutable [`Dataset`].
+/// Owns display row order independently of [`FilteredView`] and provides row
+/// formatting, cell Find, and export.
+pub struct OrderedView {
+    dataset: Arc<Dataset>,
+    rows: RowIds,
+}
+
+impl FilteredView {
     pub(crate) fn all(dataset: Arc<Dataset>) -> Arc<Self> {
+        let n_rows = dataset.n_rows();
         Arc::new(Self {
-            columns: (0..dataset.columns().len() as u32).collect(),
-            rows: (0..dataset.n_rows() as u32).collect(),
             dataset,
+            rows: RowIds::All(n_rows),
         })
     }
 
-    pub(crate) fn from_query(
-        dataset: Arc<Dataset>,
-        columns: Box<[u32]>,
-        rows: Vec<u32>,
-    ) -> Arc<Self> {
+    pub(crate) fn selected(dataset: Arc<Dataset>, rows: Vec<u32>) -> Arc<Self> {
         Arc::new(Self {
             dataset,
-            columns,
-            rows: rows.into(),
+            rows: RowIds::Selected(rows.into()),
         })
-    }
-
-    pub fn columns(&self) -> &[u32] {
-        &self.columns
     }
 
     pub fn row_count(&self) -> u64 {
         self.rows.len() as u64
     }
 
-    /// Change only display column order. The order must be a complete permutation.
-    pub fn reorder_columns(&self, order: &[u32]) -> Result<Arc<Self>> {
-        let mut expected = self.columns.to_vec();
-        let mut actual = order.to_vec();
-        expected.sort_unstable();
-        actual.sort_unstable();
-        if actual != expected {
-            return Err(crate::ColumnError::InvalidOrder {
-                expected: self.columns.to_vec(),
-                actual: order.to_vec(),
-            }
-            .into());
-        }
-        Ok(Arc::new(Self {
+    /// Produce an [`OrderedView`] preserving this view's row order in O(1).
+    pub fn unsorted(&self) -> Arc<OrderedView> {
+        Arc::new(OrderedView {
             dataset: self.dataset.clone(),
-            columns: order.into(),
             rows: self.rows.clone(),
+        })
+    }
+
+    /// Sort this view's rows independently, leaving `self` unchanged.
+    /// Empty sort keys return [`Self::unsorted`] sharing the same row selection.
+    pub fn sort(&self, sorts: &[ColumnSort]) -> Result<Arc<OrderedView>> {
+        let mut seen = HashSet::with_capacity(sorts.len());
+        for sort in sorts {
+            self.dataset.column(sort.column)?;
+            if !seen.insert(sort.column) {
+                return Err(crate::ColumnError::Duplicate {
+                    operation: crate::ColumnOperation::Sort,
+                    column: sort.column,
+                }
+                .into());
+            }
+        }
+        if sorts.is_empty() {
+            return Ok(self.unsorted());
+        }
+
+        let mut comparators = Vec::with_capacity(sorts.len());
+        for key in sorts {
+            let array = self.column_array(key.column)?;
+            comparators.push(arrow::array::make_comparator(
+                array.as_ref(),
+                array.as_ref(),
+                SortOptions {
+                    descending: key.descending,
+                    // Nulls always at the bottom, like spreadsheets.
+                    nulls_first: false,
+                },
+            )?);
+        }
+        let primitive = if sorts.len() == 1 {
+            let key = sorts[0];
+            let array = self.column_array(key.column)?;
+            array
+                .data_type()
+                .is_primitive()
+                .then_some((array, SortOptions {
+                    descending: key.descending,
+                    nulls_first: false,
+                }))
+        } else {
+            None
+        };
+        let sorted = sort_rows(self.rows.as_slice(), &comparators, primitive)?;
+        Ok(Arc::new(OrderedView {
+            dataset: self.dataset.clone(),
+            rows: RowIds::Selected(sorted.into()),
         }))
     }
 
-    pub(crate) fn column(&self, column: u32) -> Result<&Column, crate::ColumnError> {
+    pub(crate) fn column(&self, column: ColumnId) -> Result<&Column, crate::ColumnError> {
         self.dataset.column(column)
     }
 
-    pub(crate) fn column_array(&self, column: u32) -> Result<&ArrayRef, crate::ColumnError> {
+    pub(crate) fn column_array(&self, column: ColumnId) -> Result<&ArrayRef, crate::ColumnError> {
         Ok(self.column(column)?.array())
     }
 
-    pub(crate) fn col(&self, column: u32) -> Result<ColView<'_>, crate::ColumnError> {
-        Ok(ColView::new(self.column(column)?, &self.rows))
+    pub(crate) fn col(&self, column: ColumnId) -> Result<ColView<'_>, crate::ColumnError> {
+        Ok(ColView::new(self.column(column)?, self.rows.as_slice()))
+    }
+}
+
+impl OrderedView {
+    pub fn row_count(&self) -> u64 {
+        self.rows.len() as u64
+    }
+
+    pub(crate) fn column(&self, column: ColumnId) -> Result<&Column, crate::ColumnError> {
+        self.dataset.column(column)
+    }
+
+    pub(crate) fn column_array(&self, column: ColumnId) -> Result<&ArrayRef, crate::ColumnError> {
+        Ok(self.column(column)?.array())
     }
 }
 
@@ -88,7 +143,7 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch, StringArray};
 
     use super::*;
-    use crate::{ColSpec, Error, Filter, QuerySpec};
+    use crate::{AxisScale, ColumnError, ColumnFilter, ColumnOperation, Error, FileType, Filter};
 
     fn dataset() -> Arc<Dataset> {
         let numbers: ArrayRef = Arc::new(Int32Array::from_iter_values(0..12_000));
@@ -111,98 +166,210 @@ mod tests {
             ],
             n_rows: 12_000,
             file_size: 0,
-            format: crate::FileType::Csv,
+            format: FileType::Csv,
             metadata: crate::FileMetadata::Delimited,
         })
     }
 
     #[test]
-    fn reorder_shares_rows_and_dataset_and_requires_an_exact_permutation() {
-        let dataset = dataset();
-        let initial = dataset.view();
-        let sorted = dataset
-            .query(&QuerySpec::all(2).with_sort(0, true, 0))
-            .unwrap();
-        let reordered = sorted.reorder_columns(&[1, 0]).unwrap();
-        assert!(Arc::ptr_eq(&sorted.dataset, &reordered.dataset));
-        assert!(Arc::ptr_eq(&sorted.rows, &reordered.rows));
-        assert_eq!(sorted.columns(), &[0, 1]);
-        assert_eq!(reordered.columns(), &[1, 0]);
+    fn unfiltered_and_unsorted_keep_zero_alloc_all_rows_across_operations() {
+        let ds = dataset();
+        let c0 = ds.column_id("number").unwrap();
+        let c1 = ds.column_id("label").unwrap();
+
+        let unfiltered = ds.unfiltered();
+        assert!(matches!(unfiltered.rows, RowIds::All(12_000)));
+        assert_eq!(unfiltered.row_count(), 12_000);
+
+        let empty_filter = ds.filter(&[]).unwrap();
+        assert!(matches!(empty_filter.rows, RowIds::All(12_000)));
+        assert!(unfiltered.rows.ptr_eq(&empty_filter.rows));
+
+        let unsorted = unfiltered.unsorted();
+        assert!(matches!(unsorted.rows, RowIds::All(12_000)));
+        assert_eq!(unsorted.row_count(), 12_000);
+
+        let empty_sort = unfiltered.sort(&[]).unwrap();
+        assert!(matches!(empty_sort.rows, RowIds::All(12_000)));
+
+        // Works across rows, stats, find, and export.
+        let block = unsorted.rows(0, 3, &[c0, c1]).unwrap();
+        assert_eq!(block.source_rows, [0, 1, 2]);
+        assert_eq!(block.cell(0, 0), Some("0"));
+        assert_eq!(block.cell(1, 1), Some("odd"));
+
+        assert_eq!(unfiltered.count_nulls(c0).unwrap(), 0);
+        assert_eq!(unfiltered.statistics(c0).unwrap().mean, Some(5999.5));
         assert_eq!(
-            reordered.rows(0, 2, reordered.columns()).unwrap().cells,
-            ["odd", "11999", "even", "11998"].map(|text| Some(text.to_owned()))
+            unfiltered
+                .distribution(c0, 4, AxisScale::Linear)
+                .unwrap()
+                .counts
+                .iter()
+                .sum::<u64>(),
+            12_000
         );
-        for order in [&[][..], &[0], &[0, 0], &[0, 1, 2], &[1, 2]] {
-            assert!(matches!(
-                sorted.reorder_columns(order),
-                Err(Error::Column(crate::ColumnError::InvalidOrder { .. }))
-            ));
+        assert_eq!(unfiltered.values(c1).unwrap().distinct_count, 2);
+
+        let find = unsorted.find("odd", &[c1]).unwrap();
+        let hits = find.next(None, 2).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].display_row, 1);
+        assert_eq!(hits[0].column, c1);
+
+        #[cfg(feature = "csv")]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let export_path = dir.path().join("all.csv");
+            let export = unsorted.export(&[c0, c1], FileType::Csv).unwrap();
+            assert_eq!(export.progress().total_rows, 12_000);
+            export.write(&export_path).unwrap();
+            assert_eq!(export.progress().rows_written, 12_000);
         }
-        assert_eq!(initial.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
     }
 
     #[test]
-    fn independent_queries_keep_snapshots_and_recover_hidden_rows_and_columns() {
-        let dataset = dataset();
-        let initial = dataset.view();
-        let spec = QuerySpec::all(2)
-            .with_filter(0, Filter::range(Some("11998".into()), None, false))
-            .with_sort(0, true, 0);
-        let filtered = dataset.query(&spec).unwrap();
-        let find = filtered.find("odd", &[1]).unwrap();
-        let hidden = dataset
-            .query(&QuerySpec {
-                columns: vec![ColSpec {
-                    column: 1,
-                    sort: None,
-                    filter: None,
-                }],
-            })
+    fn repeated_sorts_on_one_filtered_view_are_independent_and_empty_sort_shares_rows() {
+        let ds = dataset();
+        let c0 = ds.column_id("number").unwrap();
+        let c1 = ds.column_id("label").unwrap();
+
+        let filtered = ds
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::range(Some("11997".into()), None, false),
+            }])
             .unwrap();
-        assert_eq!(hidden.columns(), &[1]);
-        assert_eq!(hidden.row_count(), 12_000);
-        let restored = dataset.query(&QuerySpec::all(2)).unwrap();
-        assert_eq!(restored.rows(0, 2, &[0]).unwrap().source_rows, [0, 1]);
-        assert_eq!(filtered.rows(0, 2, &[0]).unwrap().source_rows, [
+        assert_eq!(filtered.row_count(), 3);
+        assert!(matches!(filtered.rows, RowIds::Selected(_)));
+
+        let unsort_1 = filtered.unsorted();
+        let unsort_2 = filtered.sort(&[]).unwrap();
+        assert!(unsort_1.rows.ptr_eq(&filtered.rows));
+        assert!(unsort_2.rows.ptr_eq(&filtered.rows));
+        assert_eq!(unsort_1.rows(0, 3, &[c0]).unwrap().source_rows, [
+            11997, 11998, 11999
+        ]);
+
+        let desc = filtered
+            .sort(&[ColumnSort {
+                column: c0,
+                descending: true,
+            }])
+            .unwrap();
+        let by_label_then_num = filtered
+            .sort(&[
+                ColumnSort {
+                    column: c1,
+                    descending: false,
+                },
+                ColumnSort {
+                    column: c0,
+                    descending: true,
+                },
+            ])
+            .unwrap();
+
+        assert_eq!(desc.rows(0, 3, &[c0]).unwrap().source_rows, [
+            11999, 11998, 11997
+        ]);
+        assert_eq!(by_label_then_num.rows(0, 3, &[c0]).unwrap().source_rows, [
+            11998, 11999, 11997
+        ]);
+        // Original filtered and unsorted views remain unaffected.
+        assert_eq!(unsort_1.rows(0, 3, &[c0]).unwrap().source_rows, [
+            11997, 11998, 11999
+        ]);
+    }
+
+    #[test]
+    fn duplicate_columns_in_filter_and_sort_return_specific_operation() {
+        let ds = dataset();
+        let c0 = ds.column_id("number").unwrap();
+        let dup_filter = ds.filter(&[
+            ColumnFilter {
+                column: c0,
+                filter: Filter::range(Some("1".into()), None, false),
+            },
+            ColumnFilter {
+                column: c0,
+                filter: Filter::range(None, Some("10".into()), false),
+            },
+        ]);
+        assert!(matches!(
+            dup_filter,
+            Err(Error::Column(ColumnError::Duplicate {
+                operation: ColumnOperation::Filter,
+                column,
+            })) if column == c0
+        ));
+
+        let unfiltered = ds.unfiltered();
+        let dup_sort = unfiltered.sort(&[
+            ColumnSort {
+                column: c0,
+                descending: false,
+            },
+            ColumnSort {
+                column: c0,
+                descending: true,
+            },
+        ]);
+        assert!(matches!(
+            dup_sort,
+            Err(Error::Column(ColumnError::Duplicate {
+                operation: ColumnOperation::Sort,
+                column,
+            })) if column == c0
+        ));
+    }
+
+    #[test]
+    fn ordered_view_stays_valid_after_dropping_filtered_view_and_dataset() {
+        let ds = dataset();
+        let c0 = ds.column_id("number").unwrap();
+        let c1 = ds.column_id("label").unwrap();
+        let filtered = ds
+            .filter(&[ColumnFilter {
+                column: c0,
+                filter: Filter::range(Some("11998".into()), None, false),
+            }])
+            .unwrap();
+        let ordered = filtered
+            .sort(&[ColumnSort {
+                column: c0,
+                descending: true,
+            }])
+            .unwrap();
+        let find = ordered.find("odd", &[c1]).unwrap();
+        drop(filtered);
+        drop(ds);
+        assert_eq!(ordered.row_count(), 2);
+        assert_eq!(ordered.rows(0, 2, &[c0]).unwrap().source_rows, [
             11999, 11998
         ]);
-        drop(dataset);
-        drop(initial);
-        drop(filtered);
         assert_eq!(find.next(None, 10).unwrap()[0].display_row, 0);
-        assert_eq!(restored.count_nulls(0).unwrap(), 0);
     }
 
     #[test]
-    fn invalid_queries_leave_existing_views_usable() {
-        let dataset = dataset();
-        let initial = dataset.view();
-        let spec = QuerySpec::all(2).with_sort(0, true, 0);
-        let sorted = dataset.query(&spec).unwrap();
-        assert_eq!(sorted.rows(0, 1, &[0]).unwrap().source_rows, [11999]);
-        for bad in [
-            QuerySpec::single(5, Filter::exact(vec![], false, false)),
-            QuerySpec {
-                columns: vec![
-                    ColSpec {
-                        column: 0,
-                        sort: None,
-                        filter: None
-                    };
-                    2
-                ],
-            },
-            QuerySpec::all(2)
-                .with_sort(0, false, 0)
-                .with_sort(1, false, 0),
-            QuerySpec::single(0, Filter::exact(vec!["invalid".into()], false, false)),
-        ] {
-            assert!(matches!(
-                dataset.query(&bad),
-                Err(Error::Column(_) | Error::Query(_) | Error::Filter(_))
-            ));
-        }
-        assert_eq!(initial.rows(0, 1, &[0]).unwrap().source_rows, [0]);
-        assert_eq!(sorted.row_count(), 12_000);
+    fn column_info_carries_accurate_id_and_analysis_capabilities() {
+        let ds = dataset();
+        let info = ds.info();
+        assert_eq!(info.columns.len(), 2);
+        assert_eq!(info.columns[0].id, ColumnId::new(0));
+        assert_eq!(info.columns[0].name, "number");
+        assert!(info.columns[0].analysis.statistics);
+        assert!(info.columns[0].analysis.distribution);
+        assert!(info.columns[0].analysis.values);
+        assert!(!info.columns[0].analysis.lengths);
+        assert!(!info.columns[0].analysis.structure);
+
+        assert_eq!(info.columns[1].id, ColumnId::new(1));
+        assert_eq!(info.columns[1].name, "label");
+        assert!(!info.columns[1].analysis.statistics);
+        assert!(!info.columns[1].analysis.distribution);
+        assert!(info.columns[1].analysis.values);
+        assert!(info.columns[1].analysis.lengths);
+        assert!(!info.columns[1].analysis.structure);
     }
 }

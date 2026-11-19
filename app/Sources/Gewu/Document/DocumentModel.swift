@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 
 enum InspectorPage: String, CaseIterable {
     case column = "Column"
@@ -9,78 +9,167 @@ enum InspectorPage: String, CaseIterable {
 /// One loaded table's presentation state. Rust owns the data; SwiftUI observes only
 /// metadata and immutable views, never an array containing the whole table.
 @MainActor
-final class DocumentModel: ObservableObject {
+@Observable
+final class DocumentModel {
+    struct TableInput: Equatable {
+        let ordered: GewuOrderedView
+        let visibleColumns: [ColumnId]
+        let filters: [ColumnFilter]
+        let sorts: [ColumnSort]
+        let selectedColumn: ColumnId?
+        let inspectedColumn: ColumnId?
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.ordered === rhs.ordered
+                && lhs.visibleColumns == rhs.visibleColumns
+                && lhs.filters == rhs.filters
+                && lhs.sorts == rhs.sorts
+                && lhs.selectedColumn == rhs.selectedColumn
+                && lhs.inspectedColumn == rhs.inspectedColumn
+        }
+    }
+
+    private struct PendingQuery: Equatable {
+        let filters: [ColumnFilter]
+        let sorts: [ColumnSort]
+        let visibleColumns: [ColumnId]
+    }
+
     let url: URL
     let dataset: GewuDataset
     let info: DatasetInfo
-    let kinds: [ValueCategory]
+    let columnInfo: [ColumnId: ColumnInfo]
+    @ObservationIgnored private let columnOrder: [ColumnId: Int]
     let find: FindModel
-    /// The applied View, its spec and the results computed for it.
+    /// The applied filtered/ordered views and cached analysis results.
     let viewer: Viewer
-    var applied: Viewer.Applied { viewer.applied }
-    var view: GewuView { applied.view }
-    var appliedSpec: QuerySpec { applied.spec }
-    var isBusy: Bool { submittedSpec != nil }
-    @Published private(set) var errorMessage: String?
-    @Published var isErrorPresented = false
-    @Published var selectedColumn: Int? { didSet { publishTable() } }
-    @Published var inspectedColumn: Int? { didSet { publishTable() } }
-    @Published var inspectorPage = InspectorPage.column
-    @Published var showsSorting = false
-    @Published var inspectorRequest = 0
-    @Published var showsColumns = false
-    @Published var inspectorVisible = true { didSet { publishTable() } }
+    var filtered: GewuFilteredView { viewer.filtered }
+    var ordered: GewuOrderedView { viewer.ordered }
+
+    private(set) var visibleColumns: [ColumnId]
+    private(set) var draftVisibleColumns: [ColumnId]
+    private(set) var draftFilters: [ColumnFilter]
+    private(set) var draftSorts: [ColumnSort]
+    private var submitted: PendingQuery?
+    var isBusy: Bool { submitted != nil }
+
+    private(set) var errorMessage: String?
+    var isErrorPresented = false
+
+    @ObservationIgnored private var _selectedColumn: ColumnId?
+    var selectedColumn: ColumnId? {
+        get {
+            access(keyPath: \.selectedColumn)
+            return _selectedColumn
+        }
+        set {
+            guard newValue != _selectedColumn else { return }
+            withMutation(keyPath: \.selectedColumn) {
+                _selectedColumn = newValue
+            }
+        }
+    }
+
+    @ObservationIgnored private var _inspectedColumn: ColumnId?
+    var inspectedColumn: ColumnId? {
+        get {
+            access(keyPath: \.inspectedColumn)
+            return _inspectedColumn
+        }
+        set {
+            guard newValue != _inspectedColumn else { return }
+            withMutation(keyPath: \.inspectedColumn) {
+                _inspectedColumn = newValue
+            }
+        }
+    }
+
+    @ObservationIgnored private var _inspectorVisible = true
+    var inspectorVisible: Bool {
+        get {
+            access(keyPath: \.inspectorVisible)
+            return _inspectorVisible
+        }
+        set {
+            guard newValue != _inspectorVisible else { return }
+            withMutation(keyPath: \.inspectorVisible) {
+                _inspectorVisible = newValue
+            }
+        }
+    }
+
+    var inspectorPage = InspectorPage.column
+    var showsSorting = false
+    var inspectorRequest = 0
+    var showsColumns = false
     let inspectorSettings = InspectorSettings()
-    @Published var chartX: Int?
-    @Published var chartY: Int?
-    @Published var selectedSourceRow: UInt64?
-    @Published var selectedDisplayRow: Int?
-    @Published private(set) var spec = QuerySpec(columns: [])
-    var appliedFilterColumns: Set<UInt32> {
-        Set(appliedSpec.columns.filter { $0.filter != nil }.map(\.column))
-    }
-    @Published var searchFocusRequest = 0
-    private(set) lazy var export = ExportModel { [weak self] error, prefix in
+    var chartX: ColumnId?
+    var chartY: ColumnId?
+    var selectedSourceRow: UInt64?
+    var selectedDisplayRow: Int?
+    var searchFocusRequest = 0
+
+    @ObservationIgnored private(set) lazy var export = ExportModel { [weak self] error, prefix in
         self?.reportError(error, prefix: prefix)
     }
-    private(set) lazy var copying = CopyModel { [weak self] error, prefix in
+    @ObservationIgnored private(set) lazy var copying = CopyModel { [weak self] error, prefix in
         self?.reportError(error, prefix: prefix)
     }
 
-    weak var table: DataTableController?
-    private(set) lazy var tablePresentation = TablePresentation(tableInput)
-    private var viewTask: Task<Void, Never>?
-    @Published private var submittedSpec: QuerySpec?
+    @ObservationIgnored weak var table: DataTableController?
+    @ObservationIgnored private var viewTask: Task<Void, Never>?
 
-    private var tableInput: TablePresentation.Input {
-        .init(
-            rows: applied.rowView, spec: appliedSpec, selectedColumn: selectedColumn,
-            inspectedColumn: inspectorVisible ? inspectedColumn : nil)
+    var tableInput: TableInput {
+        TableInput(
+            ordered: ordered,
+            visibleColumns: visibleColumns,
+            filters: viewer.appliedFilters,
+            sorts: viewer.appliedSorts,
+            selectedColumn: selectedColumn,
+            inspectedColumn: inspectorVisible ? inspectedColumn : nil
+        )
     }
 
-    private func publishTable() { tablePresentation.apply(tableInput) }
-
-    /// Receives the initial View already allocated by the background loading worker.
-    init(url: URL, dataset: GewuDataset, view: GewuView) {
+    /// Receives initial views already allocated by the background loading worker,
+    /// or constructs default unfiltered/unsorted views for direct callers and tests.
+    init(
+        url: URL,
+        dataset: GewuDataset,
+        filtered: GewuFilteredView? = nil,
+        ordered: GewuOrderedView? = nil
+    ) {
         self.url = url
         self.dataset = dataset
         let metadata = dataset.info()
         info = metadata
-        kinds = metadata.columns.map(\.valueCategory)
+        columnInfo = Dictionary(uniqueKeysWithValues: metadata.columns.map { ($0.id, $0) })
+        columnOrder = Dictionary(uniqueKeysWithValues: metadata.columns.enumerated().map { ($1.id, $0) })
         find = FindModel()
-        let initial = QuerySpec(
-            columns: metadata.columns.indices.map {
-                ColSpec(column: UInt32($0), sort: nil, filter: nil)
-            })
-        viewer = Viewer(dataset: dataset, view: view, spec: initial)
-        spec = initial
-        selectedColumn = metadata.columns.isEmpty ? nil : 0
-        inspectedColumn = selectedColumn
+        let initialFiltered = filtered ?? dataset.unfiltered()
+        let initialOrdered = ordered ?? initialFiltered.unsorted()
+        viewer = Viewer(dataset: dataset, filtered: initialFiltered, ordered: initialOrdered)
+        let initialColumns = metadata.columns.map(\.id)
+        visibleColumns = initialColumns
+        draftVisibleColumns = initialColumns
+        draftFilters = []
+        draftSorts = []
+        _selectedColumn = initialColumns.first
+        _inspectedColumn = initialColumns.first
         find.onNavigate = { [weak self] match in self?.table?.navigateToMatch(match) }
         find.onError = { [weak self] error, prefix in self?.reportError(error, prefix: prefix) }
     }
 
-    var canExport: Bool { !isBusy && export.isIdle && !appliedSpec.columns.isEmpty }
+    var appliedFilterColumns: Set<ColumnId> {
+        Set(viewer.appliedFilters.map(\.column))
+    }
+
+    var canClearFilters: Bool {
+        !draftFilters.isEmpty || !viewer.appliedFilters.isEmpty
+    }
+
+    var canExport: Bool {
+        !isBusy && export.isIdle && !visibleColumns.isEmpty
+    }
 
     var subtitle: String {
         let source =
@@ -93,208 +182,297 @@ final class DocumentModel: ObservableObject {
     }
 
     var status: String {
+        let rows = ordered.rowCount()
         let text =
-            appliedFilterColumns.isEmpty && view.rowCount() == info.rowCount
-            ? "\(formatCount(view.rowCount())) rows"
-            : "\(formatCount(view.rowCount())) / \(formatCount(info.rowCount)) rows"
-        return text + " · \(appliedSpec.columns.count) columns"
+            appliedFilterColumns.isEmpty && rows == info.rowCount
+            ? "\(formatCount(rows)) rows"
+            : "\(formatCount(rows)) / \(formatCount(info.rowCount)) rows"
+        return text + " · \(visibleColumns.count) columns"
     }
 
-    var sortedColumns: [ColSpec] {
-        spec.sortedIndices.map { spec.columns[$0] }
+    func draftFilter(for column: ColumnId) -> Filter? {
+        draftFilters.first { $0.column == column }?.filter
     }
 
-    private func submit(_ next: QuerySpec) {
-        guard next != spec else { return }
-        spec = next
+    func appliedFilter(for column: ColumnId) -> Filter? {
+        viewer.appliedFilters.first { $0.column == column }?.filter
+    }
+
+    func draftSort(for column: ColumnId) -> ColumnSort? {
+        draftSorts.first { $0.column == column }
+    }
+
+    func appliedSort(for column: ColumnId) -> ColumnSort? {
+        viewer.appliedSorts.first { $0.column == column }
+    }
+
+    func sortPriority(for column: ColumnId, in sorts: [ColumnSort]) -> Int? {
+        sorts.firstIndex { $0.column == column }
+    }
+
+    func cycleSort(column: ColumnId, multiple: Bool) {
+        guard draftVisibleColumns.contains(column) else { return }
+        let old = draftSorts.first { $0.column == column }
+        var next = multiple ? draftSorts : []
+        if old?.descending == true {
+            next.removeAll { $0.column == column }
+        } else {
+            let descending = old != nil
+            if let index = next.firstIndex(where: { $0.column == column }) {
+                next[index].descending = descending
+            } else {
+                next.append(ColumnSort(column: column, descending: descending))
+            }
+        }
+        guard next != draftSorts else { return }
+        draftSorts = next
         refresh()
     }
 
-    func cycleSort(column: UInt32, multiple: Bool) {
-        guard let index = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        var next = spec
-        let old = spec.columns[index].sort
-        if !multiple { for i in next.columns.indices { next.columns[i].sort = nil } }
-        if old?.descending == true {
-            next.columns[index].sort = nil
+    func setSortDirection(column: ColumnId, descending: Bool) {
+        guard draftVisibleColumns.contains(column) else { return }
+        var next = draftSorts
+        if let index = next.firstIndex(where: { $0.column == column }) {
+            next[index].descending = descending
         } else {
-            let priority = multiple ? (old?.priority ?? UInt32(sortedColumns.count)) : 0
-            next.columns[index].sort = ColSort(priority: priority, descending: old != nil)
+            next.append(ColumnSort(column: column, descending: descending))
         }
-        next.normalizeSort()
-        submit(next)
+        guard next != draftSorts else { return }
+        draftSorts = next
+        refresh()
     }
 
-    func setSortDirection(column: UInt32, descending: Bool) {
-        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        var next = spec
-        next.columns[i].sort = ColSort(
-            priority: spec.columns[i].sort?.priority ?? UInt32(sortedColumns.count), descending: descending)
-        submit(next)
-    }
-
-    func removeSort(column: UInt32) {
-        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        var next = spec
-        next.columns[i].sort = nil
-        next.normalizeSort()
-        submit(next)
+    func removeSort(column: ColumnId) {
+        guard draftSorts.contains(where: { $0.column == column }) else { return }
+        draftSorts.removeAll { $0.column == column }
+        refresh()
     }
 
     func clearSort() {
-        var next = spec
-        for i in next.columns.indices { next.columns[i].sort = nil }
-        submit(next)
+        guard !draftSorts.isEmpty else { return }
+        draftSorts.removeAll()
+        refresh()
     }
 
-    func replaceSortColumn(_ column: UInt32, with replacement: UInt32) {
+    func replaceSortColumn(_ column: ColumnId, with replacement: ColumnId) {
         guard column != replacement,
-            let source = spec.columns.firstIndex(where: { $0.column == column }),
-            let destination = spec.columns.firstIndex(where: { $0.column == replacement }),
-            let sort = spec.columns[source].sort,
-            spec.columns[destination].sort == nil
+            draftVisibleColumns.contains(replacement),
+            let source = draftSorts.firstIndex(where: { $0.column == column }),
+            !draftSorts.contains(where: { $0.column == replacement })
         else { return }
-        var next = spec
-        next.columns[destination].sort = sort
-        next.columns[source].sort = nil
-        submit(next)
+        draftSorts[source] = ColumnSort(column: replacement, descending: draftSorts[source].descending)
+        refresh()
     }
 
-    func reorderSort(_ columns: [UInt32]) {
-        guard Set(columns) == Set(sortedColumns.map(\.column)), columns.count == sortedColumns.count else { return }
-        var next = spec
-        for (priority, column) in columns.enumerated() {
-            if let i = spec.columns.firstIndex(where: { $0.column == column }) {
-                next.columns[i].sort?.priority = UInt32(priority)
+    func reorderSort(_ columns: [ColumnId]) {
+        guard Set(columns) == Set(draftSorts.map(\.column)), columns.count == draftSorts.count else { return }
+        let byColumn = Dictionary(uniqueKeysWithValues: draftSorts.map { ($0.column, $0) })
+        let next = columns.compactMap { byColumn[$0] }
+        guard next != draftSorts else { return }
+        draftSorts = next
+        refresh()
+    }
+
+    func setFilter(_ filter: Filter?, column: ColumnId) {
+        guard draftVisibleColumns.contains(column) else { return }
+        var next = draftFilters
+        if let filter {
+            if let index = next.firstIndex(where: { $0.column == column }) {
+                next[index].filter = filter
+            } else {
+                next.append(ColumnFilter(column: column, filter: filter))
+                next.sort { (columnOrder[$0.column] ?? Int.max) < (columnOrder[$1.column] ?? Int.max) }
             }
+        } else {
+            next.removeAll { $0.column == column }
         }
-        submit(next)
+        guard next != draftFilters else { return }
+        draftFilters = next
+        refresh()
     }
-
-    func setFilter(_ filter: Filter?, column: UInt32) {
-        guard let i = spec.columns.firstIndex(where: { $0.column == column }) else { return }
-        var next = spec
-        next.columns[i].filter = filter
-        submit(next)
-    }
-
-    var canClearFilters: Bool { spec.columns.contains { $0.filter != nil } || !appliedFilterColumns.isEmpty }
 
     func clearFilters() {
         guard canClearFilters else { return }
-        var next = spec
-        for i in next.columns.indices { next.columns[i].filter = nil }
-        submit(next)
+        guard !draftFilters.isEmpty else { return }
+        draftFilters.removeAll()
+        refresh()
     }
 
-    func reorderColumns(_ columns: [UInt32]) {
-        guard columns != spec.columns.map(\.column), Set(columns) == Set(spec.columns.map(\.column)),
-            columns.count == spec.columns.count
+    func reorderColumns(_ columns: [ColumnId]) {
+        guard columns != draftVisibleColumns,
+            Set(columns) == Set(draftVisibleColumns),
+            columns.count == draftVisibleColumns.count
         else { return }
-        var next = spec
-        let byColumn = Dictionary(uniqueKeysWithValues: spec.columns.map { ($0.column, $0) })
-        next.columns = columns.compactMap { byColumn[$0] }
-        if !isBusy && spec == appliedSpec {
-            do {
-                try viewer.reorder(columns, spec: next)
-                spec = next
-                publishTable()
-                updateFind(preservingMatch: true)
-            } catch {
-                reportError(error)
-            }
+        draftVisibleColumns = columns
+        if !isBusy && draftFilters == viewer.appliedFilters && draftSorts == viewer.appliedSorts {
+            visibleColumns = columns
+            updateFind(preservingMatch: true)
         } else {
-            submit(next)
+            refresh()
         }
     }
 
     /// Apply a hide operation after any required confirmation.
-    func removeColumn(_ column: UInt32) {
+    func removeColumn(_ column: ColumnId) {
         setColumnsVisible([column], visible: false)
     }
 
-    func showColumn(_ column: UInt32) {
+    func showColumn(_ column: ColumnId) {
         setColumnsVisible([column], visible: true)
     }
 
     func showAllColumns() {
-        setColumnsVisible(info.columns.indices.map(UInt32.init), visible: true)
+        setColumnsVisible(info.columns.map(\.id), visible: true)
     }
 
-    /// Applies a confirmed bulk visibility edit as one query, preserving surviving display order.
-    func setColumnsVisible(_ columns: [UInt32], visible: Bool) {
-        let targets = Set(columns.filter { Int($0) < info.columns.count })
-        var next = spec
+    /// Applies a confirmed bulk visibility edit, preserving surviving display order.
+    func setColumnsVisible(_ columns: [ColumnId], visible: Bool) {
+        let targets = Set(columns.filter { columnInfo[$0] != nil })
+        guard !targets.isEmpty else { return }
         if visible {
-            let shown = Set(next.columns.map(\.column))
-            next.columns += targets.subtracting(shown).sorted().map { ColSpec(column: $0, sort: nil, filter: nil) }
+            let shown = Set(draftVisibleColumns)
+            let additions = info.columns.map(\.id).filter { targets.contains($0) && !shown.contains($0) }
+            guard !additions.isEmpty else { return }
+            draftVisibleColumns += additions
         } else {
-            next.columns.removeAll { targets.contains($0.column) }
-            next.normalizeSort()
-            if let selectedColumn, targets.contains(UInt32(selectedColumn)) {
-                self.selectedColumn = next.columns.first.map { Int($0.column) }
-            }
+            let nextColumns = draftVisibleColumns.filter { !targets.contains($0) }
+            let nextFilters = draftFilters.filter { !targets.contains($0.column) }
+            let nextSorts = draftSorts.filter { !targets.contains($0.column) }
+            guard nextColumns != draftVisibleColumns || nextFilters != draftFilters || nextSorts != draftSorts
+            else { return }
+            draftVisibleColumns = nextColumns
+            draftFilters = nextFilters
+            draftSorts = nextSorts
         }
-        submit(next)
+        if !isBusy && draftFilters == viewer.appliedFilters && draftSorts == viewer.appliedSorts {
+            visibleColumns = draftVisibleColumns
+            reconcileVisibleColumnSelections()
+            updateFind()
+        } else {
+            refresh()
+        }
     }
 
-    func inspectColumn(_ column: Int) {
-        guard info.columns.indices.contains(column) else { return }
+    private func reconcileVisibleColumnSelections() {
+        let visible = Set(visibleColumns)
+        if selectedColumn.map({ !visible.contains($0) }) ?? true {
+            selectedColumn = visibleColumns.first
+        }
+        if inspectedColumn.map({ !visible.contains($0) }) ?? true {
+            inspectedColumn = visibleColumns.first
+        }
+        if let chartX, !visible.contains(chartX) {
+            self.chartX = nil
+        }
+        if let chartY, !visible.contains(chartY) {
+            self.chartY = visibleColumns.first { columnInfo[$0]?.capabilities.scatter == true }
+        }
+    }
+
+    func inspectColumn(_ column: ColumnId) {
+        guard columnInfo[column] != nil, visibleColumns.contains(column) else { return }
         inspectedColumn = column
         inspectorPage = .column
         inspectorRequest &+= 1
     }
 
     func refresh(debounce: Bool = false) {
-        guard spec != submittedSpec else { return }
+        let target = PendingQuery(
+            filters: draftFilters,
+            sorts: draftSorts,
+            visibleColumns: draftVisibleColumns
+        )
+        guard target != submitted else { return }
         viewTask?.cancel()
-        if spec == appliedSpec {
+        let applied = PendingQuery(
+            filters: viewer.appliedFilters,
+            sorts: viewer.appliedSorts,
+            visibleColumns: visibleColumns
+        )
+        if target == applied {
             viewTask = nil
             if isBusy {
-                submittedSpec = nil
+                submitted = nil
                 updateFind()
             }
             return
         }
+        let filtersChanged = target.filters != viewer.appliedFilters
+        let sortsChanged = target.sorts != viewer.appliedSorts
+        if !filtersChanged && !sortsChanged {
+            viewTask = nil
+            submitted = nil
+            visibleColumns = target.visibleColumns
+            reconcileVisibleColumnSelections()
+            updateFind()
+            return
+        }
         find.invalidate()
-        let spec = spec
-        submittedSpec = spec
+        submitted = target
         let viewer = viewer
+        let currentFiltered = viewer.filtered
         viewTask = Task { [weak self] in
             do {
-                let view = try await viewer.query(spec, debounce: debounce)
-                guard !Task.isCancelled, let self else { return }
+                let nextFiltered: GewuFilteredView?
+                let nextOrdered: GewuOrderedView
+                if filtersChanged {
+                    let filteredView = try await viewer.filter(target.filters, debounce: debounce)
+                    try Task.checkCancellation()
+                    nextOrdered = try await viewer.sort(target.sorts, on: filteredView, debounce: false)
+                    nextFiltered = filteredView
+                } else {
+                    nextFiltered = nil
+                    nextOrdered = try await viewer.sort(target.sorts, on: currentFiltered, debounce: debounce)
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
                 var prepared: TableRowLoader.Snapshot?
                 while let table = self.table {
-                    prepared = try await table.loadViewport(in: view, spec: spec)
+                    prepared = try await table.loadViewport(in: nextOrdered, columns: target.visibleColumns)
                     try Task.checkCancellation()
                     if self.table === table { break }
                 }
                 try Task.checkCancellation()
-                self.commit(view, spec: spec, rows: prepared)
+                self.commit(
+                    target: target,
+                    filtered: nextFiltered,
+                    ordered: nextOrdered,
+                    rows: prepared
+                )
             } catch {
                 guard !Task.isCancelled, let self else { return }
                 self.viewTask = nil
-                self.submittedSpec = nil
-                self.spec = self.appliedSpec
+                self.submitted = nil
+                self.draftFilters = self.viewer.appliedFilters
+                self.draftSorts = self.viewer.appliedSorts
+                self.draftVisibleColumns = self.visibleColumns
                 if !error.isCancellation { self.reportError(error) }
                 self.updateFind()
             }
         }
     }
 
-    /// Publish the View and its ready cells together, without suspending or
+    /// Publish the resolved views and ready cells together, without suspending or
     /// waiting for SwiftUI to deliver another table update.
-    private func commit(_ view: GewuView, spec: QuerySpec, rows: TableRowLoader.Snapshot?) {
-        objectWillChange.send()
-        viewer.apply(view, spec: spec)
-        publishTable()
+    private func commit(
+        target: PendingQuery,
+        filtered: GewuFilteredView?,
+        ordered: GewuOrderedView,
+        rows: TableRowLoader.Snapshot?
+    ) {
+        if let filtered {
+            viewer.apply(filtered: filtered, ordered: ordered, filters: target.filters, sorts: target.sorts)
+        } else {
+            viewer.apply(ordered: ordered, sorts: target.sorts)
+        }
+        visibleColumns = target.visibleColumns
+        reconcileVisibleColumnSelections()
         if let rows { table?.commit(rows) }
         copying.cancel()
         selectedDisplayRow = nil
         selectedSourceRow = nil
         viewTask = nil
-        submittedSpec = nil
+        submitted = nil
         updateFind()
     }
 
@@ -303,18 +481,19 @@ final class DocumentModel: ObservableObject {
             find.invalidate()
             return
         }
-        let columns = appliedSpec.columns.map(\.column)
         find.update(
-            view: view, columns: columns,
+            ordered: ordered, columns: visibleColumns,
             cursor: preservingMatch ? find.currentMatch : nil, debounce: debounce)
     }
 
     func stop() {
         viewTask?.cancel()
         viewTask = nil
-        submittedSpec = nil
+        submitted = nil
         viewer.close()
-        spec = appliedSpec
+        draftFilters = viewer.appliedFilters
+        draftSorts = viewer.appliedSorts
+        draftVisibleColumns = visibleColumns
         find.stop()
         export.stop()
         copying.cancel()
@@ -324,6 +503,7 @@ final class DocumentModel: ObservableObject {
     func findNext(backwards: Bool = false) {
         find.next(backwards: backwards)
     }
+
     func focusSearch() {
         searchFocusRequest &+= 1
     }
@@ -335,18 +515,5 @@ final class DocumentModel: ObservableObject {
 
     func reportError(_ error: Error, prefix: String = "") {
         reportError(prefix + error.userMessage)
-    }
-}
-
-extension QuerySpec {
-    fileprivate var sortedIndices: [Int] {
-        columns.indices.filter { columns[$0].sort != nil }
-            .sorted { columns[$0].sort!.priority < columns[$1].sort!.priority }
-    }
-
-    fileprivate mutating func normalizeSort() {
-        for (priority, index) in sortedIndices.enumerated() {
-            columns[index].sort?.priority = UInt32(priority)
-        }
     }
 }

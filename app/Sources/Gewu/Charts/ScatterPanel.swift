@@ -1,8 +1,9 @@
+import Observation
 import SwiftUI
 
 struct ScatterPanel: View {
-    @ObservedObject var model: DocumentModel
-    @StateObject private var chart = ScatterModel()
+    @Bindable var model: DocumentModel
+    @State private var chart = ScatterModel()
     @State private var hovered: ScatterPoint?
     @State private var retry = 0
     @ObservedObject private var settings: InspectorSettings
@@ -13,14 +14,14 @@ struct ScatterPanel: View {
         _settings = ObservedObject(wrappedValue: model.inspectorSettings)
     }
 
-    private var columns: [Int] {
-        model.info.columns.indices.filter { model.info.columns[$0].capabilities.scatter }
+    private var columns: [ColumnId] {
+        model.visibleColumns.filter { model.columnInfo[$0]?.capabilities.scatter == true }
     }
 
     private struct Request: Equatable {
-        let view: ObjectIdentifier
-        let x: Int?
-        let y: Int?
+        let filtered: ObjectIdentifier
+        let x: ColumnId?
+        let y: ColumnId?
         let retry: Int
         let pointLimit: UInt32
         let rowNumberBase: Int
@@ -30,7 +31,7 @@ struct ScatterPanel: View {
 
     private var request: Request {
         Request(
-            view: ObjectIdentifier(model.applied.rowView),
+            filtered: ObjectIdentifier(model.filtered),
             x: model.chartX, y: model.chartY, retry: retry, pointLimit: settings.scatterPointLimit,
             rowNumberBase: rowNumberBase,
             xScale: supportsLog(model.chartX) ? settings.scatterXScale : .linear,
@@ -161,9 +162,8 @@ struct ScatterPanel: View {
                 .padding(16).frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .onAppear {
-            if model.chartY == nil { model.chartY = columns.first }
-        }
+        .onAppear { reconcileAxes() }
+        .onChange(of: columns) { _, _ in reconcileAxes() }
         .onChange(of: model.chartX) { _, column in
             if !supportsLog(column) { settings.scatterXScale = .linear }
         }
@@ -172,7 +172,7 @@ struct ScatterPanel: View {
         }
         .task(id: request) {
             hovered = nil
-            guard let y = model.chartY else { return }
+            guard let y = model.chartY, columns.contains(y) else { return }
             await chart.load(
                 viewer: model.viewer, x: model.chartX,
                 y: y,
@@ -182,32 +182,43 @@ struct ScatterPanel: View {
         .onDisappear { chart.cancel() }
     }
 
-    private func axisPicker(_ axis: String, selection: Binding<Int?>, allowsSourceRow: Bool) -> some View {
+    private func reconcileAxes() {
+        if let x = model.chartX, !columns.contains(x) {
+            model.chartX = nil
+        }
+        if let y = model.chartY {
+            if !columns.contains(y) { model.chartY = columns.first }
+        } else {
+            model.chartY = columns.first
+        }
+    }
+
+    private func axisPicker(_ axis: String, selection: Binding<ColumnId?>, allowsSourceRow: Bool) -> some View {
         InspectorColumnPicker(
-            label: "\(axis) axis", columns: columns.map { ($0, model.info.columns[$0].name) },
+            label: "\(axis) axis",
+            columns: columns.compactMap { id in model.columnInfo[id].map { (id, $0.name) } },
             emptySelectionTitle: allowsSourceRow ? "Source row" : nil, selection: selection
         ).frame(maxWidth: .infinity)
     }
 
-    private func supportsLog(_ column: Int?) -> Bool {
-        guard let column, model.info.columns.indices.contains(column) else { return false }
-        return model.info.columns[column].capabilities.logarithmic
+    private func supportsLog(_ column: ColumnId?) -> Bool {
+        column.flatMap { model.columnInfo[$0]?.capabilities.logarithmic } ?? false
     }
-
 }
 
 @MainActor
-final class ScatterModel: ObservableObject {
-    @Published private(set) var result: ScatterResult?
+@Observable
+final class ScatterModel {
+    private(set) var result: ScatterResult?
     private(set) var totalRows: UInt64 = 0
     private(set) var xDates: [Date]?
     private(set) var yDates: [Date]?
     private(set) var xScale: AxisScale = .linear
     private(set) var yScale: AxisScale = .linear
-    @Published private(set) var loading = false
-    @Published private(set) var error: String?
-    private var request: UInt64 = 0
-    private var work: Task<Void, Never>?
+    private(set) var loading = false
+    private(set) var error: String?
+    @ObservationIgnored private var request: UInt64 = 0
+    @ObservationIgnored private var work: Task<Void, Never>?
 
     /// Cancel this panel's pending sample and presentation work.
     func cancel() {
@@ -218,7 +229,7 @@ final class ScatterModel: ObservableObject {
     }
 
     func load(
-        viewer: Viewer, x: Int?, y: Int,
+        viewer: Viewer, x: ColumnId?, y: ColumnId,
         limit: UInt32 = 2048,
         rowNumberBase: Int = 0,
         xScale: AxisScale = .linear,
@@ -227,10 +238,10 @@ final class ScatterModel: ObservableObject {
         guard !Task.isCancelled else { return }
         cancel()
         let ticket = request
-        let view = viewer.applied.rowView
+        let filtered = viewer.filtered
         let task = Task {
             await performLoad(
-                viewer: viewer, view: view, x: x, y: y, limit: limit, rowNumberBase: rowNumberBase,
+                viewer: viewer, filtered: filtered, x: x, y: y, limit: limit, rowNumberBase: rowNumberBase,
                 xScale: xScale, yScale: yScale, ticket: ticket)
         }
         work = task
@@ -243,10 +254,10 @@ final class ScatterModel: ObservableObject {
     }
 
     private func performLoad(
-        viewer: Viewer, view: GewuView, x: Int?, y: Int, limit: UInt32, rowNumberBase: Int,
-        xScale: AxisScale, yScale: AxisScale, ticket: UInt64
+        viewer: Viewer, filtered: GewuFilteredView, x: ColumnId?, y: ColumnId, limit: UInt32,
+        rowNumberBase: Int, xScale: AxisScale, yScale: AxisScale, ticket: UInt64
     ) async {
-        guard !Task.isCancelled, ticket == request, viewer.applied.rowView === view else { return }
+        guard !Task.isCancelled, ticket == request, viewer.filtered === filtered else { return }
         defer {
             if ticket == request { loading = false }
         }
@@ -255,12 +266,12 @@ final class ScatterModel: ObservableObject {
         loading = true
         do {
             try Task.checkCancellation()
-            let rowCount = view.rowCount()
+            let rowCount = filtered.rowCount()
             let sample = try await viewer.scatter(
-                x: x.map(UInt32.init), y: UInt32(y), limit: limit, xScale: xScale, yScale: yScale)
+                x: x, y: y, limit: limit, xScale: xScale, yScale: yScale)
             try Task.checkCancellation()
             // Row numbering depends on display settings, so only the raw sample is cached.
-            let loaded = try await Task.detached(priority: .userInitiated) {
+            let loaded = await Task.detached(priority: .userInitiated) {
                 var result = sample
                 if x == nil {
                     for index in result.points.indices {
@@ -276,7 +287,7 @@ final class ScatterModel: ObservableObject {
                 )
             }.value
             try Task.checkCancellation()
-            guard !Task.isCancelled, ticket == request, viewer.applied.rowView === view else { return }
+            guard !Task.isCancelled, ticket == request, viewer.filtered === filtered else { return }
             xDates = loaded.1
             yDates = loaded.2
             self.xScale = xScale
