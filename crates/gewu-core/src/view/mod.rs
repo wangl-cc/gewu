@@ -19,8 +19,9 @@ mod selection;
 pub use rows::RowBlock;
 pub(crate) use selection::FilterSelection;
 
-/// Filtered row projection over an immutable [`Dataset`].
-/// Owns row membership and provides column analysis, filter metadata, and sorting.
+/// Immutable snapshot of filters applied to a [`Dataset`].
+/// Owns the selected rows and the information needed to derive facets.
+/// Provides column analysis, filter metadata, and sorting.
 pub struct FilteredView {
     dataset: Arc<Dataset>,
     rows: RowIds,
@@ -59,10 +60,10 @@ impl FilteredView {
         })
     }
 
-    /// The rows a filter editor for `column` chooses from: this view's rows
-    /// under every filter except `column`'s own. Combines the stored filter
-    /// bitmaps without re-evaluating any predicate, and returns `self` when
-    /// `column` is not filtered.
+    /// Derive a view of the source rows matching all filters in this snapshot
+    /// except the one on `column`. The result may include rows absent from `self`.
+    /// Returns the same view if `column` has no filter. Calling `facet` on the
+    /// derived view removes another filter without restoring the first.
     pub fn facet(self: &Arc<Self>, column: ColumnId) -> Result<Arc<Self>> {
         self.dataset.column(column)?;
         if !self.selection.constrains(column) {
@@ -350,6 +351,10 @@ mod tests {
         assert!(Arc::ptr_eq(&only_number.facet(c1).unwrap(), &only_number));
         assert!(matches!(
             only_number.facet(c0).unwrap().rows,
+            RowIds::All(12_000)
+        ));
+        assert!(matches!(
+            number_facet.facet(c1).unwrap().rows,
             RowIds::All(12_000)
         ));
         let unfiltered = ds.unfiltered();

@@ -24,18 +24,18 @@ impl Dataset {
             return Ok(self.unfiltered());
         }
 
-        // Each condition yields a bitmap over every source row, so a filter
-        // editor can later combine the other columns' bitmaps without
-        // re-running predicates. Row IDs are materialized once, from the
-        // intersection.
-        let n_rows = self.n_rows;
-        let conditions = filters
+        // Reject invalid conditions before evaluating any full-range selection.
+        let predicates = filters
             .iter()
-            .map(|f| {
-                let predicate = self.column(f.column)?.compile_filter(&f.filter)?;
-                Ok((f.column, predicate.select(0..n_rows)))
-            })
+            .map(|f| Ok((f.column, self.column(f.column)?.compile_filter(&f.filter)?)))
             .collect::<Result<Vec<_>>>()?;
+
+        // Keep each condition's full-range bitmap so facets can combine the
+        // other columns' bitmaps without re-running predicates.
+        let conditions = predicates
+            .into_iter()
+            .map(|(column, predicate)| (column, predicate.select(0..self.n_rows)))
+            .collect();
         Ok(FilteredView::selected(
             self.clone(),
             FilterSelection::new(conditions),
