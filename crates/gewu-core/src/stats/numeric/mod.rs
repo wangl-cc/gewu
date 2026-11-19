@@ -3,13 +3,16 @@
 //! are converted. No widened column or numeric cache is built.
 
 use arrow::{
-    array::{downcast_integer_array, Array, ArrayRef, AsArray, PrimitiveArray},
+    array::{downcast_integer_array, Array, ArrayRef, ArrowNativeTypeOp, AsArray, PrimitiveArray},
     compute::single_decimal_to_float_lossy,
     datatypes::*,
 };
 use num_traits::ToPrimitive;
 
-use crate::stats::Result;
+use crate::{
+    col_view::Selection,
+    stats::{scan::for_each_valid, Result},
+};
 
 #[derive(Debug, Clone)]
 pub struct NumericStatistics {
@@ -104,23 +107,116 @@ impl<'a> Numeric<'a> {
     }
 
     /// Compute moments and retain source rows for exact extrema.
-    fn summarize(self, rows: impl Iterator<Item = usize>) -> summary::NumericSummary {
-        dispatch!(self.0, summarize(rows))
+    fn summarize(self, selection: &Selection<'_>) -> summary::NumericSummary {
+        dispatch!(self.0, summarize(selection))
     }
 
-    /// One scalar conversion per access; dispatch and borrowing happen once.
-    pub(crate) fn accessor(self) -> Box<dyn Fn(usize) -> Option<f64> + 'a> {
-        dispatch!(self.0, accessor())
+    /// Convert the selected rows to `f64` (`out.len() == selection.len()`),
+    /// writing NaN for nulls. Dispatch happens once per call; the conversion
+    /// loop is native.
+    pub(crate) fn write_f64(self, selection: &Selection<'_>, out: &mut [f64]) {
+        dispatch!(self.0, write_f64(selection, out))
+    }
+
+    /// The central value (odd count) or the two central values (even count)
+    /// of the selected rows in native total order, excluding nulls and NaNs,
+    /// as a 1- or 2-element array of the column's type. `None` when nothing
+    /// is ordered.
+    pub(crate) fn median_values(self, selection: &Selection<'_>) -> Option<ArrayRef> {
+        dispatch!(self.0, median_values(selection))
     }
 }
 
+/// Write native values converted to `f64`, then mark nulls with NaN.
+fn write_f64<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    selection: &Selection<'_>,
+    out: &mut [f64],
+    as_float: impl Fn(T::Native) -> f64,
+) {
+    let values = array.values();
+    let nulls = array.nulls().filter(|nulls| nulls.null_count() > 0);
+    match selection {
+        Selection::Range(range) => {
+            for (out, &value) in out.iter_mut().zip(&values[range.clone()]) {
+                *out = as_float(value);
+            }
+            if let Some(nulls) = nulls {
+                let nulls = nulls.inner().slice(range.start, range.len());
+                for index in (!&nulls).set_indices() {
+                    out[index] = f64::NAN;
+                }
+            }
+        }
+        Selection::Rows(rows) => write_rows(
+            values,
+            nulls,
+            rows.iter().map(|&row| row as usize),
+            out,
+            as_float,
+        ),
+        Selection::Mask(mask) => write_rows(values, nulls, mask.set_indices(), out, as_float),
+    }
+}
+
+/// Gather `rows` into `out` as `f64`, writing NaN for nulls.
+#[inline]
+fn write_rows<N: Copy>(
+    values: &[N],
+    nulls: Option<&arrow::buffer::NullBuffer>,
+    rows: impl Iterator<Item = usize>,
+    out: &mut [f64],
+    as_float: impl Fn(N) -> f64,
+) {
+    for (out, row) in out.iter_mut().zip(rows) {
+        *out = match nulls {
+            Some(nulls) if nulls.is_null(row) => f64::NAN,
+            _ => as_float(values[row]),
+        };
+    }
+}
+
+/// Select the central native values; NaN-like values are excluded by `is_nan`.
+fn median_values<T: ArrowPrimitiveType>(
+    array: &PrimitiveArray<T>,
+    selection: &Selection<'_>,
+    is_nan: impl Fn(T::Native) -> bool,
+) -> Option<ArrayRef> {
+    let mut values = Vec::with_capacity(selection.len());
+    for_each_valid(array, selection, |_, value| {
+        if !is_nan(value) {
+            values.push(value);
+        }
+    });
+    if values.is_empty() {
+        return None;
+    }
+    let even = values.len() % 2 == 0;
+    let middle = values.len() / 2;
+    // Arrow's comparator order: total order for floats, numeric order otherwise.
+    let compare = |a: &T::Native, b: &T::Native| a.compare(*b);
+    let (prefix, &mut high, _) = values.select_nth_unstable_by(middle, compare);
+    let central = if even {
+        let low = *prefix.iter().max_by(|a, b| compare(a, b))?;
+        vec![low, high]
+    } else {
+        vec![high]
+    };
+    Some(std::sync::Arc::new(
+        PrimitiveArray::<T>::from_iter_values(central).with_data_type(array.data_type().clone()),
+    ))
+}
+
 pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStatistics> {
-    let summary = Numeric::new(view.array())
-        .ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
+    if !supports(view.data_type()) {
+        return Err(crate::AnalysisError::UnsupportedOperation {
             operation: crate::AnalysisOperation::Statistics,
             data_type: view.data_type().clone(),
-        })?
-        .summarize(view.iter());
+        });
+    }
+    let selection = view.selection();
+    let numeric = Numeric::new(view.array()).expect("supported numeric type");
+    let summary = numeric.summarize(&selection);
     let formatter = crate::format::formatter(view.array().as_ref())?;
     let label = |row: Option<usize>| {
         row.and_then(|row| crate::format::cell(view.array().as_ref(), &formatter, row))
@@ -128,7 +224,7 @@ pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStati
     Ok(NumericStatistics {
         min_label: label(summary.min_row),
         max_label: label(summary.max_row),
-        median_label: super::median::label(view)?,
+        median_label: super::median::label(numeric, &selection)?,
         mean: summary.mean.filter(|v| v.is_finite()),
         mean_label: temporal_mean_label(view.data_type(), summary.mean)?,
         std_dev: summary
@@ -163,12 +259,12 @@ impl<'a, T: ArrowPrimitiveType> IntegerColumn<'a, T>
 where
     T::Native: Into<i128>,
 {
-    fn accessor(self) -> Box<dyn Fn(usize) -> Option<f64> + 'a> {
-        Box::new(move |row| {
-            self.0
-                .is_valid(row)
-                .then(|| self.0.value(row).into() as f64)
-        })
+    fn write_f64(self, selection: &Selection<'_>, out: &mut [f64]) {
+        write_f64(self.0, selection, out, |value| value.into() as f64)
+    }
+
+    fn median_values(self, selection: &Selection<'_>) -> Option<ArrayRef> {
+        median_values(self.0, selection, |_| false)
     }
 }
 
@@ -218,11 +314,15 @@ impl<'a, T: RealType> RealColumn<'a, T> {
         Self { array, scale }
     }
 
-    fn accessor(self) -> Box<dyn Fn(usize) -> Option<f64> + 'a> {
-        Box::new(move |row| {
-            self.array
-                .is_valid(row)
-                .then(|| T::as_float(self.array.value(row), self.scale))
+    fn write_f64(self, selection: &Selection<'_>, out: &mut [f64]) {
+        write_f64(self.array, selection, out, |value| {
+            T::as_float(value, self.scale)
+        })
+    }
+
+    fn median_values(self, selection: &Selection<'_>) -> Option<ArrayRef> {
+        median_values(self.array, selection, |value| {
+            T::as_float(value, self.scale).is_nan()
         })
     }
 }
@@ -395,7 +495,11 @@ mod tests {
         for data_type in every_type() {
             let array = arrow::array::new_null_array(&data_type, 1);
             if let Some(numeric) = Numeric::new(&array) {
-                assert_eq!(numeric.accessor()(0), None, "{data_type}");
+                let mut out = [0.0];
+                let all = Selection::Range(0..1);
+                numeric.write_f64(&all, &mut out);
+                assert!(out[0].is_nan(), "{data_type}");
+                assert!(numeric.median_values(&all).is_none(), "{data_type}");
             }
         }
     }

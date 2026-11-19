@@ -7,6 +7,7 @@ mod lengths;
 mod median;
 pub(crate) mod numeric;
 mod scale;
+mod scan;
 pub(crate) mod scatter;
 mod values;
 

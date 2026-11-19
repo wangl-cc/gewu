@@ -11,7 +11,11 @@ use arrow::{
 };
 
 use super::AxisScale;
-use crate::{col_view::ColView, row_ids::RowSlice, scalar::Bound, stats::Result};
+use crate::{
+    col_view::{ColView, Selection},
+    scalar::Bound,
+    stats::{scan::for_each_valid, Result},
+};
 
 /// Distribution of a numeric column for statistics and filter charts.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,7 +123,7 @@ pub(crate) fn build_scaled(
 ) -> Result<Option<RangeHistogram>> {
     match scale {
         AxisScale::Linear => Ok(
-            match build_bins(view.array(), view.rows(), bins.min(MAX_BINS))? {
+            match build_bins(view.array(), &view.selection(), bins.min(MAX_BINS))? {
                 Domain::Bins(histogram) => Some(histogram),
                 Domain::Empty | Domain::InfiniteOnly | Domain::Unsupported => None,
             },
@@ -129,7 +133,7 @@ pub(crate) fn build_scaled(
 }
 
 pub(crate) fn counts(view: ColView<'_>, bins: u32) -> Result<Histogram> {
-    statistics(view.array(), view.rows(), bins)
+    statistics(view.array(), &view.selection(), bins)
 }
 
 pub(crate) fn counts_scaled(view: ColView<'_>, bins: u32, scale: AxisScale) -> Result<Histogram> {
@@ -167,7 +171,7 @@ pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
     )
 }
 
-fn statistics(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Histogram> {
+fn statistics(array: &ArrayRef, selection: &Selection<'_>, bins: u32) -> Result<Histogram> {
     let histogram = supports_histogram(array.data_type());
     if !histogram {
         return Err(crate::AnalysisError::UnsupportedOperation {
@@ -175,7 +179,7 @@ fn statistics(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Histogr
             data_type: array.data_type().clone(),
         });
     }
-    match build_bins(array, rows, bins)? {
+    match build_bins(array, selection, bins)? {
         Domain::Bins(histogram) => return Ok(histogram),
         Domain::Empty => {}
         Domain::InfiniteOnly => {
@@ -201,7 +205,11 @@ fn statistics(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Histogr
     })
 }
 
-fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Result<Domain<H>> {
+fn build_bins<H: Output>(
+    array: &ArrayRef,
+    selection: &Selection<'_>,
+    bins: u32,
+) -> Result<Domain<H>> {
     if bins == 0 {
         return Err(crate::AnalysisError::InvalidBinCount {
             operation: crate::AnalysisOperation::Distribution,
@@ -213,33 +221,39 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Res
     let bins = bins as usize;
     match array.data_type() {
         data_type if data_type.is_integer() => {
-            downcast_integer_array!(array => integer(array, rows, bins), _ => unreachable!("integer dispatch"))
+            downcast_integer_array!(array => integer(array, selection, bins), _ => unreachable!("integer dispatch"))
         }
         DataType::Date32
         | DataType::Date64
         | DataType::Time32(_)
         | DataType::Time64(_)
         | DataType::Timestamp(..) => {
-            downcast_temporal_array!(array => integer(array, rows, bins), _ => Ok(Domain::Unsupported))
+            downcast_temporal_array!(array => integer(array, selection, bins), _ => Ok(Domain::Unsupported))
         }
         DataType::Duration(TimeUnit::Second) => {
-            integer(array.as_primitive::<DurationSecondType>(), rows, bins)
+            integer(array.as_primitive::<DurationSecondType>(), selection, bins)
         }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            integer(array.as_primitive::<DurationMillisecondType>(), rows, bins)
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            integer(array.as_primitive::<DurationMicrosecondType>(), rows, bins)
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            integer(array.as_primitive::<DurationNanosecondType>(), rows, bins)
-        }
-        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), rows, bins),
-        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), rows, bins),
-        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), rows, bins),
+        DataType::Duration(TimeUnit::Millisecond) => integer(
+            array.as_primitive::<DurationMillisecondType>(),
+            selection,
+            bins,
+        ),
+        DataType::Duration(TimeUnit::Microsecond) => integer(
+            array.as_primitive::<DurationMicrosecondType>(),
+            selection,
+            bins,
+        ),
+        DataType::Duration(TimeUnit::Nanosecond) => integer(
+            array.as_primitive::<DurationNanosecondType>(),
+            selection,
+            bins,
+        ),
+        DataType::Float16 => floating(array.as_primitive::<Float16Type>(), selection, bins),
+        DataType::Float32 => floating(array.as_primitive::<Float32Type>(), selection, bins),
+        DataType::Float64 => floating(array.as_primitive::<Float64Type>(), selection, bins),
         DataType::Decimal32(_, scale) => decimal(
             array.as_primitive::<Decimal32Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |value| i256::from_i128(i128::from(value)),
@@ -247,7 +261,7 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Res
         ),
         DataType::Decimal64(_, scale) => decimal(
             array.as_primitive::<Decimal64Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |value| i256::from_i128(i128::from(value)),
@@ -255,7 +269,7 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Res
         ),
         DataType::Decimal128(_, scale) => decimal(
             array.as_primitive::<Decimal128Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             i256::from_i128,
@@ -263,7 +277,7 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Res
         ),
         DataType::Decimal256(_, scale) => decimal(
             array.as_primitive::<Decimal256Type>(),
-            rows,
+            selection,
             bins,
             *scale,
             |value| value,
@@ -277,32 +291,30 @@ fn build_bins<H: Output>(array: &ArrayRef, rows: RowSlice<'_>, bins: u32) -> Res
 
 fn extrema<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
 ) -> Option<(T::Native, T::Native)>
 where
     T::Native: Ord,
 {
     let mut extrema: Option<(T::Native, T::Native)> = None;
-    for row in rows.iter() {
-        if let Some(value) = array.is_valid(row).then(|| array.value(row)) {
-            extrema = Some(match extrema {
-                Some((lo, hi)) => (lo.min(value), hi.max(value)),
-                None => (value, value),
-            });
-        }
-    }
+    for_each_valid(array, selection, |_, value| {
+        extrema = Some(match extrema {
+            Some((lo, hi)) => (lo.min(value), hi.max(value)),
+            None => (value, value),
+        });
+    });
     extrema
 }
 
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
 ) -> Result<Domain<H>>
 where
     T::Native: Into<i128> + Ord,
 {
-    let Some((min, max)) = extrema(array, rows) else {
+    let Some((min, max)) = extrema(array, selection) else {
         return Ok(Domain::Empty);
     };
     let (min, max) = (min.into(), max.into());
@@ -328,7 +340,7 @@ where
     if (hi as i128) < max + 1 {
         hi = hi.next_up();
     }
-    let mut histogram = count(array, rows, n, true, axis(lo, hi, n), |value| {
+    let mut histogram = count(array, selection, n, true, axis(lo, hi, n), |value| {
         Some(cuts.partition_point(|&cut| cut <= value.into()))
     });
     histogram.min_label = Some(bound(min)?.display().to_owned());
@@ -341,7 +353,7 @@ where
 
 fn decimal<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
     scale: i8,
     widen: impl Fn(T::Native) -> i256,
@@ -350,7 +362,7 @@ fn decimal<T: ArrowPrimitiveType, H: Output>(
 where
     T::Native: Ord,
 {
-    let Some((min, max)) = extrema(array, rows) else {
+    let Some((min, max)) = extrema(array, selection) else {
         return Ok(Domain::Empty);
     };
     let (min, max) = (widen(min), widen(max));
@@ -381,7 +393,7 @@ where
     let (lower, upper) = (bound(min)?, bound(max)?);
     let (lo, hi) = (lower.axis_value(), upper.axis_value());
     let native_cuts: Vec<_> = cuts.iter().copied().map(narrow).collect();
-    let mut histogram = count(array, rows, n, false, axis(lo, hi, n), |value| {
+    let mut histogram = count(array, selection, n, false, axis(lo, hi, n), |value| {
         Some(native_cuts.partition_point(|&cut| cut <= value))
     });
     histogram.min_label = Some(lower.display().to_owned());
@@ -394,7 +406,7 @@ where
 
 fn floating<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
 ) -> Result<Domain<H>>
 where
@@ -403,17 +415,14 @@ where
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut has_infinite = false;
-    for row in rows.iter() {
-        let Some(value) = array.is_valid(row).then(|| array.value(row)) else {
-            continue;
-        };
+    for_each_valid(array, selection, |_, value| {
         let value: f64 = value.into();
         has_infinite |= value.is_infinite();
         if value.is_finite() {
             min = min.min(value);
             max = max.max(value);
         }
-    }
+    });
     if min > max {
         return Ok(if has_infinite {
             Domain::InfiniteOnly
@@ -440,7 +449,7 @@ where
     }
     let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let n = cuts.len() + 1;
-    let mut histogram = count(array, rows, n, false, axis(min, max, n), |value| {
+    let mut histogram = count(array, selection, n, false, axis(min, max, n), |value| {
         let value: f64 = value.into();
         (!value.is_nan()).then(|| cuts.partition_point(|&cut| cut <= value))
     });
@@ -496,7 +505,7 @@ fn axis(lo: f64, hi: f64, bins: usize) -> (f64, f64) {
 
 fn count<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     bins: usize,
     integer: bool,
     axis: (f64, f64),
@@ -514,13 +523,11 @@ fn count<T: ArrowPrimitiveType>(
         non_positive_count: 0,
         infinite_count: 0,
     };
-    for row in rows.iter() {
-        if array.is_valid(row) {
-            if let Some(bin) = classify(array.value(row)) {
-                histogram.counts[bin] += 1;
-            }
+    for_each_valid(array, selection, |_, value| {
+        if let Some(bin) = classify(value) {
+            histogram.counts[bin] += 1;
         }
-    }
+    });
     histogram
 }
 
@@ -763,6 +770,16 @@ mod tests {
             Arc::new(
                 Decimal256Array::from(vec![large, large + i256::ONE, large + i256::from(2)])
                     .with_precision_and_scale(76, 4)
+                    .unwrap(),
+            ),
+            Arc::new(
+                arrow::array::Decimal32Array::from(vec![-1, 0, 1])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
+                arrow::array::Decimal64Array::from(vec![-1, 0, 1])
+                    .with_precision_and_scale(18, 2)
                     .unwrap(),
             ),
         ];

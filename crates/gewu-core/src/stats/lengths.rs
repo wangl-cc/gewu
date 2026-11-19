@@ -1,11 +1,15 @@
-//! Length statistics scan native values twice and retain only the histogram.
+//! Length statistics measure each selected value once, then bin the lengths.
 
 use arrow::{
     array::{Array, AsArray},
     datatypes::DataType,
 };
 
-use crate::{col_view::ColView, row_ids::RowSlice, stats::Result, Histogram};
+use crate::{
+    col_view::{ColView, Selection},
+    stats::{scan::for_each_valid_index, Result},
+    Histogram,
+};
 
 #[derive(Debug, Clone)]
 pub struct LengthSummary {
@@ -38,19 +42,19 @@ pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
 }
 
 pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
-    let array = view.array();
-    let rows = view.rows();
     let unit =
-        unit(array.data_type()).ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
+        unit(view.data_type()).ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
             operation: crate::AnalysisOperation::Lengths,
-            data_type: array.data_type().clone(),
+            data_type: view.data_type().clone(),
         })?;
+    let array = view.array();
+    let selection = view.selection();
     // Dispatch once per column. The closures borrow native storage, including
     // sliced offsets, and never construct child arrays or formatted strings.
     macro_rules! scan {
         ($native:expr, | $column:ident, $row:ident | $length:expr) => {{
             let $column = $native;
-            Ok(summarize(array.as_ref(), rows, unit, bins, |$row| {
+            Ok(summarize(array.as_ref(), &selection, unit, bins, |$row| {
                 $length as u64
             }))
         }};
@@ -90,7 +94,7 @@ pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
 
 fn summarize(
     array: &dyn Array,
-    rows: RowSlice<'_>,
+    selection: &Selection<'_>,
     unit: LengthUnit,
     bins: u32,
     length: impl Fn(usize) -> u64,
@@ -99,20 +103,17 @@ fn summarize(
     let mut max = 0;
     let mut sum = 0_u128;
     let mut empty_count = 0;
-    let mut null_count = 0;
-    for row in rows.iter() {
-        if array.is_null(row) {
-            null_count += 1;
-            continue;
-        }
+    // Measure each value once; the histogram pass reads these native lengths.
+    let mut lengths = Vec::with_capacity(selection.len());
+    for_each_valid_index(array, selection, |row| {
         let value = length(row);
         min = min.min(value);
         max = max.max(value);
         sum += u128::from(value);
         empty_count += u64::from(value == 0);
-    }
-    let total = rows.len() as u64;
-    let non_null = total - null_count;
+        lengths.push(value);
+    });
+    let non_null = lengths.len() as u64;
     let mut histogram = Histogram {
         scale: crate::AxisScale::Linear,
         lo: None,
@@ -150,12 +151,10 @@ fn summarize(
     histogram.hi = Some(hi);
     histogram.min_label = Some(min.to_string());
     histogram.max_label = Some(max.to_string());
-    for row in rows.iter() {
-        if !array.is_null(row) {
-            // Equivalent to the shared integer histogram's ceil-based cuts.
-            let bin = (u128::from(length(row) - min) * bins as u128 / span) as usize;
-            histogram.counts[bin] += 1;
-        }
+    for value in lengths {
+        // Equivalent to the shared integer histogram's ceil-based cuts.
+        let bin = (u128::from(value - min) * bins as u128 / span) as usize;
+        histogram.counts[bin] += 1;
     }
     LengthSummary {
         unit,
