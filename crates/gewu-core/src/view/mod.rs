@@ -2,11 +2,14 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use arrow::{array::ArrayRef, compute::SortOptions};
+use arrow::array::ArrayRef;
 
 use crate::{
-    col_view::ColView, column::Column, execution::sort::sort_rows, row_ids::RowIds, ColumnId,
-    ColumnSort, Dataset, Result,
+    col_view::ColView,
+    column::Column,
+    execution::sort::{codes_match_arrow_order, sort_rows, SortKey},
+    row_ids::RowIds,
+    ColumnId, ColumnSort, Dataset, Result,
 };
 
 mod analysis;
@@ -110,33 +113,21 @@ impl FilteredView {
             return Ok(self.unsorted());
         }
 
-        let mut comparators = Vec::with_capacity(sorts.len());
-        for key in sorts {
-            let array = self.column_array(key.column)?;
-            comparators.push(arrow::array::make_comparator(
-                array.as_ref(),
-                array.as_ref(),
-                SortOptions {
-                    descending: key.descending,
-                    // Nulls always at the bottom, like spreadsheets.
-                    nulls_first: false,
-                },
-            )?);
+        let mut keys = Vec::with_capacity(sorts.len());
+        for sort in sorts {
+            let column = self.column(sort.column)?;
+            let codes = if codes_match_arrow_order(column.array().data_type()) {
+                column.dictionary()?.map(|dictionary| dictionary.as_ref())
+            } else {
+                None
+            };
+            keys.push(SortKey {
+                array: column.array(),
+                descending: sort.descending,
+                codes,
+            });
         }
-        let primitive = if sorts.len() == 1 {
-            let key = sorts[0];
-            let array = self.column_array(key.column)?;
-            array
-                .data_type()
-                .is_primitive()
-                .then_some((array, SortOptions {
-                    descending: key.descending,
-                    nulls_first: false,
-                }))
-        } else {
-            None
-        };
-        let sorted = sort_rows(self.rows.as_slice(), &comparators, primitive)?;
+        let sorted = sort_rows(self.rows.as_slice(), &keys)?;
         Ok(Arc::new(OrderedView {
             dataset: self.dataset.clone(),
             rows: RowIds::Selected(sorted.into()),
