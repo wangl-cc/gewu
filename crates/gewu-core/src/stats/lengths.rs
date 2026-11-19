@@ -60,14 +60,6 @@ pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
         }};
     }
     match array.data_type() {
-        // All-ASCII text (checked once, vectorized, over the value bytes) has
-        // one character per byte: lengths come straight from the offsets.
-        DataType::Utf8 if array.as_string::<i32>().value_data().is_ascii() => {
-            scan!(array.as_string::<i32>(), |a, row| a.value_length(row))
-        }
-        DataType::LargeUtf8 if array.as_string::<i64>().value_data().is_ascii() => {
-            scan!(array.as_string::<i64>(), |a, row| a.value_length(row))
-        }
         DataType::Utf8 => scan!(array.as_string::<i32>(), |a, row| a
             .value(row)
             .chars()
@@ -198,24 +190,6 @@ mod tests {
         );
         assert_eq!(unit(&DataType::Int32), None);
         assert_eq!(unit(&dictionary(DataType::Utf8)), None);
-    }
-
-    #[test]
-    fn ascii_and_unicode_text_measure_the_same_characters() {
-        let measure = |values: [&str; 3]| {
-            let array: ArrayRef = Arc::new(arrow::array::LargeStringArray::from(values.to_vec()));
-            let selected = crate::col_view::test::Fixture::new(&array, vec![2, 0]);
-            let result = analyze(selected.view(), 40).unwrap();
-            (
-                result.min,
-                result.max,
-                result.empty_count,
-                result.histogram.counts,
-            )
-        };
-        let ascii = measure(["ab", "", "abc"]);
-        assert_eq!(ascii, (Some(2), Some(3), 0, vec![1, 1]));
-        assert_eq!(ascii, measure(["éb", "", "a🙂c"]));
     }
 
     #[test]

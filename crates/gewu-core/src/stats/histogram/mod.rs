@@ -133,12 +133,6 @@ pub(crate) fn build_scaled(
 }
 
 pub(crate) fn counts(view: ColView<'_>, bins: u32) -> Result<Histogram> {
-    if !supports_histogram(view.data_type()) {
-        return Err(crate::AnalysisError::UnsupportedOperation {
-            operation: crate::AnalysisOperation::Distribution,
-            data_type: view.data_type().clone(),
-        });
-    }
     statistics(view.array(), &view.selection(), bins)
 }
 
@@ -346,14 +340,8 @@ where
     if (hi as i128) < max + 1 {
         hi = hi.next_up();
     }
-    let per_unit = n as f64 / span as f64;
     let mut histogram = count(array, selection, n, true, axis(lo, hi, n), |value| {
-        let value: i128 = value.into();
-        Some(locate(
-            &cuts,
-            value,
-            ((value - min) as f64 * per_unit) as usize,
-        ))
+        Some(cuts.partition_point(|&cut| cut <= value.into()))
     });
     histogram.min_label = Some(bound(min)?.display().to_owned());
     histogram.max_label = Some(bound(max)?.display().to_owned());
@@ -461,12 +449,9 @@ where
     }
     let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let n = cuts.len() + 1;
-    let per_unit = Some(bins as f64 / (max - min))
-        .filter(|per| per.is_finite())
-        .unwrap_or(0.0);
     let mut histogram = count(array, selection, n, false, axis(min, max, n), |value| {
         let value: f64 = value.into();
-        (!value.is_nan()).then(|| locate(&cuts, value, ((value - min) * per_unit) as usize))
+        (!value.is_nan()).then(|| cuts.partition_point(|&cut| cut <= value))
     });
     histogram.min_label = Some(bound(min)?.display().to_owned());
     histogram.max_label = Some(bound(max)?.display().to_owned());
@@ -474,21 +459,6 @@ where
         bin_ranges(&cuts, bound, |value: f64| bound(value.next_down()))
     })
     .map(Domain::Bins)
-}
-
-/// `cuts.partition_point(|&cut| cut <= value)` for ascending `cuts`, walking
-/// from an interpolated `guess`. Exact for any guess; near-uniform cuts make
-/// it O(1) instead of a branchy binary search per value.
-#[inline]
-fn locate<C: PartialOrd + Copy>(cuts: &[C], value: C, guess: usize) -> usize {
-    let mut index = guess.min(cuts.len());
-    while index > 0 && cuts[index - 1] > value {
-        index -= 1;
-    }
-    while index < cuts.len() && cuts[index] <= value {
-        index += 1;
-    }
-    index
 }
 
 fn bin_ranges<C: Copy>(
@@ -614,31 +584,6 @@ mod tests {
             view.len() as u64
         );
         result
-    }
-
-    #[test]
-    fn locate_matches_partition_point_for_any_guess() {
-        let cuts = [-3.0, -1.0, 0.0, 0.5, 4.0, f64::MAX];
-        for value in [
-            f64::NEG_INFINITY,
-            -5.0,
-            -3.0,
-            -2.0,
-            0.0,
-            0.25,
-            4.0,
-            9.0,
-            f64::INFINITY,
-        ] {
-            let expected = cuts.partition_point(|&cut| cut <= value);
-            for guess in [0, 1, 3, 5, 6, 7, usize::MAX] {
-                assert_eq!(
-                    locate(&cuts, value, guess),
-                    expected,
-                    "{value} from {guess}"
-                );
-            }
-        }
     }
 
     #[test]
