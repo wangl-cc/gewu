@@ -1,7 +1,7 @@
 //! Nested Find compiles child predicates using
 //! borrowed parent and child selections, without decoding Arrow value payload.
 
-use std::{ops::Range, sync::OnceLock};
+use std::ops::Range;
 
 use arrow::{
     array::{downcast_dictionary_array, Array, ArrayRef, AsArray, OffsetSizeTrait},
@@ -71,26 +71,19 @@ pub(super) fn search<'a>(
             if children.is_empty() {
                 return Ok(None);
             }
-            Ok(Some(Predicate::new(Box::new(
-                move |rows, incoming, hits| {
-                    hits.fill(false);
-                    let mut scratch = vec![false; rows.len()];
-                    for child in &children {
-                        child.evaluate(rows.clone(), &mut scratch);
-                        for (hit, other) in hits.iter_mut().zip(&scratch) {
-                            *hit |= *other;
-                        }
+            Ok(Some(Predicate::new(Box::new(move |rows, hits| {
+                hits.fill(false);
+                let mut scratch = vec![false; rows.len()];
+                for child in &children {
+                    child.evaluate(rows.clone(), &mut scratch);
+                    for (hit, other) in hits.iter_mut().zip(&scratch) {
+                        *hit |= *other;
                     }
-                    for (index, row) in rows.iter().enumerate() {
-                        hits[index] &= array.is_valid(row);
-                    }
-                    if let Some(mask) = incoming {
-                        for (hit, &m) in hits.iter_mut().zip(mask) {
-                            *hit &= m;
-                        }
-                    }
-                },
-            ))))
+                }
+                for (index, row) in rows.iter().enumerate() {
+                    hits[index] &= array.is_valid(row);
+                }
+            }))))
         }
         _ => unreachable!("nested type dispatched by Column"),
     }
@@ -106,16 +99,11 @@ pub(super) fn dictionary_find<'a>(
     downcast_dictionary_array!(array => {
         let values = array.values();
         let Some(child) = compile(values)? else { return Ok(None) };
-        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits| {
+        Ok(Some(Predicate::new(Box::new(move |rows, hits| {
             hits.fill(false);
             let mut keys = Vec::with_capacity(rows.len());
             let mut output_rows = Vec::with_capacity(rows.len());
             for (index, row) in rows.iter().enumerate() {
-                if let Some(mask) = incoming {
-                    if !mask[index] {
-                        continue;
-                    }
-                }
                 if array.is_valid(row) {
                     keys.push(array.keys().value(row).as_usize());
                     output_rows.push(index);
@@ -125,40 +113,6 @@ pub(super) fn dictionary_find<'a>(
             child.evaluate(&keys, &mut matched);
             for (key, output) in output_rows.into_iter().enumerate() {
                 hits[output] = matched[key];
-            }
-        }))))
-    }, _ => unreachable!("dictionary type checked by caller"))
-}
-
-/// Explicit filters retain the established eager dictionary-value cache. This
-/// avoids changing their low-cardinality execution policy as part of Find.
-pub(super) fn dictionary<'a>(
-    array: &'a ArrayRef,
-    compile: impl FnOnce(&'a ArrayRef) -> Result<Option<Predicate<'a>>>,
-) -> Result<Option<Predicate<'a>>> {
-    downcast_dictionary_array!(array => {
-        let values = array.values();
-        let Some(child) = compile(values)? else { return Ok(None) };
-        let cached = OnceLock::<Vec<bool>>::new();
-        Ok(Some(Predicate::new(Box::new(move |rows, incoming, hits| {
-            let matched = cached.get_or_init(|| {
-                let mut matched = vec![false; values.len()];
-                child.evaluate(0..values.len(), &mut matched);
-                matched
-            });
-            match incoming {
-                Some(mask) => {
-                    for (index, row) in rows.iter().enumerate() {
-                        hits[index] = mask[index]
-                            && array.is_valid(row)
-                            && matched[array.keys().value(row).as_usize()];
-                    }
-                }
-                None => {
-                    for (index, row) in rows.iter().enumerate() {
-                        hits[index] = array.is_valid(row) && matched[array.keys().value(row).as_usize()];
-                    }
-                }
             }
         }))))
     }, _ => unreachable!("dictionary type checked by caller"))
@@ -187,7 +141,7 @@ fn elements<'a>(
     child: Predicate<'a>,
     offsets: impl Fn(usize) -> Range<usize> + Send + Sync + 'a,
 ) -> Predicate<'a> {
-    Predicate::new(Box::new(move |rows, incoming, hits| {
+    Predicate::new(Box::new(move |rows, hits| {
         hits.fill(false);
         // Size scratch to this batch rather than to CHUNK: the closure is reused
         // for every 1,024-row batch, so preallocating a full CHUNK per call would
@@ -214,11 +168,6 @@ fn elements<'a>(
             owners.clear();
         };
         for (output, row) in rows.iter().enumerate() {
-            if let Some(mask) = incoming {
-                if !mask[output] {
-                    continue;
-                }
-            }
             if hits[output] || array.is_null(row) {
                 continue;
             }
@@ -270,7 +219,7 @@ mod tests {
             Some(9_999),
         ]));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, hits| {
+        let child = Predicate::new(Box::new(|rows, hits| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
@@ -300,7 +249,7 @@ mod tests {
             None,
         ));
         let selected = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, hits| {
+        let child = Predicate::new(Box::new(|rows, hits| {
             selected.lock().unwrap().extend(rows.iter());
             for (index, row) in rows.iter().enumerate() {
                 hits[index] = row == 2;
@@ -327,7 +276,7 @@ mod tests {
             None,
         ));
         let calls = Mutex::new(Vec::new());
-        let child = Predicate::new(Box::new(|rows, _incoming, _hits| {
+        let child = Predicate::new(Box::new(|rows, _hits| {
             let len = rows.len();
             let first = rows.iter().next().unwrap();
             calls.lock().unwrap().push((first, len));

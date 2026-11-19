@@ -79,6 +79,15 @@ impl GewuFilteredView {
             .into())
     }
 
+    /// The rows a filter editor for `column` chooses from: this view under
+    /// every filter except `column`'s own. Returns this view when `column` is
+    /// not filtered.
+    pub fn facet(&self, column: ColumnId) -> Result<Arc<GewuFilteredView>, GewuError> {
+        Ok(Arc::new(GewuFilteredView {
+            inner: self.inner.facet(column.into())?,
+        }))
+    }
+
     pub fn filter_choices(&self, column: ColumnId) -> Result<FilterChoices, GewuError> {
         Ok(self.inner.filter_choices(column.into())?.into())
     }

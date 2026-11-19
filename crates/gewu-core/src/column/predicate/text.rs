@@ -1,87 +1,31 @@
 //! Text predicates compile their pattern once and scan only execution batches.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
-    array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
-    datatypes::{ArrowNativeType, DataType},
+    array::{Array, ArrayAccessor, ArrayRef, AsArray},
+    datatypes::DataType,
 };
+use rapidhash::RapidHashSet;
 use regex::RegexBuilder;
 
 use super::Result;
-use crate::execution::{predicate::Predicate, selection::RowSelection};
+use crate::execution::predicate::{collect_bits, Predicate};
 
-/// Borrow a string cell without decoding dictionaries or formatting a column.
-/// Both a null dictionary key and a key naming a null value yield `None`.
-pub(crate) type StringAccessor<'a> = Box<dyn Fn(usize) -> Option<&'a str> + Send + Sync + 'a>;
-
-pub(crate) fn accessor(array: &ArrayRef) -> Result<StringAccessor<'_>> {
-    match array.data_type() {
-        DataType::Utf8 => Ok(borrow_strings(array.as_string::<i32>())),
-        DataType::LargeUtf8 => Ok(borrow_strings(array.as_string::<i64>())),
-        DataType::Utf8View => Ok(borrow_strings(array.as_string_view())),
-        DataType::Dictionary(..) => {
-            downcast_dictionary_array!(array => {
-                let values = accessor(array.values())?;
-                Ok(Box::new(move |row| {
-                    if array.is_null(row) { None } else { values(array.keys().value(row).as_usize()) }
-                }) as StringAccessor<'_>)
-            }, _ => unreachable!("dictionary type checked above"))
-        }
-        _ => Err(crate::FilterError::UnsupportedType {
-            condition: crate::FilterKind::Text,
-            data_type: array.data_type().clone(),
-        }),
-    }
-}
-
-fn borrow_strings<'a, A>(array: A) -> StringAccessor<'a>
-where
-    A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
-{
-    Box::new(move |row| array.is_valid(row).then(|| array.value(row)))
-}
-
-/// Non-null membership. The column compiler owns exclusion and null policy.
+/// Non-null membership over plain strings. Dictionary columns are matched per
+/// distinct value by the column compiler, which also owns exclusion and null policy.
 pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
-    let read = accessor(array)?;
-    let selected: HashSet<String> = values.iter().cloned().collect();
-    Ok(Predicate::new(Box::new(
-        move |rows, incoming, output| match (rows, incoming) {
-            (RowSelection::Range(range), None) => {
-                for (i, row) in range.enumerate() {
-                    let included = read(row).is_some_and(|value| selected.contains(value));
-                    output[i] = included;
-                }
-            }
-            (RowSelection::Range(range), Some(mask)) => {
-                for (i, row) in range.enumerate() {
-                    if mask[i] {
-                        let included = read(row).is_some_and(|value| selected.contains(value));
-                        output[i] = included;
-                    } else {
-                        output[i] = false;
-                    }
-                }
-            }
-            (RowSelection::Indices(indices), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    let included = read(row).is_some_and(|value| selected.contains(value));
-                    output[i] = included;
-                }
-            }
-            (RowSelection::Indices(indices), Some(mask)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    if mask[i] {
-                        let included = read(row).is_some_and(|value| selected.contains(value));
-                        output[i] = included;
-                    } else {
-                        output[i] = false;
-                    }
-                }
-            }
-        },
-    )))
+    if !matches!(
+        array.data_type(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return Err(crate::FilterError::UnsupportedType {
+            condition: crate::FilterKind::Exact,
+            data_type: array.data_type().clone(),
+        });
+    }
+    let selected: RapidHashSet<String> = values.iter().cloned().collect();
+    Ok(strings(array, move |value| selected.contains(value)))
 }
 
 pub(super) fn contains<'a>(
@@ -113,7 +57,33 @@ pub(super) fn contains<'a>(
                 .map_err(|source| crate::FilterError::PatternCompilationFailed { source })?,
         ),
     };
-    Ok(strings(array, move |value| matcher.is_match(value)))
+    if !text.is_ascii() {
+        return Ok(strings(array, move |value| matcher.is_match(value)));
+    }
+    // Unicode simple case folding only maps non-ASCII characters (such as the
+    // Kelvin sign) onto ASCII letters, so ASCII values match an ASCII needle
+    // under ASCII case folding exactly. Those characters take at least two
+    // bytes, so no value shorter than the needle can match.
+    let needle = text.to_ascii_lowercase().into_bytes();
+    Ok(strings(array, move |value| {
+        if value.len() < needle.len() {
+            false
+        } else if value.is_ascii() {
+            ascii_contains_ignore_case(value.as_bytes(), &needle)
+        } else {
+            matcher.is_match(value)
+        }
+    }))
+}
+
+/// Whether `haystack` contains `needle` (already ASCII-lowercased), ignoring ASCII case.
+fn ascii_contains_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else {
+        return true;
+    };
+    haystack.windows(needle.len()).any(|window| {
+        window[0].to_ascii_lowercase() == first && window[1..].eq_ignore_ascii_case(rest)
+    })
 }
 
 /// Explicit text filter. Case-insensitive equality agrees with case-insensitive
@@ -175,17 +145,18 @@ fn bind<'a, A>(array: A, is_match: impl Fn(&str) -> bool + Send + Sync + 'a) -> 
 where
     A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
 {
-    Predicate::new(Box::new(move |rows, incoming, output| match incoming {
-        Some(mask) => {
-            for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
-                output[i] = m && array.is_valid(row) && is_match(array.value(row));
-            }
+    let is_match = Arc::new(is_match);
+    let test = is_match.clone();
+    Predicate::new(Box::new(move |rows, output| {
+        for (i, row) in rows.iter().enumerate() {
+            output[i] = array.is_valid(row) && is_match(array.value(row));
         }
-        None => {
-            for (i, row) in rows.iter().enumerate() {
-                output[i] = array.is_valid(row) && is_match(array.value(row));
-            }
+    }))
+    .with_bitmap(Box::new(move |rows| {
+        if array.null_count() == 0 {
+            return collect_bits(rows, |row| test(array.value(row)));
         }
+        collect_bits(rows, |row| array.is_valid(row) && test(array.value(row)))
     }))
 }
 

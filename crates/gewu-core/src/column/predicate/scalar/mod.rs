@@ -9,11 +9,7 @@ pub(crate) mod temporal;
 use arrow::array::{Array, ArrayRef, AsArray};
 
 use super::range::compile_range;
-use crate::{
-    column::predicate::Result,
-    execution::{predicate::Predicate, selection::RowSelection},
-    scalar::Bound,
-};
+use crate::{column::predicate::Result, execution::predicate::Predicate, scalar::Bound};
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Result<Option<Predicate<'a>>> {
     let text = text.trim();
@@ -76,32 +72,9 @@ fn boolean(text: &str) -> Option<bool> {
 fn bool_predicate(array: &ArrayRef, target: bool) -> Predicate<'_> {
     let array = array.as_boolean();
     let has_nulls = array.null_count() > 0;
-    Predicate::new(Box::new(move |rows, incoming, output| {
-        match (rows, incoming) {
-            (RowSelection::Range(range), None) => {
-                for (i, row) in range.enumerate() {
-                    output[i] = (!has_nulls || array.is_valid(row)) && array.value(row) == target;
-                }
-            }
-            (RowSelection::Range(range), Some(mask)) => {
-                for (i, row) in range.enumerate() {
-                    output[i] = mask[i]
-                        && (!has_nulls || array.is_valid(row))
-                        && array.value(row) == target;
-                }
-            }
-            (RowSelection::Indices(indices), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = (!has_nulls || array.is_valid(row)) && array.value(row) == target;
-                }
-            }
-            (RowSelection::Indices(indices), Some(mask)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = mask[i]
-                        && (!has_nulls || array.is_valid(row))
-                        && array.value(row) == target;
-                }
-            }
+    Predicate::new(Box::new(move |rows, output| {
+        for (i, row) in rows.iter().enumerate() {
+            output[i] = (!has_nulls || array.is_valid(row)) && array.value(row) == target;
         }
     }))
 }

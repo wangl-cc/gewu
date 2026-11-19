@@ -7,7 +7,10 @@ use arrow::{
 
 use crate::{
     column::predicate::Result,
-    execution::{predicate::Predicate, selection::RowSelection},
+    execution::{
+        predicate::{collect_bits, with_nulls, Predicate},
+        selection::RowSelection,
+    },
 };
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
@@ -50,53 +53,36 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
             let array = array.as_primitive::<$ty>();
             let values = array.values();
             let has_nulls = array.null_count() > 0;
-            Predicate::new(Box::new(move |rows, incoming, output| {
-                match (rows, incoming) {
-                    (RowSelection::Range(range), None) => {
-                        let slice = &values[range.clone()];
-                        for (i, &v) in slice.iter().enumerate() {
-                            let v = f64::from(v);
-                            output[i] = v >= lo && v <= hi;
-                        }
-                        if has_nulls {
-                            for (i, row) in range.enumerate() {
-                                if array.is_null(row) {
-                                    output[i] = false;
-                                }
+            Predicate::new(Box::new(move |rows, output| match rows {
+                RowSelection::Range(range) => {
+                    let slice = &values[range.clone()];
+                    for (i, &v) in slice.iter().enumerate() {
+                        let v = f64::from(v);
+                        output[i] = v >= lo && v <= hi;
+                    }
+                    if has_nulls {
+                        for (i, row) in range.enumerate() {
+                            if array.is_null(row) {
+                                output[i] = false;
                             }
-                        }
-                    }
-                    (RowSelection::Range(range), Some(mask)) => {
-                        let slice = &values[range.clone()];
-                        for (i, &v) in slice.iter().enumerate() {
-                            let v = f64::from(v);
-                            output[i] = (v >= lo && v <= hi) & mask[i];
-                        }
-                        if has_nulls {
-                            for (i, row) in range.enumerate() {
-                                if array.is_null(row) {
-                                    output[i] = false;
-                                }
-                            }
-                        }
-                    }
-                    (RowSelection::Indices(indices), None) => {
-                        for (i, &row) in indices.iter().enumerate() {
-                            output[i] = (!has_nulls || array.is_valid(row)) && {
-                                let v = f64::from(values[row]);
-                                v >= lo && v <= hi
-                            };
-                        }
-                    }
-                    (RowSelection::Indices(indices), Some(mask)) => {
-                        for (i, &row) in indices.iter().enumerate() {
-                            output[i] = mask[i] && (!has_nulls || array.is_valid(row)) && {
-                                let v = f64::from(values[row]);
-                                v >= lo && v <= hi
-                            };
                         }
                     }
                 }
+                RowSelection::Indices(indices) => {
+                    for (i, &row) in indices.iter().enumerate() {
+                        output[i] = (!has_nulls || array.is_valid(row)) && {
+                            let v = f64::from(values[row]);
+                            v >= lo && v <= hi
+                        };
+                    }
+                }
+            }))
+            .with_bitmap(Box::new(move |rows| {
+                let bits = collect_bits(rows.clone(), |row| {
+                    let v = f64::from(values[row]);
+                    v >= lo && v <= hi
+                });
+                with_nulls(bits, array.nulls(), &rows, false)
             }))
         }};
     }
@@ -112,16 +98,9 @@ pub(super) fn nan(array: &ArrayRef) -> Predicate<'_> {
     macro_rules! native {
         ($ty:ty) => {{
             let a = array.as_primitive::<$ty>();
-            Predicate::new(Box::new(move |rows, incoming, output| match incoming {
-                Some(mask) => {
-                    for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
-                        output[i] = m && a.is_valid(row) && a.value(row).is_nan();
-                    }
-                }
-                None => {
-                    for (i, row) in rows.iter().enumerate() {
-                        output[i] = a.is_valid(row) && a.value(row).is_nan();
-                    }
+            Predicate::new(Box::new(move |rows, output| {
+                for (i, row) in rows.iter().enumerate() {
+                    output[i] = a.is_valid(row) && a.value(row).is_nan();
                 }
             }))
         }};

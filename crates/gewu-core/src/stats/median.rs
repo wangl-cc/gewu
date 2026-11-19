@@ -1,52 +1,28 @@
-//! Exact native order statistics. Only source IDs are materialized; no widened
-//! column or full sort is needed.
+//! Exact native order statistics. Only the non-null native values are copied
+//! for selection; no widened column or full sort is needed.
 
 use arrow::{
     array::{
-        downcast_integer_array, make_comparator, Array, ArrayRef, AsArray, Time32SecondArray,
-        TimestampSecondArray,
+        downcast_integer_array, Array, ArrayRef, AsArray, Time32SecondArray, TimestampSecondArray,
     },
-    compute::SortOptions,
     datatypes::*,
 };
 
 use super::numeric::Numeric;
-use crate::{col_view::ColView, format, stats::Result};
+use crate::{col_view::Selection, format, stats::Result};
 
-pub(crate) fn label(view: ColView<'_>) -> Result<Option<String>> {
-    let value = Numeric::new(view.array())
-        .expect("validated numeric statistics")
-        .accessor();
-    let mut ids = Vec::with_capacity(view.len());
-    for row in view.iter() {
-        if value(row).is_some_and(|v| !v.is_nan()) {
-            ids.push(row as u32);
-        }
-    }
-    if ids.is_empty() {
+pub(crate) fn label(numeric: Numeric<'_>, selection: &Selection<'_>) -> Result<Option<String>> {
+    let Some(central) = numeric.median_values(selection) else {
         return Ok(None);
-    }
-    let compare = make_comparator(
-        view.array().as_ref(),
-        view.array().as_ref(),
-        SortOptions::default(),
-    )?;
-    let cmp = |a: &u32, b: &u32| compare(*a as usize, *b as usize);
-    let middle = ids.len() / 2;
-    ids.select_nth_unstable_by(middle, cmp);
-    let high = ids[middle] as usize;
-    if ids.len() % 2 == 1 {
+    };
+    if central.len() == 1 {
         return Ok(format::cell(
-            view.array().as_ref(),
-            &format::formatter(view.array().as_ref())?,
-            high,
+            central.as_ref(),
+            &format::formatter(central.as_ref())?,
+            0,
         ));
     }
-    let low = *ids[..middle]
-        .iter()
-        .max_by(|a, b| cmp(a, b))
-        .expect("non-empty even prefix");
-    midpoint(view.array(), low as usize, high)
+    midpoint(&central, 0, 1)
 }
 
 fn midpoint(array: &ArrayRef, low: usize, high: usize) -> Result<Option<String>> {
@@ -75,8 +51,16 @@ fn midpoint(array: &ArrayRef, low: usize, high: usize) -> Result<Option<String>>
             return decimal(a.value(low), a.value(high), *scale as i32);
         }
         Float16 | Float32 | Float64 => {
-            let value = Numeric::new(array).unwrap().accessor();
-            let (a, b) = (value(low).unwrap(), value(high).unwrap());
+            let numeric = Numeric::new(array).unwrap();
+            let [mut a, mut b] = [0.0; 2];
+            numeric.write_f64(
+                &Selection::Range(low..low + 1),
+                std::slice::from_mut(&mut a),
+            );
+            numeric.write_f64(
+                &Selection::Range(high..high + 1),
+                std::slice::from_mut(&mut b),
+            );
             let result = a.midpoint(b);
             return Ok((!result.is_nan()).then(|| result.to_string()));
         }
@@ -219,9 +203,13 @@ mod tests {
 
     use super::*;
 
+    fn view_label(view: crate::col_view::ColView<'_>) -> Option<String> {
+        label(Numeric::new(view.array()).unwrap(), &view.selection()).unwrap()
+    }
+
     fn median(array: ArrayRef) -> Option<String> {
         let all = crate::col_view::test::Fixture::all(&array);
-        label(all.view()).unwrap()
+        view_label(all.view())
     }
 
     #[test]
@@ -330,9 +318,9 @@ mod tests {
     fn filtered_and_reordered_selections_match_sorted_median() {
         let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
         let selected = crate::col_view::test::Fixture::new(&array, vec![3, 1]);
-        assert_eq!(label(selected.view()).unwrap().as_deref(), Some("51.5"));
+        assert_eq!(view_label(selected.view()).as_deref(), Some("51.5"));
 
         let odd = crate::col_view::test::Fixture::new(&array, vec![3, 0, 2]);
-        assert_eq!(label(odd.view()).unwrap().as_deref(), Some("100"));
+        assert_eq!(view_label(odd.view()).as_deref(), Some("100"));
     }
 }

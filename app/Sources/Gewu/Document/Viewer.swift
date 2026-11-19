@@ -212,35 +212,17 @@ final class Viewer {
 
     func filterChoices(_ column: ColumnId) async throws -> FilterChoices {
         let filtered = filtered
-        let appliedFilters = appliedFilters
-        let dataset = dataset
         return try await scan(epoch.filterChoices, key: column, slot: .choices(column)) {
-            let view = try Self.resolveFacet(
-                dataset: dataset, filtered: filtered, appliedFilters: appliedFilters, column: column)
-            return try view.filterChoices(column: column)
+            try filtered.facet(column: column).filterChoices(column: column)
         }
     }
 
     func filterDistribution(_ column: ColumnId, bins: UInt32, scale: AxisScale) async throws -> RangeHistogram? {
         let key = DistributionKey(column: column, bins: bins, scale: scale)
         let filtered = filtered
-        let appliedFilters = appliedFilters
-        let dataset = dataset
         return try await scan(epoch.filterDistributions, key: key, slot: .filterDistribution(column)) {
-            let view = try Self.resolveFacet(
-                dataset: dataset, filtered: filtered, appliedFilters: appliedFilters, column: column)
-            return try view.filterDistribution(column: column, bins: bins, scale: scale)
+            try filtered.facet(column: column).filterDistribution(column: column, bins: bins, scale: scale)
         }
-    }
-
-    private nonisolated static func resolveFacet(
-        dataset: GewuDataset,
-        filtered: GewuFilteredView,
-        appliedFilters: [ColumnFilter],
-        column: ColumnId
-    ) throws -> GewuFilteredView {
-        let others = appliedFilters.filter { $0.column != column }
-        return others.count == appliedFilters.count ? filtered : try dataset.filter(filters: others)
     }
 
     // MARK: Analysis of the applied filtered view
