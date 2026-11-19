@@ -104,13 +104,13 @@ private struct ImportOptionsView: View {
 private struct LoadedDocumentView: View {
     @Bindable var model: DocumentModel
     @ObservedObject var workbook: WorkbookModel
-    @ObservedObject private var find: FindModel
+    @Bindable private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
 
     init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
         self.workbook = workbook
-        _find = ObservedObject(wrappedValue: model.find)
+        find = model.find
     }
 
     var body: some View {

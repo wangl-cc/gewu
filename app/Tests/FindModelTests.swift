@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import Testing
 
 @Suite
@@ -11,12 +11,16 @@ struct FindModelTests {
     func emptyInvalidationDoesNotPublishDisplayChanges() {
         let find = FindModel()
         var publications = 0
-        let observation = find.objectWillChange.sink { publications += 1 }
+        withObservationTracking {
+            _ = (find.query, find.currentMatch, find.isFinding, find.hasMatches)
+            _ = (find.revision, find.highlightRevision, find.status)
+        } onChange: {
+            publications += 1
+        }
         find.invalidate()
         find.stop()
         #expect(publications == 0)
         #expect(find.revision == 0 && find.highlightRevision == 0)
-        withExtendedLifetime(observation) {}
     }
 
     @Test @MainActor

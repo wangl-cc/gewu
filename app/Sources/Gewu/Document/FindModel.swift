@@ -1,48 +1,49 @@
-import Combine
 import Foundation
+import Observation
 
 /// Presentation and bounded work for cell Find in one captured table view.
 /// Only the current cell, one directional page and a bounded cache of
 /// per-column highlight bitmaps are retained in Swift.
 @MainActor
-final class FindModel: ObservableObject {
-    @Published var query = ""
-    @Published private(set) var currentMatch: CellMatch?
-    @Published private(set) var isFinding = false
-    @Published private(set) var hasMatches: Bool?
-    @Published private(set) var revision: UInt64 = 0
-    @Published private(set) var highlightRevision: UInt64 = 0
+@Observable
+final class FindModel {
+    var query = ""
+    private(set) var currentMatch: CellMatch?
+    private(set) var isFinding = false
+    private(set) var hasMatches: Bool?
+    private(set) var revision: UInt64 = 0
+    private(set) var highlightRevision: UInt64 = 0
+    private var session: FindSession?
 
-    var onNavigate: ((CellMatch) -> Void)?
-    var onError: ((Error, String) -> Void)?
+    @ObservationIgnored var onNavigate: ((CellMatch) -> Void)?
+    @ObservationIgnored var onError: ((Error, String) -> Void)?
 
     private static let pageSize: UInt32 = 32
     private static let maxHighlightRows = findLimits().maxHighlightRows
 
-    private var session: FindSession?
-    private var columns: [ColumnId] = []
-    private var request: UInt64 = 0
-    private var navigationRequest: UInt64 = 0
-    private var highlightRequest: UInt64 = 0
-    private let gate = RequestGate()
-    private let navigationGate = RequestGate()
-    private let highlightGate = RequestGate()
-    private let worker = DispatchQueue(label: "gewu.document.find", qos: .userInitiated)
-    private var navigationTask: Task<Void, Never>?
-    private var highlightTask: Task<Void, Never>?
-    private var pendingHighlight: (rows: Range<Int>, columns: [ColumnId])?
+    @ObservationIgnored private var columns: [ColumnId] = []
+    @ObservationIgnored private var request: UInt64 = 0
+    @ObservationIgnored private var navigationRequest: UInt64 = 0
+    @ObservationIgnored private var highlightRequest: UInt64 = 0
+    @ObservationIgnored private let gate = RequestGate()
+    @ObservationIgnored private let navigationGate = RequestGate()
+    @ObservationIgnored private let highlightGate = RequestGate()
+    @ObservationIgnored private let worker = DispatchQueue(label: "gewu.document.find", qos: .userInitiated)
+    @ObservationIgnored private var navigationTask: Task<Void, Never>?
+    @ObservationIgnored private var highlightTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingHighlight: (rows: Range<Int>, columns: [ColumnId])?
     /// Match bitmaps keyed like the table's segments: one column over a 64-row
     /// block, one bit per row. Requested only for the columns on screen.
-    private let highlights = LRUCache<BlockKey, Data>(costLimit: 256 * 1024, entryCostLimit: 1024)
+    @ObservationIgnored private let highlights = LRUCache<BlockKey, Data>(costLimit: 256 * 1024, entryCostLimit: 1024)
     /// The last directional page, ascending in display order, and the current
     /// match's position in it. Stepping inside the page is synchronous, so
     /// repeated Next/Previous presses are never dropped while a page is cached.
-    private var page: [CellMatch] = []
-    private var pageIndex: Int?
+    @ObservationIgnored private var page: [CellMatch] = []
+    @ObservationIgnored private var pageIndex: Int?
     /// Net navigation requested by the user. Positive is forward, negative is
     /// backward; each completed fetch consumes one step.
-    private var pendingSteps = 0
-    private var fetching = false
+    @ObservationIgnored private var pendingSteps = 0
+    @ObservationIgnored private var fetching = false
 
     var activeQuery: String? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -115,7 +116,7 @@ final class FindModel: ObservableObject {
         highlightTask?.cancel()
         navigationTask = nil
         highlightTask = nil
-        session = nil
+        if session != nil { session = nil }
         columns = []
         if currentMatch != nil { currentMatch = nil }
         if isFinding { isFinding = false }

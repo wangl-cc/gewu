@@ -15,7 +15,9 @@ struct DataTable: View {
         DataTableRepresentable(
             model: model,
             input: input,
-            find: model.find,
+            find: FindDecoration(
+                revision: model.find.revision, highlightRevision: model.find.highlightRevision,
+                currentMatch: model.find.currentMatch),
             showsRowNumbers: showsRowNumbers,
             fontSize: min(max(fontSize, 10), 20),
             rowHeight: min(max(rowHeight, 24), 36),
@@ -24,11 +26,18 @@ struct DataTable: View {
     }
 }
 
+/// The Find state that changes how existing cells are decorated.
+private struct FindDecoration: Equatable {
+    let revision: UInt64
+    let highlightRevision: UInt64
+    let currentMatch: CellMatch?
+}
+
 private struct DataTableRepresentable: NSViewControllerRepresentable {
     let model: DocumentModel
     let input: DocumentModel.TableInput
-    // Observed only so SwiftUI calls `update` when Find state or highlights change.
-    @ObservedObject var find: FindModel
+    // Read in `DataTable.body` so SwiftUI calls `update` when Find state or highlights change.
+    let find: FindDecoration
     let showsRowNumbers: Bool
     let fontSize: CGFloat
     let rowHeight: CGFloat
