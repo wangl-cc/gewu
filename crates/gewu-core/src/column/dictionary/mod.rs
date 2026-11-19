@@ -30,10 +30,7 @@ use arrow::{
 };
 use rapidhash::RapidHashMap;
 
-use crate::execution::{
-    predicate::{with_nulls, Predicate},
-    selection::RowSelection,
-};
+use crate::execution::predicate::{with_nulls, Selector};
 
 type Result<T> = std::result::Result<T, crate::ColumnError>;
 
@@ -61,17 +58,24 @@ impl Dictionary {
         &self.values
     }
 
+    /// Select rows whose value code is matched (or, with `exclude`, unmatched);
+    /// null rows are selected by `include_nulls`.
     pub(crate) fn matching_codes(
         self: &Arc<Self>,
-        matched: &[bool],
+        matched: &BooleanBuffer,
         exclude: bool,
         include_nulls: bool,
-    ) -> Predicate<'static> {
+    ) -> Selector<'static> {
         let mut allowed = [false; 256];
-        for (code, &hit) in matched.iter().enumerate() {
+        for (code, hit) in matched.iter().enumerate() {
             allowed[code] = hit != exclude;
         }
-        self.predicate_from_allowed(allowed, include_nulls)
+        let dictionary = Arc::clone(self);
+        Selector::new(Box::new(move |rows| {
+            let codes = &dictionary.codes[rows.clone()];
+            let bits = BooleanBuffer::collect_bool(codes.len(), |i| allowed[codes[i] as usize]);
+            with_nulls(bits, dictionary.nulls.as_ref(), &rows, include_nulls)
+        }))
     }
 
     pub(crate) fn build(array: &ArrayRef) -> Result<Option<Self>> {
@@ -419,62 +423,6 @@ impl Dictionary {
 
     pub(crate) fn all_counts(&self) -> &[u64] {
         &self.all_counts
-    }
-
-    fn fill_matches(
-        &self,
-        rows: RowSelection<'_>,
-        output: &mut [bool],
-        allowed: &[bool; 256],
-        null_allowed: bool,
-    ) {
-        match (rows, &self.nulls) {
-            (RowSelection::Range(range), None) => {
-                for (i, &code) in self.codes[range].iter().enumerate() {
-                    output[i] = allowed[code as usize];
-                }
-            }
-            (RowSelection::Range(range), Some(nulls)) => {
-                for (i, (&code, r)) in self.codes[range.clone()].iter().zip(range).enumerate() {
-                    output[i] = if nulls.is_null(r) {
-                        null_allowed
-                    } else {
-                        allowed[code as usize]
-                    };
-                }
-            }
-            (RowSelection::Indices(indices), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = allowed[self.codes[row] as usize];
-                }
-            }
-            (RowSelection::Indices(indices), Some(nulls)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = if nulls.is_null(row) {
-                        null_allowed
-                    } else {
-                        allowed[self.codes[row] as usize]
-                    };
-                }
-            }
-        }
-    }
-
-    fn predicate_from_allowed(
-        self: &Arc<Self>,
-        allowed: [bool; 256],
-        null_allowed: bool,
-    ) -> Predicate<'static> {
-        let dictionary = Arc::clone(self);
-        let bitmap = Arc::clone(self);
-        Predicate::new(Box::new(move |rows, output| {
-            dictionary.fill_matches(rows, output, &allowed, null_allowed);
-        }))
-        .with_bitmap(Box::new(move |rows| {
-            let codes = &bitmap.codes[rows.clone()];
-            let bits = BooleanBuffer::collect_bool(codes.len(), |i| allowed[codes[i] as usize]);
-            with_nulls(bits, bitmap.nulls.as_ref(), &rows, null_allowed)
-        }))
     }
 }
 

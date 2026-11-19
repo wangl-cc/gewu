@@ -1,12 +1,13 @@
 //! Compiled, column-bound predicates for high-throughput query execution.
 //!
-//! A predicate has two evaluators over the same semantics:
-//! - **Selection bitmap** ([`Predicate::select`]): filters evaluate each condition over a
-//!   contiguous source range into a packed [`BooleanBuffer`]. Hot predicates compare native values
-//!   64 rows per word and apply nulls with bitwise operations on the validity bitmap; the others
-//!   are packed from their chunk evaluator.
-//! - **Chunk evaluator** ([`Predicate::evaluate`]): Find evaluates display-ordered row IDs in 8K
-//!   chunks (`CHUNK = 8 * 1024`), so working data and masks stay in the L1 data cache.
+//! Two consumers, two shapes:
+//! - **Filters** compile to a [`Selector`]: one packed [`BooleanBuffer`] over a contiguous source
+//!   range. Null policy, exclusion and alternatives combine bitmaps with bitwise operations.
+//! - **Find** evaluates display-ordered row IDs with a [`Predicate`]'s chunk evaluator in 8K chunks
+//!   (`CHUNK = 8 * 1024`), so working data and masks stay in the L1 data cache.
+//!
+//! Leaf predicates (ranges, text, scalars) serve both. Hot leaves also carry a native bitmap
+//! evaluator that compares 64 rows per word; the others are packed from their chunk evaluator.
 
 use std::ops::Range;
 
@@ -48,27 +49,20 @@ impl<'a> Predicate<'a> {
 
     /// Construct a predicate that matches nothing (all false).
     pub(crate) fn empty() -> Self {
-        Self::constant(false)
-    }
-
-    /// Construct a predicate that matches every row (`true`) or none (`false`).
-    pub(crate) fn constant(hit: bool) -> Self {
-        Self::new(Box::new(move |_rows, output| output.fill(hit))).with_bitmap(Box::new(
-            move |rows| {
-                if hit {
-                    BooleanBuffer::new_set(rows.len())
-                } else {
-                    BooleanBuffer::new_unset(rows.len())
-                }
-            },
-        ))
+        Self::new(Box::new(|_rows, output| output.fill(false)))
+            .with_bitmap(Box::new(|rows| BooleanBuffer::new_unset(rows.len())))
     }
 
     /// Selection bitmap over a contiguous source range: bit `i` is row `rows.start + i`.
     pub(crate) fn select(&self, rows: Range<usize>) -> BooleanBuffer {
-        if let Some(bitmap) = &self.bitmap {
-            return bitmap(rows);
+        match &self.bitmap {
+            Some(bitmap) => bitmap(rows),
+            None => self.pack_chunks(rows),
         }
+    }
+
+    /// Selection bitmap packed from the chunk evaluator.
+    pub(crate) fn pack_chunks(&self, rows: Range<usize>) -> BooleanBuffer {
         let mut builder = BooleanBufferBuilder::new(rows.len());
         let mut scratch = vec![false; rows.len().min(CHUNK)];
         for start in rows.clone().step_by(CHUNK) {
@@ -78,67 +72,6 @@ impl<'a> Predicate<'a> {
             builder.append_slice(out);
         }
         builder.finish()
-    }
-
-    /// Bitwise NOT of this predicate's raw value matches. Callers own null policy.
-    pub(crate) fn negate(self) -> Self {
-        let Self { chunk, bitmap } = self;
-        let bitmap =
-            bitmap.map(|bitmap| -> BitmapEvaluator<'a> { Box::new(move |rows| !&bitmap(rows)) });
-        let negated = Self::new(Box::new(move |rows, output| {
-            chunk(rows, output);
-            for value in output.iter_mut() {
-                *value = !*value;
-            }
-        }));
-        match bitmap {
-            Some(bitmap) => negated.with_bitmap(bitmap),
-            None => negated,
-        }
-    }
-
-    /// Evaluate a single chunk of rows.
-    pub(crate) fn evaluate_chunk(&self, rows: RowSelection<'_>, output: &mut [bool]) {
-        (self.chunk)(rows, output);
-    }
-
-    /// Combine compiled equality alternatives without scanning the source or
-    /// materializing one whole-column mask per value.
-    pub(crate) fn any_of(predicates: Vec<Self>) -> Self {
-        if predicates.is_empty() {
-            return Self::empty();
-        }
-        if predicates.len() == 1 {
-            return predicates.into_iter().next().unwrap();
-        }
-        let predicates = std::sync::Arc::new(predicates);
-        let alternatives = predicates.clone();
-        Self::new(Box::new(move |rows, output| {
-            let mut scratch = vec![false; output.len()];
-            for (i, predicate) in predicates.iter().enumerate() {
-                if i == 0 {
-                    // First alternative directly populates the chunk output with its matches.
-                    predicate.evaluate_chunk(rows.clone(), output);
-                } else {
-                    // Fast circuit-break: once every row matches, skip remaining predicates.
-                    if output.iter().all(|&hit| hit) {
-                        break;
-                    }
-                    scratch.fill(false);
-                    predicate.evaluate_chunk(rows.clone(), &mut scratch);
-                    for (hit, &s) in output.iter_mut().zip(&scratch) {
-                        *hit |= s;
-                    }
-                }
-            }
-        }))
-        .with_bitmap(Box::new(move |rows| {
-            let mut bits = alternatives[0].select(rows.clone());
-            for predicate in &alternatives[1..] {
-                bits |= &predicate.select(rows.clone());
-            }
-            bits
-        }))
     }
 
     /// Overwrite `matched` with results for the given rows (Range or borrowed slice of row
@@ -154,6 +87,64 @@ impl<'a> Predicate<'a> {
             let rows = source_rows.chunk(chunk_idx * CHUNK, out.len());
             (self.chunk)(rows, out);
         }
+    }
+}
+
+/// A compiled filter condition. Filters only ever need whole-range selection
+/// bitmaps, so composition (null policy, exclusion, alternatives) happens on
+/// bitmaps; leaf [`Predicate`]s, shared with Find, supply them.
+pub(crate) struct Selector<'a>(BitmapEvaluator<'a>);
+
+impl<'a> Selector<'a> {
+    pub(crate) fn new(bitmap: BitmapEvaluator<'a>) -> Self {
+        Self(bitmap)
+    }
+
+    /// Select every row (`true`) or none (`false`).
+    pub(crate) fn constant(hit: bool) -> Self {
+        Self::new(Box::new(move |rows| {
+            if hit {
+                BooleanBuffer::new_set(rows.len())
+            } else {
+                BooleanBuffer::new_unset(rows.len())
+            }
+        }))
+    }
+
+    /// Selection bitmap over a contiguous source range: bit `i` is row `rows.start + i`.
+    pub(crate) fn select(&self, rows: Range<usize>) -> BooleanBuffer {
+        (self.0)(rows)
+    }
+
+    /// Bitwise NOT of the selection. Callers own null policy.
+    pub(crate) fn negate(self) -> Self {
+        Self::new(Box::new(move |rows| !&self.select(rows)))
+    }
+
+    /// Rows selected by any alternative.
+    pub(crate) fn any_of(alternatives: Vec<Self>) -> Self {
+        Self::new(Box::new(move |rows| {
+            let mut bits = BooleanBuffer::new_unset(rows.len());
+            for alternative in &alternatives {
+                bits |= &alternative.select(rows.clone());
+            }
+            bits
+        }))
+    }
+
+    /// Overwrite `matched` with the selection over `rows`.
+    #[cfg(test)]
+    pub(crate) fn evaluate(&self, rows: Range<usize>, matched: &mut [bool]) {
+        assert_eq!(rows.len(), matched.len());
+        for (hit, bit) in matched.iter_mut().zip(self.select(rows).iter()) {
+            *hit = bit;
+        }
+    }
+}
+
+impl<'a> From<Predicate<'a>> for Selector<'a> {
+    fn from(predicate: Predicate<'a>) -> Self {
+        Self::new(Box::new(move |rows| predicate.select(rows)))
     }
 }
 
