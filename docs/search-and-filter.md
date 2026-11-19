@@ -4,7 +4,7 @@ Explicit column filters narrow the displayed rows. Toolbar Find is separate: it 
 
 ## Find
 
-Find searches all visible (`visibleColumns`) columns in the current ordered row set, including columns outside the rendered viewport. Matches follow display row and visible-column order; Next and Previous wrap, and navigation reveals the row and column. Highlight storage is limited to visible blocks, but navigation pages continue through the complete view without a hit-count ceiling. Find does not report an exact total unless one is computed separately.
+Find searches all visible (`visibleColumns`) columns in the current ordered row set, including columns outside the rendered viewport. Matches follow display row and visible-column order; Next and Previous wrap, and navigation reveals the row and column. Highlights are computed only for the rows and columns on screen and cached per column in 64-row blocks; navigation pages continue through the complete view without a hit-count ceiling. Find does not report an exact total unless one is computed separately.
 
 Changing Find does not alter filters, sorts, row contents, export contents or inspector statistics. The UI replaces and stops its Find session when sorting, filtering, showing/hiding columns or closing the document (reordering visible columns updates Find while preserving the current match when possible). Existing backend `Find` objects remain bound to their captured `OrderedView` data until released.
 

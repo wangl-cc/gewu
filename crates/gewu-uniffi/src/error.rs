@@ -181,6 +181,7 @@ impl From<core::Error> for GewuError {
                 | core::FindError::InvalidHighlightRows { .. }
                 | core::FindError::InvalidCursorRow { .. }
                 | core::FindError::InvalidCursorColumn { .. }
+                | core::FindError::InvalidHighlightColumn { .. }
                 | core::FindError::Internal(_) => Self::Internal { message },
             },
             core::Error::Analysis(kind) => analysis_error(kind, message),

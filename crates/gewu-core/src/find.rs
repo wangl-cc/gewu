@@ -33,14 +33,21 @@ pub struct CellMatch {
     pub column: ColumnId,
 }
 
-/// Cell match flags for a bounded block of display rows.
+/// Match flags for a bounded block of display rows, one bitmap per requested column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindHighlight {
     pub start: u64,
     pub n_rows: u32,
-    pub n_cols: u32,
-    /// Row-major flags in the Find session's captured column order.
-    pub matched: Vec<bool>,
+    /// One entry per requested column, in request order.
+    pub columns: Vec<ColumnHighlight>,
+}
+
+/// Match flags for one column of a [`FindHighlight`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnHighlight {
+    pub column: ColumnId,
+    /// One bit per row starting at the block's first row, low bit first.
+    pub matched: Vec<u8>,
 }
 
 /// A literal matcher over a captured view and ordered column scope.
@@ -95,8 +102,10 @@ impl Find {
         self.scan(before, limit, Direction::Backward)
     }
 
-    /// Evaluate a visible block in captured column order.
-    pub fn highlight(&self, start: u64, count: u32) -> Result<FindHighlight> {
+    /// Evaluate only the requested columns, such as those on screen, over a
+    /// bounded block of display rows. Every column must belong to the captured
+    /// scope; the block is clipped to the available rows.
+    pub fn highlight(&self, columns: &[ColumnId], start: u64, count: u32) -> Result<FindHighlight> {
         if !(1..=MAX_FIND_HIGHLIGHT_ROWS).contains(&count) {
             return Err(crate::FindError::InvalidHighlightRows {
                 value: count,
@@ -104,17 +113,46 @@ impl Find {
                 max: MAX_FIND_HIGHLIGHT_ROWS,
             });
         }
-        let predicates = self.predicates()?;
+        let arrays = columns
+            .iter()
+            .map(|&column| {
+                self.columns
+                    .iter()
+                    .find(|(id, _)| *id == column)
+                    .map(|(_, array)| array)
+                    .ok_or(crate::FindError::InvalidHighlightColumn { column })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let len = self.rows.len() as u64;
         let start = start.min(len);
         let end = start.saturating_add(count as u64).min(len);
-        let mut scratch = FindScratch::default();
-        self.evaluate_batch(&predicates, start as usize..end as usize, &mut scratch);
+        let window = self.rows.as_slice().window(start as usize, end as usize);
+        let n_rows = window.len();
+        let contiguous = window.contiguous_range();
+        let source_rows: Vec<usize> = if contiguous.is_none() {
+            window.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let mut hits = vec![false; n_rows];
+        let mut result = Vec::with_capacity(columns.len());
+        for (&column, array) in columns.iter().zip(arrays) {
+            let predicate = compile_find(array, &self.query, Some(&self.matcher))?;
+            match (&predicate, contiguous.clone()) {
+                (Some(predicate), Some(range)) => predicate.evaluate(range, &mut hits),
+                (Some(predicate), None) => predicate.evaluate(&source_rows, &mut hits),
+                (None, _) => hits.fill(false),
+            }
+            let mut matched = vec![0u8; n_rows.div_ceil(8)];
+            for (row, _) in hits.iter().enumerate().filter(|(_, hit)| **hit) {
+                matched[row / 8] |= 1 << (row % 8);
+            }
+            result.push(ColumnHighlight { column, matched });
+        }
         Ok(FindHighlight {
             start,
-            n_rows: (end - start) as u32,
-            n_cols: self.columns.len() as u32,
-            matched: scratch.matched,
+            n_rows: n_rows as u32,
+            columns: result,
         })
     }
 

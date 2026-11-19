@@ -39,12 +39,17 @@ struct FindModelTests {
         #expect(model.ordered === originalView)
         #expect(model.ordered.rowCount() == 3)
 
-        model.find.requestHighlight(start: 0, count: 3)
-        try await waitUntil { model.find.highlight != nil }
-        #expect(model.find.highlight?.matched == [false, false, false, true, false, true])
-        #expect(model.find.isMatch(row: 1, column: Self.c1))
-        #expect(!model.find.isMatch(row: 1, column: Self.c0))
-        #expect(!model.find.isMatch(row: 0, column: Self.c1))
+        // Only the requested on-screen column is evaluated and cached.
+        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1])
+        try await waitUntil { model.find.hasHighlights }
+        #expect((0..<3).map { model.find.isMatch(row: $0, column: Self.c1) } == [false, true, true])
+        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
+        let revision = model.find.highlightRevision
+        model.find.requestHighlight(rows: 1..<3, columns: [Self.c1])
+        #expect(model.find.highlightRevision == revision, "Cached blocks are not requested again")
+        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1, Self.c0])
+        try await waitUntil { model.find.highlightRevision != revision }
+        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
 
         model.findNext()
         try await waitUntil { model.find.currentMatch?.displayRow == 2 }
@@ -59,7 +64,7 @@ struct FindModelTests {
         #expect(model.ordered === originalView)
         model.find.query = ""
         model.updateFind()
-        #expect(model.find.currentMatch == nil && model.find.highlight == nil)
+        #expect(model.find.currentMatch == nil && !model.find.hasHighlights)
         #expect(model.find.canNavigate == false)
         model.stop()
     }
@@ -102,14 +107,14 @@ struct FindModelTests {
         try await waitUntil { model.find.hasMatches == true }
 
         let beforeRequest = model.find.highlightRevision
-        model.find.requestHighlight(start: 0, count: 1)
+        model.find.requestHighlight(rows: 0..<1, columns: [ColumnId(raw: 0)])
         #expect(model.find.highlightRevision == beforeRequest)
         model.find.query = "old"
         model.updateFind()
         let replacementRevision = model.find.highlightRevision
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 1 }
         #expect(model.find.highlightRevision == replacementRevision)
-        #expect(model.find.highlight == nil)
+        #expect(!model.find.hasHighlights)
         model.stop()
     }
 

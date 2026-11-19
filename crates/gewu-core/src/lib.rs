@@ -31,7 +31,8 @@ pub use file::{
     FileMetadata, FileOperation, FileType, OpenOptions, ParquetCompression,
 };
 pub use find::{
-    CellMatch, Find, FindError, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    CellMatch, ColumnHighlight, Find, FindError, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS,
+    MAX_FIND_PAGE_SIZE,
 };
 pub use query::{ColumnFilter, ColumnSort, Filter, FilterCondition, TextMatch};
 pub use scalar::BoundError;

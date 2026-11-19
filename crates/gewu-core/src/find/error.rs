@@ -19,6 +19,8 @@ pub enum FindError {
     InvalidCursorRow { row: u64, row_count: u64 },
     #[error("find cursor column {column} is outside the captured scope")]
     InvalidCursorColumn { column: ColumnId },
+    #[error("find highlight column {column} is outside the captured scope")]
+    InvalidHighlightColumn { column: ColumnId },
     #[error(transparent)]
     Filter(#[from] FilterError),
     #[error(transparent)]

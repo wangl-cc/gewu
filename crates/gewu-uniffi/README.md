@@ -80,7 +80,7 @@ Dictionary construction synchronizes lazily per column and publishes a completed
 
 ## Cell Find
 
-`ordered.find(query, columns)` captures the `GewuOrderedView`'s display row order and the requested ordered `Vec<ColumnId>` column scope. `next` and `previous` return exclusive directional `CellMatch { display_row, column: ColumnId }` pages; an empty page marks a boundary and a missing cursor restarts from that end. `highlight` returns match flags for a display block, without formatting values or changing the view.
+`ordered.find(query, columns)` captures the `GewuOrderedView`'s display row order and the requested ordered `Vec<ColumnId>` column scope. `next` and `previous` return exclusive directional `CellMatch { display_row, column: ColumnId }` pages; an empty page marks a boundary and a missing cursor restarts from that end. `highlight(columns, start, count)` returns one match bitmap per requested column (one bit per row, low bit first) for a display block, without formatting values or changing the view. Request only the columns on screen; each must belong to the Find scope.
 
 Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or rows). No total hit count is implied. Text matching is compiled once per Find object. Gate navigation and highlight publication in Swift with request identity.
 

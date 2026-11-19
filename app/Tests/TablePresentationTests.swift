@@ -312,8 +312,8 @@ struct TablePresentationTests {
         model.find.query = "first"
         model.updateFind()
         try await waitUntil { model.find.hasMatches == true }
-        model.find.requestHighlight(start: 0, count: 3)
-        try await waitUntil { model.find.highlight != nil }
+        model.find.requestHighlight(rows: 0..<3, columns: [Self.c0, Self.c1])
+        try await waitUntil { model.find.hasHighlights }
         controller.update(showsRowNumbers: true)
         #expect(try cell(table, column: Self.c1, row: 0) === label)
         #expect(label.currentMatch)

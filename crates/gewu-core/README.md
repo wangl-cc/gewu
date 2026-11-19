@@ -34,7 +34,7 @@ Compiled predicates evaluate in bounded batches. Native row predicates can skip 
 
 ### Cell Find
 
-`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight` covers at most 256 display rows. Neither API computes or estimates a total hit count.
+`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight(columns, start, count)` covers at most 256 display rows and evaluates only the requested columns, which must belong to the captured scope. It returns one bitmap per requested column, so callers can request and cache just the columns on screen. Neither API computes or estimates a total hit count.
 
 Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time (`RowSlice::window`). The literal text matcher is compiled and retained when the Find object is created; typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell.
 

@@ -412,10 +412,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
             rows: visibleRows.location..<(visibleRows.location + visibleRows.length), columns: columns)
     }
 
+    /// Request match flags only for the rows and columns on screen.
     private func requestHighlights() {
         let rows = table.rows(in: table.visibleRect)
         guard rows.location != NSNotFound, rows.length > 0 else { return }
-        model.find.requestHighlight(start: UInt64(rows.location), count: UInt32(rows.length))
+        let columns = table.columnIndexes(in: table.visibleRect).compactMap { index -> ColumnId? in
+            let column = table.tableColumns[index]
+            return column.isHidden ? nil : columnId(column)
+        }
+        model.find.requestHighlight(rows: rows.location..<(rows.location + rows.length), columns: columns)
     }
 
     private func buildColumns(_ info: DatasetInfo) {

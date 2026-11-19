@@ -205,7 +205,12 @@ fn rows(c: &mut Criterion) {
 
     let find = plain.find("2024-03", &columns).unwrap();
     g.bench_function("find_highlight_256_all_columns", |b| {
-        b.iter(|| find.highlight(1_000, 256).unwrap())
+        b.iter(|| find.highlight(&columns, 1_000, 256).unwrap())
+    });
+    // The table requests only the columns on screen.
+    let visible = &columns[..8.min(columns.len())];
+    g.bench_function("find_highlight_256_8_columns", |b| {
+        b.iter(|| find.highlight(visible, 1_000, 256).unwrap())
     });
     g.finish();
 }

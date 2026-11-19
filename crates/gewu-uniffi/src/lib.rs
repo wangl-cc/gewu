@@ -38,7 +38,7 @@ pub use filter::{
     ValueChoice,
 };
 pub use filtered_view::GewuFilteredView;
-pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
+pub use find::{find_limits, CellMatch, ColumnHighlight, FindHighlight, FindLimits, FindSession};
 pub use ordered_view::GewuOrderedView;
 pub use query::{ColumnFilter, ColumnSort};
 pub use scale::AxisScale;
