@@ -104,8 +104,6 @@ final class DocumentModel {
     let inspectorSettings = InspectorSettings()
     var chartX: ColumnId?
     var chartY: ColumnId?
-    var selectedSourceRow: UInt64?
-    var selectedDisplayRow: Int?
     var searchFocusRequest = 0
 
     @ObservationIgnored private(set) lazy var export = ExportModel { [weak self] error, prefix in
@@ -472,8 +470,6 @@ final class DocumentModel {
         reconcileVisibleColumnSelections()
         if let rows { table?.commit(rows) }
         copying.cancel()
-        selectedDisplayRow = nil
-        selectedSourceRow = nil
         viewTask = nil
         submitted = nil
         updateFind()

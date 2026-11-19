@@ -186,13 +186,13 @@ fn text_filter_modes_and_choices_cross_ffi() {
                 count: 64,
             }],
             vec![
-                ColumnSpan {
-                    column: label_col,
+                ColumnBatch {
+                    columns: vec![label_col, id_col],
                     start: 1,
                     count: 64,
                 },
-                ColumnSpan {
-                    column: id_col,
+                ColumnBatch {
+                    columns: vec![id_col],
                     start: 0,
                     count: 64,
                 },
@@ -200,8 +200,8 @@ fn text_filter_modes_and_choices_cross_ffi() {
         )
         .unwrap();
     assert_eq!(batch.source_rows, [vec![1, 0], vec![0]]);
-    let [label, id] = batch.segments.try_into().ok().unwrap();
-    assert_eq!((label.row_count, label.utf8), (1, b"cat".to_vec()));
+    let [label, id] = batch.batches.try_into().ok().unwrap();
+    assert_eq!((label.row_count, label.utf8), (1, b"cat10".to_vec()));
     assert_eq!((id.row_count, id.utf8), (2, b"2010".to_vec()));
     let offsets: Vec<u8> = [0u32, 2, 4]
         .into_iter()
@@ -209,41 +209,12 @@ fn text_filter_modes_and_choices_cross_ffi() {
         .collect();
     assert_eq!(id.offsets, offsets);
     assert!(sorted_desc
-        .read_segments(vec![], vec![ColumnSpan {
-            column: ColumnId { raw: 99 },
+        .read_segments(vec![], vec![ColumnBatch {
+            columns: vec![ColumnId { raw: 99 }],
             start: 0,
             count: 1,
         }])
         .is_err());
-    let selected = |format| {
-        sorted_desc
-            .export_rows(
-                vec![RowSpan { start: 1, count: 5 }],
-                vec![label_col, id_col],
-                format,
-            )
-            .unwrap()
-    };
-    assert_eq!(
-        selected(crate::FileType::Tsv)
-            .write_text(true, 1024)
-            .unwrap(),
-        b"label\tid\ncat\t10\n"
-    );
-    assert!(matches!(
-        selected(crate::FileType::Tsv).write_text(false, 2),
-        Err(GewuError::Limit {
-            kind: crate::LimitErrorKind::TextBytes { limit: 2 },
-            ..
-        })
-    ));
-    assert!(matches!(
-        selected(crate::FileType::Parquet).write_text(true, 1024),
-        Err(GewuError::Export {
-            kind: crate::ExportErrorKind::TextFormat { .. },
-            ..
-        })
-    ));
     std::fs::remove_file(source).unwrap();
 }
 

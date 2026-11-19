@@ -14,7 +14,7 @@ struct TablePresentationTests {
         let model = try makeModel(csv: "number,label\n1,first\n2,\(longLabel)\n3,third\n")
         let original = model.ordered
         let requests = AsyncStream<PendingViewportRead>.makeStream()
-        let loader = gatedLoader(original: original, requests: requests.continuation, segmentByteLimit: 256)
+        let loader = gatedLoader(original: original, requests: requests.continuation, batchByteLimit: 256)
         let controller = DataTableController(model: model, loader: loader)
         model.table = controller
         defer {
@@ -42,15 +42,15 @@ struct TablePresentationTests {
         let label = try cell(table, column: Self.c1, row: 0)
         #expect(!number.isLoading && number.textField?.stringValue == "2")
         #expect(!label.isLoading && label.textField?.stringValue == longLabel)
+        #expect(loader.sourceRow(for: 0) == 1)
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        #expect(model.selectedSourceRow == 1)
 
         // A later presentation update must keep the committed rows and uncached
         // large values, without clearing the native selection or refetching.
         let committed = model.ordered
         controller.update(showsRowNumbers: false, fontSize: 16, rowHeight: 32, rowNumberBase: 1)
         #expect(model.ordered === committed && table.numberOfRows == 2)
-        #expect(table.selectedRow == 0 && model.selectedSourceRow == 1)
+        #expect(table.selectedRow == 0)
         #expect(!label.isLoading && label.textField?.stringValue == longLabel)
     }
 
@@ -135,9 +135,9 @@ struct TablePresentationTests {
 
     private func gatedLoader(
         original: GewuOrderedView, requests: AsyncStream<PendingViewportRead>.Continuation,
-        segmentByteLimit: Int = 1024 * 1024
+        batchByteLimit: Int = 1024 * 1024
     ) -> TableSegmentLoader {
-        TableSegmentLoader(segmentByteLimit: segmentByteLimit) { view, keys in
+        TableSegmentLoader(batchByteLimit: batchByteLimit) { view, keys in
             if view === original { return try TableSegments(reading: view, keys: keys) }
             return try await withCheckedThrowingContinuation { continuation in
                 requests.yield(.init(view: view, keys: keys, continuation: continuation))
@@ -203,8 +203,6 @@ struct TablePresentationTests {
         model.inspectorPage = .chart
         model.chartX = Self.c0
         model.chartY = Self.c1
-        model.selectedDisplayRow = 1
-        model.selectedSourceRow = 1
         model.showsSorting = true
         model.setSortDirection(column: Self.c0, descending: true)
         #expect(model.isBusy)
@@ -348,14 +346,12 @@ struct TablePresentationTests {
         let label = try cell(table, column: Self.c1, row: 1)
         try await waitUntil { !number.isLoading && !label.isLoading }
         table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
-        #expect(model.selectedDisplayRow == 1)
-        #expect(model.selectedSourceRow == 1)
+        #expect(table.selectedRow == 1)
 
         model.reorderColumns([Self.c1, Self.c0])
         controller.update(showsRowNumbers: true)
         #expect(model.tableInput.ordered === originalRows)
         #expect(table.selectedRowIndexes == IndexSet(integer: 1))
-        #expect(model.selectedDisplayRow == 1 && model.selectedSourceRow == 1)
         #expect(table.tableColumns[1].identifier.rawValue == "c1")
         // Check synchronously: a reset-and-refetch implementation cannot satisfy this.
         let movedLabel = try cell(table, column: Self.c1, row: 1)
@@ -366,7 +362,8 @@ struct TablePresentationTests {
 
     @Test func changingRowCountRebindsValuesAndSourceRowsThroughEmptyResults() async throws {
         let model = try makeModel()
-        let controller = DataTableController(model: model)
+        let loader = TableSegmentLoader()
+        let controller = DataTableController(model: model, loader: loader)
         model.table = controller
         defer { model.stop() }
         let table = try prepareTable(controller)
@@ -385,8 +382,8 @@ struct TablePresentationTests {
         try await waitUntil { !first.isLoading && !second.isLoading && !label.isLoading }
         #expect(first.textField?.stringValue == "2" && second.textField?.stringValue == "3")
         #expect(label.textField?.stringValue == "second")
+        #expect(loader.sourceRow(for: 0) == 1)
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        #expect(model.selectedDisplayRow == 0 && model.selectedSourceRow == 1)
 
         model.setFilter(Filter(condition: .range(min: "100", max: nil), includeNulls: false), column: Self.c0)
         try await waitUntil { !model.isBusy }
@@ -394,7 +391,7 @@ struct TablePresentationTests {
         controller.view.layoutSubtreeIfNeeded()
         #expect(table.numberOfRows == 0 && table.selectedRow == -1)
         #expect(table.rows(in: table.visibleRect).length == 0)
-        #expect(model.selectedDisplayRow == nil && model.selectedSourceRow == nil)
+        #expect(loader.sourceRow(for: 0) == nil)
 
         model.clearFilters()
         try await waitUntil { !model.isBusy }
@@ -406,7 +403,8 @@ struct TablePresentationTests {
         try await waitUntil { !restored.isLoading && !restoredLabel.isLoading }
         #expect(restored.textField?.stringValue == "1" && restoredLabel.textField?.stringValue == "first")
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        #expect(model.selectedDisplayRow == 0 && model.selectedSourceRow == 0)
+        #expect(table.selectedRow == 0)
+        #expect(loader.sourceRow(for: 0) == 0)
         #expect(model.errorMessage == nil)
     }
 

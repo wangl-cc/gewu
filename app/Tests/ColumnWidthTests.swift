@@ -62,9 +62,27 @@ struct ColumnWidthTests {
         let bogus = ColumnId(raw: 99)
         let cached = ColumnWidthMeasurement.Input(
             column: bogus, name: "value", type: "Text", text: true,
-            sample: TableExecutionTests.segment(["cached value"]))
+            sample: (.init(batch: .init(keys: [], text: TableExecutionTests.segment(["cached value"])), column: 0), 0))
         let widths = try ColumnWidthMeasurement.measure(
             ordered: ordered, columns: [cached], start: 0, fontSize: 12, maximum: 600, cancellation: .init())
         #expect(widths[bogus] != nil)
+    }
+
+    @Test func fitUsesTheSameRowsWithAndWithoutCachedText() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gewu-fit-offset-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let values = [String(repeating: "W", count: 80)] + Array(repeating: "x", count: 63)
+        try ("value\n" + values.joined(separator: "\n")).write(to: url, atomically: true, encoding: .utf8)
+        let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
+        let column = ColumnId(raw: 0)
+        let text = try ordered.formatColumn(column: column, start: 0, count: 64)
+        let segment = FormattedColumnSegment(batch: .init(keys: [], text: text), column: 0)
+        var input = ColumnWidthMeasurement.Input(column: column, name: "value", type: "Text", text: true)
+        let cold = try ColumnWidthMeasurement.measure(
+            ordered: ordered, columns: [input], start: 1, fontSize: 12, maximum: 800, cancellation: .init())
+        input.sample = (segment, 1)
+        let hot = try ColumnWidthMeasurement.measure(
+            ordered: ordered, columns: [input], start: 1, fontSize: 12, maximum: 800, cancellation: .init())
+        #expect(hot == cold)
     }
 }

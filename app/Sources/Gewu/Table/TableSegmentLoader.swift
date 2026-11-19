@@ -29,8 +29,7 @@ struct BlockKey: Hashable, Sendable {
     }
 }
 
-/// Segments and source rows read together. Each segment has its own buffers,
-/// so it is retained or evicted independently.
+/// Viewport data ready to display. Column slices share their batch's buffers.
 struct TableSegments: Sendable {
     var segments: [BlockKey: FormattedColumnSegment] = [:]
     var sourceRows: [Int: [UInt64]] = [:]
@@ -55,22 +54,35 @@ struct TableSegments: Sendable {
 }
 
 extension TableSegments {
+    static let columnsPerBatch = 64
+
     /// Read blocks in one FFI call. Blocks past the last row come back empty.
     init(reading view: GewuOrderedView, keys: [BlockKey]) throws {
         let count = UInt32(BlockKey.rowCount)
         let sourceKeys = keys.filter { $0.column == nil }
-        let segmentKeys = keys.filter { $0.column != nil }
+        let byBlock = Dictionary(grouping: keys.filter { $0.column != nil }, by: \.block)
+        let groups = byBlock.keys.sorted().flatMap { block -> [[BlockKey]] in
+            let group = byBlock[block]!
+            return stride(from: 0, to: group.count, by: Self.columnsPerBatch).map { start in
+                Array(group[start..<min(start + Self.columnsPerBatch, group.count)])
+            }
+        }
         let batch = try view.readSegments(
             rows: sourceKeys.map { RowSpan(start: UInt64($0.start), count: count) },
-            segments: segmentKeys.map { ColumnSpan(column: $0.column!, start: UInt64($0.start), count: count) })
-        precondition(batch.sourceRows.count == sourceKeys.count && batch.segments.count == segmentKeys.count)
+            batches: groups.map {
+                ColumnBatch(columns: $0.compactMap(\.column), start: UInt64($0[0].start), count: count)
+            })
+        precondition(batch.sourceRows.count == sourceKeys.count && batch.batches.count == groups.count)
         for (key, rows) in zip(sourceKeys, batch.sourceRows) {
             precondition(rows.count <= BlockKey.rowCount)
             sourceRows[key.block] = rows
         }
-        for (key, segment) in zip(segmentKeys, batch.segments) {
-            precondition(Int(segment.rowCount) <= BlockKey.rowCount)
-            segments[key] = segment
+        for (keys, text) in zip(groups, batch.batches) {
+            precondition(Int(text.rowCount) <= BlockKey.rowCount)
+            let owner = ColumnTextBatch(keys: keys, text: text)
+            for (column, key) in keys.enumerated() {
+                segments[key] = FormattedColumnSegment(batch: owner, column: column)
+            }
         }
     }
 }
@@ -94,30 +106,13 @@ final class TableSegmentLoader {
         let segments: TableSegments
     }
 
-    /// Each View gets a version. A block can only be found under the version of
-    /// the View it was read from, so a replaced View's blocks are never shown.
-    private struct CacheKey: Hashable {
-        let version: UInt64
-        let block: BlockKey
-    }
-
-    private enum Entry {
-        case segment(FormattedColumnSegment)
-        case sourceRows([UInt64])
-
-        /// Buffers plus a fixed allowance for the entry itself.
-        var cost: Int {
-            switch self {
-            case .segment(let segment): return segment.byteCount + 64
-            case .sourceRows(let rows): return rows.count * MemoryLayout<UInt64>.stride + 64
-            }
-        }
-    }
-
     var onLoad: ((GewuOrderedView, TableSegments) -> Void)?
     var onError: ((GewuOrderedView, Error) -> Void)?
 
-    private let cache: LRUCache<CacheKey, Entry>
+    private let cache: LRUCache<ObjectIdentifier, ColumnTextBatch>
+    private var columns: [BlockKey: (batch: ObjectIdentifier, index: Int)] = [:]
+    // Keep the gutter's indices for the current viewport under their own lifetime.
+    private var sourceRows: [Int: [UInt64]] = [:]
     private let read: Read
     private var view: GewuOrderedView?
     private var version: UInt64 = 0
@@ -130,15 +125,20 @@ final class TableSegmentLoader {
     private var failed: Set<BlockKey> = []
     private var task: Task<Void, Never>?
 
-    /// The defaults retain about 8 MiB. A segment above 1 MiB is shown when it
-    /// is read but not retained, so a long value affects only its own segment.
-    init(byteLimit: Int = 8 * 1024 * 1024, segmentByteLimit: Int = 1024 * 1024, read: Read? = nil) {
-        cache = LRUCache(costLimit: byteLimit, entryCostLimit: segmentByteLimit)
+    /// A batch above the per-entry limit is shown at delivery without evicting cached batches.
+    init(byteLimit: Int = 8 * 1024 * 1024, batchByteLimit: Int = 1024 * 1024, read: Read? = nil) {
+        cache = LRUCache(costLimit: byteLimit, entryCostLimit: batchByteLimit)
         let reader = TableSegmentReader()
         self.read = read ?? { ordered, keys in try await reader.read(ordered, keys: keys) }
+        cache.onRemove = { [weak self] id, batch in
+            guard let self else { return }
+            for key in batch.keys where self.columns[key]?.batch == id {
+                self.columns.removeValue(forKey: key)
+            }
+        }
     }
 
-    var cachedEntryCount: Int { cache.count }
+    var cachedEntryCount: Int { columns.count + sourceRows.count }
 
     private func nextVersion() -> UInt64 {
         lastVersion &+= 1
@@ -169,17 +169,15 @@ final class TableSegmentLoader {
         stop()
         view = snapshot.view
         version = snapshot.version
-        cache.removeAll { $0.version != snapshot.version }
         visibleRows = snapshot.viewport.rows
         visibleColumns = snapshot.viewport.columns
-        record(snapshot.segments, keys: snapshot.segments.keys, version: snapshot.version)
+        record(snapshot.segments, keys: snapshot.segments.keys)
     }
 
     func reset(to ordered: GewuOrderedView) {
         stop()
         view = ordered
         version = nextVersion()
-        cache.removeAll()
     }
 
     func stop() {
@@ -190,25 +188,26 @@ final class TableSegmentLoader {
         visibleColumns = []
         delivered.removeAll()
         failed.removeAll()
+        cache.removeAll()
+        columns.removeAll()
+        sourceRows.removeAll()
     }
 
     /// The cached segment containing `row`, and the row's index within it.
     func segment(for row: Int, column: ColumnId) -> (segment: FormattedColumnSegment, row: Int)? {
-        guard row >= 0, case .segment(let segment) = cache.value(for: key(row: row, column: column)) else {
+        guard row >= 0, let entry = columns[BlockKey(row: row, column: column)],
+            let batch = cache.value(for: entry.batch)
+        else {
             return nil
         }
         let local = row % BlockKey.rowCount
-        return local < Int(segment.rowCount) ? (segment, local) : nil
+        return local < Int(batch.text.rowCount) ? (.init(batch: batch, column: entry.index), local) : nil
     }
 
     func sourceRow(for row: Int) -> UInt64? {
-        guard row >= 0, case .sourceRows(let rows) = cache.value(for: key(row: row, column: nil)) else { return nil }
+        guard row >= 0, let rows = sourceRows[row / BlockKey.rowCount] else { return nil }
         let local = row % BlockKey.rowCount
         return local < rows.count ? rows[local] : nil
-    }
-
-    private func key(row: Int, column: ColumnId?) -> CacheKey {
-        CacheKey(version: version, block: BlockKey(row: row, column: column))
     }
 
     func updateViewport(rows: Range<Int>, columns: [ColumnId]) {
@@ -235,22 +234,27 @@ final class TableSegmentLoader {
             }
             visibleRows = rows
             visibleColumns = columns
+            sourceRows = sourceRows.filter { block, _ in BlockKey(block: block, column: nil).rows.overlaps(rows) }
         }
         loadNext()
     }
 
     private func needed(_ key: BlockKey) -> Bool {
         !failed.contains(key) && !delivered.contains(key)
-            && !cache.contains(CacheKey(version: version, block: key))
+            && (key.column == nil ? sourceRows[key.block] == nil : columns[key] == nil)
     }
 
-    private func record(_ segments: TableSegments, keys: [BlockKey], version: UInt64) {
+    private func record(_ segments: TableSegments, keys: [BlockKey]) {
         delivered.formUnion(keys)
-        func insert(_ entry: Entry, for key: BlockKey) {
-            cache.insert(entry, for: CacheKey(version: version, block: key), cost: entry.cost)
+        for (block, rows) in segments.sourceRows where BlockKey(block: block, column: nil).rows.overlaps(visibleRows) {
+            sourceRows[block] = rows
         }
-        for (block, rows) in segments.sourceRows { insert(.sourceRows(rows), for: BlockKey(block: block, column: nil)) }
-        for (key, segment) in segments.segments { insert(.segment(segment), for: key) }
+        let groups = Dictionary(grouping: segments.segments) { ObjectIdentifier($0.value.batch) }
+        for (id, slices) in groups {
+            let batch = slices[0].value.batch
+            guard cache.insert(batch, for: id, cost: batch.text.byteCount + batch.keys.count * 64) else { continue }
+            for (key, slice) in slices { columns[key] = (id, slice.column) }
+        }
     }
 
     private func loadNext() {
@@ -264,7 +268,7 @@ final class TableSegmentLoader {
                 let segments = try await read(view, missing)
                 guard !Task.isCancelled, let self, self.view === view, self.version == version else { return }
                 self.task = nil
-                self.record(segments, keys: missing, version: version)
+                self.record(segments, keys: missing)
                 self.onLoad?(view, segments)
                 self.loadNext()
             } catch {
@@ -287,4 +291,23 @@ actor TableSegmentReader {
         try Task.checkCancellation()
         return try TableSegments(reading: ordered, keys: keys)
     }
+}
+/// Owns all text buffers of a single FFI batch.
+final class ColumnTextBatch: Sendable {
+    let keys: [BlockKey]
+    let text: FormattedColumnText
+
+    init(keys: [BlockKey], text: FormattedColumnText) {
+        self.keys = keys
+        self.text = text
+    }
+}
+
+struct FormattedColumnSegment: Sendable {
+    let batch: ColumnTextBatch
+    let column: Int
+
+    var rowCount: UInt32 { batch.text.rowCount }
+
+    func cell(row: Int) -> String? { batch.text.cell(row: row, column: column) }
 }

@@ -147,9 +147,6 @@ pub enum ExportErrorKind {
     Encode {
         format: crate::FileType,
     },
-    TextFormat {
-        format: crate::FileType,
-    },
 }
 
 #[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +154,6 @@ pub enum LimitErrorKind {
     DatasetRows { actual: u64, limit: u64 },
     XlsxRows { actual: u64, limit: u64 },
     XlsxColumns { actual: u32, limit: u32 },
-    TextBytes { limit: u64 },
 }
 
 impl From<core::Error> for GewuError {
@@ -179,9 +175,9 @@ impl From<core::Error> for GewuError {
                 core::FindError::EmptyQuery
                 | core::FindError::InvalidPageSize { .. }
                 | core::FindError::InvalidHighlightRows { .. }
+                | core::FindError::InvalidHighlightColumn { .. }
                 | core::FindError::InvalidCursorRow { .. }
                 | core::FindError::InvalidCursorColumn { .. }
-                | core::FindError::InvalidHighlightColumn { .. }
                 | core::FindError::Internal(_) => Self::Internal { message },
             },
             core::Error::Analysis(kind) => analysis_error(kind, message),
@@ -335,16 +331,6 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
             kind: FileErrorKind::FormatDisabled {
                 format: format.into(),
             },
-            message,
-        },
-        core::ExportError::TextFormat { format } => GewuError::Export {
-            kind: ExportErrorKind::TextFormat {
-                format: format.into(),
-            },
-            message,
-        },
-        core::ExportError::TextTooLarge { limit } => GewuError::Limit {
-            kind: LimitErrorKind::TextBytes { limit },
             message,
         },
         core::ExportError::XlsxRows { actual, limit } => GewuError::Limit {

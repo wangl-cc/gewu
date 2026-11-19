@@ -2,28 +2,28 @@
 
 use crate::{ColumnId, GewuError};
 
-/// Display text for one column over consecutive display rows.
+/// Display text packed by column over consecutive display rows.
 #[derive(uniffi::Record)]
-pub struct FormattedColumnSegment {
+pub struct FormattedColumnText {
     pub row_count: u32,
     /// UTF-8 text of every row, back to back.
     pub utf8: Vec<u8>,
-    /// One little-endian u32 offset per row, plus the final end offset.
+    /// One little-endian u32 offset per cell, plus the final end offset.
     pub offsets: Vec<u8>,
-    /// One validity bit per row, starting with the low bit; unset is null.
+    /// One validity bit per cell, starting with the low bit; unset is null.
     pub validity: Vec<u8>,
 }
 
-impl TryFrom<gewu_core::FormattedColumnSegment> for FormattedColumnSegment {
+impl TryFrom<gewu_core::FormattedColumnText> for FormattedColumnText {
     type Error = GewuError;
 
-    fn try_from(segment: gewu_core::FormattedColumnSegment) -> Result<Self, GewuError> {
+    fn try_from(segment: gewu_core::FormattedColumnText) -> Result<Self, GewuError> {
         let row_count = segment.row_count();
         let (utf8, offsets, validity) = segment.into_parts();
         // UniFFI prefixes each bytes field with a signed 32-bit length.
         if utf8.len() > i32::MAX as usize {
             return Err(GewuError::Internal {
-                message: "a formatted column segment exceeds 2 GiB".into(),
+                message: "formatted column text exceeds 2 GiB".into(),
             });
         }
         Ok(Self {
@@ -42,10 +42,10 @@ pub struct RowSpan {
     pub count: u32,
 }
 
-/// One column over consecutive display rows.
+/// Columns to format together over consecutive display rows.
 #[derive(uniffi::Record)]
-pub struct ColumnSpan {
-    pub column: ColumnId,
+pub struct ColumnBatch {
+    pub columns: Vec<ColumnId>,
     pub start: u64,
     pub count: u32,
 }
@@ -55,6 +55,6 @@ pub struct ColumnSpan {
 pub struct SegmentBatch {
     /// Source row indices for each requested [`RowSpan`].
     pub source_rows: Vec<Vec<u64>>,
-    /// One segment for each requested [`ColumnSpan`].
-    pub segments: Vec<FormattedColumnSegment>,
+    /// One shared buffer for each requested [`ColumnBatch`].
+    pub batches: Vec<FormattedColumnText>,
 }

@@ -41,4 +41,4 @@ pub use stats::{
     LengthSummary, LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram,
     ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
 };
-pub use view::{FilteredView, FormattedColumnSegment, OrderedView};
+pub use view::{FilteredView, FormattedColumnText, OrderedView};

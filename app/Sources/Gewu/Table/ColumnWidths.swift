@@ -73,8 +73,7 @@ enum ColumnWidthMeasurement {
         let name: String
         let type: String
         let text: Bool
-        /// Cached single-column text near the viewport, if any.
-        var sample: FormattedColumnSegment? = nil
+        var sample: (segment: FormattedColumnSegment, row: Int)? = nil
     }
 
     /// Runs on a serial worker. Limit UTF-16 input before grapheme processing so
@@ -84,13 +83,13 @@ enum ColumnWidthMeasurement {
         maximum: CGFloat, cancellation: Request
     ) throws -> [ColumnId: CGFloat] {
         var result: [ColumnId: CGFloat] = [:]
+        let rowCount = ordered.rowCount()
+        let count = Int(min(32, rowCount - min(start, rowCount)))
         func width(_ text: String, font: NSFont) -> CGFloat {
             let sample = String(decoding: text.utf16.prefix(512), as: UTF16.self)
             return ceil((sample as NSString).size(withAttributes: [.font: font]).width)
         }
-        for column in columns {
-            try cancellation.check()
-            let sample = try column.sample ?? ordered.formatColumn(column: column.column, start: start, count: 32)
+        func measure(_ column: Input, cell: (Int) -> String?) {
             var size =
                 max(
                     width(column.name, font: .systemFont(ofSize: fontSize, weight: .semibold)),
@@ -98,10 +97,28 @@ enum ColumnWidthMeasurement {
             let font =
                 column.text
                 ? NSFont.systemFont(ofSize: fontSize) : .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
-            for row in 0..<min(32, Int(sample.rowCount)) {
-                size = max(size, width(sample.cell(row: row) ?? "null", font: font) + 20)
+            for row in 0..<count {
+                size = max(size, width(cell(row) ?? "null", font: font) + 20)
             }
             result[column.column] = min(max(size, 80), maximum)
+        }
+        var missing: [Input] = []
+        for column in columns {
+            try cancellation.check()
+            if let sample = column.sample, sample.row + count <= Int(sample.segment.rowCount) {
+                measure(column) { sample.segment.cell(row: sample.row + $0) }
+            } else {
+                missing.append(column)
+            }
+        }
+        for first in stride(from: 0, to: missing.count, by: TableSegments.columnsPerBatch) {
+            try cancellation.check()
+            let group = missing[first..<min(first + TableSegments.columnsPerBatch, missing.count)]
+            let text = try ordered.formatColumns(columns: group.map(\.column), start: start, count: UInt32(count))
+            for (index, column) in group.enumerated() {
+                try cancellation.check()
+                measure(column) { text.cell(row: $0, column: index) }
+            }
         }
         try cancellation.check()
         return result

@@ -20,7 +20,7 @@ Core, FFI and the App use immutable `GewuDataset`, `GewuFilteredView` and `GewuO
 
 UniFFI manages object lifetimes through generated Swift classes. `GewuFilteredView` and `GewuOrderedView` retain their underlying `Dataset` independently even after the original `GewuDataset` or `GewuFilteredView` handle is released. Find, candidate and export objects retain the buffers and row selection they need. Release old handles when their data is no longer needed: retaining multiple query results retains their row arrays, while source Arrow buffers and caches remain shared.
 
-There is no backend current view, column projection, query registration, commit, version lookup, query-spec getter or `StaleVersion`. Results such as `FormattedColumnSegment`, `FindHighlight` and `ScatterResult` do not carry a version.
+There is no backend current view, column projection, query registration, commit, version lookup, query-spec getter or `StaleVersion`. Results such as `FormattedColumnText`, `FindHighlight` and `ScatterResult` do not carry a version.
 
 ## Open, filter, sort and read
 
@@ -28,11 +28,11 @@ There is no backend current view, column projection, query registration, commit,
 2. Read `dataset.info()` for `DatasetInfo` (whose `columns` carry `id: ColumnId`, presentation metadata, `capabilities: ColumnCapabilities` and `analysis: AnalysisCapabilities`) and file metadata. Call `dataset.unfiltered()` for a zero-allocation `GewuFilteredView` over all source rows, and `filtered.unsorted()` for an initial `GewuOrderedView` in O(1); run both on the background opening worker. `dataset.column_id(name)` looks up `Option<ColumnId>` by column name.
 3. Maintain `[ColumnFilter]`, `[ColumnSort]` and `[ColumnId]` visible columns in the frontend. `ColumnFilter { column: ColumnId, filter: Filter }` filters the full `GewuDataset`; `ColumnSort { column: ColumnId, descending: bool }` sorts a `GewuFilteredView`, with slice order defining sort priority. Omitted columns do not filter or sort; empty lists return `dataset.unfiltered()` or `filtered.unsorted()`.
 4. Call `dataset.filter(filters)` and `filtered.sort(sorts)` off the UI thread. Filtering always reads the full `GewuDataset` and returns a new `GewuFilteredView`; sorting operates on `GewuFilteredView` without mutating it or invalidating its order-independent analyses.
-5. Read `filtered.row_count()`, `ordered.row_count()`, `ordered.read_segments(rows, segments)` and `ordered.format_column(column, start, count)`. Callers name each column explicitly; Rust stores no column projection.
+5. Read `filtered.row_count()`, `ordered.row_count()`, `ordered.read_segments(rows, batches)` and `ordered.format_column(column, start, count)`. Callers name each column explicitly; Rust stores no column projection.
 
-`start` is a zero-based display-row offset, and each read is clipped to the available rows. A `FormattedColumnSegment` holds one column's text for `row_count` rows in one UTF-8 buffer; row `r`'s two adjacent little-endian 32-bit offsets delimit its text. The validity bitmap starts at the low bit and distinguishes null from empty text. A segment over 2 GiB, UniFFI's per-field limit, is an error. `ordered.source_rows(start, count)` returns the corresponding zero-based source indices without formatting cells.
+`start` is a zero-based display-row offset. A read clips the range to the available rows. `FormattedColumnText` holds one shared UTF-8 buffer. At request column `c` and local row `r`, use cell index `c * row_count + r`. Adjacent little-endian 32-bit offsets delimit the text. The validity bitmap starts at the low bit and distinguishes null from empty text. A buffer over 2 GiB exceeds UniFFI's per-field limit. `ordered.source_rows(start, count)` returns the corresponding source indices.
 
-`ordered.read_segments(rows, segments)` serves the table viewport in one call. `SegmentBatch.source_rows` holds the source indices for each `RowSpan`, and `SegmentBatch.segments` holds one `FormattedColumnSegment` for each `ColumnSpan`, both in request order. Each segment owns its buffers, so the App caches and evicts them independently and a long value only enlarges its own segment. The App decides which segments to read and cache. An unknown column fails the whole call without a partial result.
+`ordered.read_segments(rows, batches)` reads the viewport in one call. `SegmentBatch.source_rows` holds the indices for each requested `RowSpan`. `SegmentBatch.batches` holds one shared buffer per `ColumnBatch`, in request order. The app groups up to 64 columns per batch and indexes each column slice independently. An unknown column fails the whole call.
 
 Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus row caches) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
 
@@ -69,7 +69,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | `filter`, `sort`, `count_nulls`, `statistics`, `distribution`, `values`, `lengths`, `scatter`, `filter_choices`, `filter_distribution` | Background scans, native kernels or dictionary construction. |
 | Find pages/highlights, text pages, export writes | Background; even bounded outputs can require full scans. |
 | Metadata, `unfiltered`, `unsorted`, `find`, `export` creation, `nested_export_columns`, `column_structure` | Metadata access or O(1) shared snapshot capture. |
-| `read_segments`, `format_column`, `source_rows` | Bounded viewport reads. Formatting cost grows with the number and length of cells. |
+| `read_segments`, `format_columns`, `source_rows` | Bounded viewport reads. Formatting cost grows with the number and length of cells. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
 Filtering, sorting, analyses, candidate lists and Find requests run synchronously to completion in Rust without cooperative cancellation tokens. Swift owns request replacement and cancellation: callers cancel obsolete Swift `Task`s, guard serial worker queues so superseded or cancelled queued operations skip FFI execution, and gate publication on captured view/context and request identity. Different views and unrelated requests never invalidate each other.
@@ -122,9 +122,7 @@ Results contain axis kinds, eligible/nonpositive counts and bounded points with 
 
 ## Export
 
-`ordered.export(columns, format)` creates a single-use job over shared data and the requested `Vec<ColumnId>` projection; `ordered.export_rows(ranges, columns, format)` limits it to display-row `RowSpan`s, clipped to the available rows. `ordered.nested_export_columns(columns)` reports flat-format incompatibilities. Run `write(path)` or `write_with_options(path, options)` on a worker. The default Parquet compression is Zstd; options can choose another compression without affecting other formats.
-
-`write_text(header, byte_limit)` writes CSV or TSV into memory with LF line endings and an optional header, as the App's copy does. It stops with `Limit { kind: TextBytes }` once the text would exceed `byte_limit`; other formats return `Export { kind: TextFormat }`.
+`ordered.export(columns, format)` creates a single-use job over shared data and the requested `Vec<ColumnId>` projection. `ordered.nested_export_columns(columns)` reports flat-format incompatibilities. Run `write(path)` or `write_with_options(path, options)` on a worker. The default Parquet compression is Zstd; options can choose another compression without affecting other formats.
 
 Poll `progress()`, but wait for successful return before declaring completion: all rows written does not mean the destination is committed. Writes use a sibling temporary file and replace the destination only on success. Source-file aliases are rejected. Cancellation before final commit preserves the destination; after commit it is a no-op. Each job is single-use even after failure, and newer views never alter its contents.
 
@@ -138,7 +136,7 @@ Poll `progress()`, but wait for successful return before declaring completion: a
 | `Find { kind, message }` | Report failures possible for ordinary Find input. |
 | `Analysis { kind, message }` | Report data-dependent analysis failures. |
 | `Export { kind, message }` | Report destination conflicts, incompatible columns, encoding failures and formats that cannot be written as text. |
-| `Limit { kind, message }` | Report Dataset/XLSX limits and the text byte limit with typed values. |
+| `Limit { kind, message }` | Report Dataset/XLSX limits with typed values. |
 | `Cancelled` | Returned when an in-progress `GewuExport` is cancelled before destination commit. |
 | `Internal { message }` | Report implementation defects and calls that violate the frontend/backend contract. |
 
@@ -164,4 +162,4 @@ xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
 build/view-bindings/view-smoke
 ```
 
-The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`, [column_segment.rs](src/column_segment.rs) owns `FormattedColumnSegment`, `RowSpan`, `ColumnSpan` and `SegmentBatch`, and other feature modules own their records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.
+The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`, [column_segment.rs](src/column_segment.rs) owns `FormattedColumnText`, `RowSpan`, `ColumnBatch` and `SegmentBatch`, and other feature modules own their records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.

@@ -25,7 +25,7 @@ pub use analysis::{
     ValueFrequency, ValueSummary,
 };
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
-pub use column_segment::{ColumnSpan, FormattedColumnSegment, RowSpan, SegmentBatch};
+pub use column_segment::{ColumnBatch, FormattedColumnText, RowSpan, SegmentBatch};
 pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::{
     AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,

@@ -23,10 +23,10 @@ struct TableExecutionTests {
 
     @MainActor
     private static func gatedLoader(
-        byteLimit: Int = 8 * 1024 * 1024, segmentByteLimit: Int = 1024 * 1024
+        byteLimit: Int = 8 * 1024 * 1024, batchByteLimit: Int = 1024 * 1024
     ) -> (TableSegmentLoader, AsyncStream<PendingTableRead>, AsyncStream<PendingTableRead>.Continuation) {
         let reads = AsyncStream<PendingTableRead>.makeStream()
-        let loader = TableSegmentLoader(byteLimit: byteLimit, segmentByteLimit: segmentByteLimit) { view, keys in
+        let loader = TableSegmentLoader(byteLimit: byteLimit, batchByteLimit: batchByteLimit) { view, keys in
             try await withCheckedThrowingContinuation { continuation in
                 reads.continuation.yield(.init(view: view, keys: keys, continuation: continuation))
             }
@@ -109,7 +109,7 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
-    static func loaderPrioritizesLatestViewportAndOversizedSegmentsAffectOnlyThemselves() async throws {
+    static func loaderPrioritizesLatestViewportAndDeliversOversizedBatches() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let long = String(repeating: "x", count: 4096)
@@ -117,7 +117,7 @@ struct TableExecutionTests {
             .write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
         let longColumn = ColumnId(raw: 1)
-        let (loader, stream, reads) = gatedLoader(segmentByteLimit: 2048)
+        let (loader, stream, reads) = gatedLoader(batchByteLimit: 2048)
         let delivered = AsyncStream<TableSegments>.makeStream()
         defer {
             loader.stop()
@@ -141,7 +141,7 @@ struct TableExecutionTests {
         let batch = try #require(await batches.next())
         #expect(batch.segments[key(3, longColumn)]?.cell(row: 8) == long, "Delivered for display")
         #expect(loader.segment(for: 200, column: longColumn) == nil, "The oversized segment is not retained")
-        #expect(loader.segment(for: 200, column: c0) != nil, "Other segments in the batch stay cached")
+        #expect(loader.segment(for: 200, column: c0) == nil, "Oversized batches are delivered without caching")
         #expect(loader.sourceRow(for: 200) == 200)
         loader.updateViewport(rows: 192..<202, columns: [c0, longColumn])
         loader.updateViewport(rows: 256..<260, columns: [c0, longColumn])
@@ -149,6 +149,33 @@ struct TableExecutionTests {
         #expect(next.keys.first == source(4), "A completed oversized segment must not start an endless reread loop")
         next.finish()
         #expect(try #require(await batches.next()).sourceRows[4] != nil)
+    }
+
+    @Test @MainActor
+    static func textEvictionKeepsTheCurrentSourceRows() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-indices-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let lines = (0..<64).map { "first\($0),second\($0)" }.joined(separator: "\n")
+        try ("a,b\n" + lines).write(to: path, atomically: true, encoding: .utf8)
+        let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        // One text batch fits, two do not. The gutter is independent of text eviction.
+        let loader = TableSegmentLoader(byteLimit: 1024)
+        let loaded = AsyncStream<TableSegments>.makeStream()
+        loader.onLoad = { _, data in loaded.continuation.yield(data) }
+        defer {
+            loader.stop()
+            loaded.continuation.finish()
+        }
+        var reads = loaded.stream.makeAsyncIterator()
+        loader.reset(to: view)
+        loader.updateViewport(rows: 0..<64, columns: [c0])
+        _ = try #require(await reads.next())
+        loader.updateViewport(rows: 0..<64, columns: [c1])
+        let second = try #require(await reads.next())
+        #expect(second.sourceRows.isEmpty)
+        #expect(loader.segment(for: 32, column: c0) == nil)
+        #expect(loader.segment(for: 32, column: c1)?.segment.cell(row: 32) == "second32")
+        #expect(loader.sourceRow(for: 32) == 32)
     }
 
     @Test @MainActor
@@ -178,7 +205,12 @@ struct TableExecutionTests {
         first.finish()
         let batch = try #require(await batches.next())
         let last = try #require(batch.segments[key(0, ColumnId(raw: 64))])
-        #expect(last.rowCount == 1 && last.utf8 == Data("64".utf8))
+        let firstColumn = try #require(batch.segments[key(0, c0)])
+        let column63 = try #require(batch.segments[key(0, ColumnId(raw: 63))])
+        #expect(firstColumn.batch === column63.batch)
+        #expect(last.batch !== column63.batch)
+        #expect(firstColumn.batch.keys.count == 64)
+        #expect(last.rowCount == 1 && last.batch.text.utf8 == Data("64".utf8))
         #expect(loader.segment(for: 0, column: ColumnId(raw: 63)).map { $0.segment.texts } == ["63"])
         #expect(loader.sourceRow(for: 0) == 0)
         // A source-only viewport also works without formatting any cells.
@@ -240,7 +272,7 @@ struct TableExecutionTests {
         #expect(loader.cachedEntryCount == 2, "Entries of the previous View are released")
     }
 
-    static func segment(_ values: [String?]) -> FormattedColumnSegment {
+    static func segment(_ values: [String?]) -> FormattedColumnText {
         var utf8 = Data()
         var offsets: [UInt32] = [0]
         var validity = Data(repeating: 0, count: (values.count + 7) / 8)
@@ -251,7 +283,7 @@ struct TableExecutionTests {
             }
             offsets.append(UInt32(utf8.count).littleEndian)
         }
-        return FormattedColumnSegment(
+        return FormattedColumnText(
             rowCount: UInt32(values.count), utf8: utf8, offsets: offsets.withUnsafeBytes { Data($0) },
             validity: validity)
     }
@@ -307,8 +339,8 @@ struct TableExecutionTests {
         var errors: [Error] = []
         let model = CopyModel(pasteboard: pasteboard) { error, _ in errors.append(error) }
         // A newer copy cancels the unfinished one; only its rows are published.
-        model.copy(ordered: view, rows: [0..<4], columns: [c0])
-        model.copy(ordered: view, rows: [0..<2, 3..<9], columns: [c1, c0])
+        model.copy(ordered: view, rows: [0..<4], columns: [c0], names: ["number"])
+        model.copy(ordered: view, rows: [0..<2, 3..<9], columns: [c1, c0], names: ["label", "number"])
         for _ in 0..<200 where model.message == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(errors.isEmpty && model.message == "Copied selection")
         let expected = "label\tnumber\nfirst\t1\n\"tab\tvalue\"\t2\nfourth\t4\n"
@@ -340,6 +372,10 @@ struct TableExecutionTests {
             Issue.record("Expected cancelled table read")
         } catch is CancellationError {}
     }
+}
+
+extension FormattedColumnText {
+    var texts: [String?] { (0..<Int(rowCount)).map { cell(row: $0) } }
 }
 
 extension FormattedColumnSegment {

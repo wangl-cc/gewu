@@ -222,7 +222,6 @@ struct WorkbookLifecycleTests {
     @MainActor
     static func presentationContracts(_ document: DocumentModel) async throws {
         let chart = ScatterModel()
-        document.selectedSourceRow = 0
         for base in [0, 1] {
             await chart.load(
                 viewer: document.viewer,
@@ -233,7 +232,6 @@ struct WorkbookLifecycleTests {
             #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
             #expect(!document.status.contains("in file"), "Keep source row labels in the gutter, not the status bar")
         }
-        document.selectedSourceRow = nil
         let message = "Invalid numeric bound"
         let error: Error = GewuError.Internal(message: message)
         #expect(error.userMessage == message, "Show the Core message, not the generated enum description")

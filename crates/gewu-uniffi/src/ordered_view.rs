@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gewu_core as core;
 
 use crate::{
-    ColumnId, ColumnSpan, FileType, FindSession, FormattedColumnSegment, GewuError, GewuExport,
+    ColumnBatch, ColumnId, FileType, FindSession, FormattedColumnText, GewuError, GewuExport,
     RowSpan, SegmentBatch,
 };
 
@@ -26,9 +26,21 @@ impl GewuOrderedView {
         column: ColumnId,
         start: u64,
         count: u32,
-    ) -> Result<FormattedColumnSegment, GewuError> {
+    ) -> Result<FormattedColumnText, GewuError> {
         self.inner
             .format_column(column.into(), start, count)?
+            .try_into()
+    }
+
+    pub fn format_columns(
+        &self,
+        columns: Vec<ColumnId>,
+        start: u64,
+        count: u32,
+    ) -> Result<FormattedColumnText, GewuError> {
+        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
+        self.inner
+            .format_columns(&columns, start, count)?
             .try_into()
     }
 
@@ -42,18 +54,18 @@ impl GewuOrderedView {
     pub fn read_segments(
         &self,
         rows: Vec<RowSpan>,
-        segments: Vec<ColumnSpan>,
+        batches: Vec<ColumnBatch>,
     ) -> Result<SegmentBatch, GewuError> {
-        let segments = segments
-            .iter()
-            .map(|span| self.format_column(span.column, span.start, span.count))
+        let batches = batches
+            .into_iter()
+            .map(|batch| self.format_columns(batch.columns, batch.start, batch.count))
             .collect::<Result<_, _>>()?;
         Ok(SegmentBatch {
             source_rows: rows
                 .iter()
                 .map(|span| self.inner.source_rows(span.start, span.count))
                 .collect(),
-            segments,
+            batches,
         })
     }
 
@@ -75,26 +87,6 @@ impl GewuOrderedView {
     ) -> Result<Arc<GewuExport>, GewuError> {
         let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
         Ok(Arc::new(self.inner.export(&columns, format.into())?.into()))
-    }
-
-    /// Export only the given display-row ranges, in order, such as a table
-    /// selection. Ranges are clipped to the available rows.
-    pub fn export_rows(
-        &self,
-        ranges: Vec<RowSpan>,
-        columns: Vec<ColumnId>,
-        format: FileType,
-    ) -> Result<Arc<GewuExport>, GewuError> {
-        let ranges: Vec<_> = ranges
-            .iter()
-            .map(|span| span.start..span.start.saturating_add(u64::from(span.count)))
-            .collect();
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(Arc::new(
-            self.inner
-                .export_rows(&ranges, &columns, format.into())?
-                .into(),
-        ))
     }
 
     pub fn nested_export_columns(&self, columns: Vec<ColumnId>) -> Result<Vec<String>, GewuError> {

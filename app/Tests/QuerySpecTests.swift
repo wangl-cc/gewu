@@ -391,8 +391,6 @@ struct QuerySpecTests {
     @Test func revertingPendingFilterWhileVisibilityChangedAppliesColumnsSynchronously() async throws {
         let model = try model()
         defer { model.stop() }
-        model.selectedDisplayRow = 1
-        model.selectedSourceRow = 1
 
         let c0Filter = Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false)
         model.setFilter(c0Filter, column: Self.c0)
@@ -401,7 +399,6 @@ struct QuerySpecTests {
 
         #expect(!model.isBusy)
         #expect(model.visibleColumns == [Self.c0, Self.c1])
-        #expect(model.selectedDisplayRow == 1 && model.selectedSourceRow == 1)
     }
 
     @Test func exactDraftPreservesBytesAndNullsAreIndependent() {

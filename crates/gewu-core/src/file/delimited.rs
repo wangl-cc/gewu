@@ -94,41 +94,19 @@ fn preserve_integer_precision(
     Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-/// Header and line ending choices. Files use a header and CRLF; in-memory
-/// text for the clipboard uses LF and an optional header.
-#[derive(Clone, Copy)]
-pub(super) struct Layout {
-    pub header: bool,
-    pub line_feed_only: bool,
-}
-
-impl Layout {
-    pub const FILE: Self = Self {
-        header: true,
-        line_feed_only: false,
-    };
-}
-
 pub(super) fn write(
     file: impl Write,
     delimiter: u8,
-    layout: Layout,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
 ) -> Result<(), crate::ExportError> {
     progress.check()?;
-    let terminator = if layout.line_feed_only {
-        arrow_csv::writer::Terminator::Any(b'\n')
-    } else {
-        arrow_csv::writer::Terminator::CRLF
-    };
     let mut writer = arrow_csv::WriterBuilder::new()
         .with_delimiter(delimiter)
-        .with_header(layout.header)
-        .with_line_terminator(terminator)
+        .with_line_terminator(arrow_csv::writer::Terminator::CRLF)
         .build(file);
-    // Write an empty batch first: it emits the header (when requested) even
-    // without rows and validates the schema before any row processing.
+    // Emit headers even when the snapshot has no rows; this also validates
+    // the schema before any row processing.
     writer.write(&RecordBatch::new_empty(data.schema.clone()))?;
     for rows in data.rows.chunks(CHUNK_ROWS) {
         progress.check()?;
@@ -188,13 +166,7 @@ mod tests {
             }
         }
         assert!(matches!(
-            write(
-                CancellingWriter(&cancelled),
-                b',',
-                Layout::FILE,
-                data,
-                progress
-            ),
+            write(CancellingWriter(&cancelled), b',', data, progress),
             Err(crate::ExportError::Cancelled)
         ));
         assert!(written.load(Ordering::Relaxed) > 0);
@@ -225,7 +197,7 @@ mod tests {
             rows_written: &written,
         };
         let mut bytes = Vec::new();
-        write(&mut bytes, b',', Layout::FILE, data, progress).unwrap();
+        write(&mut bytes, b',', data, progress).unwrap();
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
             "dictionary,null\r\n,\r\n,\r\n"

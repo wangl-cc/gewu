@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Testing
+import os
 
 @Suite
 struct FindModelTests {
@@ -10,16 +11,16 @@ struct FindModelTests {
     @Test @MainActor
     func emptyInvalidationDoesNotPublishDisplayChanges() {
         let find = FindModel()
-        var publications = 0
+        let publications = OSAllocatedUnfairLock(initialState: 0)
         withObservationTracking {
             _ = (find.query, find.currentMatch, find.isFinding, find.hasMatches)
             _ = (find.revision, find.highlightRevision, find.status)
         } onChange: {
-            publications += 1
+            publications.withLock { $0 += 1 }
         }
         find.invalidate()
         find.stop()
-        #expect(publications == 0)
+        #expect(publications.withLock { $0 } == 0)
         #expect(find.revision == 0 && find.highlightRevision == 0)
     }
 

@@ -2,18 +2,14 @@ import AppKit
 import Observation
 import UniformTypeIdentifiers
 
-/// Copying is a TSV export of the selected display rows into memory. The export
-/// captures an immutable View, so later queries do not change what is copied.
-/// A copy is fast or exceeds `byteLimit`; it shows no progress, and a newer
-/// copy cancels an unfinished one.
+/// Copies the displayed text of selected cells as TSV.
 @MainActor
 @Observable
 final class CopyModel {
-    /// Larger selections belong in an exported file, not on the pasteboard.
-    static let byteLimit: UInt64 = 64 * 1024 * 1024
+    static let byteLimit = 64 * 1024 * 1024
 
     private(set) var message: String?
-    @ObservationIgnored private var job: GewuExport?
+    @ObservationIgnored private var work: Task<Data, Error>?
     @ObservationIgnored private var request: UInt64 = 0
     @ObservationIgnored private let pasteboard: NSPasteboard
     @ObservationIgnored private let reportError: (Error, String) -> Void
@@ -23,28 +19,21 @@ final class CopyModel {
         self.reportError = reportError
     }
 
-    func copy(ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId]) {
+    func copy(ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId], names: [String]) {
         cancel()
         message = nil
-        let job: GewuExport
-        do {
-            job = try ordered.exportRows(
-                ranges: rows.map { RowSpan(start: UInt64($0.lowerBound), count: UInt32(clamping: $0.count)) },
-                columns: columns, format: .tsv)
-        } catch {
-            reportError(error, "Could not copy: ")
-            return
-        }
-        self.job = job
         let mine = request
         let header = UserDefaults.standard.object(forKey: "CopyIncludesHeaders") as? Bool ?? true
         let limit = Self.byteLimit
+        let work = Task.detached(priority: .userInitiated) {
+            try CopyText.format(
+                ordered: ordered, rows: rows, columns: columns, names: names, header: header, limit: limit)
+        }
+        self.work = work
         Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try job.writeText(header: header, byteLimit: limit) }
-            }.value
+            let result = await work.result
             guard let self, self.request == mine else { return }
-            self.job = nil
+            self.work = nil
             switch result {
             case .success(let text):
                 let item = NSPasteboardItem()
@@ -53,9 +42,9 @@ final class CopyModel {
                 self.pasteboard.clearContents()
                 self.pasteboard.writeObjects([item])
                 self.message = "Copied selection"
-            case .failure(GewuError.Cancelled):
+            case .failure(is CancellationError):
                 break
-            case .failure(GewuError.Limit(kind: .textBytes, _)):
+            case .failure(is CopyText.TooLarge):
                 self.message = "Selection is too large to copy; use File > Export…"
             case .failure(let error):
                 self.reportError(error, "Could not copy: ")
@@ -64,8 +53,59 @@ final class CopyModel {
     }
 
     func cancel() {
-        job?.cancel()
-        job = nil
+        work?.cancel()
+        work = nil
         request &+= 1
+    }
+}
+
+enum CopyText {
+    struct TooLarge: Error {}
+
+    static func format(
+        ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId], names: [String], header: Bool,
+        limit: Int
+    ) throws -> Data {
+        try Task.checkCancellation()
+        var data = Data()
+        func append(_ line: String) throws {
+            guard line.utf8.count < limit - data.count else { throw TooLarge() }
+            data.append(contentsOf: line.utf8)
+            data.append(10)
+        }
+        if header { try append(names.map(escaped).joined(separator: "\t")) }
+        let rowCount = Int(clamping: ordered.rowCount())
+        for range in rows {
+            let end = min(range.upperBound, rowCount)
+            for start in stride(from: min(range.lowerBound, end), to: end, by: BlockKey.rowCount) {
+                try Task.checkCancellation()
+                let count = min(BlockKey.rowCount, end - start)
+                var lines = Array(repeating: "", count: count)
+                var remaining = limit - data.count - count
+                for first in stride(from: 0, to: columns.count, by: TableSegments.columnsPerBatch) {
+                    try Task.checkCancellation()
+                    let end = min(first + TableSegments.columnsPerBatch, columns.count)
+                    let group = Array(columns[first..<end])
+                    let text = try ordered.formatColumns(columns: group, start: UInt64(start), count: UInt32(count))
+                    for row in 0..<count {
+                        for column in group.indices {
+                            let value = escaped(text.cell(row: row, column: column) ?? "")
+                            let separator = first + column > 0
+                            remaining -= value.utf8.count + (separator ? 1 : 0)
+                            guard remaining >= 0 else { throw TooLarge() }
+                            if separator { lines[row].append("\t") }
+                            lines[row].append(value)
+                        }
+                    }
+                }
+                for line in lines { try append(line) }
+            }
+        }
+        return data
+    }
+
+    static func escaped(_ value: String) -> String {
+        guard value.utf8.contains(where: { $0 == 9 || $0 == 10 || $0 == 13 || $0 == 34 }) else { return value }
+        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 }

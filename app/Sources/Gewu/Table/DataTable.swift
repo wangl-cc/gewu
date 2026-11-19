@@ -491,12 +491,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
         guard !loaded.sourceRows.isEmpty else { return }
         gutter.needsDisplay = true
-        if let row = model.selectedDisplayRow, let rows = loaded.sourceRows[row / BlockKey.rowCount],
-            row % BlockKey.rowCount < rows.count
-        {
-            let source = rows[row % BlockKey.rowCount]
-            if model.selectedSourceRow != source { model.selectedSourceRow = source }
-        }
     }
 
     /// Decoration and style changes operate on the content already in the cell,
@@ -746,7 +740,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let start = rows.location == NSNotFound ? 0 : UInt64(rows.location)
         let inputs: [ColumnWidthMeasurement.Input] = columns.compactMap { column in
             guard let info = model.columnInfo[column] else { return nil }
-            let sample = self.segments.segment(for: Int(start), column: column)?.segment
+            let sample = self.segments.segment(for: Int(start), column: column)
             return ColumnWidthMeasurement.Input(
                 column: column, name: info.name,
                 type: info.displayType, text: info.valueCategory == .text, sample: sample)
@@ -912,9 +906,6 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !reloading else { return }
         gutter.needsDisplay = true
-        let row = table.selectedRow
-        model.selectedDisplayRow = row >= 0 ? row : nil
-        model.selectedSourceRow = segments.sourceRow(for: row)
     }
 
     func navigateToMatch(_ match: CellMatch) {
@@ -971,7 +962,8 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     @objc func copy(_ sender: Any?) {
         guard !table.selectedRowIndexes.isEmpty else { return }
         model.copying.copy(
-            ordered: model.ordered, rows: Array(table.selectedRowIndexes.rangeView), columns: displayedColumns)
+            ordered: model.ordered, rows: Array(table.selectedRowIndexes.rangeView), columns: displayedColumns,
+            names: displayedColumns.map { model.columnInfo[$0]?.name ?? "" })
     }
 }
 
