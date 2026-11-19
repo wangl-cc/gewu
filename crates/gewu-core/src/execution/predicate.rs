@@ -6,8 +6,7 @@
 //!   64 rows per word and apply nulls with bitwise operations on the validity bitmap; the others
 //!   are packed from their chunk evaluator.
 //! - **Chunk evaluator** ([`Predicate::evaluate`]): Find evaluates display-ordered row IDs in 8K
-//!   chunks (`CHUNK = 8 * 1024`), so working data and masks stay in the L1 data cache. Chunk
-//!   evaluators accept an optional incoming mask so composed predicates can skip rejected rows.
+//!   chunks (`CHUNK = 8 * 1024`), so working data and masks stay in the L1 data cache.
 
 use std::ops::Range;
 
@@ -20,10 +19,9 @@ use super::selection::RowSelection;
 
 pub(crate) const CHUNK: usize = 8 * 1024;
 
-/// Chunk-level vectorized evaluator: populates the output boolean slice for a selection of rows,
-/// optionally taking an incoming mask to support short-circuiting or branchless bitwise AND.
+/// Chunk-level vectorized evaluator: overwrites the output boolean slice for a selection of rows.
 pub(crate) type ChunkEvaluator<'a> =
-    Box<dyn for<'b> Fn(RowSelection<'b>, Option<&[bool]>, &mut [bool]) + Send + Sync + 'a>;
+    Box<dyn for<'b> Fn(RowSelection<'b>, &mut [bool]) + Send + Sync + 'a>;
 
 /// Whole-range evaluator: returns one bit per source row in the range.
 pub(crate) type BitmapEvaluator<'a> = Box<dyn Fn(Range<usize>) -> BooleanBuffer + Send + Sync + 'a>;
@@ -55,17 +53,15 @@ impl<'a> Predicate<'a> {
 
     /// Construct a predicate that matches every row (`true`) or none (`false`).
     pub(crate) fn constant(hit: bool) -> Self {
-        Self::new(Box::new(move |_rows, incoming, output| match incoming {
-            Some(mask) if hit => output.copy_from_slice(mask),
-            _ => output.fill(hit),
-        }))
-        .with_bitmap(Box::new(move |rows| {
-            if hit {
-                BooleanBuffer::new_set(rows.len())
-            } else {
-                BooleanBuffer::new_unset(rows.len())
-            }
-        }))
+        Self::new(Box::new(move |_rows, output| output.fill(hit))).with_bitmap(Box::new(
+            move |rows| {
+                if hit {
+                    BooleanBuffer::new_set(rows.len())
+                } else {
+                    BooleanBuffer::new_unset(rows.len())
+                }
+            },
+        ))
     }
 
     /// Selection bitmap over a contiguous source range: bit `i` is row `rows.start + i`.
@@ -78,7 +74,7 @@ impl<'a> Predicate<'a> {
         for start in rows.clone().step_by(CHUNK) {
             let end = (start + CHUNK).min(rows.end);
             let out = &mut scratch[..end - start];
-            (self.chunk)(RowSelection::Range(start..end), None, out);
+            (self.chunk)(RowSelection::Range(start..end), out);
             builder.append_slice(out);
         }
         builder.finish()
@@ -89,10 +85,10 @@ impl<'a> Predicate<'a> {
         let Self { chunk, bitmap } = self;
         let bitmap =
             bitmap.map(|bitmap| -> BitmapEvaluator<'a> { Box::new(move |rows| !&bitmap(rows)) });
-        let negated = Self::new(Box::new(move |rows, incoming, output| {
-            chunk(rows, incoming, output);
-            for (i, value) in output.iter_mut().enumerate() {
-                *value = !*value && incoming.is_none_or(|mask| mask[i]);
+        let negated = Self::new(Box::new(move |rows, output| {
+            chunk(rows, output);
+            for value in output.iter_mut() {
+                *value = !*value;
             }
         }));
         match bitmap {
@@ -102,13 +98,8 @@ impl<'a> Predicate<'a> {
     }
 
     /// Evaluate a single chunk of rows.
-    pub(crate) fn evaluate_chunk(
-        &self,
-        rows: RowSelection<'_>,
-        incoming: Option<&[bool]>,
-        output: &mut [bool],
-    ) {
-        (self.chunk)(rows, incoming, output);
+    pub(crate) fn evaluate_chunk(&self, rows: RowSelection<'_>, output: &mut [bool]) {
+        (self.chunk)(rows, output);
     }
 
     /// Combine compiled equality alternatives without scanning the source or
@@ -122,25 +113,19 @@ impl<'a> Predicate<'a> {
         }
         let predicates = std::sync::Arc::new(predicates);
         let alternatives = predicates.clone();
-        Self::new(Box::new(move |rows, incoming, output| {
+        Self::new(Box::new(move |rows, output| {
             let mut scratch = vec![false; output.len()];
             for (i, predicate) in predicates.iter().enumerate() {
                 if i == 0 {
                     // First alternative directly populates the chunk output with its matches.
-                    predicate.evaluate_chunk(rows.clone(), incoming, output);
+                    predicate.evaluate_chunk(rows.clone(), output);
                 } else {
-                    // Fast circuit-break: if all active rows are already true, skip remaining
-                    // predicates.
-                    if let Some(mask) = incoming {
-                        let all_true = mask.iter().zip(output.iter()).all(|(&m, &hit)| !m || hit);
-                        if all_true {
-                            break;
-                        }
-                    } else if output.iter().all(|&hit| hit) {
+                    // Fast circuit-break: once every row matches, skip remaining predicates.
+                    if output.iter().all(|&hit| hit) {
                         break;
                     }
                     scratch.fill(false);
-                    predicate.evaluate_chunk(rows.clone(), incoming, &mut scratch);
+                    predicate.evaluate_chunk(rows.clone(), &mut scratch);
                     for (hit, &s) in output.iter_mut().zip(&scratch) {
                         *hit |= s;
                     }
@@ -167,7 +152,7 @@ impl<'a> Predicate<'a> {
         assert_eq!(source_rows.len(), matched.len());
         for (chunk_idx, out) in matched.chunks_mut(CHUNK).enumerate() {
             let rows = source_rows.chunk(chunk_idx * CHUNK, out.len());
-            (self.chunk)(rows, None, out);
+            (self.chunk)(rows, out);
         }
     }
 }

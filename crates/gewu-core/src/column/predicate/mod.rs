@@ -80,11 +80,11 @@ pub(crate) fn compile_filter<'a>(
     let nulls = array.logical_nulls();
     let include_nulls = filter.include_nulls;
     let (values, null_rows) = (predicate.clone(), nulls.clone());
-    Ok(Predicate::new(Box::new(move |rows, incoming, output| {
-        predicate.evaluate_chunk(rows.clone(), incoming, output);
+    Ok(Predicate::new(Box::new(move |rows, output| {
+        predicate.evaluate_chunk(rows.clone(), output);
         for (i, row) in rows.iter().enumerate() {
             if nulls.as_ref().is_some_and(|nulls| nulls.is_null(row)) {
-                output[i] = include_nulls && incoming.is_none_or(|mask| mask[i]);
+                output[i] = include_nulls;
             }
         }
     }))

@@ -58,48 +58,24 @@ where
     let values = array.values();
     let has_nulls = array.null_count() > 0;
 
-    Predicate::new(Box::new(move |rows, incoming, output| {
-        match (rows, incoming) {
-            (RowSelection::Range(range), None) => {
-                let slice = &values[range.clone()];
-                for (i, &v) in slice.iter().enumerate() {
-                    output[i] = v >= lo && v <= hi;
-                }
-                if has_nulls {
-                    for (i, row) in range.enumerate() {
-                        if array.is_null(row) {
-                            output[i] = false;
-                        }
+    Predicate::new(Box::new(move |rows, output| match rows {
+        RowSelection::Range(range) => {
+            let slice = &values[range.clone()];
+            for (i, &v) in slice.iter().enumerate() {
+                output[i] = v >= lo && v <= hi;
+            }
+            if has_nulls {
+                for (i, row) in range.enumerate() {
+                    if array.is_null(row) {
+                        output[i] = false;
                     }
                 }
             }
-            (RowSelection::Range(range), Some(mask)) => {
-                let slice = &values[range.clone()];
-                for (i, &v) in slice.iter().enumerate() {
-                    output[i] = (v >= lo && v <= hi) & mask[i];
-                }
-                if has_nulls {
-                    for (i, row) in range.enumerate() {
-                        if array.is_null(row) {
-                            output[i] = false;
-                        }
-                    }
-                }
-            }
-            (RowSelection::Indices(indices), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = (!has_nulls || array.is_valid(row))
-                        && values[row] >= lo
-                        && values[row] <= hi;
-                }
-            }
-            (RowSelection::Indices(indices), Some(mask)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = mask[i]
-                        && (!has_nulls || array.is_valid(row))
-                        && values[row] >= lo
-                        && values[row] <= hi;
-                }
+        }
+        RowSelection::Indices(indices) => {
+            for (i, &row) in indices.iter().enumerate() {
+                output[i] =
+                    (!has_nulls || array.is_valid(row)) && values[row] >= lo && values[row] <= hi;
             }
         }
     }))

@@ -1,98 +1,31 @@
 //! Text predicates compile their pattern once and scan only execution batches.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
-    array::{downcast_dictionary_array, Array, ArrayAccessor, ArrayRef, AsArray},
-    datatypes::{ArrowNativeType, DataType},
+    array::{Array, ArrayAccessor, ArrayRef, AsArray},
+    datatypes::DataType,
 };
 use rapidhash::RapidHashSet;
 use regex::RegexBuilder;
 
 use super::Result;
-use crate::execution::{
-    predicate::{collect_bits, Predicate},
-    selection::RowSelection,
-};
+use crate::execution::predicate::{collect_bits, Predicate};
 
-/// Borrow a string cell without decoding dictionaries or formatting a column.
-/// Both a null dictionary key and a key naming a null value yield `None`.
-pub(crate) type StringAccessor<'a> = Box<dyn Fn(usize) -> Option<&'a str> + Send + Sync + 'a>;
-
-pub(crate) fn accessor(array: &ArrayRef) -> Result<StringAccessor<'_>> {
-    match array.data_type() {
-        DataType::Utf8 => Ok(borrow_strings(array.as_string::<i32>())),
-        DataType::LargeUtf8 => Ok(borrow_strings(array.as_string::<i64>())),
-        DataType::Utf8View => Ok(borrow_strings(array.as_string_view())),
-        DataType::Dictionary(..) => {
-            downcast_dictionary_array!(array => {
-                let values = accessor(array.values())?;
-                Ok(Box::new(move |row| {
-                    if array.is_null(row) { None } else { values(array.keys().value(row).as_usize()) }
-                }) as StringAccessor<'_>)
-            }, _ => unreachable!("dictionary type checked above"))
-        }
-        _ => Err(crate::FilterError::UnsupportedType {
-            condition: crate::FilterKind::Text,
-            data_type: array.data_type().clone(),
-        }),
-    }
-}
-
-fn borrow_strings<'a, A>(array: A) -> StringAccessor<'a>
-where
-    A: ArrayAccessor<Item = &'a str> + Copy + Send + Sync + 'a,
-{
-    Box::new(move |row| array.is_valid(row).then(|| array.value(row)))
-}
-
-/// Non-null membership. The column compiler owns exclusion and null policy.
+/// Non-null membership over plain strings. Dictionary columns are matched per
+/// distinct value by the column compiler, which also owns exclusion and null policy.
 pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
-    if matches!(
+    if !matches!(
         array.data_type(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
-        let selected: RapidHashSet<String> = values.iter().cloned().collect();
-        return Ok(strings(array, move |value| selected.contains(value)));
+        return Err(crate::FilterError::UnsupportedType {
+            condition: crate::FilterKind::Exact,
+            data_type: array.data_type().clone(),
+        });
     }
-    let read = accessor(array)?;
-    let selected: HashSet<String> = values.iter().cloned().collect();
-    Ok(Predicate::new(Box::new(
-        move |rows, incoming, output| match (rows, incoming) {
-            (RowSelection::Range(range), None) => {
-                for (i, row) in range.enumerate() {
-                    let included = read(row).is_some_and(|value| selected.contains(value));
-                    output[i] = included;
-                }
-            }
-            (RowSelection::Range(range), Some(mask)) => {
-                for (i, row) in range.enumerate() {
-                    if mask[i] {
-                        let included = read(row).is_some_and(|value| selected.contains(value));
-                        output[i] = included;
-                    } else {
-                        output[i] = false;
-                    }
-                }
-            }
-            (RowSelection::Indices(indices), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    let included = read(row).is_some_and(|value| selected.contains(value));
-                    output[i] = included;
-                }
-            }
-            (RowSelection::Indices(indices), Some(mask)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    if mask[i] {
-                        let included = read(row).is_some_and(|value| selected.contains(value));
-                        output[i] = included;
-                    } else {
-                        output[i] = false;
-                    }
-                }
-            }
-        },
-    )))
+    let selected: RapidHashSet<String> = values.iter().cloned().collect();
+    Ok(strings(array, move |value| selected.contains(value)))
 }
 
 pub(super) fn contains<'a>(
@@ -214,16 +147,9 @@ where
 {
     let is_match = Arc::new(is_match);
     let test = is_match.clone();
-    Predicate::new(Box::new(move |rows, incoming, output| match incoming {
-        Some(mask) => {
-            for (i, (&m, row)) in mask.iter().zip(rows.iter()).enumerate() {
-                output[i] = m && array.is_valid(row) && is_match(array.value(row));
-            }
-        }
-        None => {
-            for (i, row) in rows.iter().enumerate() {
-                output[i] = array.is_valid(row) && is_match(array.value(row));
-            }
+    Predicate::new(Box::new(move |rows, output| {
+        for (i, row) in rows.iter().enumerate() {
+            output[i] = array.is_valid(row) && is_match(array.value(row));
         }
     }))
     .with_bitmap(Box::new(move |rows| {

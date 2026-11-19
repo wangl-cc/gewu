@@ -424,23 +424,17 @@ impl Dictionary {
     fn fill_matches(
         &self,
         rows: RowSelection<'_>,
-        incoming: Option<&[bool]>,
         output: &mut [bool],
         allowed: &[bool; 256],
         null_allowed: bool,
     ) {
-        match (rows, incoming, &self.nulls) {
-            (RowSelection::Range(range), None, None) => {
+        match (rows, &self.nulls) {
+            (RowSelection::Range(range), None) => {
                 for (i, &code) in self.codes[range].iter().enumerate() {
                     output[i] = allowed[code as usize];
                 }
             }
-            (RowSelection::Range(range), Some(mask), None) => {
-                for (i, &code) in self.codes[range].iter().enumerate() {
-                    output[i] = allowed[code as usize] & mask[i];
-                }
-            }
-            (RowSelection::Range(range), None, Some(nulls)) => {
+            (RowSelection::Range(range), Some(nulls)) => {
                 for (i, (&code, r)) in self.codes[range.clone()].iter().zip(range).enumerate() {
                     output[i] = if nulls.is_null(r) {
                         null_allowed
@@ -449,43 +443,18 @@ impl Dictionary {
                     };
                 }
             }
-            (RowSelection::Range(range), Some(mask), Some(nulls)) => {
-                for (i, (&code, r)) in self.codes[range.clone()].iter().zip(range).enumerate() {
-                    let hit = if nulls.is_null(r) {
-                        null_allowed
-                    } else {
-                        allowed[code as usize]
-                    };
-                    output[i] = hit & mask[i];
-                }
-            }
-            (RowSelection::Indices(indices), None, None) => {
+            (RowSelection::Indices(indices), None) => {
                 for (i, &row) in indices.iter().enumerate() {
                     output[i] = allowed[self.codes[row] as usize];
                 }
             }
-            (RowSelection::Indices(indices), Some(mask), None) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    output[i] = allowed[self.codes[row] as usize] & mask[i];
-                }
-            }
-            (RowSelection::Indices(indices), None, Some(nulls)) => {
+            (RowSelection::Indices(indices), Some(nulls)) => {
                 for (i, &row) in indices.iter().enumerate() {
                     output[i] = if nulls.is_null(row) {
                         null_allowed
                     } else {
                         allowed[self.codes[row] as usize]
                     };
-                }
-            }
-            (RowSelection::Indices(indices), Some(mask), Some(nulls)) => {
-                for (i, &row) in indices.iter().enumerate() {
-                    let hit = if nulls.is_null(row) {
-                        null_allowed
-                    } else {
-                        allowed[self.codes[row] as usize]
-                    };
-                    output[i] = hit & mask[i];
                 }
             }
         }
@@ -498,8 +467,8 @@ impl Dictionary {
     ) -> Predicate<'static> {
         let dictionary = Arc::clone(self);
         let bitmap = Arc::clone(self);
-        Predicate::new(Box::new(move |rows, incoming, output| {
-            dictionary.fill_matches(rows, incoming, output, &allowed, null_allowed);
+        Predicate::new(Box::new(move |rows, output| {
+            dictionary.fill_matches(rows, output, &allowed, null_allowed);
         }))
         .with_bitmap(Box::new(move |rows| {
             let codes = &bitmap.codes[rows.clone()];

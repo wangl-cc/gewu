@@ -135,7 +135,7 @@ fn native_dictionary_value_width_does_not_matter() {
 }
 
 #[test]
-fn predicates_cover_ranges_indices_incoming_masks_and_bitmaps() {
+fn predicates_cover_ranges_indices_and_bitmaps() {
     let a: ArrayRef = Arc::new(StringArray::from(vec![
         Some("b"),
         None,
@@ -157,15 +157,6 @@ fn predicates_cover_ranges_indices_incoming_masks_and_bitmaps() {
     let mut index_hits = [false; 4];
     predicate.evaluate(rows.as_slice(), &mut index_hits);
     assert_eq!(index_hits, [true, false, false, true]);
-
-    // Incoming mask intersects existing matches.
-    let mut matched = [false; 4];
-    predicate.evaluate_chunk(
-        (0..4).into(),
-        Some(&[true, true, true, false]),
-        &mut matched,
-    );
-    assert_eq!(matched, [true, false, false, false]);
 
     // Selection bitmaps agree, including over an unaligned sub-range.
     let bits: Vec<bool> = predicate.select(0..4).iter().collect();
