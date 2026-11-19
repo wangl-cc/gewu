@@ -7,7 +7,10 @@ use arrow::{
 
 use crate::{
     column::predicate::Result,
-    execution::{predicate::Predicate, selection::RowSelection},
+    execution::{
+        predicate::{collect_bits, with_nulls, Predicate},
+        selection::RowSelection,
+    },
 };
 
 pub(super) fn search<'a>(array: &'a ArrayRef, text: &str) -> Option<Predicate<'a>> {
@@ -97,6 +100,13 @@ pub(in crate::column) fn bound_range(array: &ArrayRef, lo: f64, hi: f64) -> Pred
                         }
                     }
                 }
+            }))
+            .with_bitmap(Box::new(move |rows| {
+                let bits = collect_bits(rows.clone(), |row| {
+                    let v = f64::from(values[row]);
+                    v >= lo && v <= hi
+                });
+                with_nulls(bits, array.nulls(), &rows, false)
             }))
         }};
     }

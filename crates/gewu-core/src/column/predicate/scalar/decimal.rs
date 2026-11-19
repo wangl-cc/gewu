@@ -5,7 +5,10 @@ use arrow::{
     datatypes::*,
 };
 
-use crate::execution::{predicate::Predicate, selection::RowSelection};
+use crate::execution::{
+    predicate::{collect_bits, with_nulls, Predicate},
+    selection::RowSelection,
+};
 pub(in crate::column) use crate::scalar::decimal::{Endpoint, Literal};
 
 pub(in crate::column) trait Coefficient:
@@ -99,6 +102,13 @@ where
                 }
             }
         }
+    }))
+    .with_bitmap(Box::new(move |rows| {
+        let bits = collect_bits(rows.clone(), |row| {
+            let v = values[row];
+            v >= lo && v <= hi
+        });
+        with_nulls(bits, array.nulls(), &rows, false)
     }))
 }
 

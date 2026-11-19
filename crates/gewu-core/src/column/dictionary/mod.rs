@@ -23,14 +23,17 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, UInt32Array},
-    buffer::NullBuffer,
+    buffer::{BooleanBuffer, NullBuffer},
     compute::take,
     datatypes::*,
     row::{RowConverter, SortField},
 };
 use rapidhash::RapidHashMap;
 
-use crate::execution::{predicate::Predicate, selection::RowSelection};
+use crate::execution::{
+    predicate::{with_nulls, Predicate},
+    selection::RowSelection,
+};
 
 type Result<T> = std::result::Result<T, crate::ColumnError>;
 
@@ -494,8 +497,14 @@ impl Dictionary {
         null_allowed: bool,
     ) -> Predicate<'static> {
         let dictionary = Arc::clone(self);
+        let bitmap = Arc::clone(self);
         Predicate::new(Box::new(move |rows, incoming, output| {
             dictionary.fill_matches(rows, incoming, output, &allowed, null_allowed);
+        }))
+        .with_bitmap(Box::new(move |rows| {
+            let codes = &bitmap.codes[rows.clone()];
+            let bits = BooleanBuffer::collect_bool(codes.len(), |i| allowed[codes[i] as usize]);
+            with_nulls(bits, bitmap.nulls.as_ref(), &rows, null_allowed)
         }))
     }
 }

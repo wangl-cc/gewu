@@ -294,5 +294,62 @@ fn inspector_values(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, open, apply_view, rows, facets, inspector_values);
+/// Opening a filter editor with three filters applied: its facet keeps the
+/// other two columns' filters.
+fn facet_open(c: &mut Criterion) {
+    let doc = gewu_core::Dataset::open(bench_file())
+        .map(std::sync::Arc::new)
+        .unwrap();
+    let (label, city, price) = (col(&doc, "label"), col(&doc, "city"), col(&doc, "price"));
+    doc.unfiltered().filter_choices(label).unwrap();
+    let filters = vec![
+        ColumnFilter {
+            column: price,
+            filter: Filter::range(Some("100".into()), Some("5000".into()), false),
+        },
+        ColumnFilter {
+            column: city,
+            filter: Filter::contains("city-1".into(), false, false),
+        },
+        ColumnFilter {
+            column: label,
+            filter: Filter::exact(vec!["cat".into(), "dog".into()], false, true),
+        },
+    ];
+    let mut g = c.benchmark_group("facet_open");
+    g.sample_size(20).measurement_time(Duration::from_secs(5));
+    g.bench_function("apply_3_filters", |b| {
+        b.iter(|| doc.filter(black_box(&filters)).unwrap())
+    });
+    let filtered = doc.filter(&filters).unwrap();
+    g.bench_function("choices_label", |b| {
+        b.iter(|| {
+            filtered
+                .facet(label)
+                .unwrap()
+                .filter_choices(label)
+                .unwrap()
+        })
+    });
+    g.bench_function("distribution_price", |b| {
+        b.iter(|| {
+            filtered
+                .facet(price)
+                .unwrap()
+                .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
+                .unwrap()
+        })
+    });
+    g.finish();
+}
+
+criterion_group!(
+    benches,
+    open,
+    apply_view,
+    rows,
+    facets,
+    inspector_values,
+    facet_open
+);
 criterion_main!(benches);

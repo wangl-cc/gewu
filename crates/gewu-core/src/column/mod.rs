@@ -639,4 +639,92 @@ mod tests {
         assert_eq!(column.array().len(), 4);
         assert!(!column.array().is_empty());
     }
+
+    #[test]
+    fn filter_bitmaps_agree_with_chunk_evaluation() {
+        use arrow::{
+            array::{BooleanArray, Date32Array, Decimal128Array, Float64Array},
+            compute::cast,
+        };
+        let n = CHUNK + 1_237;
+        let valid = |i: usize| i % 7 != 3;
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter(
+            (0..n).map(|i| valid(i).then_some((i % 500) as i32 - 100)),
+        ));
+        let floats: ArrayRef = Arc::new(Float64Array::from_iter((0..n).map(|i| {
+            valid(i).then_some(if i % 11 == 0 {
+                f64::NAN
+            } else {
+                (i % 300) as f64 / 4.0
+            })
+        })));
+        let decimals: ArrayRef = Arc::new(
+            Decimal128Array::from_iter((0..n).map(|i| valid(i).then_some((i % 900) as i128)))
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        let dates: ArrayRef = Arc::new(Date32Array::from_iter(
+            (0..n).map(|i| valid(i).then_some((i % 400) as i32)),
+        ));
+        let bools: ArrayRef = Arc::new(BooleanArray::from_iter(
+            (0..n).map(|i| valid(i).then_some(i % 3 == 0)),
+        ));
+        let low_card: ArrayRef =
+            Arc::new(StringArray::from_iter((0..n).map(|i| {
+                valid(i).then(|| ["Apple", "apple", "pear", "Kiwi"][i % 4])
+            })));
+        let high_card: ArrayRef = Arc::new(StringArray::from_iter(
+            (0..n).map(|i| valid(i).then(|| format!("Item-{:05}", i % 2_000))),
+        ));
+        let high_view = cast(&high_card, &DataType::Utf8View).unwrap();
+        let mut filters = Vec::new();
+        for include_nulls in [false, true] {
+            filters.extend([
+                Filter::range(Some("10".into()), Some("60".into()), include_nulls),
+                Filter::range(None, Some("1.5".into()), include_nulls),
+                Filter::range(Some("1970-03-01".into()), None, include_nulls),
+                Filter::exact(vec![], false, include_nulls),
+                Filter::exact(vec![], true, include_nulls),
+                Filter::contains("pp".into(), false, include_nulls),
+                Filter::contains("-01".into(), true, include_nulls),
+                Filter::text("APPLE".into(), TextMatch::Equals, false, include_nulls),
+                Filter::text("Item-00042".into(), TextMatch::Equals, true, include_nulls),
+            ]);
+            for exclude in [false, true] {
+                for values in [
+                    vec!["7".to_owned(), "12".to_owned()],
+                    vec!["NaN".to_owned(), "2.5".to_owned()],
+                    vec!["true".to_owned()],
+                    vec!["apple".to_owned(), "Kiwi".to_owned()],
+                    vec!["Item-00007".to_owned(), "Item-01999".to_owned()],
+                ] {
+                    filters.push(Filter::exact(values, exclude, include_nulls));
+                }
+            }
+        }
+        let mut checked = 0;
+        for array in [
+            ints, floats, decimals, dates, bools, low_card, high_card, high_view,
+        ] {
+            let column = col(array);
+            for filter in &filters {
+                let Ok(test) = column.compile_filter(filter) else {
+                    continue;
+                };
+                for rows in [0..n, 3..n - 5, CHUNK - 1..CHUNK + 70] {
+                    let mut expected = vec![false; rows.len()];
+                    test.evaluate(rows.clone(), &mut expected);
+                    let actual: Vec<bool> = test.select(rows.clone()).iter().collect();
+                    assert_eq!(
+                        actual,
+                        expected,
+                        "{} {filter:?} {rows:?}",
+                        column.array().data_type()
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "{checked}");
+    }
 }
