@@ -324,8 +324,4 @@ final class TableModel {
 extension TableModel {
     /// Columns with an applied filter.
     var filteredColumns: Set<ColumnID> { Set(appliedQuery.filters.map(\.column)) }
-
-    func copySelection(rows: [Range<Int>]) {
-        copying.copy(from: displayed, rows: rows, columns: visibleColumns)
-    }
 }

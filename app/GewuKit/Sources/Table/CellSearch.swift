@@ -38,8 +38,6 @@ public struct SearchHighlights: Sendable {
 /// and highlights cover only the blocks requested. A search keeps answering
 /// for its rows after the table moves on to newer ones.
 public final class CellSearch: Sendable {
-    /// Matches returned by one navigation call at most.
-    public static let maximumPageSize = Int(findLimits().maxPageSize)
     /// Display rows covered by one highlight call at most.
     public static let maximumHighlightRows = Int(findLimits().maxHighlightRows)
 

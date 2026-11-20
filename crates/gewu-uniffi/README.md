@@ -4,9 +4,9 @@ The Rust–Swift boundary for [gewu](../../README.md). This crate exposes Core t
 
 See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), [file formats](../../docs/file-formats.md) and the [development guide](../../DEVELOPMENT.md). Method names below use Rust spelling; Swift uses camel case.
 
-## Migration status
+## Consumer
 
-Core, FFI and the App use immutable `GewuDataset`, `GewuFilteredView` and `GewuOrderedView` handles. Each window owns its `GewuDataset`, applied `{ filtered, ordered }` views alongside applied filters, sorts and `visibleColumns`, and pending query drafts. Filter tasks capture `GewuDataset`; sort tasks, order-independent analyses and filter editors capture `GewuFilteredView`; row reads, Find and export capture `GewuOrderedView`. Only the window decides whether to publish a result. The App test target validates these consumers against generated bindings.
+[GewuKit](../../app/GewuKit/Sources) is the only consumer. It compiles the generated Swift as internal declarations, so the App cannot name an FFI type; GewuKit wraps these objects in Swift value types, typed errors and async methods, and schedules every call on its own serial workers. This README describes the Rust–Swift contract GewuKit relies on.
 
 ## Objects and ownership
 
@@ -15,34 +15,32 @@ Core, FFI and the App use immutable `GewuDataset`, `GewuFilteredView` and `GewuO
 | `GewuDataset` | Wraps shared decoded data, metadata and lazy column caches. |
 | `GewuFilteredView` | Wraps an immutable filtered row selection for order-independent analysis, filter editors and sorting. |
 | `GewuOrderedView` | Wraps an immutable ordered row selection for row formatting, cell Find and export. |
+| `ColumnText` | Owns one column's formatted text for a block of display rows; Swift reads its buffers in place. |
+| `RowIndices` | Owns source row indices for a block of display rows; Swift reads them in place. |
 | `FindSession` | Captures shared data, typed query and ordered column scope for navigation/highlights. |
 | `GewuExport` | Captures row/column data, progress and cancellation for one atomic file write. |
 
-UniFFI manages object lifetimes through generated Swift classes. `GewuFilteredView` and `GewuOrderedView` retain their underlying `Dataset` independently even after the original `GewuDataset` or `GewuFilteredView` handle is released. Find, candidate and export objects retain the buffers and row selection they need. Release old handles when their data is no longer needed: retaining multiple query results retains their row arrays, while source Arrow buffers and caches remain shared.
+UniFFI manages object lifetimes through generated Swift classes. `GewuFilteredView` and `GewuOrderedView` retain their underlying `Dataset` independently even after the original `GewuDataset` or `GewuFilteredView` handle is released. Find, export, text and index objects retain the buffers and row selection they need. Retaining multiple query results retains their row arrays, while source Arrow buffers and caches remain shared.
 
-There is no backend current view, column projection, query registration, commit, version lookup, query-spec getter or `StaleVersion`. Results such as `FormattedColumnSegment`, `FindHighlight` and `ScatterResult` do not carry a version.
+There is no backend current view, column projection, query registration, version lookup or `StaleVersion`. Callers own which result is current.
 
 ## Open, filter, sort and read
 
-1. Call `GewuDataset::open(path)` on a worker. `open_sheet(path, sheet)` selects a named XLSX sheet; `open_with_options(path, sheet, has_header)` controls headers and sheet selection. Parquet ignores the header option.
+1. Call `open_dataset(path, OpenOptions { sheet, has_header })` on a worker. `sheet` selects a named XLSX worksheet (the first when `None`) and is rejected for other formats; `has_header` applies to CSV, TSV and XLSX. It is a free function rather than a constructor because UniFFI 0.32 does not apply `uniffi.toml` renames to constructor signatures.
 2. Read `dataset.info()` for `DatasetInfo` (whose `columns` carry `id: ColumnId`, presentation metadata, `capabilities: ColumnCapabilities` and `analysis: AnalysisCapabilities`) and file metadata. Call `dataset.unfiltered()` for a zero-allocation `GewuFilteredView` over all source rows, and `filtered.unsorted()` for an initial `GewuOrderedView` in O(1); run both on the background opening worker. `dataset.column_id(name)` looks up `Option<ColumnId>` by column name.
 3. Maintain `[ColumnFilter]`, `[ColumnSort]` and `[ColumnId]` visible columns in the frontend. `ColumnFilter { column: ColumnId, filter: Filter }` filters the full `GewuDataset`; `ColumnSort { column: ColumnId, descending: bool }` sorts a `GewuFilteredView`, with slice order defining sort priority. Omitted columns do not filter or sort; empty lists return `dataset.unfiltered()` or `filtered.unsorted()`.
 4. Call `dataset.filter(filters)` and `filtered.sort(sorts)` off the UI thread. Filtering always reads the full `GewuDataset` and returns a new `GewuFilteredView`; sorting operates on `GewuFilteredView` without mutating it or invalidating its order-independent analyses.
-5. Read `filtered.row_count()` and `ordered.row_count()`. Use `ordered.format_column(column, start, count)` for each column segment and `ordered.source_rows(start, count)` for row indices.
+5. Read `filtered.row_count()` and `ordered.row_count()`. Use `ordered.format_column(column, start, count)` for one column's text and `ordered.source_rows(start, count)` for row indices.
 
-`start` is a zero-based display-row offset. A read clips the range to the available rows. Each `FormattedColumnSegment` holds one column's UTF-8 buffer. Adjacent little-endian 32-bit offsets delimit the text for each row. The validity bitmap starts at the low bit and distinguishes null from empty text. A buffer over 2 GiB exceeds UniFFI's per-field limit. `ordered.source_rows(start, count)` returns the corresponding source indices.
+`start` is a zero-based display-row offset. A read clips the range to the available rows. `ColumnText` exposes `row_count()` and three `BufferView { address, length }` values: UTF-8 text of every row back to back, one native-endian `u32` offset per row plus the final end offset, and a validity bitmap starting at the low bit that distinguishes null from empty text. `RowIndices` exposes `count()` and a buffer of native-endian `u32` source rows; every dataset fits in `u32`. A buffer stays at its address, unchanged, while the Swift object that returned it is alive, so readers keep the object alive for as long as they use the memory. This avoids UniFFI's byte-by-byte serialization of `Vec<u8>` and element-by-element decoding of integer vectors.
 
 Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus cached column segments) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
 
 `DatasetInfo` combines column metadata with a typed `FileType` and tagged `FileMetadata`: Parquet row groups, compression and footer entries are available only in the Parquet case, while XLSX sheet information is available only in the Xlsx case.
 
-### Window state and frontend ownership
+### Reusing results
 
-Each window owns its applied `{ filtered, ordered }` views alongside applied `filters`, `sorts`, `visibleColumns` and pending drafts. Capture the pending inputs for each request, then replace the applied views and state together only after success and a matching local request identity. Failed requests and cancelled Swift tasks leave the applied state untouched. Initialize `visibleColumns` from `dataset.info().columns.map(\.id)`; the backend stores no column list or query conditions.
-
-For a pure column reorder, update `visibleColumns` in the frontend without calling Rust, keeping `filtered`, `ordered` and cached column segments intact. For a pure sort change, call `filtered.sort(sorts)` to replace `ordered` while keeping `filtered` and its cached analyses intact. For hiding columns, remove any filter or sort on those columns and run `dataset.filter` / `filtered.sort` only if `filters` or `sorts` changed. Showing adds `ColumnId` entries without altering filters or sorts.
-
-Table segment caches, Find and export capture `GewuOrderedView`; analysis and filter editors capture `GewuFilteredView`. On replacement, cancel obsolete Swift tasks, skip queued operations, and clear or replace only the caches invalidated by the change (`filtered` replacement invalidates everything; pure sort replacement invalidates segment caches and Find while keeping `filtered` analysis caches). Two windows may share a `GewuDataset` or views and subsequently diverge independently. Opening the same path twice does not automatically share decoded data.
+Reordering or hiding unconditioned columns needs no FFI work and keeps both views and any text read from them. For a pure sort change, call `filtered.sort(sorts)` and keep `filtered` with its analyses. Two windows may share a `GewuDataset` or views and diverge independently; opening the same path twice does not share decoded data.
 
 ### XLSX worksheets
 
@@ -50,12 +48,12 @@ Table segment caches, Find and export capture `GewuOrderedView`; analysis and fi
 
 ```swift
 let names = try xlsxSheetNames(path: path)
-let dataset = try GewuDataset.openSheet(path: path, sheet: names[0])
+let dataset = try openDataset(path: path, options: FfiOpenOptions(sheet: names[0], hasHeader: true))
 let filtered = dataset.unfiltered()
 let ordered = filtered.unsorted()
 ```
 
-Listing retains no workbook snapshot; opening rereads the file. Keep the old `GewuDataset`/`GewuFilteredView`/`GewuOrderedView` until the replacement opens successfully, gate publication by a UI request ID, and reset sheet-specific state. Opening and listing do not expose cancellation; skip obsolete queued loads and discard obsolete results.
+Listing retains no workbook snapshot; opening rereads the file. Opening and listing do not expose cancellation; callers skip obsolete queued loads and discard obsolete results.
 
 ## Threading and scheduling
 
@@ -70,7 +68,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | `format_column`, `source_rows` | Viewport reads. Formatting cost grows with the number and length of cells. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
-Filtering, sorting, analyses, candidate lists and Find requests run synchronously to completion in Rust without cooperative cancellation tokens. Swift owns request replacement and cancellation: callers cancel obsolete Swift `Task`s, guard serial worker queues so superseded or cancelled queued operations skip FFI execution, and gate publication on captured view/context and request identity. Different views and unrelated requests never invalidate each other.
+Filtering, sorting, analyses, candidate lists and Find requests run synchronously to completion in Rust without cooperative cancellation tokens. Swift owns request replacement and cancellation: GewuKit runs each call on a serial worker that skips calls whose task was cancelled before they start, and callers discard results their current view no longer needs. Different views and unrelated requests never invalidate each other.
 
 Find sessions capture an immutable `GewuOrderedView` snapshot and remain valid independently of later queries or other Find sessions; neither a new query nor releasing the `GewuDataset` or `GewuFilteredView` handle invalidates an active `FindSession`.
 
@@ -80,7 +78,7 @@ Dictionary construction synchronizes lazily per column and publishes a completed
 
 `ordered.find(query, columns)` captures the `GewuOrderedView`'s display row order and the requested ordered `Vec<ColumnId>` column scope. `next` and `previous` return exclusive directional `CellMatch { display_row, column: ColumnId }` pages; an empty page marks a boundary and a missing cursor restarts from that end. `highlight(columns, start, count)` returns one match bitmap per requested column (one bit per row, low bit first) for a display block, without formatting values or changing the view. Request only the columns on screen; each must belong to the Find scope.
 
-Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or rows). No total hit count is implied. Text matching is compiled once per Find object. Gate navigation and highlight publication in Swift with request identity.
+Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or rows). No total hit count is implied. Text matching is compiled once per Find object.
 
 ## Filter candidates
 
@@ -116,13 +114,13 @@ Display `median_label` verbatim. `mean_label` provides the approximate temporal 
 
 Call `filtered.scatter(x_column, y_column, limit, x_scale, y_scale)` directly on a worker. There is no prepare/run object. `x_column: None` uses zero-based source row IDs. Limits are 1...4096; `capabilities` determine available axes/scales. Temporal and source-row axes remain linear.
 
-Results contain axis kinds, eligible/nonpositive counts and bounded points with source IDs, approximate original coordinates and exact display labels. Keep column IDs and the `GewuFilteredView`'s row count in the request context. Derive sampling from `eligible_rows > points.len()` and missing/non-finite omissions from `filtered_rows - eligible_rows - non_positive_rows`. Missing/non-finite pairs are omitted before nonpositive Log10 pairs. Sampling remains deterministic by source row, independent of sort order (and pure sorting keeps the same `GewuFilteredView`). Show sampling status and use native labels in tooltips. A retained `GewuFilteredView` remains valid after other queries complete.
+Results contain axis kinds, eligible/nonpositive counts and bounded points with source IDs, approximate original coordinates and exact display labels. Temporal axis kinds carry `seconds_per_unit`; a coordinate multiplied by it is seconds since the Unix epoch, so frontends build dates without parsing labels. Keep column IDs and the `GewuFilteredView`'s row count in the request context. Derive sampling from `eligible_rows > points.len()` and missing/non-finite omissions from `filtered_rows - eligible_rows - non_positive_rows`. Missing/non-finite pairs are omitted before nonpositive Log10 pairs. Sampling remains deterministic by source row, independent of sort order (and pure sorting keeps the same `GewuFilteredView`). Show sampling status and use native labels in tooltips. A retained `GewuFilteredView` remains valid after other queries complete.
 
 ## Export
 
 `ordered.export(columns, format)` creates a single-use job over shared data and the requested `Vec<ColumnId>` projection. `ordered.nested_export_columns(columns)` reports flat-format incompatibilities. Run `write(path)` or `write_with_options(path, options)` on a worker. The default Parquet compression is Zstd; options can choose another compression without affecting other formats.
 
-Poll `progress()`, but wait for successful return before declaring completion: all rows written does not mean the destination is committed. Writes use a sibling temporary file and replace the destination only on success. Source-file aliases are rejected. Cancellation before final commit preserves the destination; after commit it is a no-op. Each job is single-use even after failure, and newer views never alter its contents.
+Sample `progress()` while writing (GewuKit exposes it as an `AsyncStream`), but wait for successful return before declaring completion: all rows written does not mean the destination is committed. Writes use a sibling temporary file and replace the destination only on success. Source-file aliases are rejected. Cancellation before final commit preserves the destination; after commit it is a no-op. Each job is single-use even after failure, and newer views never alter its contents.
 
 ## Errors
 
@@ -138,26 +136,12 @@ Poll `progress()`, but wait for successful return before declaring completion: a
 | `Cancelled` | Returned when an in-progress `GewuExport` is cancelled before destination commit. |
 | `Internal { message }` | Report implementation defects and calls that violate the frontend/backend contract. |
 
-Core retains concrete module errors and source chains. FFI projects only the semantics a correctly implemented UI can encounter during normal use; invalid column IDs, duplicate columns in filter/sort/find/export, empty column selections in find/export, invalid UI-controlled sizes, unsupported direct analysis calls and repeated single-use export calls become `Internal`. Messages retain diagnostic context, but Swift uses structured `kind` fields rather than parsing messages. Export cancellation throws `GewuError.Cancelled`, whereas cancelled Swift Tasks throw `CancellationError`.
+Core retains concrete module errors and source chains. FFI projects only the semantics a correctly implemented UI can encounter during normal use; invalid column IDs, duplicate columns in filter/sort/find/export, empty column selections in find/export, invalid UI-controlled sizes, unsupported direct analysis calls and repeated single-use export calls become `Internal`. Messages retain diagnostic context and are what users see. GewuKit maps each variant to a `GewuKitError` case and maps `Cancelled` to Swift's `CancellationError`, so callers handle one kind of cancellation.
 
 ## Bindings and implementation
 
-Cargo package `gewu-uniffi` builds library `gewu` (`libgewu.a` and `libgewu.dylib` on macOS). The App's normal Rust build phase generates `gewu.swift`, `gewuFFI.h` and `gewuFFI.modulemap`. Never edit generated outputs.
+Cargo package `gewu-uniffi` builds library `gewu` (`libgewu.a` and `libgewu.dylib` on macOS). GewuKit's [Rust build phase](../../scripts/build-rust.sh) generates `gewu.swift`, `gewuFFI.h` and `gewuFFI.modulemap`, rewrites the Swift declarations to internal access and compiles them into GewuKit. Never edit generated outputs. [uniffi.toml](uniffi.toml) gives every exported type an `Ffi` Swift prefix, such as `FfiDataset` and `FfiColumnText`, so the generated vocabulary never collides with GewuKit's public types; add new exported types there.
 
-Backend-only binding generation:
+Validate interface changes on both sides: `cargo test --locked -p gewu-uniffi` for the Rust boundary, and the `GewuKit` scheme's tests for the Swift consumer through the generated bindings (see the [development guide](../../DEVELOPMENT.md)).
 
-```sh
-cargo build --locked -p gewu-uniffi
-cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
-  generate --library target/debug/libgewu.dylib --language swift --out-dir build/view-bindings
-xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
-  crates/gewu-uniffi/tests/view-smoke.swift \
-  app/Sources/Gewu/Table/FormattedColumnSegment.swift \
-  app/Sources/Gewu/Inspector/InspectorSection.swift -I build/view-bindings \
-  -Xcc -fmodule-map-file=build/view-bindings/gewuFFI.modulemap \
-  -L target/debug -lgewu -Xlinker -rpath -Xlinker "$PWD/target/debug" \
-  -o build/view-bindings/view-smoke
-build/view-bindings/view-smoke
-```
-
-The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`, and [column_segment.rs](src/column_segment.rs) owns `FormattedColumnSegment`. [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.
+The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [buffer.rs](src/buffer.rs) owns `ColumnText`, `RowIndices` and the in-place buffer contract, [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, and [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`. [lib.rs](src/lib.rs) declares exports.
