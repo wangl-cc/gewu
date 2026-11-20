@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Date32Array, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, ColumnFilter, ColumnId, ColumnSort, Error, Filter, OrderedView,
+    CellMatch, ColumnFilter, ColumnHighlight, ColumnId, ColumnSort, Error, Filter, OrderedView,
     MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
@@ -136,15 +136,29 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
             column: c0,
         },
     ]);
-    let highlight = find.highlight(0, 3).unwrap();
-    assert_eq!(highlight.n_cols, 2);
-    assert_eq!(highlight.matched, [false, true, true, false, true, false]);
+    // One bitmap per requested column, in request order, low bit first.
+    let highlight = find.highlight(&[c0, c1], 0, 3).unwrap();
+    assert_eq!(highlight.n_rows, 3);
+    assert_eq!(highlight.columns, [
+        ColumnHighlight {
+            column: c0,
+            matched: vec![0b110],
+        },
+        ColumnHighlight {
+            column: c1,
+            matched: vec![0b001],
+        },
+    ]);
+    // Only the requested (for example on-screen) columns are evaluated.
+    assert_eq!(find.highlight(&[c1], 0, 3).unwrap().columns, [highlight
+        .columns[1]
+        .clone()]);
     assert_eq!(doc.n_rows(), 4);
-    assert_eq!(view.rows(0, 3, &[c0]).unwrap().source_rows, [0, 1, 3]);
+    assert_eq!(view.source_rows(0, 3), [0, 1, 3]);
 
     // Captured Find work remains tied to its own version after a newer view.
     let _other = doc.unfiltered();
-    assert_eq!(find.highlight(0, 3).unwrap().matched, highlight.matched);
+    assert_eq!(find.highlight(&[c0, c1], 0, 3).unwrap(), highlight);
 }
 
 #[test]
@@ -166,14 +180,20 @@ fn find_rejects_invalid_scopes_queries_and_highlight_sizes() {
     let find = doc.find("a", &[c0]).unwrap();
     for count in [0, MAX_FIND_HIGHLIGHT_ROWS + 1] {
         assert!(matches!(
-            find.highlight(0, count),
+            find.highlight(&[c0], 0, count),
             Err(gewu_core::FindError::InvalidHighlightRows { .. })
         ));
     }
     assert_eq!(
-        find.highlight(0, MAX_FIND_HIGHLIGHT_ROWS).unwrap().n_rows,
+        find.highlight(&[c0], 0, MAX_FIND_HIGHLIGHT_ROWS)
+            .unwrap()
+            .n_rows,
         2
     );
+    assert!(matches!(
+        find.highlight(&[c1], 0, 1),
+        Err(gewu_core::FindError::InvalidHighlightColumn { column }) if column == c1
+    ));
 }
 
 #[test]
@@ -227,5 +247,6 @@ fn pages_and_cursors_follow_the_captured_column_order() {
         display_row: 1,
         column: c1,
     }]);
-    assert_eq!(find.highlight(0, 1).unwrap().matched, [true, true]);
+    let highlight = find.highlight(&[c0, c1], 0, 1).unwrap();
+    assert!(highlight.columns.iter().all(|column| column.matched == [1]));
 }

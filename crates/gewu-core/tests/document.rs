@@ -48,9 +48,9 @@ fn sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
 }
 
 fn names(doc: &Arc<OrderedView>) -> Vec<String> {
-    let block = doc.rows(0, 100, &[ColumnId::from_raw(0)]).unwrap();
-    (0..block.n_rows)
-        .map(|r| block.cell(r, 0).unwrap().to_string())
+    let segment = doc.format_column(ColumnId::from_raw(0), 0, 100).unwrap();
+    (0..segment.row_count())
+        .map(|r| segment.cell(r).unwrap().to_string())
         .collect()
 }
 
@@ -441,9 +441,7 @@ fn dates_format_parse_and_filter() {
     let c2 = ColumnId::from_raw(2);
     let initial = dataset.unfiltered().unsorted();
     assert_eq!(
-        initial.rows(1, 1, &[c1]).unwrap().cells[0]
-            .as_deref()
-            .unwrap(),
+        initial.format_column(c1, 1, 1).unwrap().cell(0).unwrap(),
         "2024-01-02"
     );
 
@@ -455,9 +453,7 @@ fn dates_format_parse_and_filter() {
         .is_err());
 
     assert_eq!(
-        initial.rows(0, 1, &[c2]).unwrap().cells[0]
-            .as_deref()
-            .unwrap(),
+        initial.format_column(c2, 0, 1).unwrap().cell(0).unwrap(),
         "2024-01-01T09:00:00Z"
     );
 

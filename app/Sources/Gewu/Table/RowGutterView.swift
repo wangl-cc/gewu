@@ -5,8 +5,8 @@ import AppKit
 /// scrolling but not its sideways scrolling, and has no stripes or cell
 /// borders of its own.
 final class RowGutterView: NSView {
-    /// The number shown for a display row, or `nil` while it is loading.
-    var label: ((Int) -> String?)?
+    /// The numbers shown for a range of display rows, read when drawing.
+    var labels: ((Range<Int>) -> [String])?
     var font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
 
     private weak var table: NSTableView?
@@ -67,12 +67,12 @@ final class RowGutterView: NSView {
         NSColor.separatorColor.setFill()
         NSRect(x: bounds.maxX - 1, y: rows.minY, width: 1, height: rows.height).fill()
 
-        guard let label else { return }
+        guard let labels else { return }
         let visible = table.rows(in: table.visibleRect)
-        guard visible.length > 0 else { return }
+        guard visible.location != NSNotFound, visible.length > 0 else { return }
+        let visibleRows = visible.location..<(visible.location + visible.length)
         let selected = table.selectedRowIndexes
-        for row in visible.location..<(visible.location + visible.length) {
-            guard let text = label(row) else { continue }
+        for (row, text) in zip(visibleRows, labels(visibleRows)) {
             let rowRect = convert(table.rect(ofRow: row), from: table)
             guard rowRect.intersects(dirtyRect) else { continue }
             let string = NSAttributedString(

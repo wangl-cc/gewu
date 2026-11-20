@@ -104,13 +104,13 @@ private struct ImportOptionsView: View {
 private struct LoadedDocumentView: View {
     @Bindable var model: DocumentModel
     @ObservedObject var workbook: WorkbookModel
-    @ObservedObject private var find: FindModel
+    @Bindable private var find: FindModel
     @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
 
     init(model: DocumentModel, workbook: WorkbookModel) {
         self.model = model
         self.workbook = workbook
-        _find = ObservedObject(wrappedValue: model.find)
+        find = model.find
     }
 
     var body: some View {
@@ -336,14 +336,10 @@ private struct ActiveFiltersView: View {
 }
 
 private struct CopyStatus: View {
-    @ObservedObject var copying: CopyModel
+    let copying: CopyModel
 
     var body: some View {
-        if copying.isCopying {
-            ProgressView().controlSize(.small)
-            Text("Copying selection…")
-            Button("Cancel Copy") { copying.cancel() }.buttonStyle(.borderless)
-        } else if let message = copying.message {
+        if let message = copying.message {
             Text(message).lineLimit(1)
         }
     }

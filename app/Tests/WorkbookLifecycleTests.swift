@@ -79,8 +79,9 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == decomposed)
         let decomposedDocument = try #require(model.document)
-        let decomposedRows = try decomposedDocument.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
-        #expect(decomposedRows.cells == ["decomposed"])
+        let decomposedRows = try decomposedDocument.ordered.formatColumn(
+            column: ColumnId(raw: 0), start: 0, count: 1)
+        #expect(decomposedRows.texts == ["decomposed"])
 
         model.selectSheet(composed)
         // Always release: the buggy implementation skips this open entirely.
@@ -88,8 +89,8 @@ struct WorkbookLifecycleTests {
         await settled(model)
         #expect(model.selectedSheet == composed)
         let composedDocument = try #require(model.document)
-        let composedRows = try composedDocument.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
-        #expect(composedRows.cells == ["composed"])
+        let composedRows = try composedDocument.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
+        #expect(composedRows.texts == ["composed"])
     }
 
     @Test
@@ -194,8 +195,8 @@ struct WorkbookLifecycleTests {
         model.open()
         await settled(model)
         #expect(model.document?.ordered.rowCount() == 2 && !model.hasHeader)
-        let first = try model.document?.ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
-        #expect(first?.cells == ["1"])
+        let first = try model.document?.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
+        #expect(first?.texts == ["1"])
         try await presentationContracts(#require(model.document))
         model.reopen(hasHeader: true)
         await settled(model)
@@ -215,14 +216,14 @@ struct WorkbookLifecycleTests {
         workbook.selectSheet(.init(rawValue: "Last"))
         await settled(workbook)
         #expect(!workbook.hasHeader && workbook.selectedSheet?.rawValue == "Last")
-        let rows = try #require(workbook.document).ordered.rows(start: 0, count: 1, columns: [ColumnId(raw: 0)])
-        #expect(rows.cells == ["column_3"], "Worksheet changes must retain the header option")
+        let rows = try #require(workbook.document).ordered.formatColumn(
+            column: ColumnId(raw: 0), start: 0, count: 1)
+        #expect(rows.texts == ["column_3"], "Worksheet changes must retain the header option")
     }
 
     @MainActor
     static func presentationContracts(_ document: DocumentModel) async throws {
         let chart = ScatterModel()
-        document.selectedSourceRow = 0
         for base in [0, 1] {
             await chart.load(
                 viewer: document.viewer,
@@ -233,7 +234,6 @@ struct WorkbookLifecycleTests {
             #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
             #expect(!document.status.contains("in file"), "Keep source row labels in the gutter, not the status bar")
         }
-        document.selectedSourceRow = nil
         let message = "Invalid numeric bound"
         let error: Error = GewuError.Internal(message: message)
         #expect(error.userMessage == message, "Show the Core message, not the generated enum description")

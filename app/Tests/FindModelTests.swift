@@ -1,6 +1,7 @@
-import Combine
 import Foundation
+import Observation
 import Testing
+import os
 
 @Suite
 struct FindModelTests {
@@ -10,13 +11,17 @@ struct FindModelTests {
     @Test @MainActor
     func emptyInvalidationDoesNotPublishDisplayChanges() {
         let find = FindModel()
-        var publications = 0
-        let observation = find.objectWillChange.sink { publications += 1 }
+        let publications = OSAllocatedUnfairLock(initialState: 0)
+        withObservationTracking {
+            _ = (find.query, find.currentMatch, find.isFinding, find.hasMatches)
+            _ = (find.revision, find.highlightRevision, find.status)
+        } onChange: {
+            publications.withLock { $0 += 1 }
+        }
         find.invalidate()
         find.stop()
-        #expect(publications == 0)
+        #expect(publications.withLock { $0 } == 0)
         #expect(find.revision == 0 && find.highlightRevision == 0)
-        withExtendedLifetime(observation) {}
     }
 
     @Test @MainActor
@@ -39,12 +44,17 @@ struct FindModelTests {
         #expect(model.ordered === originalView)
         #expect(model.ordered.rowCount() == 3)
 
-        model.find.requestHighlight(start: 0, count: 3)
-        try await waitUntil { model.find.highlight != nil }
-        #expect(model.find.highlight?.matched == [false, false, false, true, false, true])
-        #expect(model.find.isMatch(row: 1, column: Self.c1))
-        #expect(!model.find.isMatch(row: 1, column: Self.c0))
-        #expect(!model.find.isMatch(row: 0, column: Self.c1))
+        // Only the requested on-screen column is evaluated and cached.
+        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1])
+        try await waitUntil { model.find.hasHighlights }
+        #expect((0..<3).map { model.find.isMatch(row: $0, column: Self.c1) } == [false, true, true])
+        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
+        let revision = model.find.highlightRevision
+        model.find.requestHighlight(rows: 1..<3, columns: [Self.c1])
+        #expect(model.find.highlightRevision == revision, "Cached blocks are not requested again")
+        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1, Self.c0])
+        try await waitUntil { model.find.highlightRevision != revision }
+        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
 
         model.findNext()
         try await waitUntil { model.find.currentMatch?.displayRow == 2 }
@@ -59,9 +69,32 @@ struct FindModelTests {
         #expect(model.ordered === originalView)
         model.find.query = ""
         model.updateFind()
-        #expect(model.find.currentMatch == nil && model.find.highlight == nil)
+        #expect(model.find.currentMatch == nil && !model.find.hasHighlights)
         #expect(model.find.canNavigate == false)
         model.stop()
+    }
+
+    @Test @MainActor
+    func highlightsCoverAllVisibleBlocksIncludingThePartialLastBlock() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("gewu-find-blocks-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try ("left,right\n" + String(repeating: "needle,needle\n", count: 263)).write(
+            to: path, atomically: true, encoding: .utf8)
+        let ordered = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        let find = FindModel()
+        defer { find.stop() }
+        find.query = "needle"
+        find.update(ordered: ordered, columns: [Self.c0, Self.c1])
+        find.requestHighlight(rows: 0..<64, columns: [Self.c0])
+        try await waitUntil { find.hasHighlights }
+        let firstRevision = find.highlightRevision
+
+        let rows = 63..<263
+        find.requestHighlight(rows: rows, columns: [Self.c0, Self.c1])
+        try await waitUntil { find.highlightRevision != firstRevision }
+        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c0) })
+        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c1) })
+        #expect(!find.isMatch(row: rows.upperBound, column: Self.c1))
     }
 
     @Test @MainActor
@@ -102,15 +135,40 @@ struct FindModelTests {
         try await waitUntil { model.find.hasMatches == true }
 
         let beforeRequest = model.find.highlightRevision
-        model.find.requestHighlight(start: 0, count: 1)
+        model.find.requestHighlight(rows: 0..<1, columns: [ColumnId(raw: 0)])
         #expect(model.find.highlightRevision == beforeRequest)
         model.find.query = "old"
         model.updateFind()
         let replacementRevision = model.find.highlightRevision
         try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 1 }
         #expect(model.find.highlightRevision == replacementRevision)
-        #expect(model.find.highlight == nil)
+        #expect(!model.find.hasHighlights)
         model.stop()
+    }
+
+    @Test @MainActor
+    func highlightsFollowScrollingWithoutDroppingReadsAndCoverTallViewports() async throws {
+        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
+            "gewu-find-scroll-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let values = (0..<400).map { $0 % 2 == 0 ? "hit" : "miss" }
+        try ("value\n" + values.joined(separator: "\n")).write(to: path, atomically: true, encoding: .utf8)
+        let model = DocumentModel(url: path, dataset: try GewuDataset.open(path: path.path))
+        defer { model.stop() }
+        model.find.query = "hit"
+        model.updateFind()
+        try await waitUntil { model.find.hasMatches == true }
+
+        // Scrolling before the first read completes must not drop that read.
+        model.find.requestHighlight(rows: 0..<10, columns: [Self.c0])
+        model.find.requestHighlight(rows: 64..<74, columns: [Self.c0])
+        try await waitUntil {
+            model.find.isMatch(row: 0, column: Self.c0) && model.find.isMatch(row: 64, column: Self.c0)
+        }
+        // A viewport taller than one Core request is read in several runs.
+        model.find.requestHighlight(rows: 0..<400, columns: [Self.c0])
+        try await waitUntil { model.find.isMatch(row: 398, column: Self.c0) }
+        #expect((0..<400).allSatisfy { model.find.isMatch(row: $0, column: Self.c0) == ($0 % 2 == 0) })
     }
 
     @Test @MainActor

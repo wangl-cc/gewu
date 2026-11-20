@@ -42,7 +42,7 @@ fn check_range(
     }];
     let filtered = doc.filter(&filters).unwrap();
     assert_eq!(
-        filtered.unsorted().rows(0, 100, &[c0]).unwrap().source_rows,
+        filtered.unsorted().source_rows(0, 100),
         expected,
         "type {:?}, filters {filters:?}",
         doc.schema().field(0).data_type()
@@ -391,16 +391,16 @@ fn temporal_range_summary_and_histogram_keep_physical_units() {
         assert!(histogram.integer);
         assert_eq!((histogram.lo, histogram.hi), (Some(0.0), Some(3.0)));
         assert_eq!(histogram.counts, [1, 1, 1]);
-        let cells = unfiltered.unsorted().rows(1, 2, &[c0]).unwrap().cells;
-        let min = cells[0].clone().unwrap();
-        let max = cells[1].clone().unwrap();
+        let segment = unfiltered.unsorted().format_column(c0, 1, 2).unwrap();
+        let min = segment.cell(0).unwrap();
+        let max = segment.cell(1).unwrap();
         assert_eq!(
             summary.mean_label.as_deref(),
-            Some(min.as_str()),
+            Some(min),
             "{:?}: {summary:?}",
             doc.schema().field(0).data_type()
         );
-        check_range(&doc, Some(min), Some(max), &[1, 2]);
+        check_range(&doc, Some(min.to_owned()), Some(max.to_owned()), &[1, 2]);
     }
 }
 

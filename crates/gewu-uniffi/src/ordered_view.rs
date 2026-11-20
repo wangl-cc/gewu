@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{ColumnId, FileType, FindSession, GewuError, GewuExport, RowBlock};
+use crate::{ColumnId, FileType, FindSession, FormattedColumnSegment, GewuError, GewuExport};
 
 #[derive(uniffi::Object)]
 pub struct GewuOrderedView {
@@ -16,14 +16,21 @@ impl GewuOrderedView {
         self.inner.row_count()
     }
 
-    pub fn rows(
+    /// Format one column over display rows `start..start + count`,
+    /// clipped to the available rows.
+    pub fn format_column(
         &self,
+        column: ColumnId,
         start: u64,
         count: u32,
-        columns: Vec<ColumnId>,
-    ) -> Result<RowBlock, GewuError> {
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(self.inner.rows(start, count, &columns)?.into())
+    ) -> Result<FormattedColumnSegment, GewuError> {
+        self.inner
+            .format_column(column.into(), start, count)?
+            .try_into()
+    }
+
+    pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
+        self.inner.source_rows(start, count)
     }
 
     pub fn find(

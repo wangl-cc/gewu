@@ -11,13 +11,21 @@ pub struct CellMatch {
     pub column: ColumnId,
 }
 
-/// Row-major match flags in the Find session's captured column order.
+/// Match flags for a block of display rows, one bitmap per requested column.
 #[derive(uniffi::Record)]
 pub struct FindHighlight {
     pub start: u64,
     pub n_rows: u32,
-    pub n_cols: u32,
-    pub matched: Vec<bool>,
+    /// One entry per requested column, in request order.
+    pub columns: Vec<ColumnHighlight>,
+}
+
+/// Match flags for one column of a [`FindHighlight`].
+#[derive(uniffi::Record)]
+pub struct ColumnHighlight {
+    pub column: ColumnId,
+    /// One bit per row starting at the block's first row, low bit first.
+    pub matched: Vec<u8>,
 }
 
 /// Bounded Find request sizes, exported so frontends never duplicate Core limits.
@@ -71,9 +79,16 @@ impl FindSession {
             .collect())
     }
 
-    /// Highlight a visible block in captured column order.
-    pub fn highlight(&self, start: u64, count: u32) -> Result<FindHighlight, GewuError> {
-        Ok(self.inner.highlight(start, count)?.into())
+    /// Match flags for the requested columns, such as those on screen, over a
+    /// block of display rows. Every column must belong to the captured scope.
+    pub fn highlight(
+        &self,
+        columns: Vec<ColumnId>,
+        start: u64,
+        count: u32,
+    ) -> Result<FindHighlight, GewuError> {
+        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
+        Ok(self.inner.highlight(&columns, start, count)?.into())
     }
 }
 
@@ -100,8 +115,14 @@ impl From<core::FindHighlight> for FindHighlight {
         Self {
             start: highlight.start,
             n_rows: highlight.n_rows,
-            n_cols: highlight.n_cols,
-            matched: highlight.matched,
+            columns: highlight
+                .columns
+                .into_iter()
+                .map(|column| ColumnHighlight {
+                    column: column.column.into(),
+                    matched: column.matched,
+                })
+                .collect(),
         }
     }
 }
@@ -133,10 +154,15 @@ mod tests {
         assert_eq!(page.len(), 2);
         assert_eq!((page[0].display_row, page[0].column), (0, c1));
         assert_eq!((page[1].display_row, page[1].column), (2, c1));
-        let highlight = find.highlight(0, 3).unwrap();
-        assert_eq!(highlight.matched, [false, true, false, false, false, true]);
+        let highlight = find.highlight(vec![c1, c0], 0, 3).unwrap();
+        let columns: Vec<_> = highlight
+            .columns
+            .iter()
+            .map(|column| (column.column, column.matched.clone()))
+            .collect();
+        assert_eq!(columns, [(c1, vec![0b101]), (c0, vec![0])]);
         assert_eq!(find.previous(None, 1).unwrap()[0].display_row, 2);
-        assert!(doc.rows(0, 10, vec![c0]).unwrap().source_rows.len() == 3);
+        assert!(doc.source_rows(0, 10).len() == 3);
         std::fs::remove_file(source).unwrap();
     }
 }

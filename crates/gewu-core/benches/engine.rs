@@ -190,13 +190,27 @@ fn rows(c: &mut Criterion) {
     let mut g = c.benchmark_group("rows");
 
     let plain = doc.unfiltered().unsorted();
-    g.bench_function("block_256_all_columns", |b| {
-        b.iter(|| plain.rows(1_000_000, 256, &columns).unwrap())
+    // The table reads 64 display rows of one column at a time.
+    g.bench_function("column_segments_256_all_columns", |b| {
+        b.iter(|| {
+            for &column in &columns {
+                for block in 0..4 {
+                    plain
+                        .format_column(column, 1_000_000 + block * 64, 64)
+                        .unwrap();
+                }
+            }
+        })
     });
 
     let find = plain.find("2024-03", &columns).unwrap();
     g.bench_function("find_highlight_256_all_columns", |b| {
-        b.iter(|| find.highlight(1_000, 256).unwrap())
+        b.iter(|| find.highlight(&columns, 1_000, 256).unwrap())
+    });
+    // The table requests only the columns on screen.
+    let visible = &columns[..8.min(columns.len())];
+    g.bench_function("find_highlight_256_8_columns", |b| {
+        b.iter(|| find.highlight(visible, 1_000, 256).unwrap())
     });
     g.finish();
 }

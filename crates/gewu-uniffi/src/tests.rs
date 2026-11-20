@@ -68,9 +68,9 @@ fn typed_filters_compile_and_execute_across_ffi() {
             }))
             .unwrap();
         let ordered = filtered.unsorted();
-        let rows = ordered.rows(0, 10, vec![id_col]).unwrap();
-        assert_eq!(rows.source_rows, [1]);
-        assert_eq!(rows.cells, [Some("9007199254740993".into())]);
+        let rows = ordered.format_column(id_col, 0, 10).unwrap();
+        assert_eq!(ordered.source_rows(0, 10), [1]);
+        assert_eq!(rows.utf8, b"9007199254740993");
     }
     std::fs::remove_file(source).unwrap();
 }
@@ -152,10 +152,10 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert_eq!(
         filtered
             .unsorted()
-            .rows(0, 10, vec![label_col])
+            .format_column(label_col, 0, 10)
             .unwrap()
-            .cells,
-        [Some("dog".into())]
+            .utf8,
+        b"dog"
     );
     // The label editor's facet drops only the label filter.
     let facet = filtered.facet(label_col).unwrap();
@@ -179,10 +179,20 @@ fn text_filter_modes_and_choices_cross_ffi() {
             descending: true,
         }])
         .unwrap();
-    assert_eq!(
-        sorted_desc.rows(0, 2, vec![label_col]).unwrap().source_rows,
-        [1, 0]
-    );
+    assert_eq!(sorted_desc.source_rows(0, 2), [1, 0]);
+    assert_eq!(sorted_desc.source_rows(1, 64), [0]);
+    let label = sorted_desc.format_column(label_col, 1, 64).unwrap();
+    let id = sorted_desc.format_column(id_col, 0, 64).unwrap();
+    assert_eq!((label.row_count, label.utf8), (1, b"cat".to_vec()));
+    assert_eq!((id.row_count, id.utf8), (2, b"2010".to_vec()));
+    let offsets: Vec<u8> = [0u32, 2, 4]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    assert_eq!(id.offsets, offsets);
+    assert!(sorted_desc
+        .format_column(ColumnId { raw: 99 }, 0, 1)
+        .is_err());
     std::fs::remove_file(source).unwrap();
 }
 
@@ -296,10 +306,10 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 selected
                     .unfiltered()
                     .unsorted()
-                    .rows(0, 1, vec![selected_label])
+                    .format_column(selected_label, 0, 1)
                     .unwrap()
-                    .cells,
-                [Some("cat".into())]
+                    .utf8,
+                b"cat"
             );
             let filtered = selected
                 .filter(filter_single(selected_label, Filter {

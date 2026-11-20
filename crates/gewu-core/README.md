@@ -15,9 +15,9 @@ Core separates state into a three-layer unidirectional model: `Dataset` → `Fil
 - `dataset.filter(filters)` validates `&[ColumnFilter]`, filters the **full Dataset**, and returns an independent `Arc<FilteredView>` (empty filter lists return `dataset.unfiltered()` with zero row-ID allocation). Relaxing a filter can therefore recover rows absent from previous views.
 - `filtered.facet(column)` returns the view under every filter except `column`'s own, for that column's filter editor. Each filtered view keeps one selection bitmap per filter condition over all source rows, so a facet is the intersection of the other bitmaps; no predicate is re-evaluated. A column without a filter returns the same view.
 - `filtered.sort(sorts)` validates `&[ColumnSort]` (slice order defines sort priority), sorts `filtered`'s row selection independently, and returns an `Arc<OrderedView>` without mutating `filtered` (empty sort lists return `filtered.unsorted()`, sharing the same `RowIds`).
-- `ordered.rows(start, count, columns)` returns formatted `RowBlock` cells and source row IDs from that `OrderedView`. Explicit `&[ColumnId]` arguments specify which columns are formatted and in what order.
+- `ordered.format_column(column, start, count)` packs one column's display rows into a UTF-8 buffer with 32-bit offsets and a validity bitmap. Read source row indices separately with `ordered.source_rows(start, count)`.
 - `ordered.find(query, columns)` captures shared `RowIds` and column arrays for bounded navigation and highlighting over `&[ColumnId]`.
-- `ordered.export(columns, format)` captures shared data and `&[ColumnId]` projection for a single-use export with progress, cancellation and atomic destination replacement; `ordered.nested_export_columns(columns)` inspects nested types without scanning.
+- `ordered.export(columns, format)` captures shared data and a `&[ColumnId]` projection for a single-use export with progress, cancellation and atomic destination replacement. `ordered.nested_export_columns(columns)` inspects nested types without scanning.
 
 The caller owns the current `{ filtered, ordered }` views alongside its filter, sort and visible-column state, replacing views only after a successful, still-relevant request. There is no backend current view, version, query registration, commit or query-spec getter. Independent windows can share a `Dataset`, `FilteredView` or `OrderedView` while maintaining different query states or column projections. Opening the same path again does not automatically deduplicate data.
 
@@ -35,7 +35,7 @@ Filters compile each condition to a bitmap-only `Selector` and evaluate it indep
 
 ### Cell Find
 
-`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight` covers at most 256 display rows. Neither API computes or estimates a total hit count.
+`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight(columns, start, count)` covers at most 256 display rows and evaluates only the requested columns, which must belong to the captured scope. It returns one bitmap per requested column, so callers can request and cache just the columns on screen. Neither API computes or estimates a total hit count.
 
 Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time (`RowSlice::window`). The literal text matcher is compiled and retained when the Find object is created; typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell.
 
@@ -116,7 +116,7 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [view/](src/view) | `FilteredView` (row membership, analysis, sorting) and `OrderedView` (rows, Find, export). |
 | [row_ids.rs](src/row_ids.rs) | Zero-allocation `RowIds`, `RowSlice` and `RowWindow` selections shared across views, Find and export. |
 | [col_view.rs](src/col_view.rs) | Borrowed `Column` and `RowSlice` projections, and the scan-order `Selection` used by analysis and filter candidates. |
-| [view/rows.rs](src/view/rows.rs) | `RowBlock` and formatted reads from a bound `OrderedView`. |
+| [view/column_segment.rs](src/view/column_segment.rs) | `FormattedColumnSegment` and source row indices from a bound `OrderedView`. |
 | [view/analysis.rs](src/view/analysis.rs) | Order-independent typed analyses and scatter calculation on `FilteredView`. |
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and range distributions on `FilteredView`. |
 | [view/find.rs](src/view/find.rs) | Cell Find snapshot capture on `OrderedView`. |

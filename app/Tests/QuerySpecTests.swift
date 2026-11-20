@@ -210,7 +210,7 @@ struct QuerySpecTests {
         try await settled(model)
         #expect(model.visibleColumns == [Self.c2, Self.c1, Self.c0])
         #expect(
-            try model.ordered.rows(start: 0, count: 10, columns: [Self.c0]).sourceRows == [
+            model.ordered.sourceRows(start: 0, count: 10) == [
                 0, 1, 2,
             ])
     }
@@ -330,7 +330,7 @@ struct QuerySpecTests {
         #expect(model.ordered !== initialOrdered)
         #expect(model.appliedSort(for: Self.c0)?.descending == true)
         #expect(model.visibleColumns == [Self.c1, Self.c0, Self.c2])
-        #expect(try model.ordered.rows(start: 0, count: 3, columns: [Self.c0]).cells == ["2", "1", "1"])
+        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["2", "1", "1"])
 
         // Hiding a column whose only pending condition differs from applied state cancels and commits columns.
         queryWorker.isSuspended = true
@@ -391,8 +391,6 @@ struct QuerySpecTests {
     @Test func revertingPendingFilterWhileVisibilityChangedAppliesColumnsSynchronously() async throws {
         let model = try model()
         defer { model.stop() }
-        model.selectedDisplayRow = 1
-        model.selectedSourceRow = 1
 
         let c0Filter = Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false)
         model.setFilter(c0Filter, column: Self.c0)
@@ -401,7 +399,6 @@ struct QuerySpecTests {
 
         #expect(!model.isBusy)
         #expect(model.visibleColumns == [Self.c0, Self.c1])
-        #expect(model.selectedDisplayRow == 1 && model.selectedSourceRow == 1)
     }
 
     @Test func exactDraftPreservesBytesAndNullsAreIndependent() {
@@ -454,7 +451,7 @@ struct QuerySpecTests {
         draft.includesMissing = true
         model.setFilter(draft.filter(mode: .exact), column: Self.c0)
         try await settled(model)
-        #expect(try model.ordered.rows(start: 0, count: 10, columns: [Self.c0]).sourceRows == [1])
+        #expect(model.ordered.sourceRows(start: 0, count: 10) == [1])
 
         // A null-only filter reopens as an editable exact selection.
         draft = ColumnFilterDraft(draft.filter(mode: .exact))
@@ -467,7 +464,7 @@ struct QuerySpecTests {
         draft.setValue(LiteralTextValue(value: "Missing (null)"), selected: true)
         model.setFilter(draft.filter(mode: .exact), column: Self.c0)
         try await settled(model)
-        #expect(try model.ordered.rows(start: 0, count: 10, columns: [Self.c0]).sourceRows == [1, 2])
+        #expect(model.ordered.sourceRows(start: 0, count: 10) == [1, 2])
 
         draft.selectAllValues(true)
         #expect(draft.filter(mode: .exact) == nil)
@@ -529,7 +526,7 @@ struct QuerySpecTests {
         #expect(model.ordered === ordered)
         #expect(model.viewer.appliedFilters == acceptedFilters && model.draftFilters == acceptedFilters)
         #expect(model.viewer.appliedSorts == acceptedSorts && model.draftSorts == acceptedSorts)
-        #expect(try model.ordered.rows(start: 0, count: 3, columns: [Self.c0]).nRows == 2)
+        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).rowCount == 2)
     }
 
     @Test func windowsSharingDatasetOwnIndependentQueriesAndCancellation() async throws {
@@ -544,8 +541,8 @@ struct QuerySpecTests {
         second.setFilter(Filter(condition: .exact(values: ["y"], exclude: false), includeNulls: false), column: Self.c2)
         try await settled(first)
         try await settled(second)
-        #expect(try first.ordered.rows(start: 0, count: 3, columns: [Self.c0]).sourceRows == [2])
-        #expect(try second.ordered.rows(start: 0, count: 3, columns: [Self.c0]).sourceRows == [1])
+        #expect(first.ordered.sourceRows(start: 0, count: 3) == [2])
+        #expect(second.ordered.sourceRows(start: 0, count: 3) == [1])
         first.refresh(debounce: true)
         first.stop()
         #expect(try second.filtered.countNulls(column: Self.c0) == 0)

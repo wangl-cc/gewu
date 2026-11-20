@@ -175,6 +175,7 @@ impl From<core::Error> for GewuError {
                 core::FindError::EmptyQuery
                 | core::FindError::InvalidPageSize { .. }
                 | core::FindError::InvalidHighlightRows { .. }
+                | core::FindError::InvalidHighlightColumn { .. }
                 | core::FindError::InvalidCursorRow { .. }
                 | core::FindError::InvalidCursorColumn { .. }
                 | core::FindError::Internal(_) => Self::Internal { message },

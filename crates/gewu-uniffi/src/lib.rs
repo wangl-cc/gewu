@@ -5,6 +5,7 @@
 
 mod analysis;
 mod column;
+mod column_segment;
 mod dataset;
 mod error;
 mod export;
@@ -18,13 +19,13 @@ mod scale;
 mod scatter;
 #[cfg(test)]
 mod tests;
-mod view;
 
 pub use analysis::{
     AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
     ValueFrequency, ValueSummary,
 };
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
+pub use column_segment::FormattedColumnSegment;
 pub use dataset::{DatasetInfo, GewuDataset};
 pub use error::{
     AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
@@ -37,11 +38,10 @@ pub use filter::{
     ValueChoice,
 };
 pub use filtered_view::GewuFilteredView;
-pub use find::{find_limits, CellMatch, FindHighlight, FindLimits, FindSession};
+pub use find::{find_limits, CellMatch, ColumnHighlight, FindHighlight, FindLimits, FindSession};
 pub use ordered_view::GewuOrderedView;
 pub use query::{ColumnFilter, ColumnSort};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
-pub use view::RowBlock;
 
 uniffi::setup_scaffolding!();

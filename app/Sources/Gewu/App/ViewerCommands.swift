@@ -76,7 +76,7 @@ struct ViewerCommands: Commands {
 
 private struct FindNavigationCommands: View {
     let model: DocumentModel
-    @ObservedObject var find: FindModel
+    let find: FindModel
 
     var body: some View {
         Button("Find Next") { model.findNext() }.keyboardShortcut("g")

@@ -69,7 +69,7 @@ enum ViewSmoke {
         let sorted = try filtered.sort(sorts: [ColumnSort(column: idCol, descending: true)])
         check(filtered.rowCount() == 2)
         check(sorted.rowCount() == 2)
-        check(try sorted.rows(start: 0, count: 10, columns: [idCol]).sourceRows == [2, 1])
+        check(sorted.sourceRows(start: 0, count: 10) == [2, 1])
         check(try filtered.statistics(column: idCol).mean == 2.5)
         let numericCapabilities = info.columns[0].analysis
         check(numericCapabilities.statistics && numericCapabilities.distribution && numericCapabilities.values)
@@ -87,10 +87,12 @@ enum ViewSmoke {
                 ])
         check(InspectorSection.values.mask == 8)
 
-        check(try sorted.rows(start: 0, count: 1, columns: [labelCol, idCol]).cells == ["three", "3"])
+        let label = try sorted.formatColumn(column: labelCol, start: 0, count: 1)
+        let id = try sorted.formatColumn(column: idCol, start: 0, count: 1)
+        check(label.cell(row: 0) == "three" && id.cell(row: 0) == "3")
         let restored = dataset!.unfiltered()
         check(restored.rowCount() == 3)
-        check(try originalOrdered.rows(start: 0, count: 3, columns: [idCol]).sourceRows == [0, 1, 2])
+        check(originalOrdered.sourceRows(start: 0, count: 3) == [0, 1, 2])
         check(try filtered.countNulls(column: idCol) == 0)
         dataset = nil
 

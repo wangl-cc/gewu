@@ -48,12 +48,11 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         ])
         .unwrap()
         .unsorted();
-    let rows = view.rows(0, len as u32, &[c0, c1, c2]).unwrap();
     let expected = (65531..=131080)
         .filter(|i| i % 3 == 2 && i % 2 == 0)
         .map(|i| i as u64)
         .collect::<Vec<_>>();
-    assert_eq!(rows.source_rows, expected);
+    assert_eq!(view.source_rows(0, len as u32), expected);
 
     let invalid = [ColumnFilter {
         column: c0,
@@ -63,7 +62,7 @@ fn batch_queries_preserve_source_codes_composition_and_highlights() {
         doc.filter(&invalid),
         Err(Error::Filter(gewu_core::FilterError::ReversedRange { .. }))
     ));
-    assert_eq!(view.rows(0, 1, &[c0]).unwrap().source_rows, expected[..1]);
+    assert_eq!(view.source_rows(0, 1), expected[..1]);
 }
 
 #[test]
@@ -105,6 +104,5 @@ fn query_spec_reorders_predicates_by_cost_and_shares_dataset() {
         .filter(|i| i % 5 == 0)
         .map(|i| i as u64)
         .collect();
-    let rows = view.rows(0, 100, &[c0]).unwrap();
-    assert_eq!(rows.source_rows, expected);
+    assert_eq!(view.source_rows(0, 100), expected);
 }

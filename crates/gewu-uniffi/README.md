@@ -20,7 +20,7 @@ Core, FFI and the App use immutable `GewuDataset`, `GewuFilteredView` and `GewuO
 
 UniFFI manages object lifetimes through generated Swift classes. `GewuFilteredView` and `GewuOrderedView` retain their underlying `Dataset` independently even after the original `GewuDataset` or `GewuFilteredView` handle is released. Find, candidate and export objects retain the buffers and row selection they need. Release old handles when their data is no longer needed: retaining multiple query results retains their row arrays, while source Arrow buffers and caches remain shared.
 
-There is no backend current view, column projection, query registration, commit, version lookup, query-spec getter or `StaleVersion`. Results such as `RowBlock`, `FindHighlight` and `ScatterResult` do not carry a version.
+There is no backend current view, column projection, query registration, commit, version lookup, query-spec getter or `StaleVersion`. Results such as `FormattedColumnSegment`, `FindHighlight` and `ScatterResult` do not carry a version.
 
 ## Open, filter, sort and read
 
@@ -28,11 +28,11 @@ There is no backend current view, column projection, query registration, commit,
 2. Read `dataset.info()` for `DatasetInfo` (whose `columns` carry `id: ColumnId`, presentation metadata, `capabilities: ColumnCapabilities` and `analysis: AnalysisCapabilities`) and file metadata. Call `dataset.unfiltered()` for a zero-allocation `GewuFilteredView` over all source rows, and `filtered.unsorted()` for an initial `GewuOrderedView` in O(1); run both on the background opening worker. `dataset.column_id(name)` looks up `Option<ColumnId>` by column name.
 3. Maintain `[ColumnFilter]`, `[ColumnSort]` and `[ColumnId]` visible columns in the frontend. `ColumnFilter { column: ColumnId, filter: Filter }` filters the full `GewuDataset`; `ColumnSort { column: ColumnId, descending: bool }` sorts a `GewuFilteredView`, with slice order defining sort priority. Omitted columns do not filter or sort; empty lists return `dataset.unfiltered()` or `filtered.unsorted()`.
 4. Call `dataset.filter(filters)` and `filtered.sort(sorts)` off the UI thread. Filtering always reads the full `GewuDataset` and returns a new `GewuFilteredView`; sorting operates on `GewuFilteredView` without mutating it or invalidating its order-independent analyses.
-5. Read `filtered.row_count()`, `ordered.row_count()` and `ordered.rows(start, count, columns)`. Explicit `columns: Vec<ColumnId>` arguments determine which columns are formatted and in what cell order; Rust stores no column projection.
+5. Read `filtered.row_count()` and `ordered.row_count()`. Use `ordered.format_column(column, start, count)` for each column segment and `ordered.source_rows(start, count)` for row indices.
 
-`start` is a zero-based display-row offset and the block is clipped to available rows. `cells` is row-major; `nil` means null. `source_rows` contains source indexes independent of display order. Row blocks contain owned formatted strings; request bounded visible blocks.
+`start` is a zero-based display-row offset. A read clips the range to the available rows. Each `FormattedColumnSegment` holds one column's UTF-8 buffer. Adjacent little-endian 32-bit offsets delimit the text for each row. The validity bitmap starts at the low bit and distinguishes null from empty text. A buffer over 2 GiB exceeds UniFFI's per-field limit. `ordered.source_rows(start, count)` returns the corresponding source indices.
 
-Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus row caches) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
+Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus cached column segments) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
 
 `DatasetInfo` combines column metadata with a typed `FileType` and tagged `FileMetadata`: Parquet row groups, compression and footer entries are available only in the Parquet case, while XLSX sheet information is available only in the Xlsx case.
 
@@ -40,9 +40,9 @@ Reordering or hiding unconditioned visible columns happens purely in the fronten
 
 Each window owns its applied `{ filtered, ordered }` views alongside applied `filters`, `sorts`, `visibleColumns` and pending drafts. Capture the pending inputs for each request, then replace the applied views and state together only after success and a matching local request identity. Failed requests and cancelled Swift tasks leave the applied state untouched. Initialize `visibleColumns` from `dataset.info().columns.map(\.id)`; the backend stores no column list or query conditions.
 
-For a pure column reorder, update `visibleColumns` in the frontend without calling Rust, keeping `filtered`, `ordered` and row caches intact. For a pure sort change, call `filtered.sort(sorts)` to replace `ordered` while keeping `filtered` and its cached analyses intact. For hiding columns, remove any filter or sort on those columns and run `dataset.filter` / `filtered.sort` only if `filters` or `sorts` changed. Showing adds `ColumnId` entries without altering filters or sorts.
+For a pure column reorder, update `visibleColumns` in the frontend without calling Rust, keeping `filtered`, `ordered` and cached column segments intact. For a pure sort change, call `filtered.sort(sorts)` to replace `ordered` while keeping `filtered` and its cached analyses intact. For hiding columns, remove any filter or sort on those columns and run `dataset.filter` / `filtered.sort` only if `filters` or `sorts` changed. Showing adds `ColumnId` entries without altering filters or sorts.
 
-Row caches, Find and export capture `GewuOrderedView`; analysis and filter editors capture `GewuFilteredView`. On replacement, cancel obsolete Swift tasks, skip queued operations, and clear or replace only the caches invalidated by the change (`filtered` replacement invalidates everything; pure sort replacement invalidates row caches and Find while keeping `filtered` analysis caches). Two windows may share a `GewuDataset` or views and subsequently diverge independently. Opening the same path twice does not automatically share decoded data.
+Table segment caches, Find and export capture `GewuOrderedView`; analysis and filter editors capture `GewuFilteredView`. On replacement, cancel obsolete Swift tasks, skip queued operations, and clear or replace only the caches invalidated by the change (`filtered` replacement invalidates everything; pure sort replacement invalidates segment caches and Find while keeping `filtered` analysis caches). Two windows may share a `GewuDataset` or views and subsequently diverge independently. Opening the same path twice does not automatically share decoded data.
 
 ### XLSX worksheets
 
@@ -67,7 +67,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | `filter`, `sort`, `count_nulls`, `statistics`, `distribution`, `values`, `lengths`, `scatter`, `filter_choices`, `filter_distribution` | Background scans, native kernels or dictionary construction. |
 | Find pages/highlights, text pages, export writes | Background; even bounded outputs can require full scans. |
 | Metadata, `unfiltered`, `unsorted`, `find`, `export` creation, `nested_export_columns`, `column_structure` | Metadata access or O(1) shared snapshot capture. |
-| `rows` | Small visible blocks; cost grows with cell count and formatting. |
+| `format_column`, `source_rows` | Viewport reads. Formatting cost grows with the number and length of cells. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
 Filtering, sorting, analyses, candidate lists and Find requests run synchronously to completion in Rust without cooperative cancellation tokens. Swift owns request replacement and cancellation: callers cancel obsolete Swift `Task`s, guard serial worker queues so superseded or cancelled queued operations skip FFI execution, and gate publication on captured view/context and request identity. Different views and unrelated requests never invalidate each other.
@@ -78,7 +78,7 @@ Dictionary construction synchronizes lazily per column and publishes a completed
 
 ## Cell Find
 
-`ordered.find(query, columns)` captures the `GewuOrderedView`'s display row order and the requested ordered `Vec<ColumnId>` column scope. `next` and `previous` return exclusive directional `CellMatch { display_row, column: ColumnId }` pages; an empty page marks a boundary and a missing cursor restarts from that end. `highlight` returns match flags for a display block, without formatting values or changing the view.
+`ordered.find(query, columns)` captures the `GewuOrderedView`'s display row order and the requested ordered `Vec<ColumnId>` column scope. `next` and `previous` return exclusive directional `CellMatch { display_row, column: ColumnId }` pages; an empty page marks a boundary and a missing cursor restarts from that end. `highlight(columns, start, count)` returns one match bitmap per requested column (one bit per row, low bit first) for a display block, without formatting values or changing the view. Request only the columns on screen; each must belong to the Find scope.
 
 Call `find_limits()` for maximum page/highlight sizes (currently 256 cells or rows). No total hit count is implied. Text matching is compiled once per Find object. Gate navigation and highlight publication in Swift with request identity.
 
@@ -152,6 +152,7 @@ cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
   generate --library target/debug/libgewu.dylib --language swift --out-dir build/view-bindings
 xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
   crates/gewu-uniffi/tests/view-smoke.swift \
+  app/Sources/Gewu/Table/FormattedColumnSegment.swift \
   app/Sources/Gewu/Inspector/InspectorSection.swift -I build/view-bindings \
   -Xcc -fmodule-map-file=build/view-bindings/gewuFFI.modulemap \
   -L target/debug -lgewu -Xlinker -rpath -Xlinker "$PWD/target/debug" \
@@ -159,4 +160,4 @@ xcrun swiftc -parse-as-library build/view-bindings/gewu.swift \
 build/view-bindings/view-smoke
 ```
 
-The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`, [view.rs](src/view.rs) owns `RowBlock`, and other feature modules own their records and Core conversions; [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.
+The public handles are [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [query.rs](src/query.rs) owns `ColumnFilter` and `ColumnSort`, [column.rs](src/column.rs) owns `ColumnId` and `ColumnInfo`, and [column_segment.rs](src/column_segment.rs) owns `FormattedColumnSegment`. [lib.rs](src/lib.rs) declares exports. The App build and test target consume these generated interfaces directly.

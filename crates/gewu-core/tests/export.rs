@@ -314,15 +314,13 @@ fn parquet_export_honors_explicit_compression() {
         panic!("expected Parquet metadata");
     };
     assert_eq!(compression, &["SNAPPY"]);
-    assert_eq!(
-        reopened
-            .unfiltered()
-            .unsorted()
-            .rows(0, 5, &[c0, c1])
-            .unwrap()
-            .cells,
-        doc.rows(0, 5, &[c0, c1]).unwrap().cells
-    );
+    let reopened = reopened.unfiltered().unsorted();
+    for column in [c0, c1] {
+        assert_eq!(
+            reopened.format_column(column, 0, 5).unwrap(),
+            doc.format_column(column, 0, 5).unwrap()
+        );
+    }
 }
 
 #[test]

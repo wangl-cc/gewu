@@ -73,7 +73,7 @@ enum ColumnWidthMeasurement {
         let name: String
         let type: String
         let text: Bool
-        var sample: [String?]? = nil
+        var sample: (segment: FormattedColumnSegment, row: Int)? = nil
     }
 
     /// Runs on a serial worker. Limit UTF-16 input before grapheme processing so
@@ -83,13 +83,13 @@ enum ColumnWidthMeasurement {
         maximum: CGFloat, cancellation: Request
     ) throws -> [ColumnId: CGFloat] {
         var result: [ColumnId: CGFloat] = [:]
+        let rowCount = ordered.rowCount()
+        let count = Int(min(32, rowCount - min(start, rowCount)))
         func width(_ text: String, font: NSFont) -> CGFloat {
             let sample = String(decoding: text.utf16.prefix(512), as: UTF16.self)
             return ceil((sample as NSString).size(withAttributes: [.font: font]).width)
         }
-        for column in columns {
-            try cancellation.check()
-            let cells = try column.sample ?? ordered.rows(start: start, count: 32, columns: [column.column]).cells
+        func measure(_ column: Input, cell: (Int) -> String?) {
             var size =
                 max(
                     width(column.name, font: .systemFont(ofSize: fontSize, weight: .semibold)),
@@ -97,8 +97,19 @@ enum ColumnWidthMeasurement {
             let font =
                 column.text
                 ? NSFont.systemFont(ofSize: fontSize) : .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
-            for cell in cells.prefix(32) { size = max(size, width(cell ?? "null", font: font) + 20) }
+            for row in 0..<count {
+                size = max(size, width(cell(row) ?? "null", font: font) + 20)
+            }
             result[column.column] = min(max(size, 80), maximum)
+        }
+        for column in columns {
+            try cancellation.check()
+            if let sample = column.sample, sample.row + count <= Int(sample.segment.rowCount) {
+                measure(column) { sample.segment.cell(row: sample.row + $0) }
+            } else {
+                let segment = try ordered.formatColumn(column: column.column, start: start, count: UInt32(count))
+                measure(column) { segment.cell(row: $0) }
+            }
         }
         try cancellation.check()
         return result
