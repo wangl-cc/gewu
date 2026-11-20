@@ -142,15 +142,6 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
     assert_eq!(doc.nested_export_columns(&[c3, c0, c1]).unwrap(), [
         "items", "tags"
     ]);
-    // Clipboard reads display text through the same packed column path as the table.
-    assert_eq!(doc.format_column(c0, 0, 1).unwrap().cell(0), Some("3"));
-    assert!(doc
-        .format_column(c1, 0, 1)
-        .unwrap()
-        .cell(0)
-        .unwrap()
-        .contains("雪"));
-    assert!(doc.format_column(c2, 0, 1).unwrap().cell(0).is_some());
     assert!(doc
         .nested_export_columns(&[ColumnId::from_raw(99)])
         .is_err());

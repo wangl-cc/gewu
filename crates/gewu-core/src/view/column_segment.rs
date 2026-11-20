@@ -97,7 +97,9 @@ impl OrderedView {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::array::{
+        ArrayRef, Int32Array, ListBuilder, RecordBatch, StringArray, StringBuilder,
+    };
 
     use super::*;
     use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
@@ -165,5 +167,35 @@ mod tests {
             None,
             Some("é")
         ]);
+    }
+
+    #[test]
+    fn nested_values_format_as_their_display_text() {
+        let mut tags = ListBuilder::new(StringBuilder::new());
+        tags.values().append_value("雪");
+        tags.values().append_null();
+        tags.append(true);
+        tags.append(false);
+        tags.append(true);
+        let tags: ArrayRef = Arc::new(tags.finish());
+        let batch = RecordBatch::try_from_iter([("tags", tags)]).unwrap();
+        let dataset = Arc::new(Dataset {
+            source_path: Default::default(),
+            schema: batch.schema(),
+            columns: vec![Column::new("tags", batch.column(0).clone()).unwrap()],
+            n_rows: batch.num_rows(),
+            file_size: 0,
+            format: FileType::Parquet,
+            metadata: FileMetadata::Delimited,
+        });
+        let segment = dataset
+            .unfiltered()
+            .unsorted()
+            .format_column(ColumnId::from_raw(0), 0, 64)
+            .unwrap();
+        let actual: Vec<_> = (0..segment.row_count())
+            .map(|row| segment.cell(row))
+            .collect();
+        assert_eq!(actual, [Some("[雪, ]"), None, Some("[]")]);
     }
 }

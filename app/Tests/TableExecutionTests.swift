@@ -11,7 +11,7 @@ struct TableExecutionTests {
     private static let c2 = ColumnId(raw: 2)
 
     private static func dataset() throws -> GewuDataset {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-loader-\(UUID()).csv")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("segment-loader-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         try "number,label,other\n1,first,10\n2,second,20\n3,third,30\n".write(
             to: path, atomically: true, encoding: .utf8)

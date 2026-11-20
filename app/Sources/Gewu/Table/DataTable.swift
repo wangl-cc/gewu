@@ -616,14 +616,9 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         guard row >= 0, index >= 0, index < table.tableColumns.count,
             let column = columnId(table.tableColumns[index])
         else { return nil }
-        if let cached = segments.segment(for: row, column: column) {
-            return CellContent(row: row, column: column, text: cached.segment.cell(row: cached.row))
-        }
-        // Large values can be displayed without being retained by the row cache.
-        guard let cell = table.view(atColumn: index, row: row, makeIfNecessary: false) as? MatchCellView,
-            !cell.isLoading, let field = cell.textField
-        else { return nil }
-        return CellContent(row: row, column: column, text: cell.muted ? nil : field.stringValue)
+        // Visible segments stay available even when they are too large for the LRU.
+        guard let cached = segments.segment(for: row, column: column) else { return nil }
+        return CellContent(row: row, column: column, text: cached.segment.cell(row: cached.row))
     }
 
     private func cellMenu(row: Int, index: Int) -> NSMenu? {
@@ -964,9 +959,10 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
 
     @objc func copy(_ sender: Any?) {
         guard !table.selectedRowIndexes.isEmpty else { return }
+        let columns = displayedColumns
         model.copying.copy(
-            ordered: model.ordered, rows: Array(table.selectedRowIndexes.rangeView), columns: displayedColumns,
-            names: displayedColumns.map { model.columnInfo[$0]?.name ?? "" })
+            ordered: model.ordered, rows: Array(table.selectedRowIndexes.rangeView), columns: columns,
+            names: columns.map { model.columnInfo[$0]?.name ?? "" })
     }
 }
 

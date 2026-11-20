@@ -32,7 +32,7 @@ There is no backend current view, column projection, query registration, commit,
 
 `start` is a zero-based display-row offset. A read clips the range to the available rows. Each `FormattedColumnSegment` holds one column's UTF-8 buffer. Adjacent little-endian 32-bit offsets delimit the text for each row. The validity bitmap starts at the low bit and distinguishes null from empty text. A buffer over 2 GiB exceeds UniFFI's per-field limit. `ordered.source_rows(start, count)` returns the corresponding source indices.
 
-Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus row caches) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
+Reordering or hiding unconditioned visible columns happens purely in the frontend's `visibleColumns` list with zero FFI work, keeping both `GewuFilteredView` and `GewuOrderedView` (plus cached column segments) intact. Hiding a filtered or sorted column removes its condition from `[ColumnFilter]`/`[ColumnSort]` and re-runs `filter` or `sort` only for the layer that changed.
 
 `DatasetInfo` combines column metadata with a typed `FileType` and tagged `FileMetadata`: Parquet row groups, compression and footer entries are available only in the Parquet case, while XLSX sheet information is available only in the Xlsx case.
 
@@ -40,9 +40,9 @@ Reordering or hiding unconditioned visible columns happens purely in the fronten
 
 Each window owns its applied `{ filtered, ordered }` views alongside applied `filters`, `sorts`, `visibleColumns` and pending drafts. Capture the pending inputs for each request, then replace the applied views and state together only after success and a matching local request identity. Failed requests and cancelled Swift tasks leave the applied state untouched. Initialize `visibleColumns` from `dataset.info().columns.map(\.id)`; the backend stores no column list or query conditions.
 
-For a pure column reorder, update `visibleColumns` in the frontend without calling Rust, keeping `filtered`, `ordered` and row caches intact. For a pure sort change, call `filtered.sort(sorts)` to replace `ordered` while keeping `filtered` and its cached analyses intact. For hiding columns, remove any filter or sort on those columns and run `dataset.filter` / `filtered.sort` only if `filters` or `sorts` changed. Showing adds `ColumnId` entries without altering filters or sorts.
+For a pure column reorder, update `visibleColumns` in the frontend without calling Rust, keeping `filtered`, `ordered` and cached column segments intact. For a pure sort change, call `filtered.sort(sorts)` to replace `ordered` while keeping `filtered` and its cached analyses intact. For hiding columns, remove any filter or sort on those columns and run `dataset.filter` / `filtered.sort` only if `filters` or `sorts` changed. Showing adds `ColumnId` entries without altering filters or sorts.
 
-Row caches, Find and export capture `GewuOrderedView`; analysis and filter editors capture `GewuFilteredView`. On replacement, cancel obsolete Swift tasks, skip queued operations, and clear or replace only the caches invalidated by the change (`filtered` replacement invalidates everything; pure sort replacement invalidates row caches and Find while keeping `filtered` analysis caches). Two windows may share a `GewuDataset` or views and subsequently diverge independently. Opening the same path twice does not automatically share decoded data.
+Table segment caches, Find and export capture `GewuOrderedView`; analysis and filter editors capture `GewuFilteredView`. On replacement, cancel obsolete Swift tasks, skip queued operations, and clear or replace only the caches invalidated by the change (`filtered` replacement invalidates everything; pure sort replacement invalidates segment caches and Find while keeping `filtered` analysis caches). Two windows may share a `GewuDataset` or views and subsequently diverge independently. Opening the same path twice does not automatically share decoded data.
 
 ### XLSX worksheets
 
@@ -133,8 +133,8 @@ Poll `progress()`, but wait for successful return before declaring completion: a
 | `Filter { kind, message }` | Show invalid user values, reversed ranges and text-compilation failures. |
 | `Find { kind, message }` | Report failures possible for ordinary Find input. |
 | `Analysis { kind, message }` | Report data-dependent analysis failures. |
-| `Export { kind, message }` | Report destination conflicts, incompatible columns, encoding failures and formats that cannot be written as text. |
-| `Limit { kind, message }` | Report Dataset/XLSX limits with typed values. |
+| `Export { kind, message }` | Report destination conflicts, incompatible columns and encoding failures. |
+| `Limit { kind, message }` | Report Dataset/XLSX limits with typed actual and allowed values. |
 | `Cancelled` | Returned when an in-progress `GewuExport` is cancelled before destination commit. |
 | `Internal { message }` | Report implementation defects and calls that violate the frontend/backend contract. |
 
