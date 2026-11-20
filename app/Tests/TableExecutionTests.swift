@@ -23,10 +23,10 @@ struct TableExecutionTests {
 
     @MainActor
     private static func gatedLoader(
-        byteLimit: Int = 8 * 1024 * 1024, batchByteLimit: Int = 1024 * 1024
+        byteLimit: Int = 8 * 1024 * 1024, segmentByteLimit: Int = 1024 * 1024
     ) -> (TableSegmentLoader, AsyncStream<PendingTableRead>, AsyncStream<PendingTableRead>.Continuation) {
         let reads = AsyncStream<PendingTableRead>.makeStream()
-        let loader = TableSegmentLoader(byteLimit: byteLimit, batchByteLimit: batchByteLimit) { view, keys in
+        let loader = TableSegmentLoader(byteLimit: byteLimit, segmentByteLimit: segmentByteLimit) { view, keys in
             try await withCheckedThrowingContinuation { continuation in
                 reads.continuation.yield(.init(view: view, keys: keys, continuation: continuation))
             }
@@ -109,7 +109,7 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
-    static func loaderPrioritizesLatestViewportAndKeepsOversizedBatchesVisible() async throws {
+    static func loaderKeepsOversizedSegmentsVisibleAndCachesOtherColumns() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let long = String(repeating: "x", count: 4096)
@@ -117,7 +117,7 @@ struct TableExecutionTests {
             .write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
         let longColumn = ColumnId(raw: 1)
-        let (loader, stream, reads) = gatedLoader(batchByteLimit: 2048)
+        let (loader, stream, reads) = gatedLoader(segmentByteLimit: 2048)
         let delivered = AsyncStream<TableSegments>.makeStream()
         defer {
             loader.stop()
@@ -145,7 +145,8 @@ struct TableExecutionTests {
         loader.updateViewport(rows: 192..<202, columns: [c0])
         #expect(loader.segment(for: 200, column: c0)?.segment.cell(row: 8) == "200")
         loader.updateViewport(rows: 256..<260, columns: [c0, longColumn])
-        #expect(loader.segment(for: 200, column: c0) == nil, "Oversized batches are released outside the viewport")
+        #expect(loader.segment(for: 200, column: longColumn) == nil, "Oversized segments are released offscreen")
+        #expect(loader.segment(for: 200, column: c0)?.segment.cell(row: 8) == "200", "The small column was cached")
         let next = try #require(await requests.next())
         #expect(next.keys.first == source(4), "A completed oversized segment must not start an endless reread loop")
         next.finish()
@@ -159,7 +160,7 @@ struct TableExecutionTests {
         let lines = (0..<64).map { "first\($0),second\($0)" }.joined(separator: "\n")
         try ("a,b\n" + lines).write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        // One text batch fits in the LRU, two do not. Both are visible.
+        // One column segment fits in the LRU, two do not. Both are visible.
         let loader = TableSegmentLoader(byteLimit: 1024)
         let loaded = AsyncStream<TableSegments>.makeStream()
         loader.onLoad = { _, data in loaded.continuation.yield(data) }
@@ -178,11 +179,11 @@ struct TableExecutionTests {
         #expect(loader.segment(for: 32, column: c1)?.segment.cell(row: 32) == "second32")
         #expect(loader.sourceRow(for: 32) == 32)
         loader.updateViewport(rows: 0..<64, columns: [c1])
-        #expect(loader.segment(for: 32, column: c0) == nil, "The evicted batch is released outside the viewport")
+        #expect(loader.segment(for: 32, column: c0) == nil, "The evicted segment is released outside the viewport")
     }
 
     @Test @MainActor
-    static func loaderReadsWideViewportsInOneCallAndClampsRows() async throws {
+    static func loaderReadsAllColumnsInWideViewportsAndClampsRows() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("wide-viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let header = (0..<65).map { "c\($0)" }.joined(separator: ",")
@@ -207,13 +208,11 @@ struct TableExecutionTests {
         #expect(first.keys == [source(0)] + columns.map { key(0, $0) })
         first.finish()
         let batch = try #require(await batches.next())
-        let last = try #require(batch.segments[key(0, ColumnId(raw: 64))])
-        let firstColumn = try #require(batch.segments[key(0, c0)])
-        let column63 = try #require(batch.segments[key(0, ColumnId(raw: 63))])
-        #expect(firstColumn.batch === column63.batch)
-        #expect(last.batch !== column63.batch)
-        #expect(firstColumn.batch.keys.count == 64)
-        #expect(last.rowCount == 1 && last.batch.text.utf8 == Data("64".utf8))
+        #expect(batch.segments.count == 65)
+        for (index, column) in columns.enumerated() {
+            let segment = try #require(batch.segments[key(0, column)])
+            #expect(segment.rowCount == 1 && segment.utf8 == Data(String(index).utf8))
+        }
         #expect(loader.segment(for: 0, column: ColumnId(raw: 63)).map { $0.segment.texts } == ["63"])
         #expect(loader.sourceRow(for: 0) == 0)
         // A source-only viewport also works without formatting any cells.
@@ -275,7 +274,7 @@ struct TableExecutionTests {
         #expect(loader.cachedEntryCount == 2, "Entries of the previous View are released")
     }
 
-    static func segment(_ values: [String?]) -> FormattedColumnText {
+    static func segment(_ values: [String?]) -> FormattedColumnSegment {
         var utf8 = Data()
         var offsets: [UInt32] = [0]
         var validity = Data(repeating: 0, count: (values.count + 7) / 8)
@@ -286,7 +285,7 @@ struct TableExecutionTests {
             }
             offsets.append(UInt32(utf8.count).littleEndian)
         }
-        return FormattedColumnText(
+        return FormattedColumnSegment(
             rowCount: UInt32(values.count), utf8: utf8, offsets: offsets.withUnsafeBytes { Data($0) },
             validity: validity)
     }
@@ -299,8 +298,8 @@ struct TableExecutionTests {
         let csv = "number,text\n" + values.enumerated().map { "\($0.offset),\($0.element)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        let text = try view.formatColumns(columns: [c1], start: 0, count: 64)
-        let numbers = try view.formatColumns(columns: [c0], start: 0, count: 64)
+        let text = try view.formatColumn(column: c1, start: 0, count: 64)
+        let numbers = try view.formatColumn(column: c0, start: 0, count: 64)
         #expect(view.sourceRows(start: 0, count: 64) == (0..<10).map(UInt64.init))
         #expect(text.texts == values.map { $0.isEmpty ? nil : $0 })
         #expect(numbers.texts == (0..<10).map { String($0) })
@@ -378,10 +377,6 @@ struct TableExecutionTests {
             Issue.record("Expected cancelled table read")
         } catch is CancellationError {}
     }
-}
-
-extension FormattedColumnText {
-    var texts: [String?] { (0..<Int(rowCount)).map { cell(row: $0) } }
 }
 
 extension FormattedColumnSegment {

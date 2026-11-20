@@ -15,7 +15,7 @@ Core separates state into a three-layer unidirectional model: `Dataset` → `Fil
 - `dataset.filter(filters)` validates `&[ColumnFilter]`, filters the **full Dataset**, and returns an independent `Arc<FilteredView>` (empty filter lists return `dataset.unfiltered()` with zero row-ID allocation). Relaxing a filter can therefore recover rows absent from previous views.
 - `filtered.facet(column)` returns the view under every filter except `column`'s own, for that column's filter editor. Each filtered view keeps one selection bitmap per filter condition over all source rows, so a facet is the intersection of the other bitmaps; no predicate is re-evaluated. A column without a filter returns the same view.
 - `filtered.sort(sorts)` validates `&[ColumnSort]` (slice order defines sort priority), sorts `filtered`'s row selection independently, and returns an `Arc<OrderedView>` without mutating `filtered` (empty sort lists return `filtered.unsorted()`, sharing the same `RowIds`).
-- `ordered.format_columns(columns, start, count)` packs formatted cells into one column-major UTF-8 buffer with 32-bit offsets and a validity bitmap. `ordered.format_column(column, start, count)` reads a single column using the same representation. Read source row indices separately with `ordered.source_rows(start, count)`.
+- `ordered.format_column(column, start, count)` packs one column's display rows into a UTF-8 buffer with 32-bit offsets and a validity bitmap. Read source row indices separately with `ordered.source_rows(start, count)`.
 - `ordered.find(query, columns)` captures shared `RowIds` and column arrays for bounded navigation and highlighting over `&[ColumnId]`.
 - `ordered.export(columns, format)` captures shared data and a `&[ColumnId]` projection for a single-use export with progress, cancellation and atomic destination replacement. `ordered.nested_export_columns(columns)` inspects nested types without scanning.
 
@@ -116,7 +116,7 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [view/](src/view) | `FilteredView` (row membership, analysis, sorting) and `OrderedView` (rows, Find, export). |
 | [row_ids.rs](src/row_ids.rs) | Zero-allocation `RowIds`, `RowSlice` and `RowWindow` selections shared across views, Find and export. |
 | [col_view.rs](src/col_view.rs) | Borrowed `Column` and `RowSlice` projections, and the scan-order `Selection` used by analysis and filter candidates. |
-| [view/column_segment.rs](src/view/column_segment.rs) | `FormattedColumnText` and source row indices from a bound `OrderedView`. |
+| [view/column_segment.rs](src/view/column_segment.rs) | `FormattedColumnSegment` and source row indices from a bound `OrderedView`. |
 | [view/analysis.rs](src/view/analysis.rs) | Order-independent typed analyses and scatter calculation on `FilteredView`. |
 | [view/filter.rs](src/view/filter.rs) | Visible candidate counts and range distributions on `FilteredView`. |
 | [view/find.rs](src/view/find.rs) | Cell Find snapshot capture on `OrderedView`. |

@@ -190,13 +190,13 @@ fn rows(c: &mut Criterion) {
     let mut g = c.benchmark_group("rows");
 
     let plain = doc.unfiltered().unsorted();
-    // The table reads 64 rows at a time in batches of up to 64 columns.
-    g.bench_function("column_batches_256_all_columns", |b| {
+    // The table reads 64 display rows of one column at a time.
+    g.bench_function("column_segments_256_all_columns", |b| {
         b.iter(|| {
-            for group in columns.chunks(64) {
+            for &column in &columns {
                 for block in 0..4 {
                     plain
-                        .format_columns(group, 1_000_000 + block * 64, 64)
+                        .format_column(column, 1_000_000 + block * 64, 64)
                         .unwrap();
                 }
             }

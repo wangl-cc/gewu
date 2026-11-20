@@ -68,7 +68,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
             }))
             .unwrap();
         let ordered = filtered.unsorted();
-        let rows = ordered.format_columns(vec![id_col], 0, 10).unwrap();
+        let rows = ordered.format_column(id_col, 0, 10).unwrap();
         assert_eq!(ordered.source_rows(0, 10), [1]);
         assert_eq!(rows.utf8, b"9007199254740993");
     }
@@ -152,7 +152,7 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert_eq!(
         filtered
             .unsorted()
-            .format_columns(vec![label_col], 0, 10)
+            .format_column(label_col, 0, 10)
             .unwrap()
             .utf8,
         b"dog"
@@ -179,29 +179,11 @@ fn text_filter_modes_and_choices_cross_ffi() {
             descending: true,
         }])
         .unwrap();
-    let batch = sorted_desc
-        .read_segments(
-            vec![RowSpan { start: 0, count: 2 }, RowSpan {
-                start: 1,
-                count: 64,
-            }],
-            vec![
-                ColumnBatch {
-                    columns: vec![label_col, id_col],
-                    start: 1,
-                    count: 64,
-                },
-                ColumnBatch {
-                    columns: vec![id_col],
-                    start: 0,
-                    count: 64,
-                },
-            ],
-        )
-        .unwrap();
-    assert_eq!(batch.source_rows, [vec![1, 0], vec![0]]);
-    let [label, id] = batch.batches.try_into().ok().unwrap();
-    assert_eq!((label.row_count, label.utf8), (1, b"cat10".to_vec()));
+    assert_eq!(sorted_desc.source_rows(0, 2), [1, 0]);
+    assert_eq!(sorted_desc.source_rows(1, 64), [0]);
+    let label = sorted_desc.format_column(label_col, 1, 64).unwrap();
+    let id = sorted_desc.format_column(id_col, 0, 64).unwrap();
+    assert_eq!((label.row_count, label.utf8), (1, b"cat".to_vec()));
     assert_eq!((id.row_count, id.utf8), (2, b"2010".to_vec()));
     let offsets: Vec<u8> = [0u32, 2, 4]
         .into_iter()
@@ -209,11 +191,7 @@ fn text_filter_modes_and_choices_cross_ffi() {
         .collect();
     assert_eq!(id.offsets, offsets);
     assert!(sorted_desc
-        .read_segments(vec![], vec![ColumnBatch {
-            columns: vec![ColumnId { raw: 99 }],
-            start: 0,
-            count: 1,
-        }])
+        .format_column(ColumnId { raw: 99 }, 0, 1)
         .is_err());
     std::fs::remove_file(source).unwrap();
 }
@@ -328,7 +306,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 selected
                     .unfiltered()
                     .unsorted()
-                    .format_columns(vec![selected_label], 0, 1)
+                    .format_column(selected_label, 0, 1)
                     .unwrap()
                     .utf8,
                 b"cat"

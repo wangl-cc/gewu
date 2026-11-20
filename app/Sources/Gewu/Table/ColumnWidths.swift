@@ -102,22 +102,13 @@ enum ColumnWidthMeasurement {
             }
             result[column.column] = min(max(size, 80), maximum)
         }
-        var missing: [Input] = []
         for column in columns {
             try cancellation.check()
             if let sample = column.sample, sample.row + count <= Int(sample.segment.rowCount) {
                 measure(column) { sample.segment.cell(row: sample.row + $0) }
             } else {
-                missing.append(column)
-            }
-        }
-        for first in stride(from: 0, to: missing.count, by: TableSegments.columnsPerBatch) {
-            try cancellation.check()
-            let group = missing[first..<min(first + TableSegments.columnsPerBatch, missing.count)]
-            let text = try ordered.formatColumns(columns: group.map(\.column), start: start, count: UInt32(count))
-            for (index, column) in group.enumerated() {
-                try cancellation.check()
-                measure(column) { text.cell(row: $0, column: index) }
+                let segment = try ordered.formatColumn(column: column.column, start: start, count: UInt32(count))
+                measure(column) { segment.cell(row: $0) }
             }
         }
         try cancellation.check()

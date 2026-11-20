@@ -29,7 +29,6 @@ final class LRUCache<Key: Hashable, Value> {
     }
 
     var count: Int { slots.count }
-    var onRemove: ((Key, Value) -> Void)?
 
     func contains(_ key: Key) -> Bool { slots[key] != nil }
 
@@ -88,7 +87,6 @@ final class LRUCache<Key: Hashable, Value> {
         unlink(slot)
         slots[nodes[slot].key] = nil
         totalCost -= nodes[slot].cost
-        if let value = nodes[slot].value { onRemove?(nodes[slot].key, value) }
         nodes[slot].value = nil
         nodes[slot].cost = 0
         freeSlots.append(slot)

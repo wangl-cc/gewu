@@ -62,7 +62,7 @@ struct ColumnWidthTests {
         let bogus = ColumnId(raw: 99)
         let cached = ColumnWidthMeasurement.Input(
             column: bogus, name: "value", type: "Text", text: true,
-            sample: (.init(batch: .init(keys: [], text: TableExecutionTests.segment(["cached value"])), column: 0), 0))
+            sample: (TableExecutionTests.segment(["cached value"]), 0))
         let widths = try ColumnWidthMeasurement.measure(
             ordered: ordered, columns: [cached], start: 0, fontSize: 12, maximum: 600, cancellation: .init())
         #expect(widths[bogus] != nil)
@@ -75,8 +75,7 @@ struct ColumnWidthTests {
         try ("value\n" + values.joined(separator: "\n")).write(to: url, atomically: true, encoding: .utf8)
         let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
         let column = ColumnId(raw: 0)
-        let text = try ordered.formatColumns(columns: [column], start: 0, count: 64)
-        let segment = FormattedColumnSegment(batch: .init(keys: [], text: text), column: 0)
+        let segment = try ordered.formatColumn(column: column, start: 0, count: 64)
         var input = ColumnWidthMeasurement.Input(column: column, name: "value", type: "Text", text: true)
         let cold = try ColumnWidthMeasurement.measure(
             ordered: ordered, columns: [input], start: 1, fontSize: 12, maximum: 800, cancellation: .init())

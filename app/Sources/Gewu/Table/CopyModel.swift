@@ -86,20 +86,15 @@ enum CopyText {
                 var lines = Array(repeating: "", count: count)
                 let separators = hasLine ? count : count - 1
                 var remaining = limit - data.count - separators
-                for first in stride(from: 0, to: columns.count, by: TableSegments.columnsPerBatch) {
+                for (index, column) in columns.enumerated() {
                     try Task.checkCancellation()
-                    let end = min(first + TableSegments.columnsPerBatch, columns.count)
-                    let group = Array(columns[first..<end])
-                    let text = try ordered.formatColumns(columns: group, start: UInt64(start), count: UInt32(count))
+                    let segment = try ordered.formatColumn(column: column, start: UInt64(start), count: UInt32(count))
                     for row in 0..<count {
-                        for column in group.indices {
-                            let value = escaped(text.cell(row: row, column: column) ?? "")
-                            let separator = first + column > 0
-                            remaining -= value.utf8.count + (separator ? 1 : 0)
-                            guard remaining >= 0 else { throw TooLarge() }
-                            if separator { lines[row].append("\t") }
-                            lines[row].append(value)
-                        }
+                        let value = escaped(segment.cell(row: row) ?? "")
+                        remaining -= value.utf8.count + (index > 0 ? 1 : 0)
+                        guard remaining >= 0 else { throw TooLarge() }
+                        if index > 0 { lines[row].append("\t") }
+                        lines[row].append(value)
                     }
                 }
                 for line in lines { try append(line) }

@@ -19,7 +19,7 @@ mod filter;
 mod find;
 mod selection;
 
-pub use column_segment::FormattedColumnText;
+pub use column_segment::FormattedColumnSegment;
 pub(crate) use selection::FilterSelection;
 
 /// Immutable snapshot of filters applied to a [`Dataset`].

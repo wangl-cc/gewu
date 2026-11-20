@@ -1,13 +1,13 @@
-//! Column-major display text and source row indices.
+//! Per-column display text and source row indices.
 
 use std::fmt::Write;
 
 use super::OrderedView;
 use crate::{format, ColumnId, InternalError, Result};
 
-/// Display text packed in column order into one UTF-8 buffer.
+/// Display text for one column packed into one UTF-8 buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FormattedColumnText {
+pub struct FormattedColumnSegment {
     row_count: u32,
     text: String,
     /// One offset per row plus the final end offset.
@@ -16,28 +16,22 @@ pub struct FormattedColumnText {
     validity: Vec<u8>,
 }
 
-impl FormattedColumnText {
+impl FormattedColumnSegment {
     pub fn row_count(&self) -> u32 {
         self.row_count
     }
 
     /// Text of a row relative to the segment start; `None` for null or out of range.
     pub fn cell(&self, row: u32) -> Option<&str> {
-        self.cell_in_column(0, row)
-    }
-
-    pub fn cell_in_column(&self, column: usize, row: u32) -> Option<&str> {
         if row >= self.row_count {
             return None;
         }
-        let index = column
-            .checked_mul(self.row_count as usize)?
-            .checked_add(row as usize)?;
-        let end = *self.offsets.get(index.checked_add(1)?)? as usize;
-        if self.validity[index / 8] & (1 << (index % 8)) == 0 {
+        let row = row as usize;
+        if self.validity[row / 8] & (1 << (row % 8)) == 0 {
             return None;
         }
-        self.text.get(self.offsets[index] as usize..end)
+        self.text
+            .get(self.offsets[row] as usize..self.offsets[row + 1] as usize)
     }
 
     /// Transfer UTF-8 bytes, row offsets (including the final end offset), and
@@ -56,41 +50,26 @@ impl OrderedView {
         column: ColumnId,
         start: u64,
         count: u32,
-    ) -> Result<FormattedColumnText> {
-        self.format_columns(&[column], start, count)
-    }
-
-    /// Format the requested columns into a single column-major text buffer.
-    pub fn format_columns(
-        &self,
-        columns: &[ColumnId],
-        start: u64,
-        count: u32,
-    ) -> Result<FormattedColumnText> {
+    ) -> Result<FormattedColumnSegment> {
+        let array = self.column(column)?.array();
+        let formatter = format::formatter(array.as_ref())?;
         let window = self.row_window(start, count);
-        let cells = window.len() * columns.len();
         let mut text = String::new();
-        let mut offsets = Vec::with_capacity(cells + 1);
-        let mut validity = vec![0; cells.div_ceil(8)];
+        let mut offsets = Vec::with_capacity(window.len() + 1);
+        let mut validity = vec![0; window.len().div_ceil(8)];
         offsets.push(0);
-        for &column in columns {
-            let array = self.column(column)?.array();
-            let formatter = format::formatter(array.as_ref())?;
-            for row in window.iter() {
-                if !array.is_null(row) {
-                    // Keep the same display formatting, including inline Arrow errors.
-                    write!(text, "{}", formatter.value(row))
-                        .expect("formatting into String succeeds");
-                    let index = offsets.len() - 1;
-                    validity[index / 8] |= 1 << (index % 8);
-                }
-                let end = u32::try_from(text.len()).map_err(|_| {
-                    InternalError::Invariant("formatted column text exceeds 4 GiB".into())
-                })?;
-                offsets.push(end);
+        for (index, row) in window.iter().enumerate() {
+            if !array.is_null(row) {
+                // Keep the same display formatting, including inline Arrow errors.
+                write!(text, "{}", formatter.value(row)).expect("formatting into String succeeds");
+                validity[index / 8] |= 1 << (index % 8);
             }
+            let end = u32::try_from(text.len()).map_err(|_| {
+                InternalError::Invariant("formatted column text exceeds 4 GiB".into())
+            })?;
+            offsets.push(end);
         }
-        Ok(FormattedColumnText {
+        Ok(FormattedColumnSegment {
             row_count: window.len() as u32,
             text,
             offsets,

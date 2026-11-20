@@ -3,10 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{
-    ColumnBatch, ColumnId, FileType, FindSession, FormattedColumnText, GewuError, GewuExport,
-    RowSpan, SegmentBatch,
-};
+use crate::{ColumnId, FileType, FindSession, FormattedColumnSegment, GewuError, GewuExport};
 
 #[derive(uniffi::Object)]
 pub struct GewuOrderedView {
@@ -19,43 +16,21 @@ impl GewuOrderedView {
         self.inner.row_count()
     }
 
-    /// Format the requested columns over display rows `start..start + count`,
+    /// Format one column over display rows `start..start + count`,
     /// clipped to the available rows.
-    pub fn format_columns(
+    pub fn format_column(
         &self,
-        columns: Vec<ColumnId>,
+        column: ColumnId,
         start: u64,
         count: u32,
-    ) -> Result<FormattedColumnText, GewuError> {
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
+    ) -> Result<FormattedColumnSegment, GewuError> {
         self.inner
-            .format_columns(&columns, start, count)?
+            .format_column(column.into(), start, count)?
             .try_into()
     }
 
     pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
         self.inner.source_rows(start, count)
-    }
-
-    /// Read a viewport's source rows and column segments in one call. The App
-    /// decides which segments to read and cache; Core formats each one. An
-    /// unknown column fails the whole call without a partial result.
-    pub fn read_segments(
-        &self,
-        rows: Vec<RowSpan>,
-        batches: Vec<ColumnBatch>,
-    ) -> Result<SegmentBatch, GewuError> {
-        let batches = batches
-            .into_iter()
-            .map(|batch| self.format_columns(batch.columns, batch.start, batch.count))
-            .collect::<Result<_, _>>()?;
-        Ok(SegmentBatch {
-            source_rows: rows
-                .iter()
-                .map(|span| self.inner.source_rows(span.start, span.count))
-                .collect(),
-            batches,
-        })
     }
 
     pub fn find(
