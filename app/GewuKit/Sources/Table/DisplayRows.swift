@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 /// The rows of a ``RowSet`` in display order: what a table shows.
 ///
@@ -9,13 +10,16 @@ public final class DisplayRows: Sendable, Hashable, Identifiable {
     public let sorts: [ColumnSort]
     /// Number of display rows, equal to `rowSet.count`.
     public let count: Int
-    let view: FfiOrderedView
+    /// The zero-based source row of every display row, read without calling into Rust.
+    public let sourceRows: RowNumbers
+    let view: GewuBindings.GewuOrderedView
 
-    init(rowSet: RowSet, view: FfiOrderedView, sorts: [ColumnSort]) {
+    init(rowSet: RowSet, view: GewuBindings.GewuOrderedView, sorts: [ColumnSort]) {
         self.rowSet = rowSet
         self.view = view
         self.sorts = sorts
         count = Int(clamping: view.rowCount())
+        sourceRows = RowNumbers(view)
     }
 
     public static func == (lhs: DisplayRows, rhs: DisplayRows) -> Bool { lhs === rhs }
@@ -46,12 +50,9 @@ public final class DisplayRows: Sendable, Hashable, Identifiable {
         }
     }
 
-    /// Zero-based source row numbers of `rows`, clipped to the available rows.
-    /// A slice of the row mapping without formatting, fast enough for drawing.
-    public func rowNumbers(_ rows: Range<Int>) -> RowNumbers {
-        let (start, count) = clipped(rows)
-        // Core fails only for a row index above UInt32.max, which no table can hold.
-        return RowNumbers(try! view.sourceRows(start: start, count: count))
+    /// Source row numbers of `rows`, clipped to the available rows.
+    public func rowNumbers(_ rows: Range<Int>) -> Slice<RowNumbers> {
+        sourceRows[rows.clamped(to: 0..<count)]
     }
 
     /// Prepare a search for `query` in `columns`, in that order. Compiling the
@@ -59,11 +60,6 @@ public final class DisplayRows: Sendable, Hashable, Identifiable {
     public func search(_ query: String, in columns: [ColumnID]) throws -> CellSearch {
         let session = try translatingErrors { try view.find(query: query, columns: columns.map(\.ffi)) }
         return CellSearch(session: session, rows: self, columns: columns)
-    }
-
-    /// Names of `columns` that only Parquet can export, because they are nested.
-    public func nestedColumns(_ columns: [ColumnID]) throws -> [String] {
-        try translatingErrors { try view.nestedExportColumns(columns: columns.map(\.ffi)) }
     }
 
     /// A single-use export of `columns`, in that order, over these rows.

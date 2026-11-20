@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core as core;
 
-use crate::{ColumnId, ColumnText, FileType, FindSession, GewuError, GewuExport, RowIndices};
+use crate::{ColumnId, ColumnText, FileType, FindSession, GewuError, GewuExport};
 
 #[derive(uniffi::Object)]
 pub struct GewuOrderedView {
@@ -23,18 +23,11 @@ impl GewuOrderedView {
         column: ColumnId,
         start: u64,
         count: u32,
-    ) -> Result<Arc<ColumnText>, GewuError> {
-        Ok(Arc::new(
-            self.inner
-                .format_column(column.into(), start, count)?
-                .into(),
-        ))
-    }
-
-    /// Source row indices for display rows `start..start + count`, clipped
-    /// to the available rows.
-    pub fn source_rows(&self, start: u64, count: u32) -> Result<Arc<RowIndices>, GewuError> {
-        Ok(Arc::new(self.inner.source_rows(start, count).try_into()?))
+    ) -> Result<ColumnText, GewuError> {
+        Ok(self
+            .inner
+            .format_column(column.into(), start, count)?
+            .into())
     }
 
     pub fn find(
@@ -48,6 +41,7 @@ impl GewuOrderedView {
         }))
     }
 
+    /// A single-use export of every row of this view.
     pub fn export(
         &self,
         columns: Vec<ColumnId>,
@@ -57,8 +51,27 @@ impl GewuOrderedView {
         Ok(Arc::new(self.inner.export(&columns, format.into())?.into()))
     }
 
-    pub fn nested_export_columns(&self, columns: Vec<ColumnId>) -> Result<Vec<String>, GewuError> {
+    /// A single-use export of the display rows in `ranges`, in order, such as a
+    /// copied selection.
+    pub fn export_rows(
+        &self,
+        ranges: Vec<RowRange>,
+        columns: Vec<ColumnId>,
+        format: FileType,
+    ) -> Result<Arc<GewuExport>, GewuError> {
+        let ranges: Vec<_> = ranges.iter().map(|range| range.start..range.end).collect();
         let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(self.inner.nested_export_columns(&columns)?)
+        Ok(Arc::new(
+            self.inner
+                .export_rows(&ranges, &columns, format.into())?
+                .into(),
+        ))
     }
+}
+
+/// Display rows `start..end`.
+#[derive(uniffi::Record)]
+pub struct RowRange {
+    pub start: u64,
+    pub end: u64,
 }

@@ -4,8 +4,8 @@
 //! Dataset and View handles share immutable data.
 
 mod analysis;
-mod buffer;
 mod column;
+mod data;
 mod dataset;
 mod error;
 mod export;
@@ -24,9 +24,9 @@ pub use analysis::{
     AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
     ValueFrequency, ValueSummary,
 };
-pub use buffer::{BufferView, ColumnText, RowIndices};
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
-pub use dataset::{open_dataset, DatasetInfo, GewuDataset, OpenOptions};
+pub use data::{ColumnText, ExportedBytes, GewuBytes, GewuSourceRows};
+pub use dataset::{DatasetInfo, GewuDataset, OpenOptions};
 pub use error::{
     AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
     FindErrorKind, GewuError, IoOperation, LimitErrorKind, ValueParseError,
@@ -39,7 +39,7 @@ pub use filter::{
 };
 pub use filtered_view::GewuFilteredView;
 pub use find::{find_limits, CellMatch, ColumnHighlight, FindHighlight, FindLimits, FindSession};
-pub use ordered_view::GewuOrderedView;
+pub use ordered_view::{GewuOrderedView, RowRange};
 pub use query::{ColumnFilter, ColumnSort};
 pub use scale::AxisScale;
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};

@@ -42,4 +42,4 @@ pub use stats::{
     ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit, ValueFrequency, ValueSummary,
     MAX_SCATTER_POINTS,
 };
-pub use view::{FilteredView, FormattedColumnSegment, OrderedView};
+pub use view::{FilteredView, FormattedColumnSegment, OrderedView, SourceRows};

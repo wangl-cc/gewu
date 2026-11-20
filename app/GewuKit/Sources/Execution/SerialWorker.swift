@@ -1,4 +1,5 @@
 import Dispatch
+internal import GewuBindings
 
 /// Runs synchronous Rust calls one at a time on a dedicated thread.
 ///
@@ -30,7 +31,7 @@ actor SerialWorker {
 func translatingErrors<Value>(_ body: () throws -> Value) throws -> Value {
     do {
         return try body()
-    } catch let error as FfiError {
+    } catch let error as GewuBindings.GewuError {
         throw error.translated
     }
 }

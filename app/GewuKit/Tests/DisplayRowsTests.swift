@@ -53,6 +53,17 @@ import Testing
         }
     }
 
+    @Test func sourceRowsAreReadInPlaceForEveryOrder() async throws {
+        let file = try Fixture("n\n3\n1\n2\n")
+        let session = try await file.open()
+        #expect(Array(session.initialRows.sourceRows) == [0, 1, 2], "File order needs no mapping")
+        let sorted = try await session.apply(
+            TableQuery(sorts: [ColumnSort(column: session.source.id("n"), descending: false)]),
+            after: session.initialRows)
+        #expect(Array(sorted.sourceRows) == [1, 2, 0])
+        #expect(Array(sorted.rowNumbers(2..<10)) == [0], "Clipped to the available rows")
+    }
+
     @Test func tabSeparatedTextQuotesFieldsAndRespectsItsLimit() async throws {
         let file = try Fixture("a,b\n\"x\ty\",\"say \"\"hi\"\"\"\nplain,\n")
         let session = try await file.open()
@@ -60,7 +71,12 @@ import Testing
         let rows = session.initialRows
         let data = try await rows.tabSeparatedText(
             rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 1024)
-        #expect(String(decoding: data, as: UTF8.self) == "a\tb\n\"x\ty\"\t\"say \"\"hi\"\"\"\nplain\t")
+        // The same encoding as a TSV export.
+        #expect(
+            String(decoding: data, as: UTF8.self) == "a\tb\r\n\"x\ty\"\t\"say \"\"hi\"\"\"\r\nplain\t\r\n")
+        let headless = try await rows.tabSeparatedText(
+            rows: [1..<2], columns: columns, includeHeader: false, byteLimit: 1024)
+        #expect(String(decoding: headless, as: UTF8.self) == "plain\t\r\n")
         await #expect(throws: TextLimitExceeded.self) {
             try await rows.tabSeparatedText(rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 10)
         }
@@ -80,7 +96,6 @@ import Testing
         try await job.write(to: destination)
         #expect(await samples.last == ExportProgress(rowsWritten: 3, totalRows: 3))
         #expect(try String(contentsOf: destination, encoding: .utf8) == "id\r\n3\r\n2\r\n1\r\n")
-        #expect(try sorted.nestedColumns([id]).isEmpty)
     }
 }
 

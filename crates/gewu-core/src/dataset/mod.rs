@@ -107,10 +107,6 @@ impl Dataset {
         }
     }
 
-    pub(crate) fn columns(&self) -> &[Column] {
-        &self.columns
-    }
-
     /// Identifier of the column with this name.
     pub fn column_id(&self, name: &str) -> Option<ColumnId> {
         self.schema

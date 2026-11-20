@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# GewuKit build phase: Cargo owns Rust dependencies; Xcode consumes the outputs.
-# The generated Swift bindings are rewritten to internal access, so they are
-# visible only inside GewuKit and the App cannot depend on FFI types.
+# GewuBindings build phase: Cargo owns Rust dependencies; Xcode consumes the outputs.
+# The generated Swift bindings form the GewuBindings module, which only GewuKit
+# imports. The C module `gewuFFI` holds UniFFI's header and Gewu's hand-written
+# data views (crates/gewu-uniffi/include).
 set -euo pipefail
 cd "$SRCROOT"
 export PATH="$PATH:${CARGO_HOME:-$HOME/.cargo}/bin:/opt/homebrew/bin:/usr/local/bin"
@@ -17,20 +18,16 @@ generated="$DERIVED_FILE_DIR/uniffi"
 mkdir -p "$generated" "$BUILT_PRODUCTS_DIR"
 cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
   generate --library "$library.dylib" --language swift --out-dir "$generated"
-# Drop public/open from declarations and import the C module internally.
-perl -0pe '
-  s/\b(public|open)\s+(?=(class|struct|enum|func|var|let|protocol|init|static|extension|typealias|convenience|required|subscript|override|final|private\(set\))\b)//g;
-  s/^import gewuFFI$/internal import gewuFFI/m;
-' "$generated/gewu.swift" > "$generated/GewuFFI.swift"
-if grep -nE '^\s*(public|open)\b' "$generated/GewuFFI.swift"; then
-  echo "error: generated bindings still contain public declarations" >&2
-  exit 1
-fi
-# Clients of GewuKit resolve its internal C module through this include path.
+cp "$generated/gewu.swift" "$generated/GewuBindings.swift"
+cp crates/gewu-uniffi/include/gewu_data.h "$generated/gewu_data.h"
+sed 's|^\( *\)header "gewuFFI.h"$|\1header "gewuFFI.h"\
+\1header "gewu_data.h"|' "$generated/gewuFFI.modulemap" > "$generated/module.modulemap"
+grep -q 'header "gewu_data.h"' "$generated/module.modulemap"
+# Every target finds the C module through this include path.
 headers="$BUILT_PRODUCTS_DIR/gewuFFI"
 mkdir -p "$headers"
-cp "$generated/gewuFFI.modulemap" "$generated/module.modulemap"
-for pair in "GewuFFI.swift:$DERIVED_FILE_DIR" "gewuFFI.h:$headers" "module.modulemap:$headers"; do
+for pair in "GewuBindings.swift:$DERIVED_FILE_DIR" "gewuFFI.h:$headers" "gewu_data.h:$headers" \
+  "module.modulemap:$headers"; do
   file="${pair%%:*}"; destination="${pair#*:}"
   if ! cmp -s "$generated/$file" "$destination/$file"; then
     cp "$generated/$file" "$destination/$file"

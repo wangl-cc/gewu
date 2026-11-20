@@ -147,6 +147,9 @@ pub enum ExportErrorKind {
     Encode {
         format: crate::FileType,
     },
+    SizeLimit {
+        limit: u64,
+    },
 }
 
 #[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,6 +334,10 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
             kind: FileErrorKind::FormatDisabled {
                 format: format.into(),
             },
+            message,
+        },
+        core::ExportError::SizeLimit { limit } => GewuError::Export {
+            kind: ExportErrorKind::SizeLimit { limit },
             message,
         },
         core::ExportError::XlsxRows { actual, limit } => GewuError::Limit {

@@ -20,28 +20,18 @@ settings:
     RUST_PROFILE: release
     SWIFT_INCLUDE_PATHS: $(inherited) $(BUILT_PRODUCTS_DIR)/gewuFFI
 targets:
-  GewuKit:
-    type: framework
+  GewuBindings:
+    type: library.static
     platform: macOS
     sources:
-      - path: app/GewuKit/Sources
-        includes: ['**/*.swift']
-      # UniFFI bindings rewritten to internal access, so only GewuKit can use them.
-      - path: $(DERIVED_FILE_DIR)/GewuFFI.swift
+      - path: $(DERIVED_FILE_DIR)/GewuBindings.swift
         type: file
         optional: true
         buildPhase: sources
-    dependencies:
-      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
-        embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.kit
-        GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_IDENTITY: '-'
-        SKIP_INSTALL: YES
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
+        SKIP_INSTALL: YES
     preBuildScripts:
       - script: exec /bin/bash "$SRCROOT/scripts/build-rust.sh"
         name: Build Rust and generate UniFFI bindings
@@ -50,9 +40,28 @@ targets:
         showEnvVars: false
         outputFiles:
           - $(BUILT_PRODUCTS_DIR)/libgewu.a
-          - $(DERIVED_FILE_DIR)/GewuFFI.swift
+          - $(DERIVED_FILE_DIR)/GewuBindings.swift
           - $(BUILT_PRODUCTS_DIR)/gewuFFI/gewuFFI.h
+          - $(BUILT_PRODUCTS_DIR)/gewuFFI/gewu_data.h
           - $(BUILT_PRODUCTS_DIR)/gewuFFI/module.modulemap
+  GewuKit:
+    type: framework
+    platform: macOS
+    sources:
+      - path: app/GewuKit/Sources
+        includes: ['**/*.swift']
+    dependencies:
+      - target: GewuBindings
+        link: true
+      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.kit
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: '-'
+        SKIP_INSTALL: YES
+        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
   GewuKitTests:
     type: bundle.unit-test
     platform: macOS

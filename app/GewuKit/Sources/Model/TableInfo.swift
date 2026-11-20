@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 /// A stable column identity within one opened table. Unaffected by hiding or
 /// reordering columns.
@@ -6,8 +7,8 @@ public struct ColumnID: Hashable, Sendable, Codable {
     /// An opaque number, unique among the table's columns.
     public let raw: UInt32
 
-    init(_ id: FfiColumnId) { raw = id.raw }
-    var ffi: FfiColumnId { FfiColumnId(raw: raw) }
+    init(_ id: GewuBindings.ColumnId) { raw = id.raw }
+    var ffi: GewuBindings.ColumnId { GewuBindings.ColumnId(raw: raw) }
 }
 
 /// How the app should present a column's values.
@@ -112,7 +113,7 @@ public struct OpenOptions: Hashable, Sendable {
 // MARK: - Conversion from the bindings
 
 extension ValueCategory {
-    init(_ category: FfiValueCategory) {
+    init(_ category: GewuBindings.ValueCategory) {
         switch category {
         case .number: self = .number
         case .temporal: self = .temporal
@@ -122,7 +123,7 @@ extension ValueCategory {
 }
 
 extension ColumnInfo {
-    init(_ info: FfiColumnInfo) {
+    init(_ info: GewuBindings.ColumnInfo) {
         id = ColumnID(info.id)
         name = info.name
         valueCategory = ValueCategory(info.valueCategory)
@@ -141,7 +142,7 @@ extension ColumnInfo {
 }
 
 extension FileType {
-    init(_ type: FfiFileType) {
+    init(_ type: GewuBindings.FileType) {
         switch type {
         case .csv: self = .csv
         case .tsv: self = .tsv
@@ -150,7 +151,7 @@ extension FileType {
         }
     }
 
-    var ffi: FfiFileType {
+    var ffi: GewuBindings.FileType {
         switch self {
         case .csv: .csv
         case .tsv: .tsv
@@ -161,7 +162,7 @@ extension FileType {
 }
 
 extension TableInfo {
-    init(_ info: FfiDatasetInfo) {
+    init(_ info: GewuBindings.DatasetInfo) {
         path = info.path
         rowCount = info.rowCount
         columns = info.columns.map(ColumnInfo.init)
@@ -180,7 +181,7 @@ extension TableInfo {
 }
 
 extension AnalysisField {
-    init(_ field: FfiAnalysisField) {
+    init(_ field: GewuBindings.AnalysisField) {
         name = field.name
         displayType = field.displayType
         technicalType = field.technicalType

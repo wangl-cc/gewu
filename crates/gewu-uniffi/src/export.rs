@@ -1,8 +1,10 @@
 //! Independently cancellable export snapshots.
 
+use std::sync::Arc;
+
 use gewu_core as core;
 
-use crate::GewuError;
+use crate::{ExportedBytes, GewuError};
 
 #[derive(Clone, Copy, uniffi::Enum)]
 pub enum ParquetCompression {
@@ -27,9 +29,24 @@ impl From<ParquetCompression> for core::ParquetCompression {
     }
 }
 
+/// How to encode an export. Format-specific options do not affect other formats.
 #[derive(uniffi::Record)]
 pub struct ExportOptions {
     pub parquet_compression: ParquetCompression,
+    /// Write nested columns to CSV, TSV and XLSX as display text instead of rejecting them.
+    pub nested_as_text: bool,
+    /// Start CSV and TSV output with a row of column names.
+    pub include_header: bool,
+}
+
+impl From<ExportOptions> for core::ExportOptions {
+    fn from(options: ExportOptions) -> Self {
+        Self {
+            parquet_compression: options.parquet_compression.into(),
+            nested_as_text: options.nested_as_text,
+            include_header: options.include_header,
+        }
+    }
 }
 
 #[derive(uniffi::Record)]
@@ -46,20 +63,22 @@ pub struct GewuExport {
 
 #[uniffi::export]
 impl GewuExport {
-    /// Write the captured result. Slow: call off the main thread.
-    pub fn write(&self, path: String) -> Result<(), GewuError> {
-        Ok(self.inner.write(path)?)
+    /// Write the captured rows to `path`, replacing it only on success. Slow:
+    /// call off the main thread.
+    pub fn write(&self, path: String, options: ExportOptions) -> Result<(), GewuError> {
+        Ok(self.inner.write_with_options(path, &options.into())?)
     }
 
-    /// Format-specific encoding options do not affect other output formats.
-    pub fn write_with_options(
+    /// Write a CSV or TSV export into memory, failing instead of building more
+    /// than `limit` bytes. Read the result through `gewu_exported_bytes`.
+    pub fn write_to_memory(
         &self,
-        path: String,
         options: ExportOptions,
-    ) -> Result<(), GewuError> {
-        Ok(self.inner.write_with_options(path, &core::ExportOptions {
-            parquet_compression: options.parquet_compression.into(),
-        })?)
+        limit: u64,
+    ) -> Result<Arc<ExportedBytes>, GewuError> {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        let bytes = self.inner.write_to_memory(&options.into(), limit)?;
+        Ok(Arc::new(ExportedBytes::new(bytes)))
     }
 
     pub fn cancel(&self) {

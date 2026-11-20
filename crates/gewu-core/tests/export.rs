@@ -139,17 +139,13 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
         ColumnId::from_raw(2),
         ColumnId::from_raw(3),
     );
-    assert_eq!(doc.nested_export_columns(&[c3, c0, c1]).unwrap(), [
-        "items", "tags"
-    ]);
-    assert!(doc
-        .nested_export_columns(&[ColumnId::from_raw(99)])
-        .is_err());
     for format in [FileType::Csv, FileType::Tsv, FileType::Xlsx]
         .into_iter()
         .filter(|format| format.is_enabled())
     {
-        let result = doc.export(&[c0, c2], format);
+        // Nested columns are checked when writing, where options decide.
+        let destination = directory.path().join(format!("rejected.{format}"));
+        let result = doc.export(&[c0, c2], format).unwrap().write(&destination);
         assert!(matches!(
             result,
             Err(Error::Export(gewu_core::ExportError::NestedColumns {
@@ -157,11 +153,12 @@ fn flat_formats_reject_nested_columns_but_parquet_preserves_native_values() {
                 ..
             })) if columns == [c2]
         ));
-        assert!(matches!(
-            doc.export(&[c1], format),
-            Err(Error::Export(gewu_core::ExportError::NestedColumns { .. }))
-        ));
-        assert!(doc.export(&[c0], format).is_ok());
+        assert!(!destination.exists());
+        assert!(doc
+            .export(&[c0], format)
+            .unwrap()
+            .write(&destination)
+            .is_ok());
     }
     let path = directory.path().join("native.parquet");
     doc.export(&[c0, c1, c2, c3], FileType::Parquet)
@@ -304,6 +301,7 @@ fn parquet_export_honors_explicit_compression() {
         .unwrap()
         .write_with_options(&path, &ExportOptions {
             parquet_compression: ParquetCompression::Snappy,
+            ..ExportOptions::default()
         })
         .unwrap();
     let reopened = gewu_core::Dataset::open(path)
@@ -504,5 +502,105 @@ fn analysis_distribution_includes_the_columns_own_filter() {
             .unwrap()
             .counts,
         view_histogram.counts
+    );
+}
+
+#[test]
+fn nested_columns_can_be_written_as_their_display_text() {
+    let batch = nested_sample();
+    let (directory, doc) = document_from_batch(&batch);
+    let (c0, c1) = (ColumnId::from_raw(0), ColumnId::from_raw(1));
+    let options = ExportOptions {
+        nested_as_text: true,
+        ..ExportOptions::default()
+    };
+    let display = doc.format_column(c1, 0, 4).unwrap();
+    let text = doc
+        .export(&[c0, c1], FileType::Tsv)
+        .unwrap()
+        .write_to_memory(&options, 1 << 20)
+        .unwrap();
+    let text = String::from_utf8(text).unwrap();
+    // The nested column carries the same text the table shows.
+    let first = display.cell(0).unwrap();
+    assert!(text.contains(&first.replace('"', "\"\"")) || text.contains(first));
+    let path = directory.path().join("nested.csv");
+    doc.export(&[c0, c1], FileType::Csv)
+        .unwrap()
+        .write_with_options(&path, &options)
+        .unwrap();
+    assert!(fs::read_to_string(&path).unwrap().lines().count() > 1);
+}
+
+#[test]
+#[expect(
+    clippy::single_range_in_vec_init,
+    reason = "export_rows takes a list of ranges"
+)]
+fn memory_exports_take_display_row_ranges_and_respect_their_limit() {
+    let (_directory, doc) = sample();
+    let ordered = doc
+        .unfiltered()
+        .sort(&[ColumnSort {
+            column: ColumnId::from_raw(0),
+            descending: false,
+        }])
+        .unwrap();
+    let id = ColumnId::from_raw(0);
+    let text = ordered
+        .export_rows(&[0..2, 4..9], &[id], FileType::Tsv)
+        .unwrap()
+        .write_to_memory(&ExportOptions::default(), 1024)
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(text).unwrap(),
+        "id\r\n1\r\n2\r\n9007199254740993\r\n"
+    );
+    let headless = ordered
+        .export_rows(&[1..2], &[id], FileType::Tsv)
+        .unwrap()
+        .write_to_memory(
+            &ExportOptions {
+                include_header: false,
+                ..ExportOptions::default()
+            },
+            1024,
+        )
+        .unwrap();
+    assert_eq!(headless, b"2\r\n");
+    let result = ordered
+        .export_rows(&[0..5], &[id], FileType::Tsv)
+        .unwrap()
+        .write_to_memory(&ExportOptions::default(), 8);
+    assert!(matches!(
+        result,
+        Err(Error::Export(gewu_core::ExportError::SizeLimit {
+            limit: 8
+        }))
+    ));
+    assert!(ordered
+        .export(&[id], FileType::Parquet)
+        .unwrap()
+        .write_to_memory(&ExportOptions::default(), 1024)
+        .is_err());
+}
+
+#[test]
+fn ordered_views_lend_their_source_rows() {
+    let (_directory, doc) = sample();
+    assert_eq!(
+        doc.unfiltered().unsorted().row_ids(),
+        gewu_core::SourceRows::All(5)
+    );
+    let sorted = doc
+        .unfiltered()
+        .sort(&[ColumnSort {
+            column: ColumnId::from_raw(0),
+            descending: true,
+        }])
+        .unwrap();
+    assert_eq!(
+        sorted.row_ids(),
+        gewu_core::SourceRows::Selected(&[4, 2, 0, 3, 1])
     );
 }

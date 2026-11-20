@@ -1,3 +1,5 @@
+internal import GewuBindings
+
 /// How a text filter compares values.
 public enum TextMatch: Hashable, Sendable, Codable {
     case contains, equals
@@ -69,7 +71,7 @@ public struct TableQuery: Hashable, Sendable, Codable {
 // MARK: - Conversion to the bindings
 
 extension TextMatch {
-    var ffi: FfiTextMatch {
+    var ffi: GewuBindings.TextMatch {
         switch self {
         case .contains: .contains
         case .equals: .equals
@@ -78,22 +80,22 @@ extension TextMatch {
 }
 
 extension Filter {
-    var ffi: FfiFilter {
-        let condition: FfiFilterCondition =
+    var ffi: GewuBindings.Filter {
+        let condition: GewuBindings.FilterCondition =
             switch condition {
             case .range(let min, let max): .range(min: min, max: max)
             case .text(let text, let mode, let caseSensitive):
                 .text(text: text, mode: mode.ffi, caseSensitive: caseSensitive)
             case .exact(let values, let exclude): .exact(values: values, exclude: exclude)
             }
-        return FfiFilter(condition: condition, includeNulls: includeNulls)
+        return GewuBindings.Filter(condition: condition, includeNulls: includeNulls)
     }
 }
 
 extension ColumnFilter {
-    var ffi: FfiColumnFilter { FfiColumnFilter(column: column.ffi, filter: filter.ffi) }
+    var ffi: GewuBindings.ColumnFilter { GewuBindings.ColumnFilter(column: column.ffi, filter: filter.ffi) }
 }
 
 extension ColumnSort {
-    var ffi: FfiColumnSort { FfiColumnSort(column: column.ffi, descending: descending) }
+    var ffi: GewuBindings.ColumnSort { GewuBindings.ColumnSort(column: column.ffi, descending: descending) }
 }

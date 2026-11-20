@@ -1,4 +1,5 @@
 import Foundation
+import GewuBindings
 import Synchronization
 import Testing
 
@@ -22,7 +23,7 @@ import Testing
     }
 
     @Test func rustCancellationArrivesAsCancellationError() {
-        #expect(FfiError.Cancelled.translated is CancellationError)
-        #expect(FfiError.Internal(message: "m").translated as? GewuKitError == .internalFailure("m"))
+        #expect(GewuBindings.GewuError.Cancelled.translated is CancellationError)
+        #expect(GewuBindings.GewuError.Internal(message: "m").translated as? GewuKitError == .internalFailure("m"))
     }
 }

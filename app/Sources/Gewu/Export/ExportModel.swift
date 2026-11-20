@@ -34,14 +34,8 @@ final class ExportModel {
     /// Ask for a destination and export `columns` of `rows` there.
     func choose(rows: DisplayRows, columns: [ColumnID], source: URL, window: NSWindow) {
         guard isIdle else { return }
-        let nested: [String]
-        do {
-            nested = try rows.nestedColumns(columns)
-        } catch {
-            alerts.report(error, title: "Could Not Export")
-            return
-        }
-        let formats = nested.isEmpty ? ExportFileFormat.allCases : [.parquet]
+        // Every format can export nested columns: flat formats write their display text.
+        let formats = ExportFileFormat.allCases
         let remembered = ExportFileFormat(rawValue: defaults[Preferences.lastExportFormat])
         let initial =
             if defaults[Preferences.remembersExportFormat], let remembered, formats.contains(remembered) {

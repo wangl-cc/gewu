@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 /// One opened table: its data, and the workers that answer queries about it.
 ///
@@ -21,8 +22,8 @@ public final class TableSession: Sendable {
         let workers = Workers()
         let path = url.path
         return try await workers.query.perform {
-            let dataset = try openDataset(
-                path: path, options: FfiOpenOptions(sheet: options.sheet, hasHeader: options.hasHeader))
+            let dataset = try GewuBindings.GewuDataset.open(
+                path: path, options: GewuBindings.OpenOptions(sheet: options.sheet, hasHeader: options.hasHeader))
             let source = TableSource(dataset: dataset, workers: workers)
             // Creating the unfiltered views is cheap but stays off the main actor with the read.
             let rows = RowSet(source: source, view: dataset.unfiltered(), filters: [])
@@ -34,7 +35,7 @@ public final class TableSession: Sendable {
     /// and empty sheets. Reads workbook metadata without decoding cells.
     public static func worksheetNames(_ url: URL) async throws -> [String] {
         let path = url.path
-        return try await SerialWorker(label: "sheets").perform { try xlsxSheetNames(path: path) }
+        return try await SerialWorker(label: "sheets").perform { try GewuBindings.xlsxSheetNames(path: path) }
     }
 
     /// The rows for `query`, reusing as much of `current` as possible: the
@@ -63,11 +64,11 @@ public final class TableSession: Sendable {
 /// What a file contains. Shared by every query result of its session.
 public final class TableSource: Sendable {
     public let info: TableInfo
-    let dataset: FfiDataset
+    let dataset: GewuBindings.GewuDataset
     let workers: Workers
     private let columnsByID: [ColumnID: ColumnInfo]
 
-    init(dataset: FfiDataset, workers: Workers) {
+    init(dataset: GewuBindings.GewuDataset, workers: Workers) {
         self.dataset = dataset
         self.workers = workers
         info = TableInfo(dataset.info())

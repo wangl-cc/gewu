@@ -1,4 +1,11 @@
 use super::*;
+
+impl GewuDataset {
+    /// The column named `name`, for tests.
+    pub(crate) fn column_id(&self, name: String) -> Option<ColumnId> {
+        self.inner.column_id(&name).map(Into::into)
+    }
+}
 use crate::{ColumnFilter, ColumnId, ColumnSort, FilterCondition};
 
 fn filter_single(column: ColumnId, filter: Filter) -> Vec<ColumnFilter> {
@@ -9,9 +16,8 @@ fn filter_single(column: ColumnId, filter: Filter) -> Vec<ColumnFilter> {
 fn typed_filters_compile_and_execute_across_ffi() {
     let source = std::env::temp_dir().join(format!("gewu-uniffi-typed-{}.csv", std::process::id()));
     std::fs::write(&source, "id\n9007199254740992\n9007199254740993\n").unwrap();
-    let doc = crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
+    let doc = GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
     let id_col = doc.column_id("id".into()).unwrap();
-    assert!(doc.column_id("missing".into()).is_none());
     let info = doc.info();
     assert_eq!(info.columns[0].id, id_col);
     assert!(info.columns[0].analysis.distribution);
@@ -69,7 +75,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
             .unwrap();
         let ordered = filtered.unsorted();
         let rows = ordered.format_column(id_col, 0, 10).unwrap();
-        assert_eq!(ordered.source_rows(0, 10).unwrap().values(), [1]);
+        assert_eq!(ordered.inner.source_rows(0, 10), [1]);
         assert_eq!(rows.utf8(), b"9007199254740993");
     }
     std::fs::remove_file(source).unwrap();
@@ -82,12 +88,10 @@ fn text_filter_modes_and_choices_cross_ffi() {
         std::process::id()
     ));
     std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
-    let doc = crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
+    let doc = GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
     let info = doc.info();
     let label_col = info.columns[0].id;
     let id_col = info.columns[1].id;
-    assert_eq!(doc.column_id("label".into()), Some(label_col));
-    assert_eq!(doc.column_id("id".into()), Some(id_col));
     assert!(matches!(
         info.columns[0].value_category,
         crate::ValueCategory::Text
@@ -179,12 +183,12 @@ fn text_filter_modes_and_choices_cross_ffi() {
             descending: true,
         }])
         .unwrap();
-    assert_eq!(sorted_desc.source_rows(0, 2).unwrap().values(), [1, 0]);
-    assert_eq!(sorted_desc.source_rows(1, 64).unwrap().values(), [0]);
+    assert_eq!(sorted_desc.inner.source_rows(0, 2), [1, 0]);
+    assert_eq!(sorted_desc.inner.source_rows(1, 64), [0]);
     let label = sorted_desc.format_column(label_col, 1, 64).unwrap();
     let id = sorted_desc.format_column(id_col, 0, 64).unwrap();
-    assert_eq!((label.row_count(), label.utf8()), (1, &b"cat"[..]));
-    assert_eq!((id.row_count(), id.utf8()), (2, &b"2010"[..]));
+    assert_eq!((label.row_count, label.utf8()), (1, &b"cat"[..]));
+    assert_eq!((id.row_count, id.utf8()), (2, &b"2010"[..]));
     assert_eq!(id.offset_values(), [0, 2, 4]);
     assert!(sorted_desc
         .format_column(ColumnId { raw: 99 }, 0, 1)
@@ -204,7 +208,7 @@ fn histogram_bounds_cross_ffi_without_losing_large_ids() {
         writeln!(csv, "{}", base + offset).unwrap();
     }
     std::fs::write(&source, csv).unwrap();
-    let doc = crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
+    let doc = GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
     let id_col = doc.column_id("id".into()).unwrap();
     let unfiltered = doc.unfiltered();
     let custom = unfiltered
@@ -257,7 +261,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
     let source =
         std::env::temp_dir().join(format!("gewu-uniffi-formats-{}.csv", std::process::id()));
     std::fs::write(&source, "label,id\ncat,10\ndog,20\n").unwrap();
-    let doc = crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
+    let doc = GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
     let info = doc.info();
     let label_col = info.columns[0].id;
     let id_col = info.columns[1].id;
@@ -269,7 +273,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
         Err(GewuError::Internal { .. })
     ));
     assert!(matches!(
-        crate::open_dataset(source.to_str().unwrap().to_owned(), crate::OpenOptions {
+        GewuDataset::open(source.to_str().unwrap().to_owned(), crate::OpenOptions {
             sheet: Some("Sheet1".into()),
             has_header: true
         }),
@@ -282,10 +286,13 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             .unsorted()
             .export(vec![label_col, id_col], format)
             .unwrap()
-            .write(destination.to_str().unwrap().to_owned())
+            .write(
+                destination.to_str().unwrap().to_owned(),
+                test_export_options(),
+            )
             .unwrap();
         let reopened =
-            crate::open_dataset(destination.to_str().unwrap().to_owned(), Default::default())
+            GewuDataset::open(destination.to_str().unwrap().to_owned(), Default::default())
                 .unwrap();
         let info = reopened.info();
         assert_eq!(info.format, format);
@@ -297,7 +304,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             let path = destination.to_str().unwrap().to_owned();
             assert_eq!(crate::xlsx_sheet_names(path.clone()).unwrap(), sheets);
             assert_eq!(sheets, vec![sheet.clone()]);
-            let selected = crate::open_dataset(path.clone(), crate::OpenOptions {
+            let selected = GewuDataset::open(path.clone(), crate::OpenOptions {
                 sheet: Some(sheet.clone()),
                 has_header: true,
             })
@@ -328,7 +335,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
             assert_eq!(filtered.row_count(), 1);
             assert_eq!(reopened.unfiltered().row_count(), 2);
             assert!(matches!(
-                crate::open_dataset(path, crate::OpenOptions {
+                GewuDataset::open(path, crate::OpenOptions {
                     sheet: Some("absent".into()),
                     has_header: true
                 }),
@@ -360,7 +367,7 @@ fn malformed_csv_is_a_format_error_across_ffi() {
         std::env::temp_dir().join(format!("gewu-uniffi-invalid-{}.csv", std::process::id()));
     std::fs::write(&source, "id,label\n1\n").unwrap();
     assert!(matches!(
-        crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()),
+        GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()),
         Err(GewuError::File {
             kind: crate::FileErrorKind::Decode {
                 format: FileType::Csv
@@ -369,4 +376,12 @@ fn malformed_csv_is_a_format_error_across_ffi() {
         })
     ));
     std::fs::remove_file(source).unwrap();
+}
+
+fn test_export_options() -> crate::ExportOptions {
+    crate::ExportOptions {
+        parquet_compression: crate::ParquetCompression::Zstd,
+        nested_as_text: false,
+        include_header: true,
+    }
 }

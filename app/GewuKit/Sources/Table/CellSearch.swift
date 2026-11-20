@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 /// A cell in display coordinates.
 public struct CellMatch: Hashable, Sendable {
@@ -10,12 +11,12 @@ public struct CellMatch: Hashable, Sendable {
         self.column = column
     }
 
-    init(_ match: FfiCellMatch) {
+    init(_ match: GewuBindings.CellMatch) {
         displayRow = Int(match.displayRow)
         column = ColumnID(match.column)
     }
 
-    var ffi: FfiCellMatch { FfiCellMatch(displayRow: UInt64(displayRow), column: column.ffi) }
+    var ffi: GewuBindings.CellMatch { GewuBindings.CellMatch(displayRow: UInt64(displayRow), column: column.ffi) }
 }
 
 /// Which cells of a block of display rows match, one bitmap per column.
@@ -39,13 +40,13 @@ public struct SearchHighlights: Sendable {
 /// for its rows after the table moves on to newer ones.
 public final class CellSearch: Sendable {
     /// Display rows covered by one highlight call at most.
-    public static let maximumHighlightRows = Int(findLimits().maxHighlightRows)
+    public static let maximumHighlightRows = Int(GewuBindings.findLimits().maxHighlightRows)
 
     public let rows: DisplayRows
     public let columns: [ColumnID]
-    private let session: FfiFindSession
+    private let session: GewuBindings.FindSession
 
-    init(session: FfiFindSession, rows: DisplayRows, columns: [ColumnID]) {
+    init(session: GewuBindings.FindSession, rows: DisplayRows, columns: [ColumnID]) {
         self.session = session
         self.rows = rows
         self.columns = columns

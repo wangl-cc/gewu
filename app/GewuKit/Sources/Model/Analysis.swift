@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 public enum AxisScale: Hashable, Sendable, Codable {
     case linear, log10
@@ -239,14 +240,14 @@ public struct RangeHistogram: Hashable, Sendable {
 // MARK: - Conversion from the bindings
 
 extension AxisScale {
-    init(_ scale: FfiAxisScale) {
+    init(_ scale: GewuBindings.AxisScale) {
         switch scale {
         case .linear: self = .linear
         case .log10: self = .log10
         }
     }
 
-    var ffi: FfiAxisScale {
+    var ffi: GewuBindings.AxisScale {
         switch self {
         case .linear: .linear
         case .log10: .log10
@@ -255,7 +256,7 @@ extension AxisScale {
 }
 
 extension Histogram {
-    init(_ h: FfiHistogram) {
+    init(_ h: GewuBindings.Histogram) {
         self.init(
             scale: AxisScale(h.scale), lo: h.lo, hi: h.hi, minLabel: h.minLabel, maxLabel: h.maxLabel,
             integer: h.integer, counts: h.counts, binEdges: h.binEdges, nonPositiveCount: h.nonPositiveCount,
@@ -264,7 +265,7 @@ extension Histogram {
 }
 
 extension NumericStatistics {
-    init(_ s: FfiNumericStatistics) {
+    init(_ s: GewuBindings.NumericStatistics) {
         self.init(
             minLabel: s.minLabel, maxLabel: s.maxLabel, medianLabel: s.medianLabel, mean: s.mean,
             meanLabel: s.meanLabel, stdDev: s.stdDev, nanCount: s.nanCount, infiniteCount: s.infiniteCount)
@@ -272,7 +273,7 @@ extension NumericStatistics {
 }
 
 extension ValueSummary {
-    init(_ summary: FfiValueSummary) {
+    init(_ summary: GewuBindings.ValueSummary) {
         self.init(
             distinctCount: summary.distinctCount,
             values: summary.values.map { ValueFrequency(label: $0.label, count: $0.count) })
@@ -280,7 +281,7 @@ extension ValueSummary {
 }
 
 extension LengthSummary {
-    init(_ summary: FfiLengthSummary) {
+    init(_ summary: GewuBindings.LengthSummary) {
         let unit: LengthUnit =
             switch summary.unit {
             case .characters: .characters
@@ -294,8 +295,8 @@ extension LengthSummary {
 }
 
 extension ScatterSample {
-    init(_ result: FfiScatterResult) {
-        func axis(_ kind: FfiScatterAxisKind) -> (ScatterAxisKind, Double) {
+    init(_ result: GewuBindings.ScatterResult) {
+        func axis(_ kind: GewuBindings.ScatterAxisKind) -> (ScatterAxisKind, Double) {
             switch kind {
             case .number: (.number, 1)
             case .date(let seconds): (.date, seconds)
@@ -315,7 +316,7 @@ extension ScatterSample {
 }
 
 extension FilterOptions {
-    init(_ choices: FfiFilterChoices) {
+    init(_ choices: GewuBindings.FilterChoices) {
         self.init(
             values: choices.values?.map { ValueChoice(label: $0.label, value: $0.value, count: $0.count) },
             nullCount: choices.nullCount)
@@ -323,8 +324,8 @@ extension FilterOptions {
 }
 
 extension RangeHistogram {
-    init(_ h: FfiRangeHistogram) {
-        func bound(_ b: FfiRangeBound?) -> RangeBound? {
+    init(_ h: GewuBindings.RangeHistogram) {
+        func bound(_ b: GewuBindings.RangeBound?) -> RangeBound? {
             b.map { RangeBound(value: $0.value, label: $0.label, coordinate: $0.coordinate) }
         }
         self.init(

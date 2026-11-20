@@ -67,6 +67,8 @@ pub struct ColumnInfo {
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
+    /// Lists, structs and maps; only Parquet exports them structurally.
+    pub nested: bool,
     pub capabilities: ColumnCapabilities,
     pub analysis: crate::AnalysisCapabilities,
 }
@@ -80,6 +82,7 @@ impl From<core::ColumnInfo> for ColumnInfo {
             display_type: column.display_type,
             technical_type: column.technical_type,
             nullable: column.nullable,
+            nested: column.nested,
             capabilities: column.capabilities.into(),
             analysis: column.analysis.into(),
         }

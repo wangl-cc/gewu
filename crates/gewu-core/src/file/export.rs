@@ -9,10 +9,13 @@ use std::{
     },
 };
 
-use arrow::{array::ArrayRef, datatypes::SchemaRef};
+use arrow::{
+    array::ArrayRef,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 
 use super::{ExportData, WriteProgress};
-use crate::{row_ids::RowIds, ExportOptions, FileType, Result};
+use crate::{row_ids::RowIds, ColumnId, ExportOptions, FileType, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -28,6 +31,8 @@ pub struct Export {
     source: PathBuf,
     schema: SchemaRef,
     columns: Vec<ArrayRef>,
+    /// Source column identities, in export order.
+    column_ids: Vec<ColumnId>,
     rows: RowIds,
     format: FileType,
     started: AtomicBool,
@@ -43,6 +48,7 @@ impl Export {
         source: PathBuf,
         schema: SchemaRef,
         columns: Vec<ArrayRef>,
+        column_ids: Vec<ColumnId>,
         rows: RowIds,
         format: FileType,
     ) -> Self {
@@ -50,6 +56,7 @@ impl Export {
             source,
             schema,
             columns,
+            column_ids,
             rows,
             format,
             started: AtomicBool::new(false),
@@ -83,7 +90,8 @@ impl Export {
 
     /// Write on a background thread. Headers are included for CSV/TSV, nulls
     /// are empty fields, and scalar values use Arrow's full display precision.
-    /// CSV/TSV and XLSX reject nested columns. Empty strings and nulls both
+    /// CSV/TSV and XLSX reject nested columns unless
+    /// [`ExportOptions::nested_as_text`] is set. Empty strings and nulls both
     /// use empty CSV/TSV fields under the standard Arrow CSV encoding.
     /// Parquet preserves Arrow types and nulls. A sibling temporary file is
     /// atomically renamed only after the complete output has been flushed.
@@ -102,10 +110,7 @@ impl Export {
         path: impl AsRef<Path>,
         options: &ExportOptions,
     ) -> Result<()> {
-        if self.started.swap(true, Ordering::Relaxed) {
-            return Err(crate::ExportError::AlreadyStarted.into());
-        }
-        self.check_cancelled()?;
+        self.start(options)?;
         let path = path.as_ref();
         self.check_destination(path)?;
         let parent = path
@@ -118,11 +123,12 @@ impl Export {
             .map_err(|error| {
                 crate::IoError::new(crate::IoOperation::CreateTemporaryFile, parent, error)
             })?;
+        let as_text = self.as_text(options);
         super::write(
             temporary.as_file_mut(),
             self.format,
             options,
-            self.data(),
+            self.data(&as_text),
             self.write_progress(),
         )?;
         self.check_cancelled()?;
@@ -140,11 +146,87 @@ impl Export {
         Ok(())
     }
 
-    fn data(&self) -> ExportData<'_> {
+    /// Write a CSV or TSV export into memory, for example for the clipboard.
+    /// Fails with [`crate::ExportError::SizeLimit`] instead of building more
+    /// than `limit` bytes. Single-use and cancellable like a file write.
+    pub fn write_to_memory(&self, options: &ExportOptions, limit: usize) -> Result<Vec<u8>> {
+        self.start(options)?;
+        let as_text = self.as_text(options);
+        let bytes = super::write_delimited_to_memory(
+            self.format,
+            options,
+            self.data(&as_text),
+            self.write_progress(),
+            limit,
+        )?;
+        self.check_cancelled()?;
+        Ok(bytes)
+    }
+
+    /// Claim this single-use job and check that `options` can write its columns.
+    fn start(&self, options: &ExportOptions) -> Result<()> {
+        if self.started.swap(true, Ordering::Relaxed) {
+            return Err(crate::ExportError::AlreadyStarted.into());
+        }
+        self.check_cancelled()?;
+        if self.format != FileType::Parquet && !options.nested_as_text {
+            let nested: Vec<ColumnId> = self
+                .column_ids
+                .iter()
+                .zip(&self.columns)
+                .filter(|(_, array)| array.data_type().is_nested())
+                .map(|(&id, _)| id)
+                .collect();
+            if !nested.is_empty() {
+                return Err(crate::ExportError::NestedColumns {
+                    format: self.format,
+                    columns: nested,
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Which columns to write as display text under `options`.
+    fn as_text(&self, options: &ExportOptions) -> Vec<bool> {
+        self.columns
+            .iter()
+            .map(|array| {
+                options.nested_as_text
+                    && self.format != FileType::Parquet
+                    && array.data_type().is_nested()
+            })
+            .collect()
+    }
+
+    fn data<'a>(&'a self, as_text: &'a [bool]) -> ExportData<'a> {
+        let schema = if as_text.contains(&true) {
+            let fields: Vec<Field> = self
+                .schema
+                .fields()
+                .iter()
+                .zip(as_text)
+                .map(|(field, &as_text)| {
+                    if as_text {
+                        Field::new(field.name(), DataType::Utf8, field.is_nullable())
+                    } else {
+                        field.as_ref().clone()
+                    }
+                })
+                .collect();
+            std::sync::Arc::new(Schema::new_with_metadata(
+                fields,
+                self.schema.metadata().clone(),
+            ))
+        } else {
+            self.schema.clone()
+        };
         ExportData {
-            schema: &self.schema,
+            schema,
             columns: &self.columns,
             rows: self.rows.as_slice(),
+            as_text,
         }
     }
 

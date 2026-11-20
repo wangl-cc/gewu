@@ -218,7 +218,8 @@ struct TableExecutionTests {
         model.copy(from: session.initialRows, rows: [0..<2, 3..<9], columns: [label, number])
         await eventually { model.outcome != nil }
         #expect(alerts.current == nil && model.outcome == .copied)
-        let expected = "label\tnumber\nfirst\t1\n\"tab\tvalue\"\t2\nfourth\t4"
+        // The same encoding as a TSV export.
+        let expected = "label\tnumber\r\nfirst\t1\r\n\"tab\tvalue\"\t2\r\nfourth\t4\r\n"
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(
             pasteboard.data(forType: .init(UTType.tabSeparatedText.identifier)).map {

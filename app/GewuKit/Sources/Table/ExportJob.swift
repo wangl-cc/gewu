@@ -1,10 +1,11 @@
 import Foundation
+internal import GewuBindings
 import Synchronization
 
 public enum ParquetCompression: String, CaseIterable, Sendable, Codable {
     case zstd, snappy, gzip, brotli, lz4, uncompressed
 
-    var ffi: FfiParquetCompression {
+    var ffi: GewuBindings.ParquetCompression {
         switch self {
         case .zstd: .zstd
         case .snappy: .snappy
@@ -18,7 +19,7 @@ public enum ParquetCompression: String, CaseIterable, Sendable, Codable {
 
 public struct ExportProgress: Hashable, Sendable {
     /// Rows processed. Reaching `totalRows` does not mean the file is in
-    /// place; ``ExportJob/write(to:compression:progress:)`` returning does.
+    /// place; ``ExportJob/write(to:compression:)`` returning does.
     public let rowsWritten: UInt64
     public let totalRows: UInt64
 
@@ -34,25 +35,26 @@ public struct ExportProgress: Hashable, Sendable {
 /// only on success, so a failed or cancelled export leaves it untouched.
 public final class ExportJob: Sendable {
     public let format: FileType
-    private let job: FfiExport
+    private let job: GewuBindings.GewuExport
     private let finished = Mutex(false)
 
-    init(job: FfiExport, format: FileType) {
+    init(job: GewuBindings.GewuExport, format: FileType) {
         self.job = job
         self.format = format
     }
 
-    /// Write the file on a dedicated thread. Cancelling the calling task stops
-    /// the write; it then throws `CancellationError` unless the file was
-    /// already committed.
+    /// Write the file on a dedicated thread. Nested columns go to CSV, TSV and
+    /// XLSX as their display text. Cancelling the calling task stops the write;
+    /// it then throws `CancellationError` unless the file was already committed.
     public func write(to destination: URL, compression: ParquetCompression = .zstd) async throws {
         let job = job
         let path = destination.path
-        let options = FfiExportOptions(parquetCompression: compression.ffi)
+        let options = GewuBindings.ExportOptions(
+            parquetCompression: compression.ffi, nestedAsText: true, includeHeader: true)
         defer { finished.withLock { $0 = true } }
         try await withTaskCancellationHandler {
             try await SerialWorker(label: "export").perform {
-                try job.writeWithOptions(path: path, options: options)
+                try job.write(path: path, options: options)
             }
         } onCancel: {
             job.cancel()

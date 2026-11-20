@@ -1,3 +1,5 @@
+internal import GewuBindings
+
 /// The rows that pass a set of filters, in file order.
 ///
 /// A row set is immutable. Its analyses do not depend on row order, so a
@@ -9,10 +11,10 @@ public final class RowSet: Sendable, Hashable, Identifiable {
     public let filters: [ColumnFilter]
     /// Number of rows that pass `filters`.
     public let count: UInt64
-    let view: FfiFilteredView
+    let view: GewuBindings.GewuFilteredView
     private let cache = AnalysisCache()
 
-    init(source: TableSource, view: FfiFilteredView, filters: [ColumnFilter]) {
+    init(source: TableSource, view: GewuBindings.GewuFilteredView, filters: [ColumnFilter]) {
         self.source = source
         self.view = view
         self.filters = filters
@@ -93,7 +95,7 @@ public final class RowSet: Sendable, Hashable, Identifiable {
     }
 
     private func analyze<Value: Sendable>(
-        _ key: AnalysisKey, _ compute: @escaping @Sendable (FfiFilteredView) throws -> Value
+        _ key: AnalysisKey, _ compute: @escaping @Sendable (GewuBindings.GewuFilteredView) throws -> Value
     ) async throws -> Value {
         let view = view
         let worker = source.workers.analysis

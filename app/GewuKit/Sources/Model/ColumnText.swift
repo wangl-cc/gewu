@@ -1,50 +1,31 @@
-/// An immutable buffer owned by a Rust object. The address stays valid while
-/// `owner` is alive; Rust never mutates or reallocates it.
-struct ForeignBuffer: Sendable {
-    private let owner: any Sendable
-    private let address: UInt
-    let byteCount: Int
+import Foundation
+internal import GewuBindings
+internal import gewuFFI
 
-    init(_ view: FfiBufferView, owner: any Sendable) {
-        self.owner = owner
-        address = UInt(view.address)
-        byteCount = Int(view.length)
-    }
-
-    /// The bytes, valid only within `body`, which must not let them escape.
-    func withBytes<Result>(_ body: (UnsafeRawBufferPointer) throws -> Result) rethrows -> Result {
-        try withExtendedLifetime(owner) {
-            // SAFETY: Rust keeps the buffer at this address, unchanged, for the
-            // owner's lifetime, which `withExtendedLifetime` covers. Empty
-            // buffers are never dereferenced.
-            try body(UnsafeRawBufferPointer(start: UnsafeRawPointer(bitPattern: address), count: byteCount))
-        }
-    }
-}
-
-/// Display text for one column over consecutive display rows, read in place
-/// from Rust memory. Decode only the cells being shown.
+/// Display text for one column over consecutive display rows. A plain value:
+/// Rust formats a block and moves it across once, packed as row offsets, a
+/// validity bitmap and the UTF-8 text. Decode only the cells being shown.
 public struct ColumnText: Sendable {
     /// Rows in this block, starting at ``DisplayRows`` row `start`.
     public let rowCount: Int
     public let start: Int
-    private let text: ForeignBuffer
-    private let offsets: ForeignBuffer
-    private let validity: ForeignBuffer
+    /// `rowCount + 1` native-endian `UInt32` offsets, validity bits, then text.
+    private let packed: Data
+    private let textStart: Int
 
-    init(_ handle: FfiColumnText, start: Int) {
-        rowCount = Int(handle.rowCount())
+    init(_ text: GewuBindings.ColumnText, start: Int) {
+        rowCount = Int(text.rowCount)
         self.start = start
-        text = ForeignBuffer(handle.text(), owner: handle)
-        offsets = ForeignBuffer(handle.offsets(), owner: handle)
-        validity = ForeignBuffer(handle.validity(), owner: handle)
+        packed = text.bytes
+        textStart = (rowCount + 1) * MemoryLayout<UInt32>.size + (rowCount + 7) / 8
+        precondition(packed.count >= textStart, "column text is shorter than its header")
     }
 
     /// The display rows this block covers.
     public var rows: Range<Int> { start..<(start + rowCount) }
 
-    /// Bytes retained by this block's buffers.
-    public var byteCount: Int { text.byteCount + offsets.byteCount + validity.byteCount }
+    /// Bytes retained by this block.
+    public var byteCount: Int { packed.count }
 
     /// Text of display row `row`; `nil` for a missing value or a row outside this block.
     public func cell(_ row: Int) -> String? {
@@ -58,24 +39,37 @@ public struct ColumnText: Sendable {
     {
         let local = row - start
         guard local >= 0, local < rowCount else { return nil }
-        let valid = validity.withBytes { $0[local / 8] & (1 << (local % 8)) != 0 }
-        guard valid else { return nil }
-        let (lower, upper) = offsets.withBytes { bytes in
-            let words = bytes.assumingMemoryBound(to: UInt32.self)
-            return (Int(words[local]), Int(words[local + 1]))
+        let validityStart = (rowCount + 1) * MemoryLayout<UInt32>.size
+        let textStart = textStart
+        return try packed.withUnsafeBytes { bytes in
+            guard bytes[validityStart + local / 8] & (1 << (local % 8)) != 0 else { return nil }
+            let lower = Int(bytes.loadUnaligned(fromByteOffset: local * 4, as: UInt32.self))
+            let upper = Int(bytes.loadUnaligned(fromByteOffset: (local + 1) * 4, as: UInt32.self))
+            return try body(UnsafeRawBufferPointer(rebasing: bytes[(textStart + lower)..<(textStart + upper)]))
         }
-        return try text.withBytes { try body(UnsafeRawBufferPointer(rebasing: $0[lower..<upper])) }
     }
 }
 
-/// Zero-based source row numbers for consecutive display rows.
-public struct RowNumbers: Sendable, RandomAccessCollection {
-    private let rows: ForeignBuffer
+/// Zero-based source row numbers of every display row, read in place from
+/// the row mapping Rust keeps for the rows. Reading never calls into Rust.
+public struct RowNumbers: @unchecked Sendable, RandomAccessCollection {
+    // SAFETY of `@unchecked Sendable`: `rows` points into an immutable
+    // mapping that `owner` keeps alive, so concurrent reads are safe.
+    /// Keeps the mapping alive; `nil` when every row is in file order.
+    private let owner: GewuBindings.GewuOrderedView?
+    private let rows: UnsafeBufferPointer<UInt32>?
     public let count: Int
 
-    init(_ handle: FfiRowIndices) {
-        rows = ForeignBuffer(handle.rows(), owner: handle)
-        count = Int(handle.count())
+    init(_ view: GewuBindings.GewuOrderedView) {
+        let lent = gewu_ordered_view_source_rows(view.uniffiCloneHandle())
+        count = lent.count
+        if let start = lent.rows {
+            owner = view
+            rows = UnsafeBufferPointer(start: start, count: lent.count)
+        } else {
+            owner = nil
+            rows = nil
+        }
     }
 
     public var startIndex: Int { 0 }
@@ -83,6 +77,7 @@ public struct RowNumbers: Sendable, RandomAccessCollection {
 
     public subscript(position: Int) -> UInt64 {
         precondition(position >= 0 && position < count, "row number index out of range")
-        return rows.withBytes { UInt64($0.assumingMemoryBound(to: UInt32.self)[position]) }
+        guard let rows else { return UInt64(position) }
+        return withExtendedLifetime(owner) { UInt64(rows[position]) }
     }
 }

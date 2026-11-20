@@ -1,4 +1,5 @@
 import Foundation
+internal import GewuBindings
 
 /// A failure reported by the data engine, grouped by what the user can do about it.
 ///
@@ -33,7 +34,7 @@ public enum GewuKitError: LocalizedError, Equatable, Sendable {
     }
 }
 
-extension FfiError {
+extension GewuBindings.GewuError {
     var translated: any Error {
         switch self {
         case .Io(_, let message): GewuKitError.fileAccess(message)
