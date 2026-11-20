@@ -43,8 +43,12 @@ final class CopyModel {
                 pasteboard.writeObjects([item])
                 outcome = .copied
             } catch is CancellationError {
-            } catch is TextLimitExceeded {
-                outcome = .tooLarge
+            } catch let error as GewuKitError {
+                if case .export(.sizeLimit) = error.kind {
+                    outcome = .tooLarge
+                } else {
+                    alerts.report(error, title: "Could Not Copy")
+                }
             } catch {
                 alerts.report(error, title: "Could Not Copy")
             }

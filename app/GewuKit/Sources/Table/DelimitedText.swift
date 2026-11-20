@@ -2,16 +2,11 @@ import Foundation
 internal import GewuBindings
 internal import gewuFFI
 
-/// The requested text would exceed its byte limit.
-public struct TextLimitExceeded: Error, Sendable {
-    public let limit: Int
-}
-
 extension DisplayRows {
     /// Display text of `rows` and `columns` as tab-separated values, the same
     /// encoding as a TSV export, with nested values as their display text.
-    /// Throws ``TextLimitExceeded`` instead of building more than `byteLimit`
-    /// bytes. Runs on its own thread; cancelling the calling task stops it.
+    /// Fails with ``GewuKitError/ExportProblem/sizeLimit(_:)`` instead of
+    /// building more than `byteLimit` bytes. Runs on its own thread; cancelling the calling task stops it.
     public func tabSeparatedText(
         rows: [Range<Int>], columns: [ColumnID], includeHeader: Bool, byteLimit: Int
     ) async throws -> Data {
@@ -25,12 +20,7 @@ extension DisplayRows {
             parquetCompression: .zstd, nestedAsText: true, includeHeader: includeHeader)
         return try await withTaskCancellationHandler {
             try await SerialWorker(label: "copy").perform { () throws -> Data in
-                let exported: GewuBindings.ExportedBytes
-                do {
-                    exported = try job.writeToMemory(options: options, limit: UInt64(byteLimit))
-                } catch GewuBindings.GewuError.Export(kind: .sizeLimit, message: _) {
-                    throw TextLimitExceeded(limit: byteLimit)
-                }
+                let exported = try job.writeToMemory(options: options, limit: UInt64(byteLimit))
                 let contents = gewu_exported_bytes(exported.uniffiCloneHandle())
                 guard let bytes = contents.bytes else { return Data() }
                 // One copy out of Rust, kept alive by `exported` until it completes.

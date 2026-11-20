@@ -24,6 +24,8 @@ import Testing
 
     @Test func rustCancellationArrivesAsCancellationError() {
         #expect(GewuBindings.GewuError.Cancelled.translated is CancellationError)
-        #expect(GewuBindings.GewuError.Internal(message: "m").translated as? GewuKitError == .internalFailure("m"))
+        #expect(
+            GewuBindings.GewuError.Internal(message: "m").translated as? GewuKitError
+                == GewuKitError(.internalFailure, diagnostic: "m"))
     }
 }

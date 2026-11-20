@@ -18,7 +18,9 @@ import Testing
         await #expect {
             try await TableSession.open(url)
         } throws: { error in
-            if case .fileAccess = error as? GewuKitError { true } else { false }
+            guard let error = error as? GewuKitError, case .fileAccess(.resolvePath) = error.kind else { return false }
+            // The file system's own message is the only account of what happened.
+            return error.failureReason == error.diagnostic && error.diagnostic.contains(url.lastPathComponent)
         }
     }
 
@@ -54,8 +56,10 @@ import Testing
         await #expect {
             try await session.apply(query, after: session.initialRows)
         } throws: { error in
-            guard case .invalidFilter(let message) = error as? GewuKitError else { return false }
-            return message.contains("not a number") && error.localizedDescription == message
+            guard let error = error as? GewuKitError else { return false }
+            return error.kind == .filter(.invalidValue("not a number", expectedType: "Int64", reason: .invalidSyntax))
+                && error.localizedDescription == "“not a number” is not a valid Int64 value."
+                && error.failureReason == nil
         }
     }
 
@@ -70,8 +74,10 @@ import Testing
         #expect(sheets.count == 1)
         let book = try await TableSession.open(url, options: OpenOptions(sheet: sheets[0]))
         #expect(book.source.info.worksheet == sheets[0])
-        await #expect(throws: GewuKitError.self) {
+        await #expect {
             try await TableSession.open(url, options: OpenOptions(sheet: "absent"))
+        } throws: { error in
+            (error as? GewuKitError)?.kind == .file(.sheetNotFound("absent"))
         }
     }
 }

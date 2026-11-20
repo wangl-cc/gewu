@@ -17,14 +17,3 @@ func formatCount<Count: BinaryInteger>(_ n: Count) -> String {
 func formatFileSize(_ bytes: UInt64) -> String {
     Int64(clamping: bytes).formatted(.byteCount(style: .file))
 }
-
-extension FileType {
-    var displayName: String {
-        switch self {
-        case .csv: "CSV"
-        case .tsv: "TSV"
-        case .parquet: "Parquet"
-        case .xlsx: "XLSX"
-        }
-    }
-}

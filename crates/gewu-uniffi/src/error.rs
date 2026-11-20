@@ -70,10 +70,12 @@ pub enum FileErrorKind {
     SheetNotFound {
         sheet: String,
     },
+    /// An Excel error value such as `#DIV/0!`; `row` and `column` count from 1.
     ErrorCell {
         sheet: String,
         row: u32,
         column: u32,
+        error: String,
     },
     UnsupportedColumnType {
         column: String,
@@ -205,8 +207,16 @@ fn file_error(kind: core::FileError, message: String) -> GewuError {
         core::FileError::NoWorksheets => FileErrorKind::NoWorksheets,
         core::FileError::SheetNotFound { sheet } => FileErrorKind::SheetNotFound { sheet },
         core::FileError::ErrorCell {
-            sheet, row, column, ..
-        } => FileErrorKind::ErrorCell { sheet, row, column },
+            sheet,
+            row,
+            column,
+            error,
+        } => FileErrorKind::ErrorCell {
+            sheet,
+            row,
+            column,
+            error,
+        },
         core::FileError::UnsupportedColumnType { column, data_type } => {
             FileErrorKind::UnsupportedColumnType {
                 column,

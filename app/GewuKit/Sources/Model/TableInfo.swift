@@ -65,6 +65,16 @@ public struct ColumnInfo: Identifiable, Sendable {
 
 public enum FileType: String, CaseIterable, Sendable {
     case csv, tsv, parquet, xlsx
+
+    /// The format's name, such as "Parquet".
+    public var displayName: String {
+        switch self {
+        case .csv: "CSV"
+        case .tsv: "TSV"
+        case .parquet: "Parquet"
+        case .xlsx: "XLSX"
+        }
+    }
 }
 
 public enum FileMetadata: Sendable {

@@ -79,8 +79,10 @@ import Testing
         let headless = try await rows.tabSeparatedText(
             rows: [1..<2], columns: columns, includeHeader: false, byteLimit: 1024)
         #expect(String(decoding: headless, as: UTF8.self) == "plain\t\r\n")
-        await #expect(throws: TextLimitExceeded.self) {
+        await #expect {
             try await rows.tabSeparatedText(rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 10)
+        } throws: { error in
+            (error as? GewuKitError)?.kind == .export(.sizeLimit(10))
         }
     }
 

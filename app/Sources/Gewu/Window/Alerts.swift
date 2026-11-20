@@ -19,7 +19,9 @@ final class Alerts {
 
     func report(_ error: any Error, title: String) {
         guard !(error is CancellationError) else { return }
-        queue.append(AlertMessage(title: title, message: error.localizedDescription))
+        var message = error.localizedDescription
+        if let reason = (error as? LocalizedError)?.failureReason { message += "\n\n" + reason }
+        queue.append(AlertMessage(title: title, message: message))
     }
 
     func dismiss(_ alert: AlertMessage) {
