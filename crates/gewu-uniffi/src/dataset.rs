@@ -28,6 +28,22 @@ impl From<core::DatasetInfo> for DatasetInfo {
     }
 }
 
+/// How to read a file.
+#[derive(uniffi::Record)]
+pub struct OpenOptions {
+    pub sheet: Option<String>,
+    pub has_header: bool,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            sheet: None,
+            has_header: true,
+        }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct GewuDataset {
     inner: Arc<core::Dataset>,
@@ -35,33 +51,14 @@ pub struct GewuDataset {
 
 #[uniffi::export]
 impl GewuDataset {
+    /// Read and decode a file. `options.sheet` selects an XLSX worksheet
+    /// (the first one when absent); `options.has_header` applies to CSV, TSV
+    /// and XLSX. Slow: call off the main thread.
     #[uniffi::constructor]
-    pub fn open(path: String) -> Result<Arc<Self>, GewuError> {
-        Ok(Arc::new(Self {
-            inner: Arc::new(core::Dataset::open(path)?),
-        }))
-    }
-
-    #[uniffi::constructor]
-    pub fn open_with_options(
-        path: String,
-        sheet: Option<String>,
-        has_header: bool,
-    ) -> Result<Arc<Self>, GewuError> {
+    pub fn open(path: String, options: OpenOptions) -> Result<Arc<Self>, GewuError> {
         let options = core::OpenOptions {
-            sheet,
-            has_header,
-            ..core::OpenOptions::default()
-        };
-        Ok(Arc::new(Self {
-            inner: Arc::new(core::Dataset::open_with_options(path, &options)?),
-        }))
-    }
-
-    #[uniffi::constructor]
-    pub fn open_sheet(path: String, sheet: String) -> Result<Arc<Self>, GewuError> {
-        let options = core::OpenOptions {
-            sheet: Some(sheet),
+            sheet: options.sheet,
+            has_header: options.has_header,
             ..core::OpenOptions::default()
         };
         Ok(Arc::new(Self {

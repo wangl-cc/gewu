@@ -144,7 +144,8 @@ mod tests {
         let source =
             std::env::temp_dir().join(format!("gewu-uniffi-find-{}.csv", std::process::id()));
         std::fs::write(&source, "value,other\nhit,12\nmiss,120\nhit,12\n").unwrap();
-        let dataset = GewuDataset::open(source.to_str().unwrap().to_owned()).unwrap();
+        let dataset =
+            GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
         let c0 = dataset.column_id("value".into()).unwrap();
         let c1 = dataset.column_id("other".into()).unwrap();
         let doc = dataset.unfiltered().unsorted();
@@ -162,7 +163,7 @@ mod tests {
             .collect();
         assert_eq!(columns, [(c1, vec![0b101]), (c0, vec![0])]);
         assert_eq!(find.previous(None, 1).unwrap()[0].display_row, 2);
-        assert!(doc.source_rows(0, 10).len() == 3);
+        assert_eq!(doc.source_rows(0, 10).unwrap().count(), 3);
         std::fs::remove_file(source).unwrap();
     }
 }

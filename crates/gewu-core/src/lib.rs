@@ -39,6 +39,7 @@ pub use scalar::BoundError;
 pub use stats::{
     AnalysisCapabilities, AnalysisError, AnalysisField, AnalysisOperation, AxisScale, Histogram,
     LengthSummary, LengthUnit, NumericStatistics, RangeBound, RangeBounds, RangeHistogram,
-    ScatterAxisKind, ScatterPoint, ScatterResult, ValueFrequency, ValueSummary, MAX_SCATTER_POINTS,
+    ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit, ValueFrequency, ValueSummary,
+    MAX_SCATTER_POINTS,
 };
 pub use view::{FilteredView, FormattedColumnSegment, OrderedView};

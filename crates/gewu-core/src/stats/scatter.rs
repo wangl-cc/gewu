@@ -16,20 +16,62 @@ pub(crate) fn supports(data_type: &DataType) -> bool {
 
 pub const MAX_SCATTER_POINTS: u32 = 4096;
 
-/// Interpretation of scatter labels for axis presentation. Numeric coordinates
-/// retain their existing source units; date labels carry the calendar values.
+/// Interpretation of scatter coordinates for axis presentation. Coordinates
+/// keep the column's native units; temporal axes report that unit so a
+/// coordinate times [`TimeUnit::seconds`] is seconds since the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScatterAxisKind {
     Number,
-    Date,
-    DateTime,
+    Date { unit: TimeUnit },
+    DateTime { unit: TimeUnit },
+}
+
+/// The native unit of a temporal coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeUnit {
+    Day,
+    Second,
+    Millisecond,
+    Microsecond,
+    Nanosecond,
+}
+
+impl TimeUnit {
+    /// Seconds in one unit.
+    pub fn seconds(self) -> f64 {
+        match self {
+            Self::Day => 86_400.0,
+            Self::Second => 1.0,
+            Self::Millisecond => 1e-3,
+            Self::Microsecond => 1e-6,
+            Self::Nanosecond => 1e-9,
+        }
+    }
+}
+
+impl From<arrow::datatypes::TimeUnit> for TimeUnit {
+    fn from(unit: arrow::datatypes::TimeUnit) -> Self {
+        match unit {
+            arrow::datatypes::TimeUnit::Second => Self::Second,
+            arrow::datatypes::TimeUnit::Millisecond => Self::Millisecond,
+            arrow::datatypes::TimeUnit::Microsecond => Self::Microsecond,
+            arrow::datatypes::TimeUnit::Nanosecond => Self::Nanosecond,
+        }
+    }
 }
 
 impl ScatterAxisKind {
     fn from_arrow(data_type: &DataType) -> Self {
         match data_type {
-            DataType::Date32 | DataType::Date64 => Self::Date,
-            DataType::Timestamp(..) => Self::DateTime,
+            DataType::Date32 => Self::Date {
+                unit: TimeUnit::Day,
+            },
+            DataType::Date64 => Self::Date {
+                unit: TimeUnit::Millisecond,
+            },
+            DataType::Timestamp(unit, _) => Self::DateTime {
+                unit: (*unit).into(),
+            },
             _ => Self::Number,
         }
     }
@@ -220,8 +262,12 @@ mod tests {
         )
         .unwrap();
         assert!(result.points.is_empty());
-        assert_eq!(result.x_axis_kind, ScatterAxisKind::Date);
-        assert_eq!(result.y_axis_kind, ScatterAxisKind::DateTime);
+        assert_eq!(result.x_axis_kind, ScatterAxisKind::Date {
+            unit: TimeUnit::Day
+        });
+        assert_eq!(result.y_axis_kind, ScatterAxisKind::DateTime {
+            unit: TimeUnit::Nanosecond
+        });
         let result = analyze(
             None,
             (c0, &dates),

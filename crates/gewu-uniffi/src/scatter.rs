@@ -3,19 +3,25 @@
 use gewu_core as core;
 
 /// Axis presentation semantics supplied with the scatter snapshot.
-#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+/// How to read an axis's coordinates. Temporal coordinates multiplied by
+/// `seconds_per_unit` are seconds since the Unix epoch.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq)]
 pub enum ScatterAxisKind {
     Number,
-    Date,
-    DateTime,
+    Date { seconds_per_unit: f64 },
+    DateTime { seconds_per_unit: f64 },
 }
 
 impl From<core::ScatterAxisKind> for ScatterAxisKind {
     fn from(kind: core::ScatterAxisKind) -> Self {
         match kind {
             core::ScatterAxisKind::Number => Self::Number,
-            core::ScatterAxisKind::Date => Self::Date,
-            core::ScatterAxisKind::DateTime => Self::DateTime,
+            core::ScatterAxisKind::Date { unit } => Self::Date {
+                seconds_per_unit: unit.seconds(),
+            },
+            core::ScatterAxisKind::DateTime { unit } => Self::DateTime {
+                seconds_per_unit: unit.seconds(),
+            },
         }
     }
 }

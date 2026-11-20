@@ -23,6 +23,6 @@ pub(crate) use numeric::analyze as analyze_statistics;
 pub use numeric::NumericStatistics;
 pub(crate) use scale::supports_logarithmic;
 pub use scale::AxisScale;
-pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult, MAX_SCATTER_POINTS};
+pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit, MAX_SCATTER_POINTS};
 pub(crate) use values::analyze as analyze_values;
 pub use values::{ValueFrequency, ValueSummary};
