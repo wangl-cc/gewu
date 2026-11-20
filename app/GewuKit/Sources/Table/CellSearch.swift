@@ -35,13 +35,11 @@ public struct SearchHighlights: Sendable {
 
 /// A compiled search over one ``DisplayRows``, scoped to ordered columns.
 ///
-/// It reports no total: navigation pages through matches in display order,
-/// and highlights cover only the blocks requested. A search keeps answering
-/// for its rows after the table moves on to newer ones.
+/// It reports no total: navigation steps through matches in display order,
+/// scanning only as far as the match it returns, and highlights cover only
+/// the blocks requested. A search keeps answering for its rows after the
+/// table moves on to newer ones.
 public final class CellSearch: Sendable {
-    /// Display rows covered by one highlight call at most.
-    public static let maximumHighlightRows = Int(GewuBindings.findLimits().maxHighlightRows)
-
     public let rows: DisplayRows
     public let columns: [ColumnID]
     private let session: GewuBindings.FindSession
@@ -52,35 +50,26 @@ public final class CellSearch: Sendable {
         self.columns = columns
     }
 
-    /// Up to `limit` matches strictly after `cell` (from the start when `nil`),
-    /// in display order. Empty at the end.
-    public func matches(after cell: CellMatch?, limit: Int) async throws -> [CellMatch] {
+    /// The match `steps` matches after `cell` (before it when negative), in
+    /// display order, wrapping around at either end. From `nil`, stepping by
+    /// 1 finds the first match and by -1 the last. `nil` when nothing matches.
+    public func match(_ steps: Int, from cell: CellMatch?) async throws -> CellMatch? {
         let session = session
-        let limit = UInt32(clamping: limit)
+        let steps = Int64(steps)
         return try await rows.source.workers.find.perform {
-            try session.next(after: cell?.ffi, limit: limit).map(CellMatch.init)
+            try session.step(from: cell?.ffi, by: steps).map(CellMatch.init)
         }
     }
 
-    /// Up to `limit` matches strictly before `cell` (from the end when `nil`),
-    /// in display order. Empty at the start.
-    public func matches(before cell: CellMatch?, limit: Int) async throws -> [CellMatch] {
-        let session = session
-        let limit = UInt32(clamping: limit)
-        return try await rows.source.workers.find.perform {
-            try session.previous(before: cell?.ffi, limit: limit).map(CellMatch.init)
-        }
-    }
-
-    /// Match flags for `columns`, which must belong to this search, over at
-    /// most ``maximumHighlightRows`` display rows.
+    /// Match flags for `columns`, which must belong to this search, over
+    /// `rows`, clipped to the table.
     public func highlights(_ columns: [ColumnID], rows: Range<Int>) async throws -> SearchHighlights {
         let session = session
         let lower = min(max(rows.lowerBound, 0), self.rows.count)
         let upper = min(max(rows.upperBound, lower), self.rows.count)
         return try await self.rows.source.workers.find.perform { () throws -> SearchHighlights in
             let result = try session.highlight(
-                columns: columns.map(\.ffi), start: UInt64(lower), count: UInt32(upper - lower))
+                columns: columns.map(\.ffi), start: UInt64(lower), count: UInt32(clamping: upper - lower))
             var matches: [ColumnID: [UInt8]] = [:]
             for column in result.columns { matches[ColumnID(column.column)] = Array(column.matched) }
             return SearchHighlights(rows: lower..<upper, matches: matches)

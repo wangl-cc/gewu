@@ -20,7 +20,7 @@ Both formats use the first record as column names by default. The app's Import O
 
 Type inference examines the entire input before decoding. Mixed types can become text; mixed integer/fractional columns become text if floating-point promotion would round an integer literal.
 
-Empty fields, including quoted empty strings, read as null. Export uses UTF-8, CRLF line endings and CSV quoting; empty strings and nulls both use empty fields. CSV/TSV do not preserve Arrow schemas and reject nested export columns.
+Empty fields, including quoted empty strings, read as null. Export uses UTF-8, CRLF line endings and CSV quoting; empty strings and nulls both use empty fields. CSV/TSV do not preserve Arrow schemas. Nested columns are written as their display text; Core callers opt into this with `ExportOptions::nested_as_text` and are otherwise rejected. Copying a selection produces exactly a TSV export of the selected rows.
 
 Dates such as `2026-10-30` and ISO-style timestamps such as `2026-10-30T14:30:00.123` can be inferred as temporal types. Locale-specific date strings and standalone times are not automatically recognized as temporal types. Unsupported formats remain text; mixing date values with ordinary text can make the whole column text. There is no user-selectable date parsing pattern. A value that looks like a supported date but is invalid can fail decoding rather than falling back to text.
 
@@ -28,7 +28,7 @@ Dates such as `2026-10-30` and ISO-style timestamps such as `2026-10-30T14:30:00
 
 The default is the first worksheet with its first row used as column names. For workbooks with multiple sheets, select a worksheet in the strip below the table. Switching loads only the requested sheet and resets its Find, filters, sorting and analysis selections. If loading fails, the current sheet stays open; the sheet list remains available even if the first sheet cannot be read. Reading uses the occupied worksheet range, trimming blank edges including trailing all-null rows. Formula results come from cached values; Core does not recalculate formulas and rejects cells containing Excel errors.
 
-Export writes one worksheet with a header. Boolean values and ordinary finite numbers use native cells. Integers exceeding 15 digits, decimals, dates/times and non-finite numbers use literal text to preserve displayed values. Nested columns are rejected. This is table export, not workbook, styling or formula round-trip editing.
+Export writes one worksheet with a header. Boolean values and ordinary finite numbers use native cells. Integers exceeding 15 digits, decimals, dates/times and non-finite numbers use literal text to preserve displayed values. Nested columns are written as their display text under the same option. This is table export, not workbook, styling or formula round-trip editing.
 
 Date/time cells recognized by the workbook reader become timezone-free, millisecond timestamps; recognized elapsed durations become millisecond durations. Ordinary text cells are not inferred as dates. ISO date cells are handled separately, with timezone-bearing or higher-precision values retained as text rather than losing information. Invalid Excel dates that cannot be converted faithfully also remain text. The original workbook's date display formatting is not retained.
 

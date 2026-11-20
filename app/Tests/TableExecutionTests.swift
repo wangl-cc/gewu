@@ -148,7 +148,8 @@ struct TableExecutionTests {
         let session = try await TestTables.session(csv)
         let number = session.source.id("number")
         let original = session.initialRows
-        let replacement = try await session.sort(original.rowSet, by: [ColumnSort(column: number, descending: true)])
+        let replacement = try await session.apply(
+            TableQuery(sorts: [ColumnSort(column: number, descending: true)]), after: original)
         let (cache, stream, reads) = gatedCache()
         defer {
             cache.stop()
@@ -172,7 +173,8 @@ struct TableExecutionTests {
         let session = try await TestTables.session(csv)
         let number = session.source.id("number")
         let original = session.initialRows
-        let replacement = try await session.sort(original.rowSet, by: [ColumnSort(column: number, descending: true)])
+        let replacement = try await session.apply(
+            TableQuery(sorts: [ColumnSort(column: number, descending: true)]), after: original)
         let cache = TableTextCache()
         defer { cache.stop() }
         let viewport = Viewport(rows: 0..<3, columns: [number])

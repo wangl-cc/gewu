@@ -15,14 +15,28 @@ public enum FilterCondition: Hashable, Sendable, Codable {
     case exact(values: [String], exclude: Bool)
 }
 
-public struct Filter: Hashable, Sendable, Codable {
-    public var condition: FilterCondition
-    /// Whether missing values pass, independently of `condition`.
-    public var includeNulls: Bool
+/// Which rows of one column pass.
+public enum Filter: Hashable, Sendable, Codable {
+    /// Rows whose value is missing.
+    case onlyNulls
+    /// Rows whose value is not missing.
+    case notNull
+    /// Rows whose value satisfies the condition, and rows with missing values
+    /// when `includeNulls`.
+    case condition(FilterCondition, includeNulls: Bool)
 
-    public init(condition: FilterCondition, includeNulls: Bool) {
-        self.condition = condition
-        self.includeNulls = includeNulls
+    /// The condition on present values; `nil` for the null-only modes.
+    public var condition: FilterCondition? {
+        if case .condition(let condition, _) = self { condition } else { nil }
+    }
+
+    /// Whether rows with missing values pass.
+    public var passesNulls: Bool {
+        switch self {
+        case .onlyNulls: true
+        case .notNull: false
+        case .condition(_, let includeNulls): includeNulls
+        }
     }
 }
 
@@ -79,16 +93,25 @@ extension TextMatch {
     }
 }
 
+extension FilterCondition {
+    var ffi: GewuBindings.FilterCondition {
+        switch self {
+        case .range(let min, let max): .range(min: min, max: max)
+        case .text(let text, let mode, let caseSensitive):
+            .text(text: text, mode: mode.ffi, caseSensitive: caseSensitive)
+        case .exact(let values, let exclude): .exact(values: values, exclude: exclude)
+        }
+    }
+}
+
 extension Filter {
     var ffi: GewuBindings.Filter {
-        let condition: GewuBindings.FilterCondition =
-            switch condition {
-            case .range(let min, let max): .range(min: min, max: max)
-            case .text(let text, let mode, let caseSensitive):
-                .text(text: text, mode: mode.ffi, caseSensitive: caseSensitive)
-            case .exact(let values, let exclude): .exact(values: values, exclude: exclude)
-            }
-        return GewuBindings.Filter(condition: condition, includeNulls: includeNulls)
+        switch self {
+        case .onlyNulls: .onlyNulls
+        case .notNull: .notNull
+        case .condition(let condition, let includeNulls):
+            .condition(condition: condition.ffi, includeNulls: includeNulls)
+        }
     }
 }
 

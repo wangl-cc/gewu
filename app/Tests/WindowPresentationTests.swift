@@ -7,17 +7,16 @@ import Testing
 @Suite @MainActor
 struct WindowPresentationTests {
     @Test func filterDescriptionsKeepNullLiteralAndExactBoundsDistinct() {
-        let missing = Filter(condition: .exact(values: [], exclude: false), includeNulls: true)
-        let literal = Filter(condition: .exact(values: ["Missing"], exclude: false), includeNulls: false)
+        let missing: Filter = .onlyNulls
+        let literal: Filter = .condition(.exact(values: ["Missing"], exclude: false), includeNulls: false)
         #expect(missing.conditionSummary == "Only missing")
         #expect(literal.conditionSummary == "= “Missing”")
-        #expect(
-            Filter(condition: .exact(values: [""], exclude: false), includeNulls: false).conditionSummary
-                == "= (empty string)")
-        let range = Filter(condition: .range(min: "9007199254740993", max: nil), includeNulls: true)
+        let empty: Filter = .condition(.exact(values: [""], exclude: false), includeNulls: false)
+        #expect(empty.conditionSummary == "= (empty string)")
+        let range: Filter = .condition(.range(min: "9007199254740993", max: nil), includeNulls: true)
         #expect(range.conditionSummary == "≥ 9007199254740993 · + missing")
-        let text = Filter(
-            condition: .text(text: "line\nbreak", mode: .equals, caseSensitive: true), includeNulls: false)
+        let text: Filter = .condition(
+            .text(text: "line\nbreak", mode: .equals, caseSensitive: true), includeNulls: false)
         #expect(!text.conditionSummary.contains("\n"))
         #expect(text.detailSummary.contains("Case sensitive"))
     }
@@ -52,16 +51,15 @@ struct WindowPresentationTests {
         let text = columns[1].capabilities
         #expect(
             FilterMode.initial(
-                capabilities: numeric, current: Filter(condition: .range(min: "1", max: "2"), includeNulls: false))
+                capabilities: numeric, current: .condition(.range(min: "1", max: "2"), includeNulls: false))
                 == .range)
         #expect(
             FilterMode.initial(
                 capabilities: text,
-                current: Filter(
-                    condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
+                current: .condition(.text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
                 == .text)
         // Value selection waits for choices and needs a complete list of values.
-        let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)
+        let selected: Filter = .condition(.exact(values: ["group1"], exclude: false), includeNulls: true)
         #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
         let labels = try await view.filterOptions(for: columns[1].id)
         #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)

@@ -84,7 +84,7 @@ final class FilterFrameTests: XCTestCase {
 
         do {
             let c0 = model.source.columns[0].id
-            let keep = Filter(condition: .exact(values: ["Keep"], exclude: false), includeNulls: false)
+            let keep: Filter = .condition(.exact(values: ["Keep"], exclude: false), includeNulls: false)
             @MainActor func settle(filtered: Bool) async throws -> SHA256.Digest {
                 try await waitUntil("the expected second row after filtering=\(filtered)") {
                     guard !model.isUpdating, model.displayed.count == (filtered ? 512 : 8192),

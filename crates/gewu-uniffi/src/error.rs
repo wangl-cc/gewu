@@ -1,6 +1,6 @@
 //! Structured errors crossing the language boundary.
 
-use gewu_core as core;
+use gewu_core::{self as core, ColumnId, FileType};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum GewuError {
@@ -61,10 +61,10 @@ pub enum IoOperation {
 pub enum FileErrorKind {
     UnknownFormat,
     FormatDisabled {
-        format: crate::FileType,
+        format: FileType,
     },
     Decode {
-        format: crate::FileType,
+        format: FileType,
     },
     NoWorksheets,
     SheetNotFound {
@@ -141,11 +141,11 @@ pub enum ExportErrorKind {
         destination: String,
     },
     NestedColumns {
-        format: crate::FileType,
-        columns: Vec<crate::ColumnId>,
+        format: FileType,
+        columns: Vec<ColumnId>,
     },
     Encode {
-        format: crate::FileType,
+        format: FileType,
     },
     SizeLimit {
         limit: u64,
@@ -200,12 +200,8 @@ impl From<core::FindError> for GewuError {
 fn file_error(kind: core::FileError, message: String) -> GewuError {
     let kind = match kind {
         core::FileError::UnknownFormat => FileErrorKind::UnknownFormat,
-        core::FileError::FormatDisabled { format } => FileErrorKind::FormatDisabled {
-            format: format.into(),
-        },
-        core::FileError::Decode { format, .. } => FileErrorKind::Decode {
-            format: format.into(),
-        },
+        core::FileError::FormatDisabled { format } => FileErrorKind::FormatDisabled { format },
+        core::FileError::Decode { format, .. } => FileErrorKind::Decode { format },
         core::FileError::NoWorksheets => FileErrorKind::NoWorksheets,
         core::FileError::SheetNotFound { sheet } => FileErrorKind::SheetNotFound { sheet },
         core::FileError::ErrorCell {
@@ -318,22 +314,15 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
             message,
         },
         core::ExportError::NestedColumns { format, columns } => GewuError::Export {
-            kind: ExportErrorKind::NestedColumns {
-                format: format.into(),
-                columns: columns.into_iter().map(Into::into).collect(),
-            },
+            kind: ExportErrorKind::NestedColumns { format, columns },
             message,
         },
         core::ExportError::Encode { format, .. } => GewuError::Export {
-            kind: ExportErrorKind::Encode {
-                format: format.into(),
-            },
+            kind: ExportErrorKind::Encode { format },
             message,
         },
         core::ExportError::FormatDisabled { format } => GewuError::File {
-            kind: FileErrorKind::FormatDisabled {
-                format: format.into(),
-            },
+            kind: FileErrorKind::FormatDisabled { format },
             message,
         },
         core::ExportError::SizeLimit { limit } => GewuError::Export {

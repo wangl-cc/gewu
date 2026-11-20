@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use gewu_core as core;
+use gewu_core::{self as core, ExportOptions, ExportProgress, ParquetCompression};
 
 use crate::{ExportedBytes, GewuError};
 
-#[derive(Clone, Copy, uniffi::Enum)]
+#[uniffi::remote(Enum)]
 pub enum ParquetCompression {
     Zstd,
     Snappy,
@@ -16,21 +16,8 @@ pub enum ParquetCompression {
     Uncompressed,
 }
 
-impl From<ParquetCompression> for core::ParquetCompression {
-    fn from(value: ParquetCompression) -> Self {
-        match value {
-            ParquetCompression::Zstd => Self::Zstd,
-            ParquetCompression::Snappy => Self::Snappy,
-            ParquetCompression::Gzip => Self::Gzip,
-            ParquetCompression::Brotli => Self::Brotli,
-            ParquetCompression::Lz4 => Self::Lz4,
-            ParquetCompression::Uncompressed => Self::Uncompressed,
-        }
-    }
-}
-
 /// How to encode an export. Format-specific options do not affect other formats.
-#[derive(uniffi::Record)]
+#[uniffi::remote(Record)]
 pub struct ExportOptions {
     pub parquet_compression: ParquetCompression,
     /// Write nested columns to CSV, TSV and XLSX as display text instead of rejecting them.
@@ -39,17 +26,7 @@ pub struct ExportOptions {
     pub include_header: bool,
 }
 
-impl From<ExportOptions> for core::ExportOptions {
-    fn from(options: ExportOptions) -> Self {
-        Self {
-            parquet_compression: options.parquet_compression.into(),
-            nested_as_text: options.nested_as_text,
-            include_header: options.include_header,
-        }
-    }
-}
-
-#[derive(uniffi::Record)]
+#[uniffi::remote(Record)]
 pub struct ExportProgress {
     pub rows_written: u64,
     pub total_rows: u64,
@@ -66,7 +43,7 @@ impl GewuExport {
     /// Write the captured rows to `path`, replacing it only on success. Slow:
     /// call off the main thread.
     pub fn write(&self, path: String, options: ExportOptions) -> Result<(), GewuError> {
-        Ok(self.inner.write_with_options(path, &options.into())?)
+        Ok(self.inner.write_with_options(path, &options)?)
     }
 
     /// Write a CSV or TSV export into memory, failing instead of building more
@@ -77,7 +54,7 @@ impl GewuExport {
         limit: u64,
     ) -> Result<Arc<ExportedBytes>, GewuError> {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let bytes = self.inner.write_to_memory(&options.into(), limit)?;
+        let bytes = self.inner.write_to_memory(&options, limit)?;
         Ok(Arc::new(ExportedBytes::new(bytes)))
     }
 
@@ -86,11 +63,7 @@ impl GewuExport {
     }
 
     pub fn progress(&self) -> ExportProgress {
-        let progress = self.inner.progress();
-        ExportProgress {
-            rows_written: progress.rows_written,
-            total_rows: progress.total_rows,
-        }
+        self.inner.progress()
     }
 }
 

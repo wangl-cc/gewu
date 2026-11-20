@@ -100,38 +100,25 @@ struct FindModelTests {
         model.find.requestHighlights(rows: 0..<10, columns: [value])
         model.find.requestHighlights(rows: 64..<74, columns: [value])
         await eventually { model.find.isMatch(row: 0, column: value) && model.find.isMatch(row: 64, column: value) }
-        // A viewport taller than one Core request is read in several runs.
+        // A viewport taller than one Core highlight block is read in one request.
         model.find.requestHighlights(rows: 0..<400, columns: [value])
         await eventually { model.find.isMatch(row: 398, column: value) }
         #expect((0..<400).allSatisfy { model.find.isMatch(row: $0, column: value) == ($0 % 2 == 0) })
     }
 
-    @Test func burstNavigationConsumesEveryStepWithinOnePage() async throws {
-        let model = try await TestTables.model("value\nnew\nnew\nnew\nnew\nnew\nnew\n")
-        defer { model.stop() }
-        model.find.query = "new"
-        await eventually { model.find.currentMatch?.displayRow == 0 }
-
-        // The first page holds every match, so presses must not be coalesced.
-        model.find.next()
-        model.find.next()
-        model.find.next(backwards: true)
-        #expect(model.find.currentMatch?.displayRow == 1)
-        model.find.next()
-        model.find.next()
-        #expect(model.find.currentMatch?.displayRow == 3)
-    }
-
-    @Test func navigationCrossesAFetchedPageWithoutLosingSteps() async throws {
+    @Test func burstNavigationTakesEveryStep() async throws {
         let model = try await TestTables.model("value\n" + (0..<40).map { _ in "new" }.joined(separator: "\n") + "\n")
         defer { model.stop() }
         model.find.query = "new"
         await eventually { model.find.currentMatch?.displayRow == 0 }
 
-        // The first page covers 32 matches; 35 steps need one more fetch.
+        // Presses during a step are taken by the next one, never dropped.
         for _ in 0..<35 { model.find.next() }
-        await eventually { !model.find.isFinding && model.find.currentMatch?.displayRow == 35 }
-        #expect(model.find.currentMatch?.displayRow == 35)
+        for _ in 0..<3 { model.find.next(backwards: true) }
+        await eventually { !model.find.isFinding && model.find.currentMatch?.displayRow == 32 }
+        for _ in 0..<10 { model.find.next() }
+        await eventually { !model.find.isFinding && model.find.currentMatch?.displayRow == 2 }
+        #expect(model.find.currentMatch?.displayRow == 2, "Navigation wraps past the last match")
     }
 
     @Test func columnReorderPreservesTheCurrentMatch() async throws {
@@ -143,7 +130,7 @@ struct FindModelTests {
         model.find.query = "12"
         await eventually { model.find.currentMatch?.displayRow == 1 }
         model.find.next()
-        #expect(model.find.currentMatch?.displayRow == 2)
+        await eventually { model.find.currentMatch?.displayRow == 2 }
 
         model.reorderColumns([number, value])
         #expect(model.find.currentMatch == CellMatch(displayRow: 2, column: number))

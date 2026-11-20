@@ -1,17 +1,44 @@
-//! Immutable ordered view handles over shared source data.
+//! The rows a table shows: a filtered view in display order.
 use std::sync::Arc;
 
-use gewu_core as core;
+use gewu_core::{self as core, ColumnFilter, ColumnId, ColumnSort, FileType};
 
-use crate::{ColumnId, ColumnText, FileType, FindSession, GewuError, GewuExport};
+use crate::{ColumnText, FindSession, GewuError, GewuExport, GewuFilteredView};
 
+/// The rows of a [`GewuFilteredView`] ordered by `sorts`. Immutable: reads,
+/// Find and exports capture exactly these rows.
 #[derive(uniffi::Object)]
 pub struct GewuOrderedView {
     pub(crate) inner: Arc<core::OrderedView>,
+    pub(crate) filtered: Arc<GewuFilteredView>,
+    pub(crate) sorts: Vec<ColumnSort>,
 }
 
 #[uniffi::export]
 impl GewuOrderedView {
+    /// The rows passing `filters` ordered by `sorts`, reusing what is
+    /// unchanged: this view when both match, and its filtered rows with
+    /// their analyses when only the order differs. Filters on different
+    /// columns combine with AND; sorts are by priority.
+    pub fn apply(
+        self: Arc<Self>,
+        filters: Vec<ColumnFilter>,
+        sorts: Vec<ColumnSort>,
+    ) -> Result<Arc<Self>, GewuError> {
+        if filters == self.filtered.filters {
+            if sorts == self.sorts {
+                return Ok(self);
+            }
+            return self.filtered.sorted(sorts);
+        }
+        GewuFilteredView::new(Arc::clone(&self.filtered.dataset), filters)?.sorted(sorts)
+    }
+
+    /// These rows in file order, which serve every analysis.
+    pub fn filtered(&self) -> Arc<GewuFilteredView> {
+        Arc::clone(&self.filtered)
+    }
+
     pub fn row_count(&self) -> u64 {
         self.inner.row_count()
     }
@@ -24,10 +51,7 @@ impl GewuOrderedView {
         start: u64,
         count: u32,
     ) -> Result<ColumnText, GewuError> {
-        Ok(self
-            .inner
-            .format_column(column.into(), start, count)?
-            .into())
+        Ok(self.inner.format_column(column, start, count)?.into())
     }
 
     pub fn find(
@@ -35,7 +59,6 @@ impl GewuOrderedView {
         query: String,
         columns: Vec<ColumnId>,
     ) -> Result<Arc<FindSession>, GewuError> {
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
         Ok(Arc::new(FindSession {
             inner: self.inner.find(&query, &columns)?,
         }))
@@ -47,8 +70,7 @@ impl GewuOrderedView {
         columns: Vec<ColumnId>,
         format: FileType,
     ) -> Result<Arc<GewuExport>, GewuError> {
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
-        Ok(Arc::new(self.inner.export(&columns, format.into())?.into()))
+        Ok(Arc::new(self.inner.export(&columns, format)?.into()))
     }
 
     /// A single-use export of the display rows in `ranges`, in order, such as a
@@ -60,11 +82,8 @@ impl GewuOrderedView {
         format: FileType,
     ) -> Result<Arc<GewuExport>, GewuError> {
         let ranges: Vec<_> = ranges.iter().map(|range| range.start..range.end).collect();
-        let columns: Vec<core::ColumnId> = columns.into_iter().map(Into::into).collect();
         Ok(Arc::new(
-            self.inner
-                .export_rows(&ranges, &columns, format.into())?
-                .into(),
+            self.inner.export_rows(&ranges, &columns, format)?.into(),
         ))
     }
 }

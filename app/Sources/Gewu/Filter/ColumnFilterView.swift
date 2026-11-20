@@ -19,6 +19,7 @@ enum FilterMode: String, CaseIterable {
             case .exact:
                 guard let selectable else { return nil }
                 if selectable { return .exact }
+            case nil: break
             }
         }
         guard let selectable else { return nil }

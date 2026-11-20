@@ -102,7 +102,7 @@ struct TablePresentationTests {
         let first = try harness.cell(number, 0)
 
         harness.model.setFilter(
-            Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: number)
+            .condition(.range(min: "2", max: nil), includeNulls: false), column: number)
         await harness.settle()
         let pending = try #require(await harness.nextRead())
         #expect(harness.table.numberOfRows == 3 && first.textField?.stringValue == "1" && !first.isLoading)
@@ -133,10 +133,10 @@ struct TablePresentationTests {
         let number = harness.model.id("number")
         #expect(try await harness.loaded(number, 0) == "1")
 
-        harness.model.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: number)
+        harness.model.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: number)
         await harness.settle()
         let older = try #require(await harness.nextRead())
-        harness.model.setFilter(Filter(condition: .range(min: "3", max: nil), includeNulls: false), column: number)
+        harness.model.setFilter(.condition(.range(min: "3", max: nil), includeNulls: false), column: number)
         await harness.settle()
         let newer = try #require(await harness.nextRead())
         #expect(newer.rows === harness.model.displayed)
@@ -289,7 +289,7 @@ struct TablePresentationTests {
 
         // A drag during a failing query keeps the new order: columns are not part of queries.
         harness.model.setFilter(
-            Filter(condition: .range(min: "invalid", max: nil), includeNulls: false), column: number)
+            .condition(.range(min: "invalid", max: nil), includeNulls: false), column: number)
         harness.table.moveColumn(2, toColumn: 1)
         #expect(harness.model.visibleColumns == [label, number])
         await harness.settle()
@@ -320,7 +320,7 @@ struct TablePresentationTests {
 
         func filter(_ minimum: String) async {
             harness.model.setFilter(
-                Filter(condition: .range(min: minimum, max: nil), includeNulls: false), column: number)
+                .condition(.range(min: minimum, max: nil), includeNulls: false), column: number)
             await harness.settle()
             await eventually { harness.controller.shownRows === harness.model.displayed }
             harness.layout()

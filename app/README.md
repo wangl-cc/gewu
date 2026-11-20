@@ -9,7 +9,7 @@ See [App updates](../docs/app-updates.md) for Sparkle signing and publication co
 | Layer | Location | Responsibility |
 | --- | --- | --- |
 | App | `app/Sources/Gewu` | SwiftUI and AppKit views, window and table models, presentation and preferences. Never sees FFI types. |
-| GewuKit | `app/GewuKit` | The only consumer of the UniFFI bindings, which it compiles as internal declarations. Exposes Swift value types, `GewuKitError`, async APIs and the scheduling of all Rust calls. |
+| GewuKit | `app/GewuKit` | The only module that imports the generated bindings (`GewuBindings`, `gewuFFI`). Exposes Swift value types, `GewuKitError`, async APIs and the scheduling of all Rust calls. |
 | FFI and Core | `crates/` | See the [FFI contract](../crates/gewu-uniffi/README.md) and [Core](../crates/gewu-core/README.md). |
 
 GewuKit models a table with three immutable results, each an identity the App compares to decide what to keep:
@@ -17,10 +17,10 @@ GewuKit models a table with three immutable results, each an identity the App co
 | Type | Is | Keeps |
 | --- | --- | --- |
 | `TableSource` | the opened file | column metadata and file information |
-| `RowSet` | the rows passing a set of filters | every analysis, computed once on the session's analysis worker and shared by all callers; filter-editor options |
+| `RowSet` | the rows passing a set of filters | every analysis and filter-editor option, computed on the session's analysis worker; the engine keeps each result with these rows |
 | `DisplayRows` | a `RowSet` in display order | text, source row numbers, cell search, copying and export of exactly these rows |
 
-`TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise. Each session runs synchronous Rust calls on its own serial workers (query, analysis, text, Find), off Swift's cooperative pool. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as `ColumnText`, read in place from Rust memory.
+`TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise; the engine makes the same reuse underneath. Each session runs synchronous Rust calls on its own serial workers (query, analysis, text, Find), off Swift's cooperative pool. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers and copied text are read in place from Rust memory.
 
 ## Code map
 

@@ -2,12 +2,12 @@ import Foundation
 import GewuKit
 import Observation
 
-/// Cell Find over the displayed rows: bounded navigation and highlights for
+/// Cell Find over the displayed rows: wrapping navigation and highlights for
 /// the blocks on screen. Find never filters rows or changes analyses.
 ///
-/// Only the current match, one page of matches and a bounded set of
-/// highlight blocks live in Swift. Every piece of work is a single task that
-/// is cancelled when its search is replaced.
+/// Only the current match and a bounded set of highlight blocks live in
+/// Swift. Every piece of work is a single task that is cancelled when its
+/// search is replaced.
 @MainActor
 @Observable
 final class FindModel {
@@ -44,14 +44,10 @@ final class FindModel {
     @ObservationIgnored private var demand: (rows: Range<Int>, columns: [ColumnID])?
     /// Blocks whose read failed for this search; they are not retried.
     @ObservationIgnored private var failedBlocks: Set<HighlightBlocks.Key> = []
-    /// The last page, ascending in display order, and the current match's
-    /// index in it. Steps inside the page are immediate, so quick presses are never lost.
-    @ObservationIgnored private var page: [CellMatch] = []
-    @ObservationIgnored private var pageIndex: Int?
-    /// Net steps the user asked for; positive is forward.
+    /// Net steps the user asked for and no step has taken yet; positive is
+    /// forward. Presses during a step are taken together by the next one, so
+    /// quick presses are never lost.
     @ObservationIgnored private var pendingSteps = 0
-
-    private static let pageSize = 32
 
     init(alerts: Alerts) {
         self.alerts = alerts
@@ -93,7 +89,7 @@ final class FindModel {
     func next(backwards: Bool = false) {
         guard let search else { return }
         pendingSteps += backwards ? -1 : 1
-        pump(search, debounce: false)
+        step(search, debounce: false)
     }
 
     /// Fetch flags for the on-screen rows of the given columns, reading only blocks not loaded yet.
@@ -116,8 +112,6 @@ final class FindModel {
         if isFinding { isFinding = false }
         if hasMatches != nil { hasMatches = nil }
         if !highlights.isEmpty { highlights = HighlightBlocks() }
-        page = []
-        pageIndex = nil
         pendingSteps = 0
         demand = nil
         failedBlocks = []
@@ -141,45 +135,37 @@ final class FindModel {
         } else {
             isFinding = true
             pendingSteps = 1
-            pump(search, debounce: debounce)
+            step(search, debounce: debounce)
         }
     }
 
     // MARK: Navigation
 
-    /// Consume queued steps from the cached page, or start one fetch when the
-    /// page is exhausted. Each iteration moves one step or starts exactly one
-    /// fetch, so a burst of presses is never coalesced away.
-    private func pump(_ search: CellSearch, debounce: Bool) {
-        while pendingSteps != 0, navigation == nil {
-            let backwards = pendingSteps < 0
-            guard let index = pageIndex, page.indices.contains(index + (backwards ? -1 : 1)) else {
-                fetch(search, backwards: backwards, debounce: debounce)
-                return
-            }
-            pageIndex = index + (backwards ? -1 : 1)
-            pendingSteps += backwards ? 1 : -1
-            publish(page[index + (backwards ? -1 : 1)])
-        }
-    }
-
-    /// Fetch the page beyond the current match, wrapping around at either end.
-    private func fetch(_ search: CellSearch, backwards: Bool, debounce: Bool) {
+    /// Take every pending step in one scan from the current match, wrapping
+    /// around at either end. Steps asked for meanwhile follow when it ends.
+    private func step(_ search: CellSearch, debounce: Bool) {
+        guard pendingSteps != 0, navigation == nil else { return }
         isFinding = true
+        let steps = pendingSteps
+        pendingSteps = 0
         let cursor = currentMatch
-        let limit = Self.pageSize
         navigation = Task {
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(150)) }
-                var page = try await Self.page(of: search, from: cursor, backwards: backwards, limit: limit)
-                // Wrap only after an actual cursor; the first empty scan means no matches at all.
-                if page.isEmpty, cursor != nil {
-                    page = try await Self.page(of: search, from: nil, backwards: backwards, limit: limit)
-                }
+                let match = try await search.match(steps, from: cursor)
                 try Task.checkCancellation()
                 navigation = nil
-                apply(page, backwards: backwards)
-                pump(search, debounce: false)
+                isFinding = false
+                guard let match else {
+                    pendingSteps = 0
+                    currentMatch = nil
+                    hasMatches = false
+                    return
+                }
+                currentMatch = match
+                hasMatches = true
+                onNavigate?(match)
+                step(search, debounce: false)
             } catch is CancellationError {
             } catch {
                 navigation = nil
@@ -189,92 +175,44 @@ final class FindModel {
         }
     }
 
-    private static func page(
-        of search: CellSearch, from cursor: CellMatch?, backwards: Bool, limit: Int
-    ) async throws -> [CellMatch] {
-        backwards
-            ? try await search.matches(before: cursor, limit: limit)
-            : try await search.matches(after: cursor, limit: limit)
-    }
-
-    private func apply(_ newPage: [CellMatch], backwards: Bool) {
-        guard pendingSteps != 0 else {
-            // Forward and backward presses cancelled out while the page loaded.
-            isFinding = false
-            return
-        }
-        page = newPage
-        guard !newPage.isEmpty else {
-            pageIndex = nil
-            pendingSteps = 0
-            isFinding = false
-            currentMatch = nil
-            hasMatches = false
-            return
-        }
-        let index = backwards ? newPage.count - 1 : 0
-        pageIndex = index
-        pendingSteps += backwards ? 1 : -1
-        publish(newPage[index])
-    }
-
-    private func publish(_ match: CellMatch) {
-        isFinding = false
-        currentMatch = match
-        hasMatches = true
-        onNavigate?(match)
-    }
-
     // MARK: Highlights
 
-    /// One read: consecutive blocks and every column missing in any of them.
+    /// One read: the demand's blocks and every column missing in any of them,
+    /// so each column's matcher compiles once per read.
     private struct HighlightRead {
         let blocks: ClosedRange<Int>
         let columns: [ColumnID]
     }
 
-    /// Group the demand's missing blocks into runs Core can answer in one call,
-    /// so each column's matcher compiles once per run.
-    private func plannedReads() -> [HighlightRead] {
-        guard let demand, !demand.columns.isEmpty else { return [] }
+    private func plannedRead() -> HighlightRead? {
+        guard let demand, !demand.columns.isEmpty else { return nil }
         let size = HighlightBlocks.rowsPerBlock
-        let perRead = max(1, CellSearch.maximumHighlightRows / size)
-        let first = demand.rows.lowerBound / size
-        let last = (demand.rows.upperBound - 1) / size
-        return stride(from: first, through: last, by: perRead).compactMap { start in
-            let blocks = start...min(start + perRead - 1, last)
-            let columns = demand.columns.filter { column in
-                blocks.contains { block in
-                    let key = HighlightBlocks.Key(block: block, column: column)
-                    return !highlights.contains(key) && !failedBlocks.contains(key)
-                }
+        let blocks = (demand.rows.lowerBound / size)...((demand.rows.upperBound - 1) / size)
+        let columns = demand.columns.filter { column in
+            blocks.contains { block in
+                let key = HighlightBlocks.Key(block: block, column: column)
+                return !highlights.contains(key) && !failedBlocks.contains(key)
             }
-            return columns.isEmpty ? nil : HighlightRead(blocks: blocks, columns: columns)
         }
+        return columns.isEmpty ? nil : HighlightRead(blocks: blocks, columns: columns)
     }
 
     private func loadHighlights() {
-        guard highlighting == nil, let search else { return }
-        let reads = plannedReads()
-        guard !reads.isEmpty else { return }
+        guard highlighting == nil, let search, let read = plannedRead() else { return }
         let size = HighlightBlocks.rowsPerBlock
         highlighting = Task {
             do {
-                for read in reads {
-                    let rows = (read.blocks.lowerBound * size)..<((read.blocks.upperBound + 1) * size)
-                    let flags = try await search.highlights(read.columns, rows: rows)
-                    try Task.checkCancellation()
-                    highlights.store(flags, blocks: read.blocks, columns: read.columns)
-                }
+                let rows = (read.blocks.lowerBound * size)..<((read.blocks.upperBound + 1) * size)
+                let flags = try await search.highlights(read.columns, rows: rows)
+                try Task.checkCancellation()
+                highlights.store(flags, blocks: read.blocks, columns: read.columns)
                 highlighting = nil
                 loadHighlights()
             } catch is CancellationError {
             } catch {
                 highlighting = nil
-                for read in reads {
-                    for block in read.blocks {
-                        for column in read.columns { failedBlocks.insert(.init(block: block, column: column)) }
-                    }
+                for block in read.blocks {
+                    for column in read.columns { failedBlocks.insert(.init(block: block, column: column)) }
                 }
                 alerts.report(error, title: "Could Not Highlight Matches")
                 loadHighlights()

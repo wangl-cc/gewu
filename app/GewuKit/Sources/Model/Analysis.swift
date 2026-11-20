@@ -296,21 +296,18 @@ extension LengthSummary {
 
 extension ScatterSample {
     init(_ result: GewuBindings.ScatterResult) {
-        func axis(_ kind: GewuBindings.ScatterAxisKind) -> (ScatterAxisKind, Double) {
+        func axis(_ kind: GewuBindings.ScatterAxisKind) -> ScatterAxisKind {
             switch kind {
-            case .number: (.number, 1)
-            case .date(let seconds): (.date, seconds)
-            case .dateTime(let seconds): (.dateTime, seconds)
+            case .number: .number
+            case .date: .date
+            case .dateTime: .dateTime
             }
         }
-        let (xAxis, xSeconds) = axis(result.xAxisKind)
-        let (yAxis, ySeconds) = axis(result.yAxisKind)
         self.init(
-            xAxis: xAxis, yAxis: yAxis, eligibleRows: result.eligibleRows, nonPositiveRows: result.nonPositiveRows,
+            xAxis: axis(result.xAxisKind), yAxis: axis(result.yAxisKind), eligibleRows: result.eligibleRows,
+            nonPositiveRows: result.nonPositiveRows,
             points: result.points.map {
-                ScatterPoint(
-                    sourceRow: $0.sourceRow, x: $0.x * xSeconds, y: $0.y * ySeconds, xLabel: $0.xLabel,
-                    yLabel: $0.yLabel)
+                ScatterPoint(sourceRow: $0.sourceRow, x: $0.x, y: $0.y, xLabel: $0.xLabel, yLabel: $0.yLabel)
             })
     }
 }

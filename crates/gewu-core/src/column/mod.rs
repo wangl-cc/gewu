@@ -484,15 +484,13 @@ mod tests {
         ));
         for array in [list, structure] {
             let column = col(array);
-            for (exclude, include_nulls, expected) in [
-                (false, true, [false, true, false, false]),
-                (true, false, [true, false, true, true]),
-                (true, true, [true; 4]),
-                (false, false, [false; 4]),
+            for (filter, expected) in [
+                (Filter::OnlyNulls, [false, true, false, false]),
+                (Filter::NotNull, [true, false, true, true]),
+                (Filter::exact(vec![], true, true), [true; 4]),
+                (Filter::exact(vec![], false, false), [false; 4]),
             ] {
-                let test = column
-                    .compile_filter(&Filter::exact(vec![], exclude, include_nulls))
-                    .unwrap();
+                let test = column.compile_filter(&filter).unwrap();
                 let mut hits = [false; 4];
                 test.evaluate(0..4, &mut hits);
                 assert_eq!(hits, expected);

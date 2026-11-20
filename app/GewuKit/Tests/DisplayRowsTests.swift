@@ -25,7 +25,7 @@ import Testing
         #expect(text.cell(1) == "2")
     }
 
-    @Test func searchPagesAndHighlightsInDisplayOrder() async throws {
+    @Test func searchStepsAndHighlightsInDisplayOrder() async throws {
         let file = try Fixture("value,other\nhit,12\nmiss,120\nhit,12\n")
         let session = try await file.open()
         let value = session.source.id("value")
@@ -33,11 +33,13 @@ import Testing
         let search = try session.initialRows.search("12", in: [value, other])
 
         // Numbers match whole values, so 120 is not a match for 12.
-        let page = try await search.matches(after: nil, limit: 2)
-        #expect(page == [CellMatch(displayRow: 0, column: other), CellMatch(displayRow: 2, column: other)])
-        let last = try await search.matches(before: nil, limit: 1)
-        #expect(last == [CellMatch(displayRow: 2, column: other)])
-        #expect(try await search.matches(after: last[0], limit: 4).isEmpty, "Empty at the end")
+        let first = CellMatch(displayRow: 0, column: other)
+        let last = CellMatch(displayRow: 2, column: other)
+        #expect(try await search.match(1, from: nil) == first)
+        #expect(try await search.match(-1, from: nil) == last)
+        #expect(try await search.match(1, from: last) == first, "Wraps at the end")
+        #expect(try await search.match(3, from: first) == last)
+        #expect(try await session.initialRows.search("absent", in: [value]).match(1, from: nil) == nil)
 
         let flags = try await search.highlights([other, value], rows: 0..<64)
         #expect(flags.rows == 0..<3)

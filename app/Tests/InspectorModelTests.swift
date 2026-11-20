@@ -54,7 +54,7 @@ struct InspectorModelTests {
         let all = session.initialRows
         let filtered = try await session.apply(
             TableQuery(filters: [
-                ColumnFilter(column: number, filter: Filter(condition: .range(min: "2", max: nil), includeNulls: false))
+                ColumnFilter(column: number, filter: .condition(.range(min: "2", max: nil), includeNulls: false))
             ]), after: all)
         let model = InspectorModel()
         await model.load(request(all.rowSet, number, [.statistics]))

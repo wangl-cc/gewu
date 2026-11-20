@@ -49,7 +49,7 @@ import Testing
         let query = TableQuery(filters: [
             ColumnFilter(
                 column: session.source.id("score"),
-                filter: Filter(condition: .range(min: "not a number", max: nil), includeNulls: false))
+                filter: .condition(.range(min: "not a number", max: nil), includeNulls: false))
         ])
         await #expect {
             try await session.apply(query, after: session.initialRows)

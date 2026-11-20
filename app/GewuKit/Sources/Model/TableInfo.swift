@@ -7,8 +7,8 @@ public struct ColumnID: Hashable, Sendable, Codable {
     /// An opaque number, unique among the table's columns.
     public let raw: UInt32
 
-    init(_ id: GewuBindings.ColumnId) { raw = id.raw }
-    var ffi: GewuBindings.ColumnId { GewuBindings.ColumnId(raw: raw) }
+    init(_ id: GewuBindings.ColumnId) { raw = id }
+    var ffi: GewuBindings.ColumnId { raw }
 }
 
 /// How the app should present a column's values.

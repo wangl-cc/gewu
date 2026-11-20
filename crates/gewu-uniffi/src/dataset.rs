@@ -1,10 +1,12 @@
 //! Dataset opening and metadata across the language boundary.
 use std::sync::Arc;
 
-use gewu_core as core;
+use gewu_core::{self as core, AnalysisField, ColumnId, ColumnInfo, FileType};
 
-use crate::{ColumnFilter, ColumnId, ColumnInfo, FileMetadata, FileType, GewuError};
+use crate::{FileMetadata, GewuError, GewuOrderedView};
 
+/// What a file contains. Mirrors Core's, with source metadata in its
+/// boundary form.
 #[derive(uniffi::Record)]
 pub struct DatasetInfo {
     pub path: String,
@@ -20,8 +22,8 @@ impl From<core::DatasetInfo> for DatasetInfo {
         Self {
             path: info.path,
             row_count: info.row_count,
-            columns: info.columns.into_iter().map(Into::into).collect(),
-            format: info.format.into(),
+            columns: info.columns,
+            format: info.format,
             file_size: info.file_size,
             metadata: info.metadata.into(),
         }
@@ -70,31 +72,13 @@ impl GewuDataset {
         self.inner.info().into()
     }
 
-    pub fn column_structure(
-        &self,
-        column: ColumnId,
-    ) -> Result<Vec<crate::AnalysisField>, GewuError> {
-        Ok(self
-            .inner
-            .column_structure(column.into())?
-            .into_iter()
-            .map(Into::into)
-            .collect())
+    /// Nested fields of a column, read from the schema without scanning.
+    pub fn column_structure(&self, column: ColumnId) -> Result<Vec<AnalysisField>, GewuError> {
+        Ok(self.inner.column_structure(column)?)
     }
 
-    pub fn unfiltered(&self) -> Arc<crate::GewuFilteredView> {
-        Arc::new(crate::GewuFilteredView {
-            inner: self.inner.unfiltered(),
-        })
-    }
-
-    pub fn filter(
-        &self,
-        filters: Vec<ColumnFilter>,
-    ) -> Result<Arc<crate::GewuFilteredView>, GewuError> {
-        let filters: Vec<core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
-        Ok(Arc::new(crate::GewuFilteredView {
-            inner: self.inner.filter(&filters)?,
-        }))
+    /// Every row in file order. Derive other rows with [`GewuOrderedView::apply`].
+    pub fn rows(&self) -> Arc<GewuOrderedView> {
+        crate::GewuFilteredView::unfiltered(Arc::clone(&self.inner)).unsorted()
     }
 }

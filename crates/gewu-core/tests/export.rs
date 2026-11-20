@@ -494,7 +494,8 @@ fn analysis_distribution_includes_the_columns_own_filter() {
     let view_histogram = view
         .distribution(c0, 8, gewu_core::AxisScale::Linear)
         .unwrap();
-    assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 3);
+    // The editor's histogram ignores the column's own filter; analysis does not.
+    assert_eq!(filter_histogram.counts.iter().sum::<u64>(), 5);
     assert_eq!(view_histogram.counts.iter().sum::<u64>(), 3);
     let _other = doc.filter(&[]).unwrap();
     assert_eq!(

@@ -102,7 +102,9 @@ fn checkbox_filter_and_choices() {
     );
     let all = doc.unfiltered().filter_choices(c1).unwrap();
     assert_eq!(all.null_count, 1);
+    let all_nulls = all.null_count;
     let values = all.values.unwrap();
+    let all_labels = values.len();
     let labels: Vec<_> = values.iter().map(|v| v.label.as_str()).collect();
     assert_eq!(labels, ["bird", "cat", "dog"]);
     assert_eq!(values[1].count, 2);
@@ -134,10 +136,10 @@ fn checkbox_filter_and_choices() {
             .count(),
         3
     );
-    // The filtered column also lists only values present in this view.
+    // The filtered column's own editor ignores its filter, keeping alternatives.
     let labels = filtered.filter_choices(c1).unwrap();
-    assert_eq!(labels.null_count, 0);
-    assert_eq!(labels.values.unwrap().len(), 2);
+    assert_eq!(labels.values.unwrap().len(), all_labels);
+    assert_eq!(labels.null_count, all_nulls);
     std::fs::remove_file(path).ok();
 }
 
@@ -148,7 +150,7 @@ fn null_contains_and_typed_equality() {
     let doc = dataset
         .filter(&[ColumnFilter {
             column: c2,
-            filter: Filter::exact(vec![], false, true),
+            filter: Filter::OnlyNulls,
         }])
         .unwrap()
         .unsorted();

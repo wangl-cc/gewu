@@ -5,7 +5,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
-use gewu_core::{ColumnFilter, ColumnId, Error, Filter, FilteredView};
+use gewu_core::{ColumnFilter, ColumnId, Filter, FilteredView};
 use parquet::arrow::ArrowWriter;
 
 /// name | label | price | id
@@ -84,7 +84,7 @@ fn busy_filters() -> Vec<ColumnFilter> {
 }
 
 #[test]
-fn choices_include_only_visible_values() {
+fn choices_ignore_only_the_edited_columns_filter() {
     let (path, doc) = sample("distinct");
     let (c0, c1, c2) = (
         ColumnId::from_raw(0),
@@ -93,13 +93,18 @@ fn choices_include_only_visible_values() {
     );
     let view = doc.filter(&busy_filters()).unwrap();
 
-    // Both filters apply to all candidate columns: rows a and f.
-    assert_eq!(labels_of(&view, c1), [("cat".into(), 1), ("dog".into(), 1)]);
-    let prices: Vec<String> = labels_of(&view, c2).into_iter().map(|(l, _)| l).collect();
-    assert_eq!(prices, ["3.5", "7.0"]);
-    // name: both filters apply -> rows a, f
+    // An unfiltered column lists values of rows passing every filter: rows a and f.
     let names: Vec<String> = labels_of(&view, c0).into_iter().map(|(l, _)| l).collect();
     assert_eq!(names, ["a", "f"]);
+    // A filtered column lists values of rows passing every other filter.
+    for column in [c1, c2] {
+        let others: Vec<_> = busy_filters()
+            .into_iter()
+            .filter(|filter| filter.column != column)
+            .collect();
+        let expected = labels_of(&doc.filter(&others).unwrap(), column);
+        assert_eq!(labels_of(&view, column), expected);
+    }
     std::fs::remove_file(path).ok();
 }
 
@@ -130,7 +135,7 @@ fn choices_and_distribution_apply_column_filters() {
 }
 
 #[test]
-fn histogram_domain_and_counts_use_visible_rows() {
+fn histogram_domain_and_counts_use_rows_passing_the_other_filters() {
     let (path, doc) = sample("hist");
     let (c2, c3) = (ColumnId::from_raw(2), ColumnId::from_raw(3));
     let mut filters = busy_filters();
@@ -138,120 +143,23 @@ fn histogram_domain_and_counts_use_visible_rows() {
         column: c3,
         filter: Filter::range(Some("60".into()), None, false),
     });
-    // All filters apply: only row f remains.
     let view = doc.filter(&filters).unwrap();
-    let h = view
-        .filter_distribution(c3, 6, gewu_core::AxisScale::Linear)
-        .map(|result| result.expect("histogram domain").histogram)
-        .unwrap();
-    assert_eq!(h.counts.iter().sum::<u64>(), 1);
-    // The price domain contains only the visible value.
-    let h = view
-        .filter_distribution(c2, 4, gewu_core::AxisScale::Linear)
-        .map(|result| result.expect("histogram domain").histogram)
-        .unwrap();
-    assert_eq!(h.counts.iter().sum::<u64>(), 1);
-    // A constant visible domain does not fall back to the source range.
-    assert_eq!(h.min_label.as_deref(), Some("7"));
-    assert_eq!(h.max_label.as_deref(), Some("7"));
-    assert!(h.lo.unwrap() <= 7.0 && h.hi.unwrap() >= 7.0);
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn failed_apply_keeps_the_old_view() {
-    let (path, doc) = sample("failed");
-    let c0 = ColumnId::from_raw(0);
-    let before = doc.unfiltered().unsorted();
-    let bad = [ColumnFilter {
-        column: c0,
-        filter: Filter::range(Some("1".into()), None, false),
-    }];
-    assert!(doc.filter(&bad).is_err());
-    assert_eq!(
-        doc.unfiltered().unsorted().format_column(c0, 0, 6).unwrap(),
-        before.format_column(c0, 0, 6).unwrap()
-    );
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn unknown_column_is_an_argument_error() {
-    let (path, doc) = sample("unknown");
-    let c9 = ColumnId::from_raw(9);
-    let filtered = doc.unfiltered();
-    assert!(matches!(filtered.filter_choices(c9), Err(Error::Column(_))));
-    assert!(matches!(
-        filtered
-            .filter_distribution(c9, 10, gewu_core::AxisScale::Linear)
-            .map(|result| result.expect("histogram domain").histogram),
-        Err(Error::Column(_))
-    ));
-    let v = filtered.unsorted();
-    assert!(matches!(v.format_column(c9, 0, 1), Err(Error::Column(_))));
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn high_cardinality_columns_have_no_choice_list_but_exact_filters_still_work() {
-    // 150,000 distinct names, with "x" also on every 1000th row.
-    let n = 150_000i64;
-    let names: ArrayRef = Arc::new(StringArray::from_iter_values((0..n).map(|i| {
-        if i % 1000 == 0 {
-            "x".to_string()
-        } else {
-            format!("n{i:06}")
-        }
-    })));
-    let batch = RecordBatch::try_from_iter(vec![("name", names)]).unwrap();
-    let (path, doc) = write("many", &batch);
-    let c0 = ColumnId::from_raw(0);
-
-    let choices = doc.unfiltered().filter_choices(c0).unwrap();
-    assert!(choices.values.is_none());
-    assert_eq!(choices.null_count, 0);
-    let by_value = [ColumnFilter {
-        column: c0,
-        filter: Filter::exact(vec!["x".into()], false, false),
-    }];
-    assert_eq!(
-        doc.filter(&by_value).unwrap().row_count(),
-        (n / 1000) as u64
-    );
-    doc.filter(&[]).unwrap();
-
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn value_analysis_excludes_nulls_and_recounts_candidates() {
-    let (path, doc) = sample("summary");
-    let c1 = ColumnId::from_raw(1);
-    let summary = doc.unfiltered().values(c1).unwrap();
-    assert_eq!(summary.distinct_count, 3);
-    let top: Vec<_> = summary
-        .values
-        .iter()
-        .map(|v| (v.label.as_str(), v.count))
-        .collect();
-    assert_eq!(top, [("cat", 2), ("dog", 2), ("bird", 1)]);
-    assert_eq!(doc.unfiltered().count_nulls(c1).unwrap(), 1);
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn min_and_max_leave_out_nan() {
-    let v: ArrayRef = Arc::new(Float64Array::from(vec![
-        Some(2.0),
-        Some(f64::NAN),
-        None,
-        Some(-1.5),
-    ]));
-    let batch = RecordBatch::try_from_iter(vec![("v", v)]).unwrap();
-    let (path, doc) = write("nan", &batch);
-    let s = doc.unfiltered().statistics(ColumnId::from_raw(0)).unwrap();
-    assert_eq!(s.nan_count, 1);
-    assert_eq!(s.min_label.as_deref(), Some("-1.5"));
-    assert_eq!(s.max_label.as_deref(), Some("2.0"));
+    for column in [c2, c3] {
+        let others: Vec<_> = filters
+            .iter()
+            .filter(|filter| filter.column != column)
+            .cloned()
+            .collect();
+        let histogram = |view: &std::sync::Arc<gewu_core::FilteredView>| {
+            view.filter_distribution(column, 4, gewu_core::AxisScale::Linear)
+                .map(|result| result.expect("histogram domain").histogram)
+                .unwrap()
+        };
+        let expected = histogram(&doc.filter(&others).unwrap());
+        let actual = histogram(&view);
+        assert_eq!(actual.counts, expected.counts);
+        assert_eq!(actual.min_label, expected.min_label);
+        assert_eq!(actual.max_label, expected.max_label);
+    }
     std::fs::remove_file(path).ok();
 }

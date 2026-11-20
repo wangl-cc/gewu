@@ -25,5 +25,5 @@ extension TableSource {
 }
 
 func exact(_ value: String) -> Filter {
-    Filter(condition: .exact(values: [value], exclude: false), includeNulls: false)
+    .condition(.exact(values: [value], exclude: false), includeNulls: false)
 }

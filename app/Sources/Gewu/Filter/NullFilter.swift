@@ -5,22 +5,24 @@ enum NullMode: Int {
     case include, exclude, only
 
     init(_ filter: Filter?) {
-        if let filter, case .exact(let values, let exclude) = filter.condition, values.isEmpty, !exclude,
-            filter.includeNulls
-        {
-            self = .only
-        } else {
-            self = filter?.includeNulls == false ? .exclude : .include
+        switch filter {
+        case .onlyNulls: self = .only
+        case .notNull: self = .exclude
+        case .condition(_, let includeNulls): self = includeNulls ? .include : .exclude
+        case nil: self = .include
         }
     }
 
+    /// The filter for `condition` under this mode. Excluding no values is no condition.
     func applying(to condition: FilterCondition?) -> Filter? {
-        if self == .only { return Filter(condition: .exact(values: [], exclude: false), includeNulls: true) }
-        guard let condition else {
-            return self == .include ? nil : Filter(condition: .exact(values: [], exclude: true), includeNulls: false)
+        var condition = condition
+        if case .exact(let values, true) = condition, values.isEmpty { condition = nil }
+        switch (self, condition) {
+        case (.only, _): return .onlyNulls
+        case (.exclude, nil): return .notNull
+        case (.include, nil): return nil
+        case (_, let condition?): return .condition(condition, includeNulls: self == .include)
         }
-        if case .exact(let values, let exclude) = condition, values.isEmpty, exclude, self == .include { return nil }
-        return Filter(condition: condition, includeNulls: self == .include)
     }
 }
 

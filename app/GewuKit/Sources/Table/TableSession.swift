@@ -25,9 +25,10 @@ public final class TableSession: Sendable {
             let dataset = try GewuBindings.GewuDataset.open(
                 path: path, options: GewuBindings.OpenOptions(sheet: options.sheet, hasHeader: options.hasHeader))
             let source = TableSource(dataset: dataset, workers: workers)
-            // Creating the unfiltered views is cheap but stays off the main actor with the read.
-            let rows = RowSet(source: source, view: dataset.unfiltered(), filters: [])
-            return TableSession(source: source, initialRows: rows.unsorted())
+            // Creating the initial views is cheap but stays off the main actor with the read.
+            let view = dataset.rows()
+            let rows = RowSet(source: source, view: view.filtered(), filters: [])
+            return TableSession(source: source, initialRows: DisplayRows(rowSet: rows, view: view, sorts: []))
         }
     }
 
@@ -39,25 +40,20 @@ public final class TableSession: Sendable {
     }
 
     /// The rows for `query`, reusing as much of `current` as possible: the
-    /// same rows when nothing changed, and `current.rowSet` with its cached
-    /// analyses when only the sort changed.
+    /// same rows when nothing changed, and `current.rowSet` with its
+    /// analyses when only the sort changed. Filters always apply to the
+    /// whole table, not to `current`.
     public func apply(_ query: TableQuery, after current: DisplayRows) async throws -> DisplayRows {
         precondition(current.rowSet.source === source, "rows belong to another table")
-        if query.filters == current.rowSet.filters {
-            if query.sorts == current.sorts { return current }
-            return try await sort(current.rowSet, by: query.sorts)
-        }
+        if query == current.query { return current }
         let source = source
         return try await source.workers.query.perform {
-            let rows = try source.filter(query.filters)
-            try Task.checkCancellation()
-            return try rows.sorted(by: query.sorts)
+            let view = try current.view.apply(filters: query.filters.map(\.ffi), sorts: query.sorts.map(\.ffi))
+            let rowSet =
+                query.filters == current.rowSet.filters
+                ? current.rowSet : RowSet(source: source, view: view.filtered(), filters: query.filters)
+            return DisplayRows(rowSet: rowSet, view: view, sorts: query.sorts)
         }
-    }
-
-    /// The rows of `rowSet` ordered by `sorts`.
-    public func sort(_ rowSet: RowSet, by sorts: [ColumnSort]) async throws -> DisplayRows {
-        try await source.workers.query.perform { try rowSet.sorted(by: sorts) }
     }
 }
 
@@ -82,10 +78,5 @@ public final class TableSource: Sendable {
     /// Nested fields of a column, read from the schema without scanning.
     public func structure(of column: ColumnID) throws -> [AnalysisField] {
         try translatingErrors { try dataset.columnStructure(column: column.ffi).map(AnalysisField.init) }
-    }
-
-    /// Synchronous; runs on the query worker.
-    fileprivate func filter(_ filters: [ColumnFilter]) throws -> RowSet {
-        RowSet(source: self, view: try dataset.filter(filters: filters.map(\.ffi)), filters: filters)
     }
 }

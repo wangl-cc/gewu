@@ -18,7 +18,7 @@ struct QuerySpecTests {
     }
 
     private func exact(_ value: String) -> Filter {
-        Filter(condition: .exact(values: [value], exclude: false), includeNulls: false)
+        .condition(.exact(values: [value], exclude: false), includeNulls: false)
     }
 
     @Test func queryEditsPublishOnlyTheirFinalDraft() async throws {
@@ -60,11 +60,11 @@ struct QuerySpecTests {
         defer { model.stop() }
         let a = model.id("a")
         #expect(rowSummary(model) == "3 rows · 3 columns")
-        model.setFilter(Filter(condition: .range(min: "1", max: nil), includeNulls: false), column: a)
+        model.setFilter(.condition(.range(min: "1", max: nil), includeNulls: false), column: a)
         #expect(rowSummary(model) == "3 rows · 3 columns", "A pending query does not describe shown rows")
         await settled(model)
         #expect(rowSummary(model) == "3 / 3 rows · 3 columns")
-        model.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: a)
+        model.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: a)
         await settled(model)
         #expect(rowSummary(model) == "1 / 3 rows · 3 columns")
         model.clearFilters()
@@ -87,7 +87,7 @@ struct QuerySpecTests {
         let model = try await model()
         defer { model.stop() }
         let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
-        let filter = Filter(condition: .range(min: "1", max: nil), includeNulls: true)
+        let filter: Filter = .condition(.range(min: "1", max: nil), includeNulls: true)
         model.setFilter(filter, column: a)
         model.setSortDirection(column: a, descending: true)
         model.setSortDirection(column: b, descending: false)
@@ -110,7 +110,7 @@ struct QuerySpecTests {
         model.reorderColumns([b, a])
         model.find.query = "1"
         model.inspect(a)
-        model.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: a)
+        model.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: a)
         model.setSortDirection(column: b, descending: true)
         await settled(model)
         model.clearFilters()
@@ -267,7 +267,7 @@ struct QuerySpecTests {
         model.setFilter(exact("1"), column: a)
         await settled(model)
         let rows = model.displayed
-        model.setFilter(Filter(condition: .range(min: "invalid", max: nil), includeNulls: false), column: a)
+        model.setFilter(.condition(.range(min: "invalid", max: nil), includeNulls: false), column: a)
         await settled(model)
         #expect(alerts.current?.message.contains("invalid") == true)
         #expect(model.displayed === rows && model.draft == rows.query)
@@ -299,7 +299,7 @@ struct QuerySpecTests {
             first.stop()
             second.stop()
         }
-        first.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: first.id("a"))
+        first.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: first.id("a"))
         second.setFilter(exact("y"), column: second.id("c"))
         await settled(first)
         await settled(second)
@@ -317,14 +317,14 @@ struct QuerySpecTests {
         draft.set(composed, selected: false)
         #expect(!draft.contains(composed) && draft.contains(decomposed))
         let filter = NullMode.exclude.applying(to: draft.condition)
-        #expect(filter?.includeNulls == false)
+        #expect(filter?.passesNulls == false)
         guard case .exact(let values, let exclude) = filter?.condition else {
             Issue.record("Expected exact selection")
             return
         }
         #expect(exclude && values.count == 1)
         let onlyNull = NullMode.only.applying(to: draft.condition)
-        #expect(onlyNull == Filter(condition: .exact(values: [], exclude: false), includeNulls: true))
+        #expect(onlyNull == .onlyNulls)
         draft.all(true)
         #expect(NullMode.include.applying(to: draft.condition) == nil)
     }

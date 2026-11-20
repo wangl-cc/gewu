@@ -52,7 +52,7 @@ open build/xcode/Build/Products/Debug/Gewu.app
 
 These commands use `build/xcode` for DerivedData so the launch path is predictable. Edit [project.yml](project.yml), not the generated `Gewu.xcodeproj`; regenerate after adding or moving sources or changing project configuration. Omit `--use-cache` to force regeneration. For IDE debugging, optionally run `open Gewu.xcodeproj` and select the `Gewu` scheme.
 
-GewuKit's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings as internal GewuKit declarations and links `libgewu.a` into the GewuKit framework. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
+The `GewuBindings` target's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings as the `GewuBindings` module and the `gewuFFI` C module, and links `libgewu.a` into the GewuKit framework, the only module that imports them. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
 
 All App configurations use Rust's `release` profile with optimization level 3, fat LTO, one codegen unit and debug information stripped. Debug keeps Swift unoptimized. Release and Performance optimize Swift. Cargo reuses unchanged Rust artifacts during frontend development. Debug Rust directly with Cargo tests; for cross-language debugging, append `RUST_PROFILE=dev` to the `xcodebuild` command.
 

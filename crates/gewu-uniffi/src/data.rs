@@ -39,25 +39,6 @@ impl From<core::FormattedColumnSegment> for ColumnText {
     }
 }
 
-#[cfg(test)]
-impl ColumnText {
-    fn header_len(&self) -> usize {
-        (self.row_count as usize + 1) * 4 + (self.row_count as usize).div_ceil(8)
-    }
-
-    /// Every row's text, back to back.
-    pub(crate) fn utf8(&self) -> &[u8] {
-        &self.bytes[self.header_len()..]
-    }
-
-    pub(crate) fn offset_values(&self) -> Vec<u32> {
-        self.bytes[..(self.row_count as usize + 1) * 4]
-            .chunks(4)
-            .map(|word| u32::from_ne_bytes(word.try_into().unwrap()))
-            .collect()
-    }
-}
-
 /// Bytes produced by an export into memory.
 #[derive(uniffi::Object)]
 pub struct ExportedBytes {
@@ -141,9 +122,8 @@ mod tests {
             Default::default(),
         )
         .unwrap()
-        .unfiltered()
-        .unsorted()
-        .format_column(crate::ColumnId { raw: 0 }, 0, 8)
+        .rows()
+        .format_column(core::ColumnId::from_raw(0), 0, 8)
         .unwrap();
         assert_eq!(segment.row_count, 3);
         let offsets: Vec<u32> = segment.bytes[..16]
@@ -163,11 +143,10 @@ mod tests {
         let dataset =
             crate::GewuDataset::open(path.to_str().unwrap().to_owned(), Default::default())
                 .unwrap();
-        let unsorted = dataset.unfiltered().unsorted();
-        let sorted = dataset
-            .unfiltered()
-            .sort(vec![crate::ColumnSort {
-                column: crate::ColumnId { raw: 0 },
+        let unsorted = dataset.rows();
+        let sorted = Arc::clone(&unsorted)
+            .apply(vec![], vec![core::ColumnSort {
+                column: core::ColumnId::from_raw(0),
                 descending: false,
             }])
             .unwrap();

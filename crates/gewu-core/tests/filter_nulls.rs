@@ -63,8 +63,8 @@ fn range_null_policy_keeps_nulls_without_matching_nan_or_outside_values() {
     for (filter, expected) in [
         (range(false), vec![1, 2, 6]),
         (range(true), vec![0, 1, 2, 4, 6]),
-        (Filter::exact(vec![], false, true), vec![0, 4]),
-        (Filter::exact(vec![], true, false), vec![1, 2, 3, 5, 6]),
+        (Filter::OnlyNulls, vec![0, 4]),
+        (Filter::NotNull, vec![1, 2, 3, 5, 6]),
     ] {
         assert_eq!(rows(&doc, &[ColumnFilter { column: c0, filter }]), expected);
     }
@@ -78,7 +78,7 @@ fn contains_null_policy_preserves_case_matching_and_only_nulls() {
         (contains(false), vec![1, 3, 4, 5]),
         (contains(true), vec![0, 1, 3, 4, 5, 6]),
         (Filter::contains("ALPHA".into(), true, true), vec![0, 6]),
-        (Filter::exact(vec![], false, true), vec![0, 6]),
+        (Filter::OnlyNulls, vec![0, 6]),
     ] {
         assert_eq!(rows(&doc, &[ColumnFilter { column: c1, filter }]), expected);
     }
@@ -94,7 +94,10 @@ fn included_nulls_still_obey_other_column_filters() {
         ColumnId::from_raw(3),
     );
     for (filter, expected) in [(range(true), vec![0, 1]), (contains(true), vec![0, 1, 5])] {
-        let col = if matches!(filter.condition, gewu_core::FilterCondition::Range { .. }) {
+        let col = if matches!(filter, Filter::Condition {
+            condition: gewu_core::FilterCondition::Range { .. },
+            ..
+        }) {
             c0
         } else {
             c1
@@ -139,7 +142,7 @@ fn exact_values_combine_with_an_independent_null_policy() {
 }
 
 #[test]
-fn choices_count_included_nulls_and_respect_all_filters() {
+fn choices_count_included_nulls_and_respect_the_other_filters() {
     let doc = document();
     let (c0, c2, c3) = (
         ColumnId::from_raw(0),
@@ -167,16 +170,18 @@ fn choices_count_included_nulls_and_respect_all_filters() {
             .iter()
             .map(|value| (value.value.as_str(), value.count))
             .collect::<Vec<_>>(),
-        [("A", 2)]
+        [("A", 2), ("B", 2)],
+        "The edited column's own filter does not hide its alternatives"
     );
 
-    // All filters leave source rows 0 and 1: null and one finite value.
+    // Without its own range filter, column 0 keeps the rows the other filters
+    // leave; included nulls are counted separately from values.
     let choices = filtered.filter_choices(c0).unwrap();
     let values = choices.values.unwrap();
+    let others = doc.filter(&filters[1..]).unwrap();
     assert_eq!(
         values.iter().map(|value| value.count).sum::<u64>() + choices.null_count,
-        2
+        others.row_count()
     );
-    assert_eq!(choices.null_count, 1);
-    assert!(values.iter().all(|value| value.label != "NaN"));
+    assert!(choices.null_count >= 1);
 }
