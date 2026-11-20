@@ -58,7 +58,8 @@ import Testing
         let session = try await file.open()
         let columns = session.source.columns.map(\.id)
         let rows = session.initialRows
-        let data = try await rows.tabSeparatedText(rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 1024)
+        let data = try await rows.tabSeparatedText(
+            rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 1024)
         #expect(String(decoding: data, as: UTF8.self) == "a\tb\n\"x\ty\"\t\"say \"\"hi\"\"\"\nplain\t")
         await #expect(throws: TextLimitExceeded.self) {
             try await rows.tabSeparatedText(rows: [0..<2], columns: columns, includeHeader: true, byteLimit: 10)

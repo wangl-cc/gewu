@@ -1,11 +1,12 @@
+import GewuKit
 import SwiftUI
 
 struct ColumnsView: View {
-    let model: DocumentModel
+    let model: TableModel
     @State private var search = ""
 
     private var matching: [ColumnInfo] {
-        model.info.columns.filter {
+        model.source.columns.filter {
             search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)
         }
     }
@@ -18,10 +19,10 @@ struct ColumnsView: View {
                 ForEach(matching, id: \.id) { column in
                     Toggle(
                         isOn: Binding(
-                            get: { model.draftVisibleColumns.contains(column.id) },
+                            get: { model.visibleColumns.contains(column.id) },
                             set: { visible in
                                 if visible {
-                                    model.showColumn(column.id)
+                                    model.setColumnsVisible([column.id], visible: true)
                                 } else {
                                     hideColumn(column.id, in: model)
                                 }
@@ -36,7 +37,7 @@ struct ColumnsView: View {
                 }
             }.listStyle(.plain).scrollContentBackground(.hidden)
             HStack {
-                Text("\(model.draftVisibleColumns.count) of \(model.info.columns.count) visible").font(.caption)
+                Text("\(model.visibleColumns.count) of \(model.source.columns.count) visible").font(.caption)
                 Spacer()
                 Menu {
                     Button("Show Matching Columns") {
@@ -50,34 +51,34 @@ struct ColumnsView: View {
                 .accessibilityLabel("Matching column actions")
                 Button("Show All") { model.showAllColumns() }
                     .buttonStyle(.borderless)
-                    .disabled(model.draftVisibleColumns.count == model.info.columns.count)
+                    .disabled(model.visibleColumns.count == model.source.columns.count)
             }
-        }.padding(16).frame(width: 340, height: min(380, 120 + CGFloat(model.info.columns.count) * 28))
+        }.padding(16).frame(width: 340, height: min(380, 120 + CGFloat(model.source.columns.count) * 28))
     }
 }
 
 /// Shared by the column picker and the AppKit header menu. The model only applies the confirmed change.
 @MainActor
-func hideColumn(_ column: ColumnId, in model: DocumentModel) {
+func hideColumn(_ column: ColumnID, in model: TableModel) {
     hideColumns([column], in: model)
 }
 
 @MainActor
-func hideColumns(_ columns: [ColumnId], in model: DocumentModel) {
+func hideColumns(_ columns: [ColumnID], in model: TableModel) {
     let targetSet = Set(columns)
-    let targets = model.draftVisibleColumns.filter { targetSet.contains($0) }
+    let targets = model.visibleColumns.filter { targetSet.contains($0) }
     guard !targets.isEmpty else { return }
     let hasConditions = targets.contains { col in
-        model.draftFilter(for: col) != nil
-            || model.appliedFilter(for: col) != nil
-            || model.draftSort(for: col) != nil
-            || model.appliedSort(for: col) != nil
+        model.draft.filter(for: col) != nil
+            || model.appliedQuery.filter(for: col) != nil
+            || model.draft.sort(for: col) != nil
+            || model.appliedQuery.sort(for: col) != nil
     }
-    if hasConditions, !UserDefaults.standard.bool(forKey: "SkipHideColumnWarning") {
+    if hasConditions, !UserDefaults.standard[Preferences.skipsHideColumnWarning] {
         let alert = NSAlert()
         alert.messageText =
             targets.count == 1
-            ? "Hide \(model.columnInfo[targets[0]]?.name ?? "")?" : "Hide \(targets.count) columns?"
+            ? "Hide \(model.column(targets[0])?.name ?? "")?" : "Hide \(targets.count) columns?"
         alert.informativeText =
             "Hiding columns clears their sorting and filters. This may change the visible rows and their order."
         alert.addButton(withTitle: targets.count == 1 ? "Hide Column" : "Hide Columns")
@@ -86,7 +87,7 @@ func hideColumns(_ columns: [ColumnId], in model: DocumentModel) {
         alert.suppressionButton?.title = "Do not ask again"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         if alert.suppressionButton?.state == .on {
-            UserDefaults.standard.set(true, forKey: "SkipHideColumnWarning")
+            UserDefaults.standard[Preferences.skipsHideColumnWarning] = true
         }
     }
     model.setColumnsVisible(columns, visible: false)

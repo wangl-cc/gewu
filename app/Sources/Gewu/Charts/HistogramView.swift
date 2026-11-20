@@ -1,4 +1,5 @@
 import AppKit
+import GewuKit
 import SwiftUI
 
 struct HistogramSelection: Equatable {
@@ -261,7 +262,7 @@ final class HistogramView: NSView {
     private func axisLabel(_ v: Double) -> String {
         if let labelFormatter { return labelFormatter(v) }
         if v == v.rounded(), abs(v) < 1e15 {
-            return NumberFormatter.localizedString(from: NSNumber(value: Int64(v)), number: .decimal)
+            return formatCount(Int64(v))
         }
         return String(format: "%.6g", v)
     }

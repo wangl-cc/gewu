@@ -67,7 +67,8 @@ public enum FileType: String, CaseIterable, Sendable {
 }
 
 public enum FileMetadata: Sendable {
-    case parquet(rowGroups: UInt32, compression: [String], createdBy: String?, keyValues: [(key: String, value: String)])
+    case parquet(
+        rowGroups: UInt32, compression: [String], createdBy: String?, keyValues: [(key: String, value: String)])
     case delimited
     case xlsx(sheet: String, sheets: [String])
 }

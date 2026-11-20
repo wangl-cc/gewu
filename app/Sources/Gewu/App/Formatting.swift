@@ -1,4 +1,5 @@
 import Foundation
+import GewuKit
 
 /// Core source rows stay zero-based; apply the user's base only for presentation.
 func rowNumber(_ sourceRow: UInt64, base: Int) -> UInt64 {
@@ -9,17 +10,21 @@ func formatRowNumber(_ sourceRow: UInt64, base: Int) -> String {
     String(rowNumber(sourceRow, base: base))
 }
 
-func formatCount(_ n: UInt64) -> String {
-    NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
+func formatCount<Count: BinaryInteger>(_ n: Count) -> String {
+    Int64(clamping: n).formatted(.number)
+}
+
+func formatFileSize(_ bytes: UInt64) -> String {
+    Int64(clamping: bytes).formatted(.byteCount(style: .file))
 }
 
 extension FileType {
     var displayName: String {
         switch self {
-        case .csv: return "CSV"
-        case .tsv: return "TSV"
-        case .parquet: return "Parquet"
-        case .xlsx: return "XLSX"
+        case .csv: "CSV"
+        case .tsv: "TSV"
+        case .parquet: "Parquet"
+        case .xlsx: "XLSX"
         }
     }
 }

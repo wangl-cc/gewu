@@ -1,54 +1,63 @@
 import AppKit
-import Combine
+import GewuKit
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Owns the save panel and the export job captured from a document view.
+/// Owns the save panel and the export job captured from the displayed rows.
 @MainActor
-final class ExportModel: ObservableObject {
-    @Published private(set) var progress: ExportProgress?
-    @Published private(set) var message: String?
-    @Published private var choosingExport = false
-
-    private var task: Task<Void, Never>?
-    private var job: GewuExport?
-    private var panel: NSSavePanel?
-    private let reportError: (Error, String) -> Void
-
-    init(reportError: @escaping (Error, String) -> Void) {
-        self.reportError = reportError
+@Observable
+final class ExportModel {
+    enum Outcome: Equatable {
+        case exported(String)
+        case cancelled
     }
 
-    var isIdle: Bool { !choosingExport && progress == nil }
+    private(set) var progress: ExportProgress?
+    private(set) var outcome: Outcome?
+    private(set) var choosingDestination = false
 
-    func choose(ordered: GewuOrderedView, columns: [ColumnId], source: URL, window: NSWindow) {
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var panel: NSSavePanel?
+    /// The panel's delegate, held for as long as the panel is open.
+    @ObservationIgnored private var selection: ExportSelection?
+    @ObservationIgnored private let alerts: Alerts
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(alerts: Alerts, defaults: UserDefaults = .standard) {
+        self.alerts = alerts
+        self.defaults = defaults
+    }
+
+    var isIdle: Bool { !choosingDestination && progress == nil }
+
+    /// Ask for a destination and export `columns` of `rows` there.
+    func choose(rows: DisplayRows, columns: [ColumnID], source: URL, window: NSWindow) {
         guard isIdle else { return }
-        let nestedColumns: [String]
+        let nested: [String]
         do {
-            nestedColumns = try ordered.nestedExportColumns(columns: columns)
+            nested = try rows.nestedColumns(columns)
         } catch {
-            reportError(error, "")
+            alerts.report(error, title: "Could Not Export")
             return
         }
-        let formats: [ExportFileFormat] = nestedColumns.isEmpty ? ExportFileFormat.allCases : [.parquet]
-        let remembered = ExportFileFormat(rawValue: UserDefaults.standard.string(forKey: "LastExportFormat") ?? "")
-        let rememberFormat = UserDefaults.standard.object(forKey: "RememberExportFormat") as? Bool ?? true
-        let defaultFormat: ExportFileFormat
-        if rememberFormat, let remembered, formats.contains(remembered) {
-            defaultFormat = remembered
-        } else {
-            defaultFormat = .parquet
-        }
-        let selection = ExportSelection()
+        let formats = nested.isEmpty ? ExportFileFormat.allCases : [.parquet]
+        let remembered = ExportFileFormat(rawValue: defaults[Preferences.lastExportFormat])
+        let initial =
+            if defaults[Preferences.remembersExportFormat], let remembered, formats.contains(remembered) {
+                remembered
+            } else {
+                ExportFileFormat.parquet
+            }
+        let compression = ParquetCompression(rawValue: defaults[Preferences.parquetCompression]) ?? .zstd
+        let selection = ExportSelection(compression: compression)
         let panel = NSSavePanel()
         panel.title = "Export"
         panel.prompt = "Export"
-        panel.message =
-            "Export \(formatCount(ordered.rowCount())) rows · visible columns in display order"
-        panel.nameFieldStringValue =
-            source.deletingPathExtension().lastPathComponent + "-export.\(defaultFormat.rawValue)"
+        panel.message = "Export \(formatCount(rows.count)) rows · visible columns in display order"
+        panel.nameFieldStringValue = source.deletingPathExtension().lastPathComponent + "-export.\(initial.rawValue)"
         panel.allowedContentTypes = formats.map(\.contentType)
-        panel.currentContentType = defaultFormat.contentType
+        panel.currentContentType = initial.contentType
         panel.showsContentTypes = true
         panel.delegate = selection
         selection.panel(panel, didSelect: panel.currentContentType)
@@ -56,66 +65,56 @@ final class ExportModel: ObservableObject {
         panel.isExtensionHidden = false
         panel.showsTagField = false
         self.panel = panel
-        choosingExport = true
-        panel.beginSheetModal(for: window) { [weak self, weak panel] response in
+        self.selection = selection
+        choosingDestination = true
+        panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
-            let destination = response == .OK ? panel?.url : nil
-            let format = formats.first { $0.contentType == panel?.currentContentType }
-            self.choosingExport = false
+            let destination = response == .OK ? panel.url : nil
+            let format = formats.first { $0.contentType == panel.currentContentType }
+            self.choosingDestination = false
             self.panel = nil
-            guard let destination else { return }
-            guard let format else {
-                self.reportError(GewuError.Internal(message: "Select a supported export format."), "")
-                return
-            }
-            do {
-                let job = try ordered.export(
-                    columns: columns,
-                    format: format.coreFormat)
-                self.startExport(job, to: destination, format: format, compression: selection.compression)
-            } catch {
-                self.reportError(error, "")
-            }
+            self.selection = nil
+            guard let destination, let format else { return }
+            self.start(
+                rows: rows, columns: columns, format: format, compression: selection.compression, to: destination)
         }
     }
 
-    private func startExport(
-        _ job: GewuExport, to destination: URL, format: ExportFileFormat, compression: ExportCompression
+    private func start(
+        rows: DisplayRows, columns: [ColumnID], format: ExportFileFormat, compression: ParquetCompression,
+        to destination: URL
     ) {
-        self.job = job
-        progress = job.progress()
-        message = nil
-        task = Task { [weak self] in
-            let polling = Task { [weak self] in
-                while !Task.isCancelled {
-                    self?.progress = job.progress()
-                    do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-                }
+        let job: ExportJob
+        do {
+            job = try rows.export(columns, format: format.fileType)
+        } catch {
+            alerts.report(error, title: "Could Not Export")
+            return
+        }
+        outcome = nil
+        progress = ExportProgress(rowsWritten: 0, totalRows: UInt64(rows.count))
+        task = Task {
+            let updates = Task {
+                for await update in job.progress() { progress = update }
             }
-            defer { polling.cancel() }
+            defer { updates.cancel() }
             do {
-                let options = ExportOptions(parquetCompression: compression.coreCompression)
-                try await Task.detached(priority: .userInitiated) {
-                    try job.writeWithOptions(path: destination.path, options: options)
-                }.value
-                UserDefaults.standard.set(format.rawValue, forKey: "LastExportFormat")
-                if format == .parquet {
-                    UserDefaults.standard.set(compression.rawValue, forKey: "ParquetCompression")
-                }
-                self?.message = "Exported \(destination.lastPathComponent)"
-            } catch GewuError.Cancelled {
-                self?.message = "Export cancelled"
+                try await job.write(to: destination, compression: compression)
+                defaults[Preferences.lastExportFormat] = format.rawValue
+                if format == .parquet { defaults[Preferences.parquetCompression] = compression.rawValue }
+                outcome = .exported(destination.lastPathComponent)
+            } catch is CancellationError {
+                outcome = .cancelled
             } catch {
-                self?.message = nil
-                self?.reportError(error, "Could not export: ")
+                alerts.report(error, title: "Could Not Export")
             }
-            self?.progress = nil
-            self?.job = nil
-            self?.task = nil
+            progress = nil
+            task = nil
         }
     }
 
-    func cancel() { job?.cancel() }
+    /// Stop the running export; the destination is left untouched unless already written.
+    func cancel() { task?.cancel() }
 
     func stop() {
         panel?.cancel(nil)
@@ -123,14 +122,14 @@ final class ExportModel: ObservableObject {
     }
 }
 
+/// The save panel's delegate: names formats and offers Parquet compression.
 @MainActor
-private final class ExportSelection: NSObject, ObservableObject, NSOpenSavePanelDelegate {
-    @Published var compression: ExportCompression
+@Observable
+private final class ExportSelection: NSObject, NSOpenSavePanelDelegate {
+    var compression: ParquetCompression
 
-    override init() {
-        compression =
-            ExportCompression(rawValue: UserDefaults.standard.string(forKey: "ParquetCompression") ?? "") ?? .zstd
-        super.init()
+    init(compression: ParquetCompression) {
+        self.compression = compression
     }
 
     func panel(_ sender: Any, displayNameFor type: UTType) -> String? {
@@ -146,13 +145,13 @@ private final class ExportSelection: NSObject, ObservableObject, NSOpenSavePanel
 }
 
 private struct ExportAccessory: View {
-    @ObservedObject var selection: ExportSelection
+    @Bindable var selection: ExportSelection
 
     var body: some View {
         HStack(spacing: 8) {
             Text("Compression:")
             Picker("Compression", selection: $selection.compression) {
-                ForEach(ExportCompression.allCases, id: \.self) { compression in
+                ForEach(ParquetCompression.allCases, id: \.self) { compression in
                     Text(compression.title).tag(compression)
                 }
             }

@@ -1,9 +1,10 @@
 import AppKit
+import GewuKit
 
 /// Row numbers in a gutter beside the table, like Xcode's line numbers.
 /// A separate view to the table's left: it follows the table's vertical
 /// scrolling but not its sideways scrolling, and has no stripes or cell
-/// borders of its own.
+/// borders of its own. Its owner redraws it when the table scrolls.
 final class RowGutterView: NSView {
     /// The numbers shown for a range of display rows, read when drawing.
     var labels: ((Range<Int>) -> [String])?
@@ -16,24 +17,12 @@ final class RowGutterView: NSView {
         self.table = table
         super.init(frame: .zero)
         widthConstraint.isActive = true
-        // Redraw as the table scrolls.
-        if let clip = table.enclosingScrollView?.contentView {
-            clip.postsBoundsChangedNotifications = true
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(tableScrolled(_:)),
-                name: NSView.boundsDidChangeNotification, object: clip
-            )
-        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
-
-    @objc private func tableScrolled(_ note: Notification) {
-        needsDisplay = true
-    }
 
     private(set) var fittedWidth: CGFloat = 40
     private var shown = true

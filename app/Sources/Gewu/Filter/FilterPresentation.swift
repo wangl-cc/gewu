@@ -1,4 +1,5 @@
 import Foundation
+import GewuKit
 
 extension Filter {
     /// A compact condition description for query summaries and the header tooltip.

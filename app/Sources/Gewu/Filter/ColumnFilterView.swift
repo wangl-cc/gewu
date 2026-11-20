@@ -1,3 +1,4 @@
+import GewuKit
 import SwiftUI
 
 enum FilterMode: String, CaseIterable {
@@ -8,7 +9,7 @@ enum FilterMode: String, CaseIterable {
     /// Value selection is offered only when the column has a complete list of values,
     /// so a nil mode means the bounded candidate request is still needed.
     static func initial(
-        capabilities: ColumnCapabilities, current: Filter?, choices: FilterChoices? = nil
+        capabilities: ColumnCapabilities, current: Filter?, choices: FilterOptions? = nil
     ) -> FilterMode? {
         let selectable: Bool? = capabilities.exact ? choices.map { $0.values != nil } : false
         if let current {
@@ -78,14 +79,18 @@ struct ColumnFilterDraft {
     }
 }
 
+/// Edits one column's filter against the table's current rows. Candidate
+/// values and the range preview describe the rows passing every other filter.
 struct ColumnFilterView: View {
-    let viewer: Viewer
+    let model: TableModel
     let info: ColumnInfo
     let current: Filter?
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode?
     @State private var draft: ColumnFilterDraft
-    @State private var choices: FilterChoices?
+    /// The rows `choices` and `distribution` describe.
+    @State private var describedRows: RowSet?
+    @State private var choices: FilterOptions?
     @State private var distribution: RangeHistogram?
     @State private var error: String?
     // The fixed-width filter plot needs a useful preview, not a bin-count editor.
@@ -95,10 +100,10 @@ struct ColumnFilterView: View {
     @State private var retry = 0
 
     init(
-        viewer: Viewer, info: ColumnInfo, current: Filter?,
+        model: TableModel, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
-        self.viewer = viewer
+        self.model = model
         self.info = info
         self.current = current
         self.onApply = onApply
@@ -165,7 +170,10 @@ struct ColumnFilterView: View {
             .onChange(of: mode) { _, mode in
                 if mode == .exact { draft.enterValues() }
             }
-            .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)) { await load() }
+            .task(
+                id: Request(
+                    rows: model.displayed.rowSet, mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)
+            ) { await load(model.displayed.rowSet) }
     }
 
     @ViewBuilder private var exactEditor: some View {
@@ -188,20 +196,27 @@ struct ColumnFilterView: View {
     }
 
     private struct Request: Equatable {
+        let rows: RowSet
         let mode: FilterMode?
         let bins: UInt32
         let scale: AxisScale
         let retry: Int
     }
-    @MainActor private func load() async {
+    private func load(_ rows: RowSet) async {
+        if describedRows !== rows {
+            // The table's rows changed while the editor was open; describe the new ones.
+            describedRows = rows
+            choices = nil
+            distribution = nil
+        }
         loading = true
         error = nil
         let mode = mode
         do {
             // Choices decide whether value selection is offered and supply the null count.
             if info.capabilities.exact && choices == nil {
-                let result = try await viewer.filterChoices(info.id)
-                guard !Task.isCancelled else { return }
+                let result = try await rows.filterOptions(for: info.id)
+                try Task.checkCancellation()
                 choices = result
                 if mode == nil {
                     // Choosing a mode restarts this task for that editor.
@@ -209,22 +224,16 @@ struct ColumnFilterView: View {
                 }
             }
             if mode == .range {
-                let result = try await viewer.filterDistribution(info.id, bins: histogramBins, scale: histogramScale)
-                guard !Task.isCancelled else { return }
+                let result = try await rows.filterDistribution(info.id, bins: histogramBins, scale: histogramScale)
+                try Task.checkCancellation()
                 distribution = result
                 draft.range.restoreLabels(from: result)
             }
         } catch {
-            guard !Task.isCancelled else { return }
-            if error.isCancellation {
-                // The applied View changed while this editor was open; describe the new one.
-                choices = nil
-                retry &+= 1
-                return
-            }
-            self.error = error.userMessage
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
+            self.error = error.localizedDescription
         }
-        if !Task.isCancelled { loading = false }
+        loading = false
     }
 
     private func apply() {

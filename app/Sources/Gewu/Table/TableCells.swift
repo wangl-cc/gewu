@@ -1,4 +1,5 @@
 import AppKit
+import GewuKit
 
 /// The app chooses styling from the coarse value category reported by Core.
 extension ValueCategory {
@@ -46,7 +47,8 @@ final class StripedRowView: NSTableRowView {
 /// Data cell that can show a search match: a find-highlight behind the
 /// whole value (numbers, dates) or behind matched text (via attributes).
 final class MatchCellView: NSTableCellView {
-    weak var boundView: GewuOrderedView?
+    /// The rows this cell's content came from.
+    weak var boundRows: DisplayRows?
     var isLoading = false
     private(set) var wholeCellMatch = false
     private(set) var currentMatch = false

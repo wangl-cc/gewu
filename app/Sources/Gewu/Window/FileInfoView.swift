@@ -1,3 +1,4 @@
+import GewuKit
 import SwiftUI
 
 /// Small, immutable window value; opening an info window never reopens the data.
@@ -11,13 +12,13 @@ struct FileDetails: Codable, Hashable {
     let items: [Detail]
     let metadata: [Detail]
 
-    init(info: DatasetInfo) {
+    init(info: TableInfo) {
         path = info.path
         var details = [
             Detail(title: "Kind", value: "\(info.format.displayName) table"),
             Detail(
                 title: "Size",
-                value: ByteCountFormatter.string(fromByteCount: Int64(clamping: info.fileSize), countStyle: .file)),
+                value: formatFileSize(info.fileSize)),
             Detail(title: "Rows", value: formatCount(info.rowCount)),
             Detail(title: "Columns", value: formatCount(UInt64(info.columns.count))),
         ]

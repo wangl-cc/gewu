@@ -103,8 +103,7 @@ public struct LengthSummary: Hashable, Sendable {
     public var mean: Double?
     public var histogram: Histogram
 
-    public init(unit: LengthUnit, emptyCount: UInt64, min: UInt64?, max: UInt64?, mean: Double?, histogram: Histogram)
-    {
+    public init(unit: LengthUnit, emptyCount: UInt64, min: UInt64?, max: UInt64?, mean: Double?, histogram: Histogram) {
         self.unit = unit
         self.emptyCount = emptyCount
         self.min = min

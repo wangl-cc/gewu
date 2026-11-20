@@ -1,4 +1,5 @@
 import Foundation
+import GewuKit
 
 /// Compact presentation only. Never use these labels to reconstruct filter bounds.
 /// Source text is retained separately for copying and tooltips.

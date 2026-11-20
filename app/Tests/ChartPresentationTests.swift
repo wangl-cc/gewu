@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import GewuKit
 import Testing
 
 /// Presentation preserves exact source text separately; compact axes must not
@@ -32,57 +32,55 @@ struct ChartPresentationTests {
     @Test
     @MainActor
     static func scatterLogOptionsReachTheSampler() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
-        try "x,y\n-1,10\n1,0\n10,100\n100,1000\n".write(to: url, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
-        let filtered = document.unfiltered()
-        let viewer = Viewer(dataset: document, filtered: filtered, ordered: filtered.unsorted())
-        let c0 = ColumnId(raw: 0)
-        let c1 = ColumnId(raw: 1)
+        let session = try await TestTables.session("x,y\n-1,10\n1,0\n10,100\n100,1000\n")
+        let rows = session.initialRows.rowSet
+        let x = session.source.id("x")
+        let y = session.source.id("y")
         let model = ScatterModel()
-        await model.load(
-            viewer: viewer, x: c0, y: c1,
-            xScale: .log10, yScale: .log10)
+        func request(_ xScale: AxisScale, _ yScale: AxisScale, base: Int = 0) -> ScatterModel.Request {
+            .init(rows: rows, x: x, y: y, limit: 2048, xScale: xScale, yScale: yScale, rowNumberBase: base, attempt: 0)
+        }
+        await model.load(request(.log10, .log10))
         let result = try #require(model.result)
         #expect(model.xScale == .log10 && model.yScale == .log10)
         #expect(result.nonPositiveRows == 2 && result.points.map(\.sourceRow) == [2, 3])
         #expect(result.points[0].x == 10 && result.points[0].xLabel == "10")
-        await model.load(
-            viewer: viewer, x: c0, y: c1)
+        await model.load(request(.linear, .linear))
         #expect(model.xScale == .linear && model.yScale == .linear && model.result?.eligibleRows == 4)
     }
 
-    @Test @MainActor
-    static func cancelledScatterDoesNotLeaveLoadingOrEraseReplacement() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
-        try "value\n1\n2\n".write(to: url, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let dataset = try GewuDataset.open(path: url.path)
-        let filtered = dataset.unfiltered()
-        let worker = OperationQueue()
-        worker.isSuspended = true
-        defer { worker.isSuspended = false }
-        let viewer = Viewer(
-            dataset: dataset, filtered: filtered, ordered: filtered.unsorted(), analysisWorker: worker)
-        let c0 = ColumnId(raw: 0)
+    @Test
+    @MainActor
+    static func sourceRowAxisFollowsTheRowNumberBase() async throws {
+        let session = try await TestTables.session("value\n5\n6\n")
         let model = ScatterModel()
-        let task = Task { await model.load(viewer: viewer, x: nil, y: c0) }
-        while !model.loading || worker.operations.filter({ !$0.isFinished }).isEmpty {
-            await Task.yield()
+        for base in [0, 1] {
+            await model.load(
+                .init(
+                    rows: session.initialRows.rowSet, x: nil, y: session.source.id("value"), limit: 16,
+                    xScale: .linear, yScale: .linear, rowNumberBase: base, attempt: 0))
+            let point = try #require(model.result?.points.first)
+            #expect(point.sourceRow == 0, "Presentation must not change source row identity")
+            #expect(point.xLabel == String(base) && point.x == Double(base))
         }
-        task.cancel()
-        worker.isSuspended = false
-        await task.value
-        #expect(model.result == nil && !model.loading && model.error == nil)
-        await model.load(viewer: viewer, x: nil, y: c0)
-        let replacement = try #require(model.result)
+    }
+
+    @Test
+    @MainActor
+    static func cancelledScatterLeavesNoStaleState() async throws {
+        let session = try await TestTables.session("value\n1\n2\n")
+        let request = ScatterModel.Request(
+            rows: session.initialRows.rowSet, x: nil, y: session.source.id("value"), limit: 16, xScale: .linear,
+            yScale: .linear, rowNumberBase: 0, attempt: 0)
+        let model = ScatterModel()
         let obsolete = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await model.load(viewer: viewer, x: nil, y: c0)
+            await model.load(request)
         }
         await obsolete.value
-        #expect(model.result == replacement && model.totalRows == 2 && !model.loading)
+        #expect(model.result == nil && !model.loading && model.error == nil)
+        await model.load(request)
+        #expect(model.result?.points.count == 2 && model.totalRows == 2 && !model.loading)
     }
 
     @Test
@@ -103,17 +101,19 @@ struct ChartPresentationTests {
         let repeatedHour = ChartLabels.endpoints("2024-10-27T01:30:00+01:00", "2024-10-27T01:30:00+00:00")
         #expect(repeatedHour.0 == "01:30:00 +01:00" && repeatedHour.1 == "01:30:00 +00:00")
         #expect(ChartLabels.context("2024-01-01T10:00:00+08:00", "2024-01-01T11:00:00+08:00") == "2024-01-01 · +08:00")
+        // Temporal coordinates arrive in seconds since 1970.
+        let day = 1_704_067_200.0  // 2024-01-01T00:00:00Z
         let datePoints = [
-            ScatterPoint(sourceRow: 0, x: 0, y: 0, xLabel: "2024-01-01", yLabel: "2024-01-01T10:00:00.123456789+08:00"),
-            ScatterPoint(sourceRow: 1, x: 1, y: 1, xLabel: "2024-01-02", yLabel: "2024-01-01T03:00:00.123456789"),
+            ScatterPoint(
+                sourceRow: 0, x: day, y: day + 7200, xLabel: "2024-01-01", yLabel: "2024-01-01T10:00:00+08:00"),
+            ScatterPoint(
+                sourceRow: 1, x: day + 86400, y: day + 10800, xLabel: "2024-01-02", yLabel: "2024-01-01T03:00:00"),
         ]
         let days = try #require(ScatterDates.make(points: datePoints, x: true, kind: .date))
-        let timestamps = try #require(
-            ScatterDates.make(points: datePoints, x: false, kind: .dateTime))
+        let timestamps = try #require(ScatterDates.make(points: datePoints, x: false, kind: .dateTime))
         #expect(days[1].timeIntervalSince(days[0]) == 86400)
         #expect(ScatterDates.context(days) == "2024 · UTC")
-        #expect(abs(timestamps[1].timeIntervalSince(timestamps[0]) - 3600) < 0.001)
-        #expect(
-            ScatterDates.make(points: datePoints, x: true, kind: .number) == nil)
+        #expect(timestamps[1].timeIntervalSince(timestamps[0]) == 3600)
+        #expect(ScatterDates.make(points: datePoints, x: true, kind: .number) == nil)
     }
 }

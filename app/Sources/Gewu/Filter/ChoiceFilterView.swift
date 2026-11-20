@@ -1,3 +1,4 @@
+import GewuKit
 import SwiftUI
 
 /// Arrow text equality compares UTF-8, unlike Swift's canonical-equivalence equality.

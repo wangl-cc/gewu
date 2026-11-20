@@ -1,16 +1,17 @@
+import GewuKit
 import SwiftUI
 
 @main
 struct GewuApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var files = FileCoordinator.shared
-    @StateObject private var updater = AppUpdater()
+    @State private var files = FileCoordinator.shared
+    @State private var updater = AppUpdater()
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup("Gewu", id: "viewer", for: URL.self) { $url in
-            ViewerScene(url: url).environmentObject(files)
+            ViewerScene(url: url, files: files)
         }
         .defaultSize(width: 1200, height: 720)
         .windowToolbarStyle(.unified)
@@ -50,13 +51,13 @@ extension Scene {
 
 private struct ViewerScene: View {
     let url: URL?
-    @EnvironmentObject private var files: FileCoordinator
+    let files: FileCoordinator
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if let url {
-                DocumentScene(url: url).id(url)
+                WindowScene(url: url).id(url)
                     .onAppear { files.documentPresented() }
             } else {
                 // Discard an obsolete empty window restored from an older version.
