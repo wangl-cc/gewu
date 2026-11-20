@@ -433,10 +433,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
     }
 
     private func buildColumns(_ info: DatasetInfo) {
-        gutter.label = { [weak self] row in
-            guard let self, let source = self.segments.sourceRow(for: row) else { return nil }
-            return formatRowNumber(source, base: self.rowNumberBase)
-        }
+        gutter.labels = { [weak self] rows in self?.rowNumbers(for: rows) ?? [] }
         let rowHeader = NSTableColumn(identifier: rowHeaderID)
         rowHeader.headerCell = ColumnHeaderCell(textCell: "")
         rowHeader.width = gutter.fittedWidth
@@ -479,7 +476,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         let visibleRows = visible.location..<(visible.location + visible.length)
         let visibleColumns = table.columnIndexes(in: table.visibleRect)
         for (key, segment) in loaded.segments {
-            guard let column = key.column else { continue }
+            let column = key.column
             let rows = key.rows.clamped(to: visibleRows)
             let index = table.column(withIdentifier: identifier(for: column))
             guard !rows.isEmpty, visibleColumns.contains(index) else { continue }
@@ -489,8 +486,15 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
                 }
             }
         }
-        guard !loaded.sourceRows.isEmpty else { return }
-        gutter.needsDisplay = true
+    }
+
+    /// Source row numbers for display rows, read synchronously from the
+    /// displayed View: a bounded slice of its row mapping, with no formatting.
+    func rowNumbers(for rows: Range<Int>) -> [String] {
+        guard let view = displayedView, !rows.isEmpty, rows.lowerBound >= 0 else { return [] }
+        return view.sourceRows(start: UInt64(rows.lowerBound), count: UInt32(clamping: rows.count)).map {
+            formatRowNumber($0, base: rowNumberBase)
+        }
     }
 
     /// Decoration and style changes operate on the content already in the cell.

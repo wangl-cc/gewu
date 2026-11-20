@@ -1,74 +1,58 @@
 import Foundation
 
-/// One 64-row block of the table: a column's segment, or the block's source
-/// row indices when `column` is nil. Blocks start at multiples of `rowCount`.
+/// One column of the table over 64 aligned display rows: the unit the table
+/// reads and caches. Blocks start at multiples of `rowCount`.
 struct BlockKey: Hashable, Sendable {
     static let rowCount = 64
 
     let block: Int
-    let column: ColumnId?
+    let column: ColumnId
 
-    init(block: Int, column: ColumnId?) {
+    init(block: Int, column: ColumnId) {
         precondition(block >= 0)
         self.block = block
         self.column = column
     }
 
-    init(row: Int, column: ColumnId?) { self.init(block: row / Self.rowCount, column: column) }
+    init(row: Int, column: ColumnId) { self.init(block: row / Self.rowCount, column: column) }
 
     var start: Int { block * Self.rowCount }
     var rows: Range<Int> { start..<(start + Self.rowCount) }
 
-    /// Keys covering a viewport. Source rows come first, then each column's
-    /// segments in order.
+    /// Keys covering a viewport, column by column.
     static func covering(rows: Range<Int>, columns: [ColumnId]) -> [BlockKey] {
         guard !rows.isEmpty else { return [] }
         let blocks = (rows.lowerBound / rowCount)...((rows.upperBound - 1) / rowCount)
-        return blocks.map { BlockKey(block: $0, column: nil) }
-            + columns.flatMap { column in blocks.map { BlockKey(block: $0, column: column) } }
+        return columns.flatMap { column in blocks.map { BlockKey(block: $0, column: column) } }
     }
 }
 
-/// Viewport data ready to display, with one buffer per column segment.
+/// Column segments ready to display, each with its own buffers.
 struct TableSegments: Sendable {
     var segments: [BlockKey: FormattedColumnSegment] = [:]
-    var sourceRows: [Int: [UInt64]] = [:]
 
-    func contains(_ key: BlockKey) -> Bool {
-        key.column == nil ? sourceRows[key.block] != nil : segments[key] != nil
-    }
+    func contains(_ key: BlockKey) -> Bool { segments[key] != nil }
 
-    var keys: [BlockKey] { sourceRows.keys.map { BlockKey(block: $0, column: nil) } + Array(segments.keys) }
+    var keys: [BlockKey] { Array(segments.keys) }
 
     mutating func merge(_ other: TableSegments) {
         segments.merge(other.segments) { _, new in new }
-        sourceRows.merge(other.sourceRows) { _, new in new }
     }
 
     /// Keep only blocks that intersect the viewport.
     mutating func retain(rows: Range<Int>, columns: [ColumnId]) {
-        guard !rows.isEmpty else {
-            self = TableSegments()
-            return
-        }
         let columns = Set(columns)
-        segments = segments.filter { key, _ in key.rows.overlaps(rows) && columns.contains(key.column!) }
-        sourceRows = sourceRows.filter { block, _ in BlockKey(block: block, column: nil).rows.overlaps(rows) }
+        segments = segments.filter { key, _ in key.rows.overlaps(rows) && columns.contains(key.column) }
     }
 }
 
 extension TableSegments {
-    /// Read the requested column segments and source row indices.
+    /// Format the requested column segments.
     init(reading view: GewuOrderedView, keys: [BlockKey]) throws {
         let count = UInt32(BlockKey.rowCount)
         for key in keys {
             try Task.checkCancellation()
-            let start = UInt64(key.start)
-            if let column = key.column {
-                segments[key] = try view.formatColumn(column: column, start: start, count: count)
-            } else {
-                sourceRows[key.block] = view.sourceRows(start: start, count: count)
-            }
+            segments[key] = try view.formatColumn(column: key.column, start: UInt64(key.start), count: count)
         }
     }
 }
@@ -113,7 +97,7 @@ final class TableSegmentLoader {
         self.read = read ?? { ordered, keys in try await reader.read(ordered, keys: keys) }
     }
 
-    var cachedEntryCount: Int { cache.count + viewportSegments.sourceRows.count }
+    var cachedEntryCount: Int { cache.count }
 
     private func nextVersion() -> UInt64 {
         lastVersion &+= 1
@@ -179,12 +163,6 @@ final class TableSegmentLoader {
         return (segment, local)
     }
 
-    func sourceRow(for row: Int) -> UInt64? {
-        guard row >= 0, let rows = viewportSegments.sourceRows[row / BlockKey.rowCount] else { return nil }
-        let local = row % BlockKey.rowCount
-        return local < rows.count ? rows[local] : nil
-    }
-
     func updateViewport(rows: Range<Int>, columns: [ColumnId]) {
         guard let view else { return }
         let count = Int(clamping: view.rowCount())
@@ -196,9 +174,7 @@ final class TableSegmentLoader {
         guard visibleRows != rows || visibleColumns != columns else { return }
         if !failed.isEmpty {
             let sources = Set(columns)
-            failed = failed.filter { key in
-                rows.overlaps(key.rows) && (key.column.map(sources.contains) ?? true)
-            }
+            failed = failed.filter { key in rows.overlaps(key.rows) && sources.contains(key.column) }
         }
         visibleRows = rows
         visibleColumns = columns

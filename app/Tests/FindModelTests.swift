@@ -147,6 +147,31 @@ struct FindModelTests {
     }
 
     @Test @MainActor
+    func highlightsFollowScrollingWithoutDroppingReadsAndCoverTallViewports() async throws {
+        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
+            "gewu-find-scroll-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let values = (0..<400).map { $0 % 2 == 0 ? "hit" : "miss" }
+        try ("value\n" + values.joined(separator: "\n")).write(to: path, atomically: true, encoding: .utf8)
+        let model = DocumentModel(url: path, dataset: try GewuDataset.open(path: path.path))
+        defer { model.stop() }
+        model.find.query = "hit"
+        model.updateFind()
+        try await waitUntil { model.find.hasMatches == true }
+
+        // Scrolling before the first read completes must not drop that read.
+        model.find.requestHighlight(rows: 0..<10, columns: [Self.c0])
+        model.find.requestHighlight(rows: 64..<74, columns: [Self.c0])
+        try await waitUntil {
+            model.find.isMatch(row: 0, column: Self.c0) && model.find.isMatch(row: 64, column: Self.c0)
+        }
+        // A viewport taller than one Core request is read in several runs.
+        model.find.requestHighlight(rows: 0..<400, columns: [Self.c0])
+        try await waitUntil { model.find.isMatch(row: 398, column: Self.c0) }
+        #expect((0..<400).allSatisfy { model.find.isMatch(row: $0, column: Self.c0) == ($0 % 2 == 0) })
+    }
+
+    @Test @MainActor
     func burstNavigationConsumesEveryStepWithinOnePage() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
             "gewu-find-burst-\(UUID()).csv")

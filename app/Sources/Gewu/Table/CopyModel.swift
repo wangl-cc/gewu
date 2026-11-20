@@ -62,6 +62,10 @@ final class CopyModel {
 enum CopyText {
     struct TooLarge: Error {}
 
+    /// Rows formatted per column read. Large reads keep FFI calls few; the
+    /// byte limit still bounds the result.
+    static let rowsPerRead = 4096
+
     static func format(
         ordered: GewuOrderedView, rows: [Range<Int>], columns: [ColumnId], names: [String], header: Bool,
         limit: Int
@@ -80,9 +84,9 @@ enum CopyText {
         let rowCount = Int(clamping: ordered.rowCount())
         for range in rows {
             let end = min(range.upperBound, rowCount)
-            for start in stride(from: min(range.lowerBound, end), to: end, by: BlockKey.rowCount) {
+            for start in stride(from: min(range.lowerBound, end), to: end, by: rowsPerRead) {
                 try Task.checkCancellation()
-                let count = min(BlockKey.rowCount, end - start)
+                let count = min(rowsPerRead, end - start)
                 var lines = Array(repeating: "", count: count)
                 let separators = hasLine ? count : count - 1
                 var remaining = limit - data.count - separators

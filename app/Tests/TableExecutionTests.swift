@@ -18,7 +18,6 @@ struct TableExecutionTests {
         return try GewuDataset.open(path: path.path)
     }
 
-    private static func source(_ block: Int) -> BlockKey { BlockKey(block: block, column: nil) }
     private static func key(_ block: Int, _ column: ColumnId) -> BlockKey { BlockKey(block: block, column: column) }
 
     @MainActor
@@ -43,14 +42,14 @@ struct TableExecutionTests {
         var requests = stream.makeAsyncIterator()
         let pending = Task { try await loader.snapshot(of: view) { viewport } }
         let first = try #require(await requests.next())
-        #expect(first.keys == [source(0), key(0, c0)])
+        #expect(first.keys == [key(0, c0)])
         viewport = .init(rows: 1..<3, columns: [c0, c2])
         first.finish()
         let second = try #require(await requests.next())
         #expect(second.keys == [key(0, c2)])
         second.finish()
         let snapshot = try await pending.value
-        #expect(snapshot.viewport == viewport && Set(snapshot.segments.keys) == [source(0), key(0, c0), key(0, c2)])
+        #expect(snapshot.viewport == viewport && Set(snapshot.segments.keys) == [key(0, c0), key(0, c2)])
     }
 
     @Test @MainActor
@@ -73,7 +72,7 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
-    static func loaderBatchesMissingSegmentsAndReusesCache() async throws {
+    static func loaderReadsOnlyMissingSegmentsAndReusesCache() async throws {
         let view = try dataset().unfiltered().unsorted()
         let (loader, stream, reads) = gatedLoader()
         let delivered = AsyncStream<TableSegments>.makeStream()
@@ -90,17 +89,15 @@ struct TableExecutionTests {
         #expect(loader.segment(for: 0, column: c0) == nil)
         loader.updateViewport(rows: 0..<3, columns: [c0, c1, c0])
         let first = try #require(await requests.next())
-        #expect(first.keys == [source(0), key(0, c0), key(0, c1)], "One read, deduplicated columns")
+        #expect(first.keys == [key(0, c0), key(0, c1)], "One read, deduplicated columns")
         first.finish()
         let batch = try #require(await batches.next())
         #expect(batch.segments[key(0, c1)]?.texts == ["first", "second", "third"])
-        #expect(batch.sourceRows[0] == [0, 1, 2])
         #expect(loader.segment(for: 1, column: c0).map { $0.segment.texts } == ["1", "2", "3"])
         #expect(loader.segment(for: 2, column: c1).map { $0.segment.cell(row: $0.row) } == "third")
         #expect(loader.segment(for: 3, column: c1) == nil, "Rows past the end are not cached cells")
-        #expect(loader.sourceRow(for: 1) == 1)
-        #expect(loader.cachedEntryCount == 3)
-        // Replanning reads only the missing tile; cached cells never enqueue reads.
+        #expect(loader.cachedEntryCount == 2)
+        // Replanning reads only the missing segment; cached cells never enqueue reads.
         loader.updateViewport(rows: 1..<3, columns: [c1, c0, c2])
         let added = try #require(await requests.next())
         #expect(added.keys == [key(0, c2)])
@@ -135,22 +132,23 @@ struct TableExecutionTests {
         loader.updateViewport(rows: 192..<202, columns: [c0, longColumn])
         first.finish()
         let current = try #require(await requests.next())
-        #expect(current.keys == [source(3), key(3, c0), key(3, longColumn)])
+        #expect(current.keys == [key(3, c0), key(3, longColumn)])
         current.finish()
-        #expect(try #require(await batches.next()).sourceRows.keys.sorted() == [0])
+        #expect(try #require(await batches.next()).keys == [key(0, c0)])
         let batch = try #require(await batches.next())
         #expect(batch.segments[key(3, longColumn)]?.cell(row: 8) == long, "Delivered for display")
         #expect(loader.segment(for: 200, column: longColumn)?.segment.cell(row: 8) == long)
-        #expect(loader.sourceRow(for: 200) == 200)
         loader.updateViewport(rows: 192..<202, columns: [c0])
         #expect(loader.segment(for: 200, column: c0)?.segment.cell(row: 8) == "200")
         loader.updateViewport(rows: 256..<260, columns: [c0, longColumn])
         #expect(loader.segment(for: 200, column: longColumn) == nil, "Oversized segments are released offscreen")
         #expect(loader.segment(for: 200, column: c0)?.segment.cell(row: 8) == "200", "The small column was cached")
         let next = try #require(await requests.next())
-        #expect(next.keys.first == source(4), "A completed oversized segment must not start an endless reread loop")
+        #expect(
+            next.keys == [key(4, c0), key(4, longColumn)],
+            "A completed oversized segment must not start an endless reread loop")
         next.finish()
-        #expect(try #require(await batches.next()).sourceRows[4] != nil)
+        #expect(try #require(await batches.next()).segments[key(4, c0)] != nil)
     }
 
     @Test @MainActor
@@ -174,10 +172,9 @@ struct TableExecutionTests {
         _ = try #require(await reads.next())
         loader.updateViewport(rows: 0..<64, columns: [c0, c1])
         let second = try #require(await reads.next())
-        #expect(second.sourceRows.isEmpty)
+        #expect(second.keys == [key(0, c1)])
         #expect(loader.segment(for: 32, column: c0)?.segment.cell(row: 32) == "first32")
         #expect(loader.segment(for: 32, column: c1)?.segment.cell(row: 32) == "second32")
-        #expect(loader.sourceRow(for: 32) == 32)
         loader.updateViewport(rows: 0..<64, columns: [c1])
         #expect(loader.segment(for: 32, column: c0) == nil, "The evicted segment is released outside the viewport")
     }
@@ -205,7 +202,7 @@ struct TableExecutionTests {
         loader.reset(to: view)
         loader.updateViewport(rows: 0..<500, columns: columns)
         let first = try #require(await requests.next())
-        #expect(first.keys == [source(0)] + columns.map { key(0, $0) })
+        #expect(first.keys == columns.map { key(0, $0) })
         first.finish()
         let batch = try #require(await batches.next())
         #expect(batch.segments.count == 65)
@@ -214,14 +211,6 @@ struct TableExecutionTests {
             #expect(segment.rowCount == 1 && segment.utf8 == Data(String(index).utf8))
         }
         #expect(loader.segment(for: 0, column: ColumnId(raw: 63)).map { $0.segment.texts } == ["63"])
-        #expect(loader.sourceRow(for: 0) == 0)
-        // A source-only viewport also works without formatting any cells.
-        loader.reset(to: view)
-        loader.updateViewport(rows: 0..<500, columns: [])
-        let source = try #require(await requests.next())
-        #expect(source.keys == [Self.source(0)])
-        source.finish()
-        #expect(try #require(await batches.next()).sourceRows == [0: [0]])
     }
 
     @Test @MainActor
@@ -253,7 +242,6 @@ struct TableExecutionTests {
         oldRead.finish()  // Simulate an FFI read completing after cancellation.
         newRead.finish()
         #expect(try #require(await batches.next()).segments[key(0, c0)]?.texts == ["3", "2", "1"])
-        #expect(loader.sourceRow(for: 0) == 2)
     }
 
     @Test @MainActor
@@ -271,7 +259,7 @@ struct TableExecutionTests {
         #expect(loader.segment(for: 0, column: c0)?.segment.cell(row: 0) == "1", "Preparing keeps the display")
         loader.install(next)
         #expect(loader.segment(for: 0, column: c0)?.segment.cell(row: 0) == "3")
-        #expect(loader.cachedEntryCount == 2, "Entries of the previous View are released")
+        #expect(loader.cachedEntryCount == 1, "Entries of the previous View are released")
     }
 
     static func segment(_ values: [String?]) -> FormattedColumnSegment {
@@ -357,7 +345,7 @@ struct TableExecutionTests {
     }
 
     @Test
-    static func readerReadsSourceRowsAndSegmentsAndHonorsCancellation() async throws {
+    static func readerFormatsSegmentsClippedToTheViewAndHonorsCancellation() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-table-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let csv = "value,label\n" + (0..<130).map { "\($0),row\($0)" }.joined(separator: "\n")
@@ -365,8 +353,8 @@ struct TableExecutionTests {
         let dataset = try GewuDataset.open(path: path.path)
         let view = dataset.unfiltered().unsorted()
         let reader = TableSegmentReader()
-        let source = try await reader.read(view, keys: [source(2)])
-        #expect(source.segments.isEmpty && source.sourceRows == [2: [128, 129]])
+        let tail = try await reader.read(view, keys: [key(2, c1)])
+        #expect(tail.segments[key(2, c1)]?.texts == ["row128", "row129"], "The last block is clipped")
         #expect(try await reader.read(view, keys: [key(0, c0)]).segments[key(0, c0)]?.rowCount == 64)
         let work = Task {
             withUnsafeCurrentTask { $0?.cancel() }

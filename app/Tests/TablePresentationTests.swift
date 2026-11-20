@@ -42,7 +42,7 @@ struct TablePresentationTests {
         let label = try cell(table, column: Self.c1, row: 0)
         #expect(!number.isLoading && number.textField?.stringValue == "2")
         #expect(!label.isLoading && label.textField?.stringValue == longLabel)
-        #expect(loader.sourceRow(for: 0) == 1)
+        #expect(controller.rowNumbers(for: 0..<1) == ["1"])
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
 
         // A later presentation update must keep the committed rows and uncached
@@ -360,6 +360,24 @@ struct TablePresentationTests {
         #expect(!movedNumber.isLoading && movedNumber.textField?.stringValue == "2")
     }
 
+    @Test func rowNumbersAreAvailableImmediatelyAfterScrollingBack() async throws {
+        let model = try makeModel(csv: "value\n" + (0..<300).map(String.init).joined(separator: "\n"))
+        let controller = DataTableController(model: model)
+        model.table = controller
+        defer { model.stop() }
+        let table = try prepareTable(controller)
+        model.setSortDirection(column: Self.c0, descending: true)
+        try await waitUntil { !model.isBusy }
+        controller.update(showsRowNumbers: true)
+        table.scrollRowToVisible(250)
+        controller.view.layoutSubtreeIfNeeded()
+        table.scrollRowToVisible(0)
+        controller.view.layoutSubtreeIfNeeded()
+        // No wait for any read: the gutter maps rows through the displayed View.
+        #expect(controller.rowNumbers(for: 0..<3) == ["299", "298", "297"])
+        #expect(controller.rowNumbers(for: 298..<400) == ["1", "0"], "Clipped to the available rows")
+    }
+
     @Test func changingRowCountRebindsValuesAndSourceRowsThroughEmptyResults() async throws {
         let model = try makeModel()
         let loader = TableSegmentLoader()
@@ -382,7 +400,7 @@ struct TablePresentationTests {
         try await waitUntil { !first.isLoading && !second.isLoading && !label.isLoading }
         #expect(first.textField?.stringValue == "2" && second.textField?.stringValue == "3")
         #expect(label.textField?.stringValue == "second")
-        #expect(loader.sourceRow(for: 0) == 1)
+        #expect(controller.rowNumbers(for: 0..<2) == ["1", "2"])
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
 
         model.setFilter(Filter(condition: .range(min: "100", max: nil), includeNulls: false), column: Self.c0)
@@ -391,7 +409,7 @@ struct TablePresentationTests {
         controller.view.layoutSubtreeIfNeeded()
         #expect(table.numberOfRows == 0 && table.selectedRow == -1)
         #expect(table.rows(in: table.visibleRect).length == 0)
-        #expect(loader.sourceRow(for: 0) == nil)
+        #expect(controller.rowNumbers(for: 0..<1).isEmpty)
 
         model.clearFilters()
         try await waitUntil { !model.isBusy }
@@ -404,7 +422,7 @@ struct TablePresentationTests {
         #expect(restored.textField?.stringValue == "1" && restoredLabel.textField?.stringValue == "first")
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         #expect(table.selectedRow == 0)
-        #expect(loader.sourceRow(for: 0) == 0)
+        #expect(controller.rowNumbers(for: 0..<3) == ["0", "1", "2"])
         #expect(model.errorMessage == nil)
     }
 
