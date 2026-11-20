@@ -130,7 +130,6 @@ impl From<core::FindHighlight> for FindHighlight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GewuDataset;
 
     #[test]
     fn find_limits_match_the_exported_core_constants() {
