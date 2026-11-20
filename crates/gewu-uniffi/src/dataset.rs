@@ -51,21 +51,6 @@ pub struct GewuDataset {
 
 #[uniffi::export]
 impl GewuDataset {
-    /// Read and decode a file. `options.sheet` selects an XLSX worksheet
-    /// (the first one when absent); `options.has_header` applies to CSV, TSV
-    /// and XLSX. Slow: call off the main thread.
-    #[uniffi::constructor]
-    pub fn open(path: String, options: OpenOptions) -> Result<Arc<Self>, GewuError> {
-        let options = core::OpenOptions {
-            sheet: options.sheet,
-            has_header: options.has_header,
-            ..core::OpenOptions::default()
-        };
-        Ok(Arc::new(Self {
-            inner: Arc::new(core::Dataset::open_with_options(path, &options)?),
-        }))
-    }
-
     pub fn info(&self) -> DatasetInfo {
         self.inner.info().into()
     }
@@ -101,4 +86,22 @@ impl GewuDataset {
             inner: self.inner.filter(&filters)?,
         }))
     }
+}
+
+/// Read and decode a file. `options.sheet` selects an XLSX worksheet (the
+/// first one when absent); `options.has_header` applies to CSV, TSV and XLSX.
+/// Slow: call off the main thread.
+///
+/// A free function rather than a constructor: UniFFI 0.32 does not apply
+/// `uniffi.toml` renames to constructor signatures.
+#[uniffi::export]
+pub fn open_dataset(path: String, options: OpenOptions) -> Result<Arc<GewuDataset>, GewuError> {
+    let options = core::OpenOptions {
+        sheet: options.sheet,
+        has_header: options.has_header,
+        ..core::OpenOptions::default()
+    };
+    Ok(Arc::new(GewuDataset {
+        inner: Arc::new(core::Dataset::open_with_options(path, &options)?),
+    }))
 }

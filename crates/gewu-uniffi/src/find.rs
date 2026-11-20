@@ -145,7 +145,7 @@ mod tests {
             std::env::temp_dir().join(format!("gewu-uniffi-find-{}.csv", std::process::id()));
         std::fs::write(&source, "value,other\nhit,12\nmiss,120\nhit,12\n").unwrap();
         let dataset =
-            GewuDataset::open(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
+            crate::open_dataset(source.to_str().unwrap().to_owned(), Default::default()).unwrap();
         let c0 = dataset.column_id("value".into()).unwrap();
         let c1 = dataset.column_id("other".into()).unwrap();
         let doc = dataset.unfiltered().unsorted();

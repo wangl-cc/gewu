@@ -26,7 +26,7 @@ pub use analysis::{
 };
 pub use buffer::{BufferView, ColumnText, RowIndices};
 pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
-pub use dataset::{DatasetInfo, GewuDataset, OpenOptions};
+pub use dataset::{open_dataset, DatasetInfo, GewuDataset, OpenOptions};
 pub use error::{
     AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
     FindErrorKind, GewuError, IoOperation, LimitErrorKind, ValueParseError,
