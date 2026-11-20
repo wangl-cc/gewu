@@ -19,19 +19,8 @@ impl GewuOrderedView {
         self.inner.row_count()
     }
 
-    /// Format one column at display rows `start..start + count`, clipped to
-    /// the available rows.
-    pub fn format_column(
-        &self,
-        column: ColumnId,
-        start: u64,
-        count: u32,
-    ) -> Result<FormattedColumnText, GewuError> {
-        self.inner
-            .format_column(column.into(), start, count)?
-            .try_into()
-    }
-
+    /// Format the requested columns over display rows `start..start + count`,
+    /// clipped to the available rows.
     pub fn format_columns(
         &self,
         columns: Vec<ColumnId>,

@@ -68,10 +68,13 @@ enum CopyText {
     ) throws -> Data {
         try Task.checkCancellation()
         var data = Data()
+        var hasLine = false
         func append(_ line: String) throws {
-            guard line.utf8.count < limit - data.count else { throw TooLarge() }
+            let separator = hasLine ? 1 : 0
+            guard line.utf8.count <= limit - data.count - separator else { throw TooLarge() }
+            if hasLine { data.append(10) }
             data.append(contentsOf: line.utf8)
-            data.append(10)
+            hasLine = true
         }
         if header { try append(names.map(escaped).joined(separator: "\t")) }
         let rowCount = Int(clamping: ordered.rowCount())
@@ -81,7 +84,8 @@ enum CopyText {
                 try Task.checkCancellation()
                 let count = min(BlockKey.rowCount, end - start)
                 var lines = Array(repeating: "", count: count)
-                var remaining = limit - data.count - count
+                let separators = hasLine ? count : count - 1
+                var remaining = limit - data.count - separators
                 for first in stride(from: 0, to: columns.count, by: TableSegments.columnsPerBatch) {
                     try Task.checkCancellation()
                     let end = min(first + TableSegments.columnsPerBatch, columns.count)

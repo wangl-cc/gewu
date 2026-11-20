@@ -472,7 +472,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         }
     }
 
-    /// Render segments directly, including segments too large for the cache.
+    /// Render completed segments that intersect the table's visible area.
     private func display(_ loaded: TableSegments) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
@@ -493,8 +493,7 @@ final class DataTableController: NSViewController, NSTableViewDataSource, NSTabl
         gutter.needsDisplay = true
     }
 
-    /// Decoration and style changes operate on the content already in the cell,
-    /// including large values intentionally not retained by the row cache.
+    /// Decoration and style changes operate on the content already in the cell.
     private func refreshVisibleCells(restyle: Bool, enteringViewport: Bool = false) {
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }

@@ -167,8 +167,8 @@ struct TablePresentationTests {
             }
             let columns = indexes.map { ColumnId(raw: UInt32(table.tableColumns[$0].identifier.rawValue.dropFirst())!) }
             let expected = try columns.map {
-                try model.ordered.formatColumn(
-                    column: $0, start: UInt64(visible.location), count: UInt32(visible.length))
+                try model.ordered.formatColumns(
+                    columns: [$0], start: UInt64(visible.location), count: UInt32(visible.length))
             }
             for (r, row) in (visible.location..<(visible.location + visible.length)).enumerated() {
                 for (c, column) in columns.enumerated() {
@@ -288,11 +288,11 @@ struct TablePresentationTests {
         model.setSortDirection(column: Self.c0, descending: false)
         try await waitUntil { !model.isBusy }
         #expect(model.appliedSort(for: Self.c0)?.descending == false)
-        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["1", "2", "3"])
+        #expect(try model.ordered.formatColumns(columns: [Self.c0], start: 0, count: 3).texts == ["1", "2", "3"])
         model.clearSort()
         try await waitUntil { !model.isBusy }
         #expect(model.viewer.appliedSorts.isEmpty)
-        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["1", "2", "3"])
+        #expect(try model.ordered.formatColumns(columns: [Self.c0], start: 0, count: 3).texts == ["1", "2", "3"])
         #expect(model.errorMessage == nil)
     }
 
@@ -422,7 +422,7 @@ struct TablePresentationTests {
             let last = min(table.numberOfRows, visible.location + visible.length) - 1
             for row in [visible.location, last] {
                 let expected = try [Self.c0, Self.c1].map {
-                    try model.ordered.formatColumn(column: $0, start: UInt64(row), count: 1).cell(row: 0)
+                    try model.ordered.formatColumns(columns: [$0], start: UInt64(row), count: 1).cell(row: 0)
                 }
                 let number = try cell(table, column: Self.c0, row: row)
                 let label = try cell(table, column: Self.c1, row: row)

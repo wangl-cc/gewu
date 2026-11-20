@@ -87,8 +87,8 @@ enum ViewSmoke {
                 ])
         check(InspectorSection.values.mask == 8)
 
-        let label = try sorted.formatColumn(column: labelCol, start: 0, count: 1)
-        let id = try sorted.formatColumn(column: idCol, start: 0, count: 1)
+        let label = try sorted.formatColumns(columns: [labelCol], start: 0, count: 1)
+        let id = try sorted.formatColumns(columns: [idCol], start: 0, count: 1)
         check(label.cell(row: 0) == "three" && id.cell(row: 0) == "3")
         let restored = dataset!.unfiltered()
         check(restored.rowCount() == 3)

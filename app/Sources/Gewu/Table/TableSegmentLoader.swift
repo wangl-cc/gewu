@@ -47,6 +47,10 @@ struct TableSegments: Sendable {
 
     /// Keep only blocks that intersect the viewport.
     mutating func retain(rows: Range<Int>, columns: [ColumnId]) {
+        guard !rows.isEmpty else {
+            self = TableSegments()
+            return
+        }
         let columns = Set(columns)
         segments = segments.filter { key, _ in key.rows.overlaps(rows) && columns.contains(key.column!) }
         sourceRows = sourceRows.filter { block, _ in BlockKey(block: block, column: nil).rows.overlaps(rows) }
@@ -87,8 +91,8 @@ extension TableSegments {
     }
 }
 
-/// Plans batched block reads for the current viewport. Cells only read the
-/// cache; scrolling replaces demand instead of appending work to a FIFO.
+/// Keeps the current viewport's blocks available to cells and reuses recent
+/// text batches when scrolling.
 @MainActor
 final class TableSegmentLoader {
     typealias Read = @Sendable (GewuOrderedView, [BlockKey]) async throws -> TableSegments
@@ -111,21 +115,18 @@ final class TableSegmentLoader {
 
     private let cache: LRUCache<ObjectIdentifier, ColumnTextBatch>
     private var columns: [BlockKey: (batch: ObjectIdentifier, index: Int)] = [:]
-    // Keep the gutter's indices for the current viewport under their own lifetime.
-    private var sourceRows: [Int: [UInt64]] = [:]
+    private var viewportSegments = TableSegments()
     private let read: Read
     private var view: GewuOrderedView?
     private var version: UInt64 = 0
     private var lastVersion: UInt64 = 0
     private var visibleRows = 0..<0
     private var visibleColumns: [ColumnId] = []
-    // Completed demand, including uncached blocks, prevents cache pressure from
-    // repeatedly loading the same viewport. Moving the viewport renews demand.
-    private var delivered: Set<BlockKey> = []
     private var failed: Set<BlockKey> = []
     private var task: Task<Void, Never>?
 
-    /// A batch above the per-entry limit is shown at delivery without evicting cached batches.
+    /// The cache limits apply to reuse outside the viewport. Visible slices
+    /// keep their shared batch alive independently of the LRU.
     init(byteLimit: Int = 8 * 1024 * 1024, batchByteLimit: Int = 1024 * 1024, read: Read? = nil) {
         cache = LRUCache(costLimit: byteLimit, entryCostLimit: batchByteLimit)
         let reader = TableSegmentReader()
@@ -138,7 +139,7 @@ final class TableSegmentLoader {
         }
     }
 
-    var cachedEntryCount: Int { columns.count + sourceRows.count }
+    var cachedEntryCount: Int { columns.count + viewportSegments.sourceRows.count }
 
     private func nextVersion() -> UInt64 {
         lastVersion &+= 1
@@ -171,7 +172,7 @@ final class TableSegmentLoader {
         version = snapshot.version
         visibleRows = snapshot.viewport.rows
         visibleColumns = snapshot.viewport.columns
-        record(snapshot.segments, keys: snapshot.segments.keys)
+        record(snapshot.segments)
     }
 
     func reset(to ordered: GewuOrderedView) {
@@ -186,26 +187,32 @@ final class TableSegmentLoader {
         view = nil
         visibleRows = 0..<0
         visibleColumns = []
-        delivered.removeAll()
         failed.removeAll()
         cache.removeAll()
         columns.removeAll()
-        sourceRows.removeAll()
+        viewportSegments = TableSegments()
     }
 
-    /// The cached segment containing `row`, and the row's index within it.
+    /// The available segment containing `row`, and the row's index within it.
     func segment(for row: Int, column: ColumnId) -> (segment: FormattedColumnSegment, row: Int)? {
-        guard row >= 0, let entry = columns[BlockKey(row: row, column: column)],
-            let batch = cache.value(for: entry.batch)
+        guard row >= 0 else { return nil }
+        let key = BlockKey(row: row, column: column)
+        let local = row - key.start
+        guard let segment = viewportSegments.segments[key] ?? cachedSegment(for: key),
+            local < Int(segment.rowCount)
         else {
             return nil
         }
-        let local = row % BlockKey.rowCount
-        return local < Int(batch.text.rowCount) ? (.init(batch: batch, column: entry.index), local) : nil
+        return (segment, local)
+    }
+
+    private func cachedSegment(for key: BlockKey) -> FormattedColumnSegment? {
+        guard let entry = columns[key], let batch = cache.value(for: entry.batch) else { return nil }
+        return .init(batch: batch, column: entry.index)
     }
 
     func sourceRow(for row: Int) -> UInt64? {
-        guard row >= 0, let rows = sourceRows[row / BlockKey.rowCount] else { return nil }
+        guard row >= 0, let rows = viewportSegments.sourceRows[row / BlockKey.rowCount] else { return nil }
         let local = row % BlockKey.rowCount
         return local < rows.count ? rows[local] : nil
     }
@@ -218,37 +225,23 @@ final class TableSegmentLoader {
         let rows = start..<end
         var seen: Set<ColumnId> = []
         let columns = columns.filter { seen.insert($0).inserted }
-        if visibleRows != rows || visibleColumns != columns {
-            // Installing a viewport includes bordering rows. Narrowing to the
-            // actual visible region must not reread its uncached oversized values.
-            if rows.lowerBound < visibleRows.lowerBound || rows.upperBound > visibleRows.upperBound
-                || !Set(columns).isSubset(of: Set(visibleColumns))
-            {
-                delivered.removeAll()
+        guard visibleRows != rows || visibleColumns != columns else { return }
+        if !failed.isEmpty {
+            let sources = Set(columns)
+            failed = failed.filter { key in
+                rows.overlaps(key.rows) && (key.column.map(sources.contains) ?? true)
             }
-            if !failed.isEmpty {
-                let sources = Set(columns)
-                failed = failed.filter { key in
-                    rows.overlaps(key.rows) && (key.column.map(sources.contains) ?? true)
-                }
-            }
-            visibleRows = rows
-            visibleColumns = columns
-            sourceRows = sourceRows.filter { block, _ in BlockKey(block: block, column: nil).rows.overlaps(rows) }
         }
+        visibleRows = rows
+        visibleColumns = columns
+        viewportSegments.retain(rows: rows, columns: columns)
         loadNext()
     }
 
-    private func needed(_ key: BlockKey) -> Bool {
-        !failed.contains(key) && !delivered.contains(key)
-            && (key.column == nil ? sourceRows[key.block] == nil : columns[key] == nil)
-    }
-
-    private func record(_ segments: TableSegments, keys: [BlockKey]) {
-        delivered.formUnion(keys)
-        for (block, rows) in segments.sourceRows where BlockKey(block: block, column: nil).rows.overlaps(visibleRows) {
-            sourceRows[block] = rows
-        }
+    private func record(_ segments: TableSegments) {
+        var visible = segments
+        visible.retain(rows: visibleRows, columns: visibleColumns)
+        viewportSegments.merge(visible)
         let groups = Dictionary(grouping: segments.segments) { ObjectIdentifier($0.value.batch) }
         for (id, slices) in groups {
             let batch = slices[0].value.batch
@@ -258,9 +251,16 @@ final class TableSegmentLoader {
     }
 
     private func loadNext() {
-        guard task == nil, let view else { return }
-        let missing = BlockKey.covering(rows: visibleRows, columns: visibleColumns).filter(needed)
-        guard !missing.isEmpty else { return }
+        guard let view else { return }
+        var missing: [BlockKey] = []
+        for key in BlockKey.covering(rows: visibleRows, columns: visibleColumns) where !viewportSegments.contains(key) {
+            if let segment = cachedSegment(for: key) {
+                viewportSegments.segments[key] = segment
+            } else if !failed.contains(key) {
+                missing.append(key)
+            }
+        }
+        guard task == nil, !missing.isEmpty else { return }
         let read = read
         let version = version
         task = Task { [weak self] in
@@ -268,7 +268,7 @@ final class TableSegmentLoader {
                 let segments = try await read(view, missing)
                 guard !Task.isCancelled, let self, self.view === view, self.version == version else { return }
                 self.task = nil
-                self.record(segments, keys: missing)
+                self.record(segments)
                 self.onLoad?(view, segments)
                 self.loadNext()
             } catch {

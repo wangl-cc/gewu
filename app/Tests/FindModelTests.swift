@@ -75,6 +75,29 @@ struct FindModelTests {
     }
 
     @Test @MainActor
+    func highlightsCoverAllVisibleBlocksIncludingThePartialLastBlock() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("gewu-find-blocks-\(UUID()).csv")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try ("left,right\n" + String(repeating: "needle,needle\n", count: 263)).write(
+            to: path, atomically: true, encoding: .utf8)
+        let ordered = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        let find = FindModel()
+        defer { find.stop() }
+        find.query = "needle"
+        find.update(ordered: ordered, columns: [Self.c0, Self.c1])
+        find.requestHighlight(rows: 0..<64, columns: [Self.c0])
+        try await waitUntil { find.hasHighlights }
+        let firstRevision = find.highlightRevision
+
+        let rows = 63..<263
+        find.requestHighlight(rows: rows, columns: [Self.c0, Self.c1])
+        try await waitUntil { find.highlightRevision != firstRevision }
+        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c0) })
+        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c1) })
+        #expect(!find.isMatch(row: rows.upperBound, column: Self.c1))
+    }
+
+    @Test @MainActor
     func viewRefreshDefersPreparationAndRestoresLatestFind() async throws {
         let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
             "gewu-find-refresh-\(UUID()).csv")

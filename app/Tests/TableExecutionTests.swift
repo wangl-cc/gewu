@@ -109,7 +109,7 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
-    static func loaderPrioritizesLatestViewportAndDeliversOversizedBatches() async throws {
+    static func loaderPrioritizesLatestViewportAndKeepsOversizedBatchesVisible() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let long = String(repeating: "x", count: 4096)
@@ -140,11 +140,12 @@ struct TableExecutionTests {
         #expect(try #require(await batches.next()).sourceRows.keys.sorted() == [0])
         let batch = try #require(await batches.next())
         #expect(batch.segments[key(3, longColumn)]?.cell(row: 8) == long, "Delivered for display")
-        #expect(loader.segment(for: 200, column: longColumn) == nil, "The oversized segment is not retained")
-        #expect(loader.segment(for: 200, column: c0) == nil, "Oversized batches are delivered without caching")
+        #expect(loader.segment(for: 200, column: longColumn)?.segment.cell(row: 8) == long)
         #expect(loader.sourceRow(for: 200) == 200)
-        loader.updateViewport(rows: 192..<202, columns: [c0, longColumn])
+        loader.updateViewport(rows: 192..<202, columns: [c0])
+        #expect(loader.segment(for: 200, column: c0)?.segment.cell(row: 8) == "200")
         loader.updateViewport(rows: 256..<260, columns: [c0, longColumn])
+        #expect(loader.segment(for: 200, column: c0) == nil, "Oversized batches are released outside the viewport")
         let next = try #require(await requests.next())
         #expect(next.keys.first == source(4), "A completed oversized segment must not start an endless reread loop")
         next.finish()
@@ -152,13 +153,13 @@ struct TableExecutionTests {
     }
 
     @Test @MainActor
-    static func textEvictionKeepsTheCurrentSourceRows() async throws {
+    static func textEvictionKeepsTheCurrentViewport() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("row-indices-\(UUID()).csv")
         defer { try? FileManager.default.removeItem(at: path) }
         let lines = (0..<64).map { "first\($0),second\($0)" }.joined(separator: "\n")
         try ("a,b\n" + lines).write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        // One text batch fits, two do not. The gutter is independent of text eviction.
+        // One text batch fits in the LRU, two do not. Both are visible.
         let loader = TableSegmentLoader(byteLimit: 1024)
         let loaded = AsyncStream<TableSegments>.makeStream()
         loader.onLoad = { _, data in loaded.continuation.yield(data) }
@@ -170,12 +171,14 @@ struct TableExecutionTests {
         loader.reset(to: view)
         loader.updateViewport(rows: 0..<64, columns: [c0])
         _ = try #require(await reads.next())
-        loader.updateViewport(rows: 0..<64, columns: [c1])
+        loader.updateViewport(rows: 0..<64, columns: [c0, c1])
         let second = try #require(await reads.next())
         #expect(second.sourceRows.isEmpty)
-        #expect(loader.segment(for: 32, column: c0) == nil)
+        #expect(loader.segment(for: 32, column: c0)?.segment.cell(row: 32) == "first32")
         #expect(loader.segment(for: 32, column: c1)?.segment.cell(row: 32) == "second32")
         #expect(loader.sourceRow(for: 32) == 32)
+        loader.updateViewport(rows: 0..<64, columns: [c1])
+        #expect(loader.segment(for: 32, column: c0) == nil, "The evicted batch is released outside the viewport")
     }
 
     @Test @MainActor
@@ -296,8 +299,8 @@ struct TableExecutionTests {
         let csv = "number,text\n" + values.enumerated().map { "\($0.offset),\($0.element)" }.joined(separator: "\n")
         try csv.write(to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        let text = try view.formatColumn(column: c1, start: 0, count: 64)
-        let numbers = try view.formatColumn(column: c0, start: 0, count: 64)
+        let text = try view.formatColumns(columns: [c1], start: 0, count: 64)
+        let numbers = try view.formatColumns(columns: [c0], start: 0, count: 64)
         #expect(view.sourceRows(start: 0, count: 64) == (0..<10).map(UInt64.init))
         #expect(text.texts == values.map { $0.isEmpty ? nil : $0 })
         #expect(numbers.texts == (0..<10).map { String($0) })
@@ -334,6 +337,9 @@ struct TableExecutionTests {
         try "number,label\n1,first\n2,\"tab\tvalue\"\n3,third\n4,fourth\n".write(
             to: path, atomically: true, encoding: .utf8)
         let view = try GewuDataset.open(path: path.path).unfiltered().unsorted()
+        let singleCell = try CopyText.format(
+            ordered: view, rows: [0..<1], columns: [c1], names: ["label"], header: false, limit: 5)
+        #expect(String(decoding: singleCell, as: UTF8.self) == "first")
         let pasteboard = NSPasteboard(name: .init("gewu-copy-test-\(UUID())"))
         defer { pasteboard.releaseGlobally() }
         var errors: [Error] = []
@@ -343,7 +349,7 @@ struct TableExecutionTests {
         model.copy(ordered: view, rows: [0..<2, 3..<9], columns: [c1, c0], names: ["label", "number"])
         for _ in 0..<200 where model.message == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(errors.isEmpty && model.message == "Copied selection")
-        let expected = "label\tnumber\nfirst\t1\n\"tab\tvalue\"\t2\nfourth\t4\n"
+        let expected = "label\tnumber\nfirst\t1\n\"tab\tvalue\"\t2\nfourth\t4"
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(
             pasteboard.data(forType: .init(UTType.tabSeparatedText.identifier)).map {

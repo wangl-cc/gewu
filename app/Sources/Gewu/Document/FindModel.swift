@@ -19,7 +19,11 @@ final class FindModel {
     @ObservationIgnored var onError: ((Error, String) -> Void)?
 
     private static let pageSize: UInt32 = 32
-    private static let maxHighlightRows = findLimits().maxHighlightRows
+
+    private struct HighlightBlock: Equatable, Sendable {
+        let block: Int
+        let columns: [ColumnId]
+    }
 
     @ObservationIgnored private var columns: [ColumnId] = []
     @ObservationIgnored private var request: UInt64 = 0
@@ -31,7 +35,7 @@ final class FindModel {
     @ObservationIgnored private let worker = DispatchQueue(label: "gewu.document.find", qos: .userInitiated)
     @ObservationIgnored private var navigationTask: Task<Void, Never>?
     @ObservationIgnored private var highlightTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingHighlight: (rows: Range<Int>, columns: [ColumnId])?
+    @ObservationIgnored private var pendingHighlight: [HighlightBlock] = []
     /// Match bitmaps keyed like the table's segments: one column over a 64-row
     /// block, one bit per row. Requested only for the columns on screen.
     @ObservationIgnored private let highlights = LRUCache<BlockKey, Data>(costLimit: 256 * 1024, entryCostLimit: 1024)
@@ -125,7 +129,7 @@ final class FindModel {
         pageIndex = nil
         pendingSteps = 0
         fetching = false
-        pendingHighlight = nil
+        pendingHighlight = []
         if highlights.count > 0 {
             highlights.removeAll()
             highlightRevision &+= 1
@@ -143,74 +147,65 @@ final class FindModel {
     func requestHighlight(rows: Range<Int>, columns: [ColumnId]) {
         guard let session, !rows.isEmpty, rows.lowerBound >= 0 else { return }
         let scope = Set(self.columns)
+        let columns = columns.filter(scope.contains)
         let first = rows.lowerBound / BlockKey.rowCount
-        let maxBlocks = max(1, Int(Self.maxHighlightRows) / BlockKey.rowCount)
-        let last = min((rows.upperBound - 1) / BlockKey.rowCount, first + maxBlocks - 1)
-        let blocks = first...last
-        let missing = columns.filter { column in
-            scope.contains(column)
-                && blocks.contains { !highlights.contains(BlockKey(block: $0, column: column)) }
+        let last = (rows.upperBound - 1) / BlockKey.rowCount
+        let missing = (first...last).compactMap { block -> HighlightBlock? in
+            let columns = columns.filter { !highlights.contains(BlockKey(block: block, column: $0)) }
+            return columns.isEmpty ? nil : HighlightBlock(block: block, columns: columns)
         }
-        guard !missing.isEmpty else { return }
-        let range = (first * BlockKey.rowCount)..<((last + 1) * BlockKey.rowCount)
-        if let pendingHighlight, pendingHighlight.rows == range, pendingHighlight.columns == missing { return }
-        pendingHighlight = (range, missing)
+        guard missing != pendingHighlight else { return }
+        pendingHighlight = missing
         highlightRequest &+= 1
         let mine = highlightRequest
         highlightGate.set(mine)
+        highlightTask?.cancel()
+        highlightTask = nil
+        guard !missing.isEmpty else { return }
         let findRequest = request
         let worker = worker
         let gate = gate
         let highlightGate = highlightGate
-        highlightTask?.cancel()
         highlightTask = Task { [weak self] in
             guard !Task.isCancelled, let self, self.request == findRequest, self.highlightRequest == mine else {
                 return
             }
             do {
-                let result: FindHighlight = try await withCheckedThrowingContinuation { continuation in
+                let results: [FindHighlight] = try await withCheckedThrowingContinuation { continuation in
                     worker.async {
-                        guard gate.isCurrent(findRequest), highlightGate.isCurrent(mine) else {
-                            continuation.resume(throwing: CancellationError())
-                            return
-                        }
-                        do {
-                            continuation.resume(
-                                returning: try session.highlight(
-                                    columns: missing, start: UInt64(range.lowerBound),
-                                    count: UInt32(range.count)))
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
+                        continuation.resume(
+                            with: Result {
+                                try missing.map { request in
+                                    guard gate.isCurrent(findRequest), highlightGate.isCurrent(mine) else {
+                                        throw CancellationError()
+                                    }
+                                    return try session.highlight(
+                                        columns: request.columns, start: UInt64(request.block * BlockKey.rowCount),
+                                        count: UInt32(BlockKey.rowCount))
+                                }
+                            })
                     }
                 }
                 guard !Task.isCancelled, self.request == findRequest, self.highlightRequest == mine else {
                     return
                 }
-                self.pendingHighlight = nil
-                self.store(result, blocks: blocks)
+                self.highlightTask = nil
+                self.pendingHighlight = []
+                for (request, result) in zip(missing, results) {
+                    for column in result.columns {
+                        let key = BlockKey(block: request.block, column: column.column)
+                        self.highlights.insert(column.matched, for: key, cost: column.matched.count + 16)
+                    }
+                }
                 self.highlightRevision &+= 1
             } catch {
                 guard !Task.isCancelled, self.request == findRequest, self.highlightRequest == mine else {
                     return
                 }
-                self.pendingHighlight = nil
+                self.highlightTask = nil
+                self.pendingHighlight = []
                 if error is CancellationError { return }
                 self.onError?(error, "Find highlight error: ")
-            }
-        }
-    }
-
-    /// Split each column's bitmap into its 64-row blocks. Blocks past the last
-    /// row are stored empty, so they are not requested again.
-    private func store(_ result: FindHighlight, blocks: ClosedRange<Int>) {
-        let bytesPerBlock = BlockKey.rowCount / 8
-        for column in result.columns {
-            for (index, block) in blocks.enumerated() {
-                let start = min(index * bytesPerBlock, column.matched.count)
-                let end = min(start + bytesPerBlock, column.matched.count)
-                let bits = Data(column.matched[start..<end])
-                highlights.insert(bits, for: BlockKey(block: block, column: column.column), cost: bits.count + 16)
             }
         }
     }

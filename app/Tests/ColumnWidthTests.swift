@@ -75,7 +75,7 @@ struct ColumnWidthTests {
         try ("value\n" + values.joined(separator: "\n")).write(to: url, atomically: true, encoding: .utf8)
         let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
         let column = ColumnId(raw: 0)
-        let text = try ordered.formatColumn(column: column, start: 0, count: 64)
+        let text = try ordered.formatColumns(columns: [column], start: 0, count: 64)
         let segment = FormattedColumnSegment(batch: .init(keys: [], text: text), column: 0)
         var input = ColumnWidthMeasurement.Input(column: column, name: "value", type: "Text", text: true)
         let cold = try ColumnWidthMeasurement.measure(

@@ -68,7 +68,7 @@ fn typed_filters_compile_and_execute_across_ffi() {
             }))
             .unwrap();
         let ordered = filtered.unsorted();
-        let rows = ordered.format_column(id_col, 0, 10).unwrap();
+        let rows = ordered.format_columns(vec![id_col], 0, 10).unwrap();
         assert_eq!(ordered.source_rows(0, 10), [1]);
         assert_eq!(rows.utf8, b"9007199254740993");
     }
@@ -152,7 +152,7 @@ fn text_filter_modes_and_choices_cross_ffi() {
     assert_eq!(
         filtered
             .unsorted()
-            .format_column(label_col, 0, 10)
+            .format_columns(vec![label_col], 0, 10)
             .unwrap()
             .utf8,
         b"dog"
@@ -328,7 +328,7 @@ fn file_metadata_and_xlsx_export_cross_the_ffi_boundary() {
                 selected
                     .unfiltered()
                     .unsorted()
-                    .format_column(selected_label, 0, 1)
+                    .format_columns(vec![selected_label], 0, 1)
                     .unwrap()
                     .utf8,
                 b"cat"
