@@ -88,12 +88,10 @@ final class ExportModel {
         outcome = nil
         progress = ExportProgress(rowsWritten: 0, totalRows: UInt64(rows.count))
         task = Task {
-            let updates = Task {
-                for await update in job.progress() { progress = update }
-            }
-            defer { updates.cancel() }
             do {
-                try await job.write(to: destination, compression: compression)
+                try await job.write(to: destination, compression: compression) { [weak self] update in
+                    self?.progress = update
+                }
                 defaults[Preferences.lastExportFormat] = format.rawValue
                 if format == .parquet { defaults[Preferences.parquetCompression] = compression.rawValue }
                 outcome = .exported(destination.lastPathComponent)

@@ -142,6 +142,6 @@ struct FindModelTests {
         let model = try await TestTables.model("value\nx\n", alerts: alerts)
         defer { model.stop() }
         model.find.query = " "
-        #expect(model.find.search == nil && alerts.current == nil, "Blank queries are not searches")
+        #expect(model.find.cellFind == nil && alerts.current == nil, "Blank queries start no Find")
     }
 }

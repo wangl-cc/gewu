@@ -41,11 +41,11 @@ impl From<core::FormattedColumnSegment> for ColumnText {
 
 /// Bytes produced by an export into memory.
 #[derive(uniffi::Object)]
-pub struct ExportedBytes {
+pub struct GewuExportedBytes {
     bytes: Vec<u8>,
 }
 
-impl ExportedBytes {
+impl GewuExportedBytes {
     pub(crate) fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
@@ -72,7 +72,9 @@ pub struct GewuBytes {
 ///
 /// `view` must be a handle the caller obtained for a live `GewuOrderedView`
 /// by cloning (UniFFI's `uniffiCloneHandle()`); this function consumes it. The
-/// returned pointer is valid while the caller's own reference to the view is.
+/// returned pointer is valid while the caller's own reference to the view is:
+/// the view owns the indices and never changes them, so they neither move nor
+/// change while it lives.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gewu_ordered_view_source_rows(view: u64) -> GewuSourceRows {
     // SAFETY: The caller passes a cloned handle of a live `GewuOrderedView`.
@@ -93,13 +95,14 @@ pub unsafe extern "C" fn gewu_ordered_view_source_rows(view: u64) -> GewuSourceR
 ///
 /// # Safety
 ///
-/// `bytes` must be a handle the caller obtained for a live `ExportedBytes` by
+/// `bytes` must be a handle the caller obtained for a live `GewuExportedBytes` by
 /// cloning (UniFFI's `uniffiCloneHandle()`); this function consumes it. The
-/// returned pointer is valid while the caller's own reference to the object is.
+/// returned pointer is valid while the caller's own reference to the object is:
+/// the object owns the bytes and never changes them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gewu_exported_bytes(bytes: u64) -> GewuBytes {
-    // SAFETY: The caller passes a cloned handle of a live `ExportedBytes`.
-    let bytes: Arc<ExportedBytes> = unsafe { Handle::from_raw_unchecked(bytes).into_arc() };
+    // SAFETY: The caller passes a cloned handle of a live `GewuExportedBytes`.
+    let bytes: Arc<GewuExportedBytes> = unsafe { Handle::from_raw_unchecked(bytes).into_arc() };
     GewuBytes {
         bytes: bytes.bytes.as_ptr(),
         count: bytes.bytes.len(),

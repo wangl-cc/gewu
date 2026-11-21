@@ -3,9 +3,8 @@
 /// the Inspector and the chart use.
 ///
 /// A value with the rules that keep these consistent: every edit names only
-/// visible columns, filters stay in schema order so equal queries compare
-/// equal, hiding a column removes its filter and sort, and the column
-/// choices fall back to visible columns. Running the query and showing its
+/// visible columns, hiding a column removes its filter and sort, and the
+/// column choices fall back to visible columns. Running the query and showing its
 /// result belong to the caller.
 public struct TableState: Equatable, Sendable {
     /// The query being edited.
@@ -19,14 +18,12 @@ public struct TableState: Equatable, Sendable {
     public private(set) var chartY: ColumnID?
 
     private let schema: [ColumnID]
-    private let order: [ColumnID: Int]
     private let plottable: Set<ColumnID>
 
     /// Every column visible in file order, with the first column selected and
     /// inspected and the first plottable column on the chart's y axis.
     public init(columns: [ColumnInfo]) {
         schema = columns.map(\.id)
-        order = Dictionary(uniqueKeysWithValues: schema.enumerated().map { ($1, $0) })
         plottable = Set(columns.filter(\.capabilities.scatter).map(\.id))
         visibleColumns = schema
         selectedColumn = schema.first
@@ -117,20 +114,11 @@ public struct TableState: Equatable, Sendable {
     /// Set or, with `nil`, remove `column`'s filter.
     public mutating func setFilter(_ filter: Filter?, for column: ColumnID) {
         guard isVisible(column) else { return }
-        guard let filter else {
-            query.filters.removeAll { $0.column == column }
-            return
-        }
-        if let index = query.filters.firstIndex(where: { $0.column == column }) {
-            query.filters[index].filter = filter
-        } else {
-            query.filters.append(ColumnFilter(column: column, filter: filter))
-            query.filters.sort { (order[$0.column] ?? .max) < (order[$1.column] ?? .max) }
-        }
+        query.setFilter(filter, for: column)
     }
 
     public mutating func clearFilters() {
-        query.filters = []
+        query.removeFilters { _ in true }
     }
 
     /// Return the query to `applied`, such as after it failed to run.
@@ -158,7 +146,7 @@ public struct TableState: Equatable, Sendable {
             visibleColumns.removeAll(where: targets.contains)
         }
         let visible = Set(visibleColumns)
-        query.filters.removeAll { !visible.contains($0.column) }
+        query.removeFilters { !visible.contains($0.column) }
         query.sorts.removeAll { !visible.contains($0.column) }
         let fallback = visibleColumns.first
         if selectedColumn.map({ !isVisible($0) }) ?? true { selectedColumn = fallback }

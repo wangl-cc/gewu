@@ -42,15 +42,14 @@ final class CopyModel {
                 pasteboard.clearContents()
                 pasteboard.writeObjects([item])
                 outcome = .copied
-            } catch is CancellationError {
-            } catch let error as GewuKitError {
-                if case .export(.sizeLimit) = error.kind {
+            } catch {
+                // A replaced copy reports nothing, even if it failed.
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
+                if case .export(.sizeLimit) = (error as? GewuKitError)?.kind {
                     outcome = .tooLarge
                 } else {
                     alerts.report(error, title: "Could Not Copy")
                 }
-            } catch {
-                alerts.report(error, title: "Could Not Copy")
             }
             if !Task.isCancelled { work = nil }
         }

@@ -11,14 +11,14 @@ public final class RowSet: Sendable, Hashable, Identifiable {
     public let source: TableSource
     public let filters: [ColumnFilter]
     /// Number of rows that pass `filters`.
-    public let count: UInt64
+    public let count: Int
     let view: GewuBindings.GewuFilteredView
 
     init(source: TableSource, view: GewuBindings.GewuFilteredView, filters: [ColumnFilter]) {
         self.source = source
         self.view = view
         self.filters = filters
-        count = view.rowCount()
+        count = Int(clamping: view.rowCount())
     }
 
     public static func == (lhs: RowSet, rhs: RowSet) -> Bool { lhs === rhs }
@@ -55,9 +55,9 @@ public final class RowSet: Sendable, Hashable, Identifiable {
     /// A sample of up to `limit` pairs. `x == nil` plots against the source row number.
     public func scatter(
         x: ColumnID?, y: ColumnID, limit: UInt32, xScale: AxisScale, yScale: AxisScale
-    ) async throws -> ScatterSample {
+    ) async throws -> ScatterResult {
         try await analyze { view in
-            ScatterSample(
+            ScatterResult(
                 try view.scatter(
                     xColumn: x?.ffi, yColumn: y.ffi, limit: limit, xScale: xScale.ffi, yScale: yScale.ffi))
         }
@@ -67,12 +67,12 @@ public final class RowSet: Sendable, Hashable, Identifiable {
 
     /// The values an editor for `column` can offer: those in rows passing
     /// every filter except `column`'s own, so its alternatives stay visible.
-    public func filterOptions(for column: ColumnID) async throws -> FilterOptions {
-        try await analyze { view in FilterOptions(try view.filterChoices(column: column.ffi)) }
+    public func filterChoices(for column: ColumnID) async throws -> FilterChoices {
+        try await analyze { view in FilterChoices(try view.filterChoices(column: column.ffi)) }
     }
 
     /// A histogram with exact bin endpoints for a range editor, over the same
-    /// rows as ``filterOptions(for:)``. `nil` when the column has no plottable values.
+    /// rows as ``filterChoices(for:)``. `nil` when the column has no plottable values.
     public func filterDistribution(_ column: ColumnID, bins: UInt32, scale: AxisScale) async throws -> RangeHistogram? {
         try await analyze { view in
             try view.filterDistribution(column: column.ffi, bins: bins, scale: scale.ffi).map(RangeHistogram.init)

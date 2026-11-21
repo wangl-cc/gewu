@@ -265,7 +265,7 @@ struct QuerySpecTests {
         #expect(model.displayed.count == 0)
 
         // Reopening a zero-row result can recover through the column's own options.
-        let options = try await model.displayed.rowSet.filterOptions(for: value)
+        let options = try await model.displayed.rowSet.filterChoices(for: value)
         #expect(options.values?.count == 3 && options.nullCount == 1)
         var reopened = FilterDraft(model.appliedQuery.filter(for: value))
         reopened.enterValues()

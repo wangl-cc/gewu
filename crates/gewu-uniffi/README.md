@@ -10,7 +10,7 @@ See [data types](../../docs/data-types.md), [Find and filtering](../../docs/sear
 
 ## Types
 
-Core types whose shape suits the boundary cross as they are: this crate declares them with `#[uniffi::remote]`, so Core stays free of UniFFI and no conversion code exists. They include `ColumnInfo`, `Filter`, `ColumnFilter`, `ColumnSort`, the analysis results, `CellMatch`, `FindHighlight`, `FileType` and `ExportOptions`. `ColumnId` crosses as a `u32` (`typealias ColumnId = UInt32` in Swift).
+Core types whose shape suits the boundary cross as they are: this crate declares them with `#[uniffi::remote]`, so Core stays free of UniFFI and no conversion code exists. They include `ColumnInfo`, `Filter`, `ColumnFilter`, `ColumnSort`, the analysis results, `CellMatch`, `FindHighlight`, `FileType`, `ExportOptions` and the plain enums inside errors (`IoOperation`, `ValueParseError`, `AnalysisOperation`). `ColumnId` crosses as a `u32` (`typealias ColumnId = UInt32` in Swift).
 
 The crate defines its own types only where the boundary needs another shape: `DatasetInfo` and `FileMetadata` (UniFFI has no tuples, so footer entries become `KeyValue`), `ScatterResult` (temporal coordinates in seconds), `OpenOptions` (the subset of Core's options the app sets), `GewuError` and the bulk-data types below.
 
@@ -21,9 +21,11 @@ The crate defines its own types only where the boundary needs another shape: `Da
 | `GewuDataset` | Wraps shared decoded data, metadata and lazy column caches. |
 | `GewuFilteredView` | The rows passing a set of filters, in file order, with their cached analyses. |
 | `GewuOrderedView` | A filtered view in display order, remembering its filters and sorts; serves text, cell Find and export. |
-| `FindSession` | Captures shared data, the query and an ordered column scope for navigation and highlights. |
+| `GewuFind` | Captures shared data, the query and an ordered column scope for navigation and highlights. |
 | `GewuExport` | Captures row/column data, progress and cancellation for one write to a file or to memory. |
-| `ExportedBytes` | Owns the result of an export into memory; Swift reads it in place. |
+| `GewuExportedBytes` | Owns the result of an export into memory; Swift reads it in place. |
+
+Objects carry the `Gewu` prefix and records do not. GewuKit gives values and error kinds the same names as this crate and Core, and wraps the objects in its own domain types (`GewuDataset` in `TableSource`, `GewuFilteredView` in `RowSet`, `GewuOrderedView` in `DisplayRows`, `GewuFind` in `CellFind`, `GewuExport` in `ExportJob`).
 
 UniFFI manages object lifetimes through generated Swift classes. Views retain their `Dataset` independently of the `GewuDataset` handle; an ordered view retains its filtered view. Find, export and exported-byte objects retain what they need. Source Arrow buffers and caches stay shared among all views.
 
@@ -33,7 +35,7 @@ There is no backend current view, column projection or query registration. Calle
 
 1. Construct `GewuDataset::open(path, OpenOptions { sheet, has_header })` on a worker. `sheet` selects a named XLSX worksheet (the first when `None`) and is rejected for other formats; `has_header` applies to CSV, TSV and XLSX.
 2. Read `dataset.info()` for `DatasetInfo`: columns with `id`, presentation metadata, `capabilities` and `analysis`, plus the file's `FileType` and tagged `FileMetadata`. Call `dataset.rows()` for every row in file order, in O(1).
-3. Keep `[ColumnFilter]`, `[ColumnSort]` and the visible columns in the frontend. Call `ordered.apply(filters, sorts)` on a worker for the rows of a new query. Filters always read the full dataset and combine with AND; sort keys are by priority. `apply` returns the same view when nothing changed, and keeps the filtered view, with its cached analyses, when only the sort changed. `ordered.filtered()` returns that filtered view.
+3. Keep `[ColumnFilter]`, `[ColumnSort]` and the visible columns in the frontend. Call `ordered.apply(filters, sorts)` on a worker for the rows of a new query. Filters always read the full dataset and combine with AND; sort keys are by priority. `apply` returns the same view when nothing changed, and keeps the filtered view, with its cached analyses, when only the sort changed. `ordered.filtered()` returns that filtered view. Each Swift wrapper is a separate reference, so `is_same_view(other)` on either view tells Swift whether two wrappers are the same view; GewuKit follows these answers instead of deciding reuse itself.
 4. Read `ordered.row_count()`, then `ordered.format_column(column, start, count)` for one column's display text over display rows `start..start + count`, clipped to the available rows.
 
 Reordering or hiding unconditioned visible columns needs no FFI work and keeps both views and any text read from them. Two windows may share a `GewuDataset` or views and diverge independently; opening the same path twice does not share decoded data.
@@ -61,7 +63,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | Metadata, `rows`, `filtered`, `find` and `export` creation, `column_structure`, lending functions | Metadata access or O(1) shared snapshot capture. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
-Calls run to completion in Rust without cooperative cancellation. Swift owns request replacement: GewuKit runs each call on a serial worker that skips calls whose task was cancelled before they start, and callers discard results they no longer need. A `FindSession` or `GewuExport` stays valid whatever later queries do.
+Calls run to completion in Rust without cooperative cancellation. Swift owns request replacement: GewuKit runs each call on a serial worker that skips calls whose task was cancelled before they start, and callers discard results they no longer need. A `GewuFind` or `GewuExport` stays valid whatever later queries do.
 
 ## Analyses
 
@@ -112,7 +114,7 @@ Sample `progress()` while writing, but wait for a successful return before decla
 | `Cancelled` | Returned when an in-progress `GewuExport` is cancelled before destination commit. |
 | `Internal { message }` | Report implementation defects and calls that violate the frontend/backend contract. |
 
-Core retains concrete module errors and source chains. FFI projects only the semantics a correctly implemented UI can encounter during normal use, as structured kinds the frontend can present in its own words; invalid column IDs, duplicate columns, empty column selections, invalid UI-controlled sizes, unsupported direct analysis calls and repeated single-use export calls become `Internal`. Messages retain diagnostic context.
+Core retains concrete module errors and source chains. A filter failure keeps its `Filter` kind wherever it arises, in a query, Find or an analysis. FFI projects only the semantics a correctly implemented UI can encounter during normal use, as structured kinds the frontend can present in its own words; invalid column IDs, duplicate columns, empty column selections, invalid UI-controlled sizes, unsupported direct analysis calls and repeated single-use export calls become `Internal`. Messages retain diagnostic context.
 
 ## Bindings and implementation
 

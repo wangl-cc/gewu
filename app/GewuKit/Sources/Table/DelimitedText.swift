@@ -5,8 +5,9 @@ internal import gewuFFI
 extension DisplayRows {
     /// Display text of `rows` and `columns` as tab-separated values, the same
     /// encoding as a TSV export, with nested values as their display text.
-    /// Fails with ``GewuKitError/ExportProblem/sizeLimit(_:)`` instead of
-    /// building more than `byteLimit` bytes. Runs on its own thread; cancelling the calling task stops it.
+    /// Fails with ``GewuKitError/ExportErrorKind/sizeLimit(_:)`` instead of
+    /// building more than `byteLimit` bytes. Runs on a worker of its own;
+    /// cancelling the calling task stops it.
     public func tabSeparatedText(
         rows: [Range<Int>], columns: [ColumnID], includeHeader: Bool, byteLimit: Int
     ) async throws -> Data {
@@ -19,12 +20,14 @@ extension DisplayRows {
         let options = GewuBindings.ExportOptions(
             parquetCompression: .zstd, nestedAsText: true, includeHeader: includeHeader)
         return try await withTaskCancellationHandler {
-            try await SerialWorker(label: "copy").perform { () throws -> Data in
+            try await SerialWorker.perform(alone: "copy") { () throws -> Data in
                 let exported = try job.writeToMemory(options: options, limit: UInt64(byteLimit))
-                let contents = gewu_exported_bytes(exported.uniffiCloneHandle())
-                guard let bytes = contents.bytes else { return Data() }
-                // One copy out of Rust, kept alive by `exported` until it completes.
-                return withExtendedLifetime(exported) { Data(bytes: bytes, count: contents.count) }
+                // One copy out of Rust, while `exported` keeps the lent bytes alive.
+                return withExtendedLifetime(exported) {
+                    let contents = gewu_exported_bytes(exported.uniffiCloneHandle())
+                    guard let bytes = contents.bytes else { return Data() }
+                    return Data(bytes: bytes, count: contents.count)
+                }
             }
         } onCancel: {
             job.cancel()

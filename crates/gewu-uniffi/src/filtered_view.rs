@@ -70,6 +70,12 @@ impl GewuFilteredView {
         self.inner.row_count()
     }
 
+    /// Whether `other` is this very view, with the same cached analyses, such
+    /// as when [`GewuOrderedView::apply`] kept it for a new order.
+    pub fn is_same_view(&self, other: Arc<Self>) -> bool {
+        std::ptr::eq(self, Arc::as_ptr(&other))
+    }
+
     pub fn count_nulls(&self, column: ColumnId) -> Result<u64, GewuError> {
         Ok(self
             .analyses

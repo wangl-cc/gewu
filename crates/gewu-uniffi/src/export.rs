@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gewu_core::{self as core, ExportOptions, ExportProgress, ParquetCompression};
 
-use crate::{ExportedBytes, GewuError};
+use crate::{GewuError, GewuExportedBytes};
 
 #[uniffi::remote(Enum)]
 pub enum ParquetCompression {
@@ -52,10 +52,10 @@ impl GewuExport {
         &self,
         options: ExportOptions,
         limit: u64,
-    ) -> Result<Arc<ExportedBytes>, GewuError> {
+    ) -> Result<Arc<GewuExportedBytes>, GewuError> {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         let bytes = self.inner.write_to_memory(&options, limit)?;
-        Ok(Arc::new(ExportedBytes::new(bytes)))
+        Ok(Arc::new(GewuExportedBytes::new(bytes)))
     }
 
     pub fn cancel(&self) {

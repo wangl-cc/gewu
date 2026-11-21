@@ -1,6 +1,5 @@
 import Foundation
 internal import GewuBindings
-import Synchronization
 
 public enum ParquetCompression: String, CaseIterable, Sendable, Codable {
     case zstd, snappy, gzip, brotli, lz4, uncompressed
@@ -19,13 +18,17 @@ public enum ParquetCompression: String, CaseIterable, Sendable, Codable {
 
 public struct ExportProgress: Hashable, Sendable {
     /// Rows processed. Reaching `totalRows` does not mean the file is in
-    /// place; ``ExportJob/write(to:compression:)`` returning does.
+    /// place; ``ExportJob/write(to:compression:progressInterval:onProgress:)`` returning does.
     public let rowsWritten: UInt64
     public let totalRows: UInt64
 
     public init(rowsWritten: UInt64, totalRows: UInt64) {
         self.rowsWritten = rowsWritten
         self.totalRows = totalRows
+    }
+
+    init(_ progress: GewuBindings.ExportProgress) {
+        self.init(rowsWritten: progress.rowsWritten, totalRows: progress.totalRows)
     }
 }
 
@@ -36,45 +39,47 @@ public struct ExportProgress: Hashable, Sendable {
 public final class ExportJob: Sendable {
     public let format: FileType
     private let job: GewuBindings.GewuExport
-    private let finished = Mutex(false)
 
     init(job: GewuBindings.GewuExport, format: FileType) {
         self.job = job
         self.format = format
     }
 
-    /// Write the file on a dedicated thread. Nested columns go to CSV, TSV and
-    /// XLSX as their display text. Cancelling the calling task stops the write;
-    /// it then throws `CancellationError` unless the file was already committed.
-    public func write(to destination: URL, compression: ParquetCompression = .zstd) async throws {
+    /// Write the file on a worker of its own, reporting progress every
+    /// `progressInterval` while it runs and once more when it succeeds; no
+    /// report follows the return. Nested columns go to CSV, TSV and XLSX as
+    /// their display text. Cancelling the calling task stops the write; it
+    /// then throws `CancellationError` unless the file was already committed.
+    public func write(
+        to destination: URL, compression: ParquetCompression = .zstd,
+        progressInterval: Duration = .milliseconds(150),
+        onProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void = { _ in }
+    ) async throws {
         let job = job
         let path = destination.path
         let options = GewuBindings.ExportOptions(
             parquetCompression: compression.ffi, nestedAsText: true, includeHeader: true)
-        defer { finished.withLock { $0 = true } }
-        try await withTaskCancellationHandler {
-            try await SerialWorker(label: "export").perform {
-                try job.write(path: path, options: options)
+        let sampler = Task {
+            while !Task.isCancelled {
+                await onProgress(ExportProgress(job.progress()))
+                try? await Task.sleep(for: progressInterval)
             }
-        } onCancel: {
-            job.cancel()
         }
-    }
-
-    /// Progress sampled every `interval` until ``write(to:compression:)`` returns.
-    public func progress(every interval: Duration = .milliseconds(150)) -> AsyncStream<ExportProgress> {
-        AsyncStream { continuation in
-            let sampler = Task { [self] in
-                while !Task.isCancelled {
-                    let done = self.finished.withLock { $0 }
-                    let current = self.job.progress()
-                    continuation.yield(ExportProgress(rowsWritten: current.rowsWritten, totalRows: current.totalRows))
-                    if done { break }
-                    try? await Task.sleep(for: interval)
+        do {
+            try await withTaskCancellationHandler {
+                try await SerialWorker.perform(alone: "export") {
+                    try job.write(path: path, options: options)
                 }
-                continuation.finish()
+            } onCancel: {
+                job.cancel()
             }
-            continuation.onTermination = { _ in sampler.cancel() }
+        } catch {
+            sampler.cancel()
+            await sampler.value
+            throw error
         }
+        sampler.cancel()
+        await sampler.value
+        await onProgress(ExportProgress(job.progress()))
     }
 }

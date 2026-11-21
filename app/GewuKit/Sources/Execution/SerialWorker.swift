@@ -25,6 +25,15 @@ actor SerialWorker {
         try Task.checkCancellation()
         return try translatingErrors(body)
     }
+
+    /// Run `body` on a worker of its own, created for this one call, for work
+    /// that must neither wait behind nor delay a session's workers: writing an
+    /// export, copying, or reading a file before any session exists.
+    static func perform<Value: Sendable>(
+        alone label: String, _ body: @Sendable () throws -> Value
+    ) async throws -> Value {
+        try await SerialWorker(label: label).perform(body)
+    }
 }
 
 /// Map a Rust error to the error GewuKit reports.
@@ -37,7 +46,8 @@ func translatingErrors<Value>(_ body: () throws -> Value) throws -> Value {
 }
 
 /// The workers that serve one opened table. Each kind of work has its own
-/// queue, so a long analysis never delays scrolling or a query.
+/// queue, so a long analysis never delays scrolling or a query. Work that
+/// belongs to no session queue runs through ``SerialWorker/perform(alone:_:)``.
 struct Workers: Sendable {
     let query = SerialWorker(label: "query")
     let analysis = SerialWorker(label: "analysis")

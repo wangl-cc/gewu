@@ -22,7 +22,11 @@ GewuKit models a table with three immutable results, each an identity the App co
 
 Two value types hold the rules of what the user edits, so App models only run and present them: `TableState` keeps the query, visible columns and the selected, inspected and charted columns consistent (filters in schema order, hidden columns lose their conditions, choices fall back to visible columns), and `FilterDraft` is one column's filter while its editor is open, with exact values compared by UTF-8 bytes (`ExactValue`).
 
-`TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise; the engine makes the same reuse underneath. Each session runs synchronous Rust calls on its own serial workers (query, analysis, text, Find), off Swift's cooperative pool. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers and copied text are read in place from Rust memory.
+`TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise. The engine alone decides what is reused; GewuKit asks it whether the views it returned are the ones `current` holds and keeps the matching Swift results. `TableQuery` compares filter literals by UTF-8 bytes, as the engine does, and keeps its filters in column order, so two queries are equal exactly when they select the same rows in the same order.
+
+Each session runs synchronous Rust calls on its own serial workers (`query`, `analysis`, `read` for text, `find`), off Swift's cooperative pool. Work that must neither wait behind nor delay those queues (export writes, copies and worksheet listing) runs on a worker created for that one call. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers are read in place from Rust memory, and copied text is read in place and copied once into `Data`.
+
+`GewuKitError` carries the engine's structured kind and its English diagnostic but no user-facing wording. The App's [ErrorPresentation](Sources/Gewu/App/ErrorPresentation.swift) is the one place that words failures, so alerts, panels and the open-failure page read alike.
 
 ## Code map
 
@@ -30,12 +34,12 @@ Start with [GewuApp](Sources/Gewu/App/GewuApp.swift) for scenes and commands.
 
 | Directory | Responsibility |
 | --- | --- |
-| `App/` | App entry point, file opening, settings, commands, Sparkle updates, [Preferences](Sources/Gewu/App/Preferences.swift) and display formatting. |
+| `App/` | App entry point, file opening, settings, commands, Sparkle updates, [Preferences](Sources/Gewu/App/Preferences.swift), display formatting and error wording. |
 | `Window/` | Window model and scene, worksheet loading, alerts, Find field and file information. |
 | `Table/` | Table model, Find, copying, the AppKit table and its text cache. |
 | `Filter/` | Filter editors. |
 | `Inspector/` | Column analysis presentation. |
-| `Export/` | Save panel, export job and formats. |
+| `Export/` | Save panel, export progress and formats. |
 | `Charts/` | Histograms, scatter plots and chart labels. |
 
 Each piece of state has one owner whose lifetime matches it. Every model is `@Observable`; models never refer to views.
@@ -49,7 +53,7 @@ Each piece of state has one owner whose lifetime matches it. Every model is `@Ob
 
 Query edits change `draft` at once and run in the background; `displayed` changes only when a query succeeds, so the status bar, headers, Find and analyses describe one result. A failed query keeps `displayed` and returns the draft to it. Column visibility is presentation: it applies immediately, and hiding a column removes its conditions from the draft.
 
-Background work follows one pattern. Panels load in `.task(id:)` keyed by the `RowSet` (or `DisplayRows`), column and parameters, so SwiftUI cancels obsolete work. Models hold a single `Task` per activity and cancel it on replacement. Swift 6 language mode checks data-race safety at compile time; the App has no `@unchecked Sendable`.
+Background work follows one pattern. Panels load in `.task(id:)` keyed by the `RowSet` (or `DisplayRows`), column and parameters, so SwiftUI cancels obsolete work. Models hold a single `Task` per activity and cancel it on replacement. A cancelled task changes no state when it ends, whether it succeeded or failed: every handler checks for cancellation before touching the model or reporting an error. Swift 6 language mode checks data-race safety at compile time; the App has no `@unchecked Sendable`.
 
 ## The table
 
@@ -59,7 +63,7 @@ The cache reads one column over an aligned 64-row block per call, keeps viewport
 
 ## Workspace interaction
 
-The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. Both the Inspector column chooser and the Scatter X/Y axis pickers list only currently visible columns. `TableModel` owns fallback for selection, inspection, `chartX`, and `chartY` whenever columns are hidden or shown again (`visibleColumns.first` for selection and inspection, `nil` / Source row for `chartX`, and the first visible scatter-capable column for `chartY`); if no columns remain visible, the Inspector shows a `No Columns` empty state. Chart axes and display settings survive page changes.
+The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. Both the Inspector column chooser and the Scatter X/Y axis pickers list only currently visible columns. `TableState` owns fallback for selection, inspection, `chartX`, and `chartY` whenever columns are hidden or shown again (`visibleColumns.first` for selection and inspection, `nil` / Source row for `chartX`, and the first visible scatter-capable column for `chartY`); if no columns remain visible, the Inspector shows a `No Columns` empty state. Chart axes and display settings survive page changes.
 
 The existing status bar shows applied result and source row counts when filters are active, plus clickable filtered-column and sorted-column counts. The filter summary can locate a column in the table or clear individual or all filters; the sort summary opens the sort editor at the status bar. These summaries describe the applied views while a new query is pending and do not add another row above the table.
 
@@ -71,7 +75,7 @@ Filter editors show mode selection only when multiple modes are available. Bound
 
 ## Copying and export
 
-Copy serializes the selected cells' display text, including nested values, reading each column in chunks of up to 4,096 rows, and writes it to the pasteboard as plain text and TSV. It is limited to 64 MiB and suggests File > Export… beyond that; a newer copy cancels an unfinished one. Export captures the displayed rows and visible columns, writes on its own thread with progress sampled into the status bar, and continues after the table changes.
+Copy goes through the export path: it exports the selected display rows and visible columns as TSV into memory, with nested values as display text, and writes the result to the pasteboard as plain text and TSV. It is limited to 64 MiB and suggests File > Export… beyond that; a newer copy cancels an unfinished one. Export captures the displayed rows and visible columns, writes on its own thread with progress sampled into the status bar, and continues after the table changes.
 
 ## App icon
 

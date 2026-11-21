@@ -241,9 +241,9 @@ final class TableModel {
                 let rows = try await session.apply(target, after: current)
                 try Task.checkCancellation()
                 self.show(rows)
-            } catch is CancellationError {
-                // Replaced by a newer draft, or the table closed.
             } catch {
+                // Replaced by a newer draft, or the table closed: report nothing, even a failure.
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
                 self.fail(error)
             }
         }
@@ -275,7 +275,7 @@ final class TableModel {
         submitted = nil
         isUpdating = false
         edit { $0.revert(to: displayed.query) }
-        find.stop()
+        find.invalidate()
         copying.cancel()
         export.stop()
     }

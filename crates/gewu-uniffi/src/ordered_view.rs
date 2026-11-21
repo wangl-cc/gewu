@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gewu_core::{self as core, ColumnFilter, ColumnId, ColumnSort, FileType};
 
-use crate::{ColumnText, FindSession, GewuError, GewuExport, GewuFilteredView};
+use crate::{ColumnText, GewuError, GewuExport, GewuFilteredView, GewuFind};
 
 /// The rows of a [`GewuFilteredView`] ordered by `sorts`. Immutable: reads,
 /// Find and exports capture exactly these rows.
@@ -39,6 +39,13 @@ impl GewuOrderedView {
         Arc::clone(&self.filtered)
     }
 
+    /// Whether `other` is this very view, such as when [`Self::apply`] reused
+    /// it. Each Swift wrapper is a separate reference, so Swift cannot tell
+    /// by itself.
+    pub fn is_same_view(&self, other: Arc<Self>) -> bool {
+        std::ptr::eq(self, Arc::as_ptr(&other))
+    }
+
     pub fn row_count(&self) -> u64 {
         self.inner.row_count()
     }
@@ -54,12 +61,8 @@ impl GewuOrderedView {
         Ok(self.inner.format_column(column, start, count)?.into())
     }
 
-    pub fn find(
-        &self,
-        query: String,
-        columns: Vec<ColumnId>,
-    ) -> Result<Arc<FindSession>, GewuError> {
-        Ok(Arc::new(FindSession {
+    pub fn find(&self, query: String, columns: Vec<ColumnId>) -> Result<Arc<GewuFind>, GewuError> {
+        Ok(Arc::new(GewuFind {
             inner: self.inner.find(&query, &columns)?,
         }))
     }

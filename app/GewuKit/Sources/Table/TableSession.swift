@@ -3,9 +3,10 @@ internal import GewuBindings
 
 /// One opened table: its data, and the workers that answer queries about it.
 ///
-/// A session runs all its work off the main actor and keeps queries in
-/// order. Each query result is an immutable ``DisplayRows``; the caller owns
-/// which result is current and discards results it no longer needs.
+/// A session runs its queries, analyses, text reads and Find each on a
+/// worker of its own, off the main actor. Each query result is an immutable
+/// ``DisplayRows``; the caller owns which result is current and discards
+/// results it no longer needs.
 public final class TableSession: Sendable {
     public let source: TableSource
     /// All rows in file order, the result of an empty ``TableQuery``.
@@ -36,22 +37,24 @@ public final class TableSession: Sendable {
     /// and empty sheets. Reads workbook metadata without decoding cells.
     public static func worksheetNames(_ url: URL) async throws -> [String] {
         let path = url.path
-        return try await SerialWorker(label: "sheets").perform { try GewuBindings.xlsxSheetNames(path: path) }
+        return try await SerialWorker.perform(alone: "sheets") { try GewuBindings.xlsxSheetNames(path: path) }
     }
 
-    /// The rows for `query`, reusing as much of `current` as possible: the
-    /// same rows when nothing changed, and `current.rowSet` with its
-    /// analyses when only the sort changed. Filters always apply to the
-    /// whole table, not to `current`.
+    /// The rows for `query`, reusing as much of `current` as the engine can:
+    /// `current` itself when nothing changed, and `current.rowSet` with its
+    /// analyses when only the sort changed. Filters always apply to the whole
+    /// table, not to `current`. The engine alone decides what is reused;
+    /// GewuKit keeps the matching Swift results.
     public func apply(_ query: TableQuery, after current: DisplayRows) async throws -> DisplayRows {
         precondition(current.rowSet.source === source, "rows belong to another table")
-        if query == current.query { return current }
         let source = source
         return try await source.workers.query.perform {
             let view = try current.view.apply(filters: query.filters.map(\.ffi), sorts: query.sorts.map(\.ffi))
+            if view.isSameView(other: current.view) { return current }
+            let filtered = view.filtered()
             let rowSet =
-                query.filters == current.rowSet.filters
-                ? current.rowSet : RowSet(source: source, view: view.filtered(), filters: query.filters)
+                filtered.isSameView(other: current.rowSet.view)
+                ? current.rowSet : RowSet(source: source, view: filtered, filters: query.filters)
             return DisplayRows(rowSet: rowSet, view: view, sorts: query.sorts)
         }
     }

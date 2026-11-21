@@ -25,33 +25,33 @@ import Testing
         #expect(text.cell(1) == "2")
     }
 
-    @Test func searchStepsAndHighlightsInDisplayOrder() async throws {
+    @Test func findStepsAndHighlightsInDisplayOrder() async throws {
         let file = try Fixture("value,other\nhit,12\nmiss,120\nhit,12\n")
         let session = try await file.open()
         let value = session.source.id("value")
         let other = session.source.id("other")
-        let search = try session.initialRows.search("12", in: [value, other])
+        let find = try session.initialRows.find("12", in: [value, other])
 
         // Numbers match whole values, so 120 is not a match for 12.
         let first = CellMatch(displayRow: 0, column: other)
         let last = CellMatch(displayRow: 2, column: other)
-        #expect(try await search.match(1, from: nil) == first)
-        #expect(try await search.match(-1, from: nil) == last)
-        #expect(try await search.match(1, from: last) == first, "Wraps at the end")
-        #expect(try await search.match(3, from: first) == last)
-        #expect(try await session.initialRows.search("absent", in: [value]).match(1, from: nil) == nil)
+        #expect(try await find.step(1, from: nil) == first)
+        #expect(try await find.step(-1, from: nil) == last)
+        #expect(try await find.step(1, from: last) == first, "Wraps at the end")
+        #expect(try await find.step(3, from: first) == last)
+        #expect(try await session.initialRows.find("absent", in: [value]).step(1, from: nil) == nil)
 
-        let flags = try await search.highlights([other, value], rows: 0..<64)
+        let flags = try await find.highlight([other, value], in: 0..<64)
         #expect(flags.rows == 0..<3)
         #expect((0..<3).map { flags.isMatch(row: $0, column: other) } == [true, false, true])
         #expect(!flags.isMatch(row: 0, column: value))
     }
 
-    @Test func invalidSearchesAreUserErrors() async throws {
+    @Test func emptyFindQueriesAreRejected() async throws {
         let file = try Fixture("value\nx\n")
         let session = try await file.open()
         #expect(throws: GewuKitError.self) {
-            try session.initialRows.search("", in: [session.source.id("value")])
+            try session.initialRows.find("", in: [session.source.id("value")])
         }
     }
 
@@ -96,16 +96,14 @@ import Testing
         defer { try? FileManager.default.removeItem(at: destination) }
 
         let job = try sorted.export([id], format: .csv)
-        async let samples = Array(collecting: job.progress(every: .milliseconds(5)))
-        try await job.write(to: destination)
-        #expect(await samples.last == ExportProgress(rowsWritten: 3, totalRows: 3))
+        let samples = ProgressLog()
+        try await job.write(to: destination, progressInterval: .milliseconds(5)) { samples.reports.append($0) }
+        #expect(await samples.reports.last == ExportProgress(rowsWritten: 3, totalRows: 3))
         #expect(try String(contentsOf: destination, encoding: .utf8) == "id\r\n3\r\n2\r\n1\r\n")
     }
 }
 
-extension Array {
-    fileprivate init<S: AsyncSequence>(collecting sequence: S) async rethrows where S.Element == Element {
-        self = []
-        for try await element in sequence { append(element) }
-    }
+@MainActor
+private final class ProgressLog: Sendable {
+    var reports: [ExportProgress] = []
 }

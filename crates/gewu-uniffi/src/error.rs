@@ -1,6 +1,8 @@
 //! Structured errors crossing the language boundary.
 
-use gewu_core::{self as core, ColumnId, FileType};
+use gewu_core::{
+    self as core, AnalysisOperation, ColumnId, FileType, IoOperation, ValueParseError,
+};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum GewuError {
@@ -45,7 +47,7 @@ pub enum GewuError {
     Internal { message: String },
 }
 
-#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+#[uniffi::remote(Enum)]
 pub enum IoOperation {
     Canonicalize,
     ReadMetadata,
@@ -97,7 +99,7 @@ pub enum FilterErrorKind {
     PatternCompilationFailed,
 }
 
-#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+#[uniffi::remote(Enum)]
 pub enum ValueParseError {
     InvalidSyntax,
     OutOfRange,
@@ -125,7 +127,7 @@ pub enum AnalysisErrorKind {
     },
 }
 
-#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+#[uniffi::remote(Enum)]
 pub enum AnalysisOperation {
     Statistics,
     Distribution,
@@ -166,7 +168,7 @@ impl From<core::Error> for GewuError {
         let message = error.to_string();
         match error {
             core::Error::Io(error) => Self::Io {
-                operation: error.operation.into(),
+                operation: error.operation,
                 message,
             },
             core::Error::File(kind) => file_error(kind, message),
@@ -234,7 +236,7 @@ fn file_error(kind: core::FileError, message: String) -> GewuError {
         }
         core::FileError::Io(error) => {
             return GewuError::Io {
-                operation: error.operation.into(),
+                operation: error.operation,
                 message,
             };
         }
@@ -251,7 +253,7 @@ fn filter_error(kind: core::FilterError, message: String) -> GewuError {
         } => FilterErrorKind::InvalidValue {
             value,
             expected_type: expected.to_string(),
-            reason: reason.into(),
+            reason,
         },
         core::FilterError::Bound(core::BoundError::InvalidValue {
             value,
@@ -260,7 +262,7 @@ fn filter_error(kind: core::FilterError, message: String) -> GewuError {
         }) => FilterErrorKind::InvalidValue {
             value,
             expected_type: expected.to_string(),
-            reason: reason.into(),
+            reason,
         },
         core::FilterError::ReversedRange { min, max } => {
             FilterErrorKind::ReversedRange { min, max }
@@ -279,6 +281,7 @@ fn filter_error(kind: core::FilterError, message: String) -> GewuError {
 
 fn analysis_error(kind: core::AnalysisError, message: String) -> GewuError {
     let kind = match kind {
+        core::AnalysisError::Filter(kind) => return filter_error(kind, message),
         core::AnalysisError::NoFiniteValues => AnalysisErrorKind::NoFiniteValues,
         core::AnalysisError::UnrepresentableDomain { data_type } => {
             AnalysisErrorKind::UnrepresentableDomain {
@@ -289,14 +292,14 @@ fn analysis_error(kind: core::AnalysisError, message: String) -> GewuError {
             operation,
             data_type,
         } => AnalysisErrorKind::ValueOutOfRange {
-            operation: operation.into(),
+            operation,
             data_type: data_type.to_string(),
         },
         core::AnalysisError::UnsupportedDataType {
             operation,
             data_type,
         } => AnalysisErrorKind::UnsupportedDataType {
-            operation: operation.into(),
+            operation,
             data_type: data_type.to_string(),
         },
         core::AnalysisError::InvalidBinCount { .. }
@@ -304,7 +307,6 @@ fn analysis_error(kind: core::AnalysisError, message: String) -> GewuError {
         | core::AnalysisError::UnsupportedOperation { .. }
         | core::AnalysisError::UnsupportedAxisScale { .. }
         | core::AnalysisError::Bound(_)
-        | core::AnalysisError::Filter(_)
         | core::AnalysisError::Column(_)
         | core::AnalysisError::Internal(_) => return GewuError::Internal { message },
     };
@@ -348,51 +350,12 @@ fn export_error(kind: core::ExportError, message: String) -> GewuError {
             message,
         },
         core::ExportError::Io(error) => GewuError::Io {
-            operation: error.operation.into(),
+            operation: error.operation,
             message,
         },
         core::ExportError::Cancelled => GewuError::Cancelled,
         core::ExportError::AlreadyStarted | core::ExportError::Internal(_) => {
             GewuError::Internal { message }
-        }
-    }
-}
-
-impl From<core::IoOperation> for IoOperation {
-    fn from(value: core::IoOperation) -> Self {
-        match value {
-            core::IoOperation::Canonicalize => Self::Canonicalize,
-            core::IoOperation::ReadMetadata => Self::ReadMetadata,
-            core::IoOperation::Open => Self::Open,
-            core::IoOperation::Read => Self::Read,
-            core::IoOperation::Seek => Self::Seek,
-            core::IoOperation::CreateTemporaryFile => Self::CreateTemporaryFile,
-            core::IoOperation::Sync => Self::Sync,
-            core::IoOperation::Commit => Self::Commit,
-        }
-    }
-}
-
-impl From<core::ValueParseError> for ValueParseError {
-    fn from(value: core::ValueParseError) -> Self {
-        match value {
-            core::ValueParseError::InvalidSyntax => Self::InvalidSyntax,
-            core::ValueParseError::OutOfRange => Self::OutOfRange,
-            core::ValueParseError::NaNNotAllowed => Self::NaNNotAllowed,
-        }
-    }
-}
-
-impl From<core::AnalysisOperation> for AnalysisOperation {
-    fn from(value: core::AnalysisOperation) -> Self {
-        match value {
-            core::AnalysisOperation::Statistics => Self::Statistics,
-            core::AnalysisOperation::Distribution => Self::Distribution,
-            core::AnalysisOperation::Values => Self::Values,
-            core::AnalysisOperation::Lengths => Self::Lengths,
-            core::AnalysisOperation::Structure => Self::Structure,
-            core::AnalysisOperation::Scatter => Self::Scatter,
-            core::AnalysisOperation::FilterDistribution => Self::FilterDistribution,
         }
     }
 }

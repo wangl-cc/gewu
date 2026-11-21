@@ -23,5 +23,5 @@ typedef struct {
 /// Source rows of a `GewuOrderedView`, in display order.
 GewuSourceRows gewu_ordered_view_source_rows(uint64_t view);
 
-/// Contents of an `ExportedBytes`.
+/// Contents of a `GewuExportedBytes`.
 GewuBytes gewu_exported_bytes(uint64_t bytes);

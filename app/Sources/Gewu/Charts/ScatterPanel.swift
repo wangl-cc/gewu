@@ -190,7 +190,7 @@ final class ScatterModel {
         let attempt: Int
     }
 
-    private(set) var result: ScatterSample?
+    private(set) var result: ScatterResult?
     private(set) var totalRows: UInt64 = 0
     private(set) var xDates: [Date]?
     private(set) var yDates: [Date]?
@@ -217,15 +217,15 @@ final class ScatterModel {
                     sample.points[index].xLabel = formatRowNumber(row, base: request.rowNumberBase)
                 }
             }
-            xDates = ScatterDates.make(points: sample.points, x: true, kind: sample.xAxis)
-            yDates = ScatterDates.make(points: sample.points, x: false, kind: sample.yAxis)
+            xDates = ScatterDates.make(points: sample.points, x: true, kind: sample.xAxisKind)
+            yDates = ScatterDates.make(points: sample.points, x: false, kind: sample.yAxisKind)
             xScale = request.xScale
             yScale = request.yScale
-            totalRows = request.rows.count
+            totalRows = UInt64(request.rows.count)
             result = sample
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
-            self.error = error.localizedDescription
+            self.error = ErrorPresentation(error).text
         }
     }
 }

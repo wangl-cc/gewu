@@ -148,9 +148,9 @@ public struct ScatterPoint: Hashable, Sendable {
 }
 
 /// A deterministic sample of plottable pairs, chosen by source row.
-public struct ScatterSample: Hashable, Sendable {
-    public var xAxis: ScatterAxisKind
-    public var yAxis: ScatterAxisKind
+public struct ScatterResult: Hashable, Sendable {
+    public var xAxisKind: ScatterAxisKind
+    public var yAxisKind: ScatterAxisKind
     /// Rows with finite values in both axis domains; more than `points.count` means sampled.
     public var eligibleRows: UInt64
     /// Finite pairs omitted because a logarithmic axis is zero or negative.
@@ -158,11 +158,11 @@ public struct ScatterSample: Hashable, Sendable {
     public var points: [ScatterPoint]
 
     public init(
-        xAxis: ScatterAxisKind, yAxis: ScatterAxisKind, eligibleRows: UInt64, nonPositiveRows: UInt64,
+        xAxisKind: ScatterAxisKind, yAxisKind: ScatterAxisKind, eligibleRows: UInt64, nonPositiveRows: UInt64,
         points: [ScatterPoint]
     ) {
-        self.xAxis = xAxis
-        self.yAxis = yAxis
+        self.xAxisKind = xAxisKind
+        self.yAxisKind = yAxisKind
         self.eligibleRows = eligibleRows
         self.nonPositiveRows = nonPositiveRows
         self.points = points
@@ -189,7 +189,7 @@ public struct ValueChoice: Hashable, Sendable {
 }
 
 /// The values a filter editor can offer for a column.
-public struct FilterOptions: Hashable, Sendable {
+public struct FilterChoices: Hashable, Sendable {
     /// Every value present, or `nil` when no complete bounded list exists.
     public var values: [ValueChoice]?
     public var nullCount: UInt64
@@ -294,7 +294,7 @@ extension LengthSummary {
     }
 }
 
-extension ScatterSample {
+extension ScatterResult {
     init(_ result: GewuBindings.ScatterResult) {
         func axis(_ kind: GewuBindings.ScatterAxisKind) -> ScatterAxisKind {
             switch kind {
@@ -304,7 +304,7 @@ extension ScatterSample {
             }
         }
         self.init(
-            xAxis: axis(result.xAxisKind), yAxis: axis(result.yAxisKind), eligibleRows: result.eligibleRows,
+            xAxisKind: axis(result.xAxisKind), yAxisKind: axis(result.yAxisKind), eligibleRows: result.eligibleRows,
             nonPositiveRows: result.nonPositiveRows,
             points: result.points.map {
                 ScatterPoint(sourceRow: $0.sourceRow, x: $0.x, y: $0.y, xLabel: $0.xLabel, yLabel: $0.yLabel)
@@ -312,7 +312,7 @@ extension ScatterSample {
     }
 }
 
-extension FilterOptions {
+extension FilterChoices {
     init(_ choices: GewuBindings.FilterChoices) {
         self.init(
             values: choices.values?.map { ValueChoice(label: $0.label, value: $0.value, count: $0.count) },

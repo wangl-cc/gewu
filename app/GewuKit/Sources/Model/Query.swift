@@ -7,12 +7,66 @@ public enum TextMatch: Hashable, Sendable, Codable {
 
 /// The condition one column's values must satisfy. Literals are sent to Core
 /// unchanged; Core parses them for the column's type.
+///
+/// Conditions compare their literals by UTF-8 bytes, as Core does, so two
+/// conditions are equal exactly when Core treats them alike. `String`
+/// equality would merge canonically equivalent spellings, such as a
+/// precomposed and a decomposed "é", which Core keeps apart.
 public enum FilterCondition: Hashable, Sendable, Codable {
     /// Inclusive bounds. Use ``RangeBound/value`` for exact endpoints, never display labels.
     case range(min: String?, max: String?)
     case text(text: String, mode: TextMatch, caseSensitive: Bool)
-    /// Exact values. Compare them by UTF-8 bytes, as Core does.
+    /// Exact values.
     case exact(values: [String], exclude: Bool)
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.range(let min, let max), .range(let otherMin, let otherMax)):
+            sameBytes(min, otherMin) && sameBytes(max, otherMax)
+        case (.text(let text, let mode, let caseSensitive), .text(let otherText, let otherMode, let otherCase)):
+            text.utf8.elementsEqual(otherText.utf8) && mode == otherMode && caseSensitive == otherCase
+        case (.exact(let values, let exclude), .exact(let otherValues, let otherExclude)):
+            exclude == otherExclude && values.count == otherValues.count
+                && zip(values, otherValues).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+        default: false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .range(let min, let max):
+            hasher.combine(0)
+            hashBytes(min, into: &hasher)
+            hashBytes(max, into: &hasher)
+        case .text(let text, let mode, let caseSensitive):
+            hasher.combine(1)
+            hashBytes(text, into: &hasher)
+            hasher.combine(mode)
+            hasher.combine(caseSensitive)
+        case .exact(let values, let exclude):
+            hasher.combine(2)
+            hasher.combine(exclude)
+            for value in values { hashBytes(value, into: &hasher) }
+        }
+    }
+}
+
+private func sameBytes(_ lhs: String?, _ rhs: String?) -> Bool {
+    switch (lhs, rhs) {
+    case (nil, nil): true
+    case (let lhs?, let rhs?): lhs.utf8.elementsEqual(rhs.utf8)
+    default: false
+    }
+}
+
+/// Hash `text` by its UTF-8 bytes, consistently with byte comparison.
+func hashBytes(_ text: String?, into hasher: inout Hasher) {
+    guard let text else {
+        hasher.combine(-1)
+        return
+    }
+    hasher.combine(text.utf8.count)
+    for byte in text.utf8 { hasher.combine(byte) }
 }
 
 /// Which rows of one column pass.
@@ -62,14 +116,17 @@ public struct ColumnSort: Hashable, Sendable, Codable {
 
 /// The rows a table shows: which rows pass and in what order. Column
 /// visibility is presentation only and is not part of a query.
-public struct TableQuery: Hashable, Sendable, Codable {
-    /// At most one filter per column. Order does not affect the result.
-    public var filters: [ColumnFilter]
+public struct TableQuery: Hashable, Sendable {
+    /// At most one filter per column, kept in column order whatever order
+    /// they were set in. Their order does not affect the rows, so keeping one
+    /// order makes queries with the same filters compare equal.
+    public private(set) var filters: [ColumnFilter]
     /// Sort keys by priority, at most one per column.
     public var sorts: [ColumnSort]
 
     public init(filters: [ColumnFilter] = [], sorts: [ColumnSort] = []) {
-        self.filters = filters
+        precondition(Set(filters.map(\.column)).count == filters.count, "at most one filter per column")
+        self.filters = filters.sorted { $0.column.raw < $1.column.raw }
         self.sorts = sorts
     }
 
@@ -79,6 +136,18 @@ public struct TableQuery: Hashable, Sendable, Codable {
 
     public func sort(for column: ColumnID) -> ColumnSort? {
         sorts.first { $0.column == column }
+    }
+
+    /// Set or, with `nil`, remove `column`'s filter.
+    public mutating func setFilter(_ filter: Filter?, for column: ColumnID) {
+        filters.removeAll { $0.column == column }
+        guard let filter else { return }
+        let index = filters.firstIndex { $0.column.raw > column.raw } ?? filters.endIndex
+        filters.insert(ColumnFilter(column: column, filter: filter), at: index)
+    }
+
+    public mutating func removeFilters(where shouldRemove: (ColumnFilter) -> Bool) {
+        filters.removeAll(where: shouldRemove)
     }
 }
 

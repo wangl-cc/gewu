@@ -9,9 +9,7 @@ public struct ExactValue: Hashable, Sendable {
 
     public static func == (lhs: Self, rhs: Self) -> Bool { lhs.text.utf8.elementsEqual(rhs.text.utf8) }
 
-    public func hash(into hasher: inout Hasher) {
-        for byte in text.utf8 { hasher.combine(byte) }
-    }
+    public func hash(into hasher: inout Hasher) { hashBytes(text, into: &hasher) }
 }
 
 extension ValueChoice {
@@ -29,7 +27,7 @@ public enum FilterMode: CaseIterable, Hashable, Sendable {
 
     /// The modes `capabilities` and `choices` allow. Value selection needs a
     /// complete list of values.
-    public static func available(capabilities: ColumnCapabilities, choices: FilterOptions?) -> [FilterMode] {
+    public static func available(capabilities: ColumnCapabilities, choices: FilterChoices?) -> [FilterMode] {
         allCases.filter {
             switch $0 {
             case .range: capabilities.range
@@ -43,7 +41,7 @@ public enum FilterMode: CaseIterable, Hashable, Sendable {
     /// offered, else value selection when the column has a complete list of
     /// values, else Range, then Text. `nil` while `choices` are needed to decide.
     public static func initial(
-        capabilities: ColumnCapabilities, current: Filter?, choices: FilterOptions? = nil
+        capabilities: ColumnCapabilities, current: Filter?, choices: FilterChoices? = nil
     ) -> FilterMode? {
         let selectable: Bool? = capabilities.exact ? choices.map { $0.values != nil } : false
         if let current {
@@ -186,12 +184,12 @@ public struct RangeDraft: Sendable {
     /// edge's label, such as when an applied range filter is reopened.
     public mutating func restoreLabels(from histogram: RangeHistogram?) {
         guard let histogram else { return }
-        if lowerTyped, let bound = histogram.ranges.compactMap(\.min).first(where: { $0.value == minimum }) {
+        if lowerTyped, let bound = histogram.ranges.compactMap(\.min).first(where: { $0.value.utf8.elementsEqual(minimum.utf8) }) {
             lowerBound = bound
             minimum = bound.label
             lowerTyped = false
         }
-        if upperTyped, let bound = histogram.ranges.compactMap(\.max).first(where: { $0.value == maximum }) {
+        if upperTyped, let bound = histogram.ranges.compactMap(\.max).first(where: { $0.value.utf8.elementsEqual(maximum.utf8) }) {
             upperBound = bound
             maximum = bound.label
             upperTyped = false

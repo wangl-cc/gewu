@@ -28,14 +28,15 @@ pub struct ColumnHighlight {
     pub matched: Vec<u8>,
 }
 
-/// An immutable view/query/column scope.
+/// Cell Find over one ordered view: a compiled query and an ordered column
+/// scope, bound to the rows the view had when it was created.
 #[derive(uniffi::Object)]
-pub struct FindSession {
+pub struct GewuFind {
     pub(crate) inner: core::Find,
 }
 
 #[uniffi::export]
-impl FindSession {
+impl GewuFind {
     /// The match `by` matches after `from` (before it when negative), in
     /// display order, wrapping around at either end. `from == None` starts
     /// outside the cells, so stepping by 1 finds the first match and by -1
@@ -58,7 +59,7 @@ impl FindSession {
     }
 }
 
-impl FindSession {
+impl GewuFind {
     fn step_inner(
         &self,
         from: Option<CellMatch>,
@@ -154,7 +155,7 @@ impl FindSession {
 mod tests {
     use crate::GewuDataset;
 
-    fn session(csv: &str) -> (std::path::PathBuf, std::sync::Arc<super::FindSession>) {
+    fn session(csv: &str) -> (std::path::PathBuf, std::sync::Arc<super::GewuFind>) {
         let source = std::env::temp_dir().join(format!(
             "gewu-uniffi-find-{}-{}.csv",
             std::process::id(),

@@ -67,7 +67,7 @@ final class InspectorModel {
                 try await fetch(section, request)
             } catch {
                 guard !Task.isCancelled, !(error is CancellationError) else { return }
-                errors[section] = error.localizedDescription
+                errors[section] = ErrorPresentation(error).text
             }
         }
     }

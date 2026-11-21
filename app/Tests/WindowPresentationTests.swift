@@ -41,7 +41,7 @@ struct WindowPresentationTests {
         let expected: [FilterMode] = [.exact, .exact, .range, .text]
         for (index, column) in columns.enumerated() {
             #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
-            let choices = try await view.filterOptions(for: column.id)
+            let choices = try await view.filterChoices(for: column.id)
             #expect(
                 FilterMode.initial(capabilities: column.capabilities, current: nil, choices: choices)
                     == expected[index])
@@ -61,9 +61,9 @@ struct WindowPresentationTests {
         // Value selection waits for choices and needs a complete list of values.
         let selected: Filter = .condition(.exact(values: ["group1"], exclude: false), includeNulls: true)
         #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
-        let labels = try await view.filterOptions(for: columns[1].id)
+        let labels = try await view.filterChoices(for: columns[1].id)
         #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)
-        let unlisted = try await view.filterOptions(for: columns[3].id)
+        let unlisted = try await view.filterChoices(for: columns[3].id)
         #expect(unlisted.values == nil)
         #expect(
             FilterMode.initial(capabilities: columns[3].capabilities, current: selected, choices: unlisted) == .text)

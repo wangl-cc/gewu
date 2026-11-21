@@ -21,7 +21,7 @@ import Testing
         #expect(try await rows.lengths(city, bins: 2).max == 2)
     }
 
-    @Test func filterOptionsIgnoreTheEditedColumnsOwnFilter() async throws {
+    @Test func filterChoicesIgnoreTheEditedColumnsOwnFilter() async throws {
         let file = try Fixture("label,id\ncat,1\ndog,2\n")
         let session = try await file.open()
         let label = session.source.id("label")
@@ -30,8 +30,8 @@ import Testing
             TableQuery(filters: [ColumnFilter(column: label, filter: exact("dog"))]), after: session.initialRows
         ).rowSet
 
-        #expect(try await rows.filterOptions(for: label).values?.map(\.value) == ["cat", "dog"])
-        #expect(try await rows.filterOptions(for: id).values?.map(\.value) == ["2"])
+        #expect(try await rows.filterChoices(for: label).values?.map(\.value) == ["cat", "dog"])
+        #expect(try await rows.filterChoices(for: id).values?.map(\.value) == ["2"])
         let range = try #require(try await rows.filterDistribution(id, bins: 4, scale: .linear))
         #expect(range.ranges.count == range.histogram.counts.count)
     }
@@ -41,7 +41,7 @@ import Testing
         let session = try await file.open()
         let sample = try await session.initialRows.rowSet.scatter(
             x: session.source.id("day"), y: session.source.id("n"), limit: 16, xScale: .linear, yScale: .linear)
-        #expect(sample.xAxis == .date && sample.yAxis == .number)
+        #expect(sample.xAxisKind == .date && sample.yAxisKind == .number)
         let calendar = Calendar(identifier: .gregorian)
         let day = try #require(
             calendar.date(from: DateComponents(timeZone: .gmt, year: 2024, month: 1, day: 2)))

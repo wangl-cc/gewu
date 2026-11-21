@@ -67,6 +67,7 @@ public struct RowNumbers: @unchecked Sendable, RandomAccessCollection {
             owner = view
             rows = UnsafeBufferPointer(start: start, count: lent.count)
         } else {
+            // File order needs no mapping, so there is nothing to keep alive.
             owner = nil
             rows = nil
         }

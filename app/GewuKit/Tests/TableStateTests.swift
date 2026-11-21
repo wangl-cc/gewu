@@ -27,7 +27,7 @@ import Testing
         #expect(state.visibleColumns == [c, b, a])
     }
 
-    @Test func filtersKeepSchemaOrder() async throws {
+    @Test func filtersKeepColumnOrder() async throws {
         var (state, a, _, c) = try await state()
         let x = Filter.condition(.exact(values: ["x"], exclude: false), includeNulls: false)
         state.setFilter(x, for: c)

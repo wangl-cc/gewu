@@ -18,9 +18,9 @@ import Testing
         await #expect {
             try await TableSession.open(url)
         } throws: { error in
-            guard let error = error as? GewuKitError, case .fileAccess(.resolvePath) = error.kind else { return false }
+            guard let error = error as? GewuKitError, case .io(.canonicalize) = error.kind else { return false }
             // The file system's own message is the only account of what happened.
-            return error.failureReason == error.diagnostic && error.diagnostic.contains(url.lastPathComponent)
+            return error.diagnostic.contains(url.lastPathComponent)
         }
     }
 
@@ -45,6 +45,19 @@ import Testing
         #expect(filtered.query.filters.count == 1)
     }
 
+    @Test func canonicallyEquivalentValuesAreDifferentQueries() async throws {
+        let file = try Fixture("name\n\u{E9}\ne\u{301}\n")
+        let session = try await file.open()
+        let name = session.source.id("name")
+        let composed = try await session.apply(
+            TableQuery(filters: [ColumnFilter(column: name, filter: exact("\u{E9}"))]), after: session.initialRows)
+        #expect(Array(composed.rowNumbers(0..<2)) == [0])
+        let decomposed = try await session.apply(
+            TableQuery(filters: [ColumnFilter(column: name, filter: exact("e\u{301}"))]), after: composed)
+        #expect(decomposed.rowSet !== composed.rowSet)
+        #expect(Array(decomposed.rowNumbers(0..<2)) == [1], "The engine keeps the spellings apart, and so does the query")
+    }
+
     @Test func invalidFilterValuesAreUserErrors() async throws {
         let file = try Fixture("score\n1\n")
         let session = try await file.open()
@@ -57,9 +70,8 @@ import Testing
             try await session.apply(query, after: session.initialRows)
         } throws: { error in
             guard let error = error as? GewuKitError else { return false }
-            return error.kind == .filter(.invalidValue("not a number", expectedType: "Int64", reason: .invalidSyntax))
-                && error.localizedDescription == "“not a number” is not a valid Int64 value."
-                && error.failureReason == nil
+            return error.kind
+                == .filter(.invalidValue(value: "not a number", expectedType: "Int64", reason: .invalidSyntax))
         }
     }
 

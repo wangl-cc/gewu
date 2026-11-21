@@ -22,7 +22,7 @@ struct ColumnFilterView: View {
     @State private var draft: FilterDraft
     /// The rows `choices` and `distribution` describe.
     @State private var describedRows: RowSet?
-    @State private var choices: FilterOptions?
+    @State private var choices: FilterChoices?
     @State private var distribution: RangeHistogram?
     @State private var error: String?
     // The fixed-width filter plot needs a useful preview, not a bin-count editor.
@@ -139,7 +139,7 @@ struct ColumnFilterView: View {
         do {
             // Choices decide whether value selection is offered and supply the null count.
             if info.capabilities.exact && choices == nil {
-                let result = try await rows.filterOptions(for: info.id)
+                let result = try await rows.filterChoices(for: info.id)
                 try Task.checkCancellation()
                 choices = result
                 if mode == nil {
@@ -155,7 +155,7 @@ struct ColumnFilterView: View {
             }
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
-            self.error = error.localizedDescription
+            self.error = ErrorPresentation(error).text
         }
         loading = false
     }

@@ -7,7 +7,7 @@ import Observation
 ///
 /// Only the current match and a bounded set of highlight blocks live in
 /// Swift. Every piece of work is a single task that is cancelled when its
-/// search is replaced.
+/// Find is replaced, and a replaced task changes no state.
 @MainActor
 @Observable
 final class FindModel {
@@ -30,8 +30,8 @@ final class FindModel {
     private(set) var hasMatches: Bool?
     /// Match flags of the blocks requested for display.
     private(set) var highlights = HighlightBlocks()
-    /// The search behind the current state; `nil` without a query or while rows are updating.
-    private(set) var search: CellSearch?
+    /// The Find behind the current state; `nil` without a query or while rows are updating.
+    private(set) var cellFind: CellFind?
 
     @ObservationIgnored var onNavigate: ((CellMatch) -> Void)?
     @ObservationIgnored private let alerts: Alerts
@@ -42,7 +42,7 @@ final class FindModel {
     /// The latest on-screen demand. A read in flight is never cancelled for a
     /// newer demand: its blocks stay useful, and the next read follows the latest one.
     @ObservationIgnored private var demand: (rows: Range<Int>, columns: [ColumnID])?
-    /// Blocks whose read failed for this search; they are not retried.
+    /// Blocks whose read failed for this Find; they are not retried.
     @ObservationIgnored private var failedBlocks: Set<HighlightBlocks.Key> = []
     /// Net steps the user asked for and no step has taken yet; positive is
     /// forward. Presses during a step are taken together by the next one, so
@@ -55,13 +55,13 @@ final class FindModel {
 
     var activeQuery: String? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return search == nil || trimmed.isEmpty ? nil : trimmed
+        return cellFind == nil || trimmed.isEmpty ? nil : trimmed
     }
 
-    var canNavigate: Bool { search != nil && hasMatches != false }
+    var canNavigate: Bool { cellFind != nil && hasMatches != false }
 
     var status: Status? {
-        guard search != nil else { return nil }
+        guard cellFind != nil else { return nil }
         if hasMatches == false { return .noMatches }
         if let currentMatch { return .match(displayRow: currentMatch.displayRow) }
         return isFinding ? .finding : .ready
@@ -69,7 +69,7 @@ final class FindModel {
 
     func isMatch(row: Int, column: ColumnID) -> Bool { highlights.isMatch(row: row, column: column) }
 
-    /// Search `rows` in `columns`. With `keepingMatch`, the rows and query are
+    /// Find in `rows`, over `columns`. With `keepingMatch`, the rows and query are
     /// unchanged and only the column order moved, so the current match stays.
     func update(rows: DisplayRows, columns: [ColumnID], keepingMatch: Bool = false) {
         let match = keepingMatch && rows === self.rows ? currentMatch : nil
@@ -84,17 +84,15 @@ final class FindModel {
         reset()
     }
 
-    func stop() { invalidate() }
-
     func next(backwards: Bool = false) {
-        guard let search else { return }
+        guard let find = cellFind else { return }
         pendingSteps += backwards ? -1 : 1
-        step(search, debounce: false)
+        step(find, debounce: false)
     }
 
     /// Fetch flags for the on-screen rows of the given columns, reading only blocks not loaded yet.
     func requestHighlights(rows: Range<Int>, columns: [ColumnID]) {
-        guard search != nil, !rows.isEmpty, rows.lowerBound >= 0 else { return }
+        guard cellFind != nil, !rows.isEmpty, rows.lowerBound >= 0 else { return }
         let scope = Set(self.columns)
         demand = (rows, columns.filter(scope.contains))
         loadHighlights()
@@ -107,7 +105,7 @@ final class FindModel {
         highlighting?.cancel()
         navigation = nil
         highlighting = nil
-        if search != nil { search = nil }
+        if cellFind != nil { cellFind = nil }
         if currentMatch != nil { currentMatch = nil }
         if isFinding { isFinding = false }
         if hasMatches != nil { hasMatches = nil }
@@ -121,21 +119,21 @@ final class FindModel {
         reset()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let rows, !trimmed.isEmpty else { return }
-        let search: CellSearch
+        let find: CellFind
         do {
-            search = try rows.search(trimmed, in: columns)
+            find = try rows.find(trimmed, in: columns)
         } catch {
             alerts.report(error, title: "Could Not Find")
             return
         }
-        self.search = search
+        cellFind = find
         if let match {
             currentMatch = match
             hasMatches = true
         } else {
             isFinding = true
             pendingSteps = 1
-            step(search, debounce: debounce)
+            step(find, debounce: debounce)
         }
     }
 
@@ -143,7 +141,7 @@ final class FindModel {
 
     /// Take every pending step in one scan from the current match, wrapping
     /// around at either end. Steps asked for meanwhile follow when it ends.
-    private func step(_ search: CellSearch, debounce: Bool) {
+    private func step(_ find: CellFind, debounce: Bool) {
         guard pendingSteps != 0, navigation == nil else { return }
         isFinding = true
         let steps = pendingSteps
@@ -152,7 +150,7 @@ final class FindModel {
         navigation = Task {
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(150)) }
-                let match = try await search.match(steps, from: cursor)
+                let match = try await find.step(steps, from: cursor)
                 try Task.checkCancellation()
                 navigation = nil
                 isFinding = false
@@ -165,9 +163,10 @@ final class FindModel {
                 currentMatch = match
                 hasMatches = true
                 onNavigate?(match)
-                step(search, debounce: false)
-            } catch is CancellationError {
+                step(find, debounce: false)
             } catch {
+                // A replaced Find reports nothing, even if it failed.
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
                 navigation = nil
                 isFinding = false
                 alerts.report(error, title: "Could Not Find")
@@ -198,18 +197,18 @@ final class FindModel {
     }
 
     private func loadHighlights() {
-        guard highlighting == nil, let search, let read = plannedRead() else { return }
+        guard highlighting == nil, let find = cellFind, let read = plannedRead() else { return }
         let size = HighlightBlocks.rowsPerBlock
         highlighting = Task {
             do {
                 let rows = (read.blocks.lowerBound * size)..<((read.blocks.upperBound + 1) * size)
-                let flags = try await search.highlights(read.columns, rows: rows)
+                let flags = try await find.highlight(read.columns, in: rows)
                 try Task.checkCancellation()
                 highlights.store(flags, blocks: read.blocks, columns: read.columns)
                 highlighting = nil
                 loadHighlights()
-            } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
                 highlighting = nil
                 for block in read.blocks {
                     for column in read.columns { failedBlocks.insert(.init(block: block, column: column)) }
@@ -249,7 +248,7 @@ struct HighlightBlocks: Equatable {
 
     /// Split a result into blocks. Blocks past the last row are stored empty so
     /// they are not requested again.
-    mutating func store(_ flags: SearchHighlights, blocks range: ClosedRange<Int>, columns: [ColumnID]) {
+    mutating func store(_ flags: FindHighlight, blocks range: ClosedRange<Int>, columns: [ColumnID]) {
         let bytesPerBlock = Self.rowsPerBlock / 8
         for column in columns {
             let bits = flags.matches[column] ?? []

@@ -3,13 +3,13 @@ internal import GewuBindings
 
 /// The rows of a ``RowSet`` in display order: what a table shows.
 ///
-/// Immutable. Text, search and export capture these exact rows, so they stay
+/// Immutable. Text, Find and export capture these exact rows, so they stay
 /// consistent while newer queries replace the table's current rows.
 public final class DisplayRows: Sendable, Hashable, Identifiable {
     public let rowSet: RowSet
     public let sorts: [ColumnSort]
-    /// Number of display rows, equal to `rowSet.count`.
-    public let count: Int
+    /// Number of display rows: the rows of `rowSet`, in display order.
+    public var count: Int { rowSet.count }
     /// The zero-based source row of every display row, read without calling into Rust.
     public let sourceRows: RowNumbers
     let view: GewuBindings.GewuOrderedView
@@ -18,7 +18,6 @@ public final class DisplayRows: Sendable, Hashable, Identifiable {
         self.rowSet = rowSet
         self.view = view
         self.sorts = sorts
-        count = Int(clamping: view.rowCount())
         sourceRows = RowNumbers(view)
     }
 
@@ -55,11 +54,11 @@ public final class DisplayRows: Sendable, Hashable, Identifiable {
         sourceRows[rows.clamped(to: 0..<count)]
     }
 
-    /// Prepare a search for `query` in `columns`, in that order. Compiling the
-    /// query is immediate; navigation and highlights scan on demand.
-    public func search(_ query: String, in columns: [ColumnID]) throws -> CellSearch {
-        let session = try translatingErrors { try view.find(query: query, columns: columns.map(\.ffi)) }
-        return CellSearch(session: session, rows: self, columns: columns)
+    /// Prepare Find for `query` in `columns`, in that order. Compiling the
+    /// query is immediate; stepping and highlights scan on demand.
+    public func find(_ query: String, in columns: [ColumnID]) throws -> CellFind {
+        let find = try translatingErrors { try view.find(query: query, columns: columns.map(\.ffi)) }
+        return CellFind(find: find, rows: self, columns: columns)
     }
 
     /// A single-use export of `columns`, in that order, over these rows.

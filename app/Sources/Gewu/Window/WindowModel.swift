@@ -142,7 +142,7 @@ final class WindowModel {
                 guard !Task.isCancelled, !(error is CancellationError) else { return }
                 isOpening = false
                 pendingSheet = nil
-                openError = error.localizedDescription
+                openError = ErrorPresentation(error).text
                 alerts.report(error, title: "Could Not Open Table")
             }
         }

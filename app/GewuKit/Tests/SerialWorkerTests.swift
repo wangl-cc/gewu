@@ -26,6 +26,6 @@ import Testing
         #expect(GewuBindings.GewuError.Cancelled.translated is CancellationError)
         #expect(
             GewuBindings.GewuError.Internal(message: "m").translated as? GewuKitError
-                == GewuKitError(.internalFailure, diagnostic: "m"))
+                == GewuKitError(.internal, diagnostic: "m"))
     }
 }
