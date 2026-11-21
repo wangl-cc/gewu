@@ -158,6 +158,18 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Gewu
         CODE_SIGN_IDENTITY: '-'
+  GewuScreenshotTests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [app/ScreenshotTests]
+    dependencies:
+      - target: Gewu
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.screenshottests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Gewu
+        CODE_SIGN_IDENTITY: '-'
 schemes:
   GewuKit:
     build:
@@ -181,6 +193,16 @@ schemes:
           parallelizable: false
         - name: GewuUITests
           parallelizable: false
+
+  GewuScreenshots:
+    build:
+      targets:
+        Gewu: all
+    test:
+      config: Performance
+      debugEnabled: false
+      targets:
+        - name: GewuScreenshotTests
 
   Gewu:
     build:
