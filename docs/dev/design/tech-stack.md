@@ -46,7 +46,7 @@ Typical use shapes the requirements. A user opens a 2-million-row Parquet file, 
 ## When to reconsider
 
 - **Larger-than-memory files** become a goal. Revisit DataFusion for out-of-core queries; this also reopens the [in-memory note](in-memory-without-cancellation.md).
-- **gpui, or another Rust UI framework, becomes stable** and offers a virtualized table with native accessibility. A single language would remove the boundary entirely.
+- **gpui, or another Rust UI framework, becomes stable and well documented**, and a trial shows it can handle a virtualized table of millions of rows. A single language would remove the boundary entirely.
 - **A second consumer** appears (for example MCP or RPC) and needs a query language. An embedded SQL engine might then pay for itself.
 - **UniFFI's per-call costs** become a measured bottleneck on the control plane, not just on bulk data, or the project stops being maintained.
 - **SwiftUI's `Table`** gains real virtualization for millions of rows.
