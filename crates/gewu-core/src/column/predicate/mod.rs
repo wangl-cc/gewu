@@ -49,10 +49,18 @@ pub(crate) fn compile_filter<'a>(
     filter: &Filter,
 ) -> Result<Selector<'a>> {
     use crate::FilterCondition;
+    let (condition, include_nulls) = match filter {
+        Filter::OnlyNulls => return Ok(null_selector(&column.array, true)),
+        Filter::NotNull => return Ok(null_selector(&column.array, false)),
+        Filter::Condition {
+            condition,
+            include_nulls,
+        } => (condition, *include_nulls),
+    };
     // Conditions that depend only on the value are evaluated once per distinct
     // dictionary value, then rows are matched by code.
     let data_type = column.array.data_type();
-    let per_value = match &filter.condition {
+    let per_value = match condition {
         FilterCondition::Exact { values, exclude }
             if !values.is_empty() && supports_equals(data_type) =>
         {
@@ -63,7 +71,7 @@ pub(crate) fn compile_filter<'a>(
             Some((condition, *exclude))
         }
         FilterCondition::Text { .. } if supports_text_match(data_type) => {
-            Some((filter.condition.clone(), false))
+            Some((condition.clone(), false))
         }
         _ => None,
     };
@@ -71,13 +79,12 @@ pub(crate) fn compile_filter<'a>(
         if let Some(dictionary) = column.dictionary()? {
             let values = dictionary.values();
             let matched = compile_condition(values, &condition)?.select(0..values.len());
-            return Ok(dictionary.matching_codes(&matched, exclude, filter.include_nulls));
+            return Ok(dictionary.matching_codes(&matched, exclude, include_nulls));
         }
     }
     let array = &column.array;
-    let condition = compile_condition(array, &filter.condition)?;
+    let condition = compile_condition(array, condition)?;
     let nulls = array.logical_nulls();
-    let include_nulls = filter.include_nulls;
     Ok(Selector::new(Box::new(move |rows| {
         with_nulls(
             condition.select(rows.clone()),
@@ -86,6 +93,19 @@ pub(crate) fn compile_filter<'a>(
             include_nulls,
         )
     })))
+}
+
+/// Rows whose value is null, or with `nulls == false`, not null.
+fn null_selector(array: &ArrayRef, nulls: bool) -> Selector<'static> {
+    let mask = array.logical_nulls();
+    Selector::new(Box::new(move |rows| {
+        let bits = if nulls {
+            arrow::buffer::BooleanBuffer::new_unset(rows.len())
+        } else {
+            arrow::buffer::BooleanBuffer::new_set(rows.len())
+        };
+        with_nulls(bits, mask.as_ref(), &rows, nulls)
+    }))
 }
 
 /// Raw value matches of `condition`; null rows are unselected.

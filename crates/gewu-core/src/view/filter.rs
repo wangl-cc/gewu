@@ -1,5 +1,7 @@
 //! Filter editor candidates and distributions over visible rows.
 
+use std::sync::Arc;
+
 use arrow::buffer::BooleanBuffer;
 
 use super::FilteredView;
@@ -16,7 +18,25 @@ struct Tally {
 }
 
 impl FilteredView {
-    pub fn filter_choices(&self, column: ColumnId) -> Result<FilterChoices> {
+    /// The values an editor for `column`'s filter can offer: those in rows
+    /// passing every filter except `column`'s own, so its alternatives stay
+    /// visible. See [`Self::facet`].
+    pub fn filter_choices(self: &Arc<Self>, column: ColumnId) -> Result<FilterChoices> {
+        self.facet(column)?.choices(column)
+    }
+
+    /// A range editor's histogram for `column`, over the same rows as
+    /// [`Self::filter_choices`].
+    pub fn filter_distribution(
+        self: &Arc<Self>,
+        column: ColumnId,
+        bins: u32,
+        scale: crate::AxisScale,
+    ) -> Result<Option<RangeHistogram>> {
+        self.facet(column)?.range_histogram(column, bins, scale)
+    }
+
+    fn choices(&self, column: ColumnId) -> Result<FilterChoices> {
         let view = self.col(column)?;
         if predicate::supports_equals(view.data_type()) {
             if let Some(dictionary) = view.column().dictionary()? {
@@ -29,7 +49,7 @@ impl FilteredView {
         })
     }
 
-    pub fn filter_distribution(
+    fn range_histogram(
         &self,
         column: ColumnId,
         bins: u32,

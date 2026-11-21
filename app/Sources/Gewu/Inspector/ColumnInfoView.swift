@@ -1,20 +1,20 @@
+import GewuKit
 import SwiftUI
 
 struct InspectorSidebar: View {
-    @Bindable var model: DocumentModel
+    @Bindable var window: WindowModel
+    let model: TableModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            InspectorPageControl(selection: $model.inspectorPage)
+            InspectorPageControl(selection: $window.inspectorPage)
                 .frame(width: 180)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16).padding(.vertical, 10)
-            if model.inspectorPage == .chart {
-                ScatterPanel(model: model)
-            } else if let column = model.inspectedColumn, model.columnInfo[column] != nil,
-                model.visibleColumns.contains(column)
-            {
-                ColumnAnalysisView(model: model, column: column)
+            if window.inspectorPage == .chart {
+                ScatterPanel(model: model, settings: window.inspectorSettings)
+            } else if let column = model.inspectedColumn, model.visibleColumns.contains(column) {
+                ColumnAnalysisView(model: model, settings: window.inspectorSettings, column: column)
             } else {
                 ContentUnavailableView("No Columns", systemImage: "tablecells")
             }
@@ -50,6 +50,7 @@ private struct InspectorPageControl: NSViewRepresentable {
         CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
     }
 
+    @MainActor
     final class Coordinator: NSObject {
         var selection: Binding<InspectorPage>
         init(selection: Binding<InspectorPage>) { self.selection = selection }
@@ -63,52 +64,38 @@ private struct InspectorPageControl: NSViewRepresentable {
 
 /// Only visible, expanded sections request work from Core.
 struct ColumnAnalysisView: View {
-    @Bindable var model: DocumentModel
-    let column: ColumnId
+    let model: TableModel
+    @Bindable var settings: InspectorSettings
+    let column: ColumnID
     @State private var analysis = InspectorModel()
-    @ObservedObject private var settings: InspectorSettings
-    @State private var retry = 0
-    @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
+    @State private var attempt = 0
+    @AppStorage(Preferences.statisticsSignificantDigits) private var significantDigits
 
-    init(model: DocumentModel, column: ColumnId) {
-        self.model = model
-        self.column = column
-        _settings = ObservedObject(wrappedValue: model.inspectorSettings)
-    }
+    private var info: ColumnInfo? { model.column(column) }
 
-    private var info: ColumnInfo? { model.columnInfo[column] }
-
-    private var expanded: Int {
-        settings.expanded(distribution: info?.analysis.distribution ?? false)
+    private var expanded: Set<InspectorSection> {
+        settings.expandedSections(defaultingToDistribution: info?.analyses.distribution ?? false)
     }
 
     private var histogramScale: AxisScale {
         settings.binningScale(logarithmic: info?.capabilities.logarithmic ?? false)
     }
 
-    private struct Request: Equatable {
-        let filtered: ObjectIdentifier
-        let column: ColumnId
-        let expanded: Int
-        let retry: Int
-        let histogramBins: UInt32
-        let histogramScale: AxisScale
+    private var request: InspectorModel.Request {
+        InspectorModel.Request(
+            rows: model.displayed.rowSet, column: column, expanded: expanded, bins: settings.histogramBins,
+            scale: histogramScale, attempt: attempt)
     }
 
-    private var request: Request {
-        Request(
-            filtered: ObjectIdentifier(model.filtered),
-            column: column, expanded: expanded, retry: retry, histogramBins: settings.histogramBins,
-            histogramScale: histogramScale)
-    }
+    private var rowCount: UInt64 { UInt64(analysis.rows?.count ?? 0) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 InspectorColumnPicker(
                     label: "Analyzed column",
-                    columns: model.visibleColumns.compactMap { id in model.columnInfo[id].map { (id, $0.name) } },
-                    selection: $model.inspectedColumn
+                    columns: model.visibleColumns.compactMap { id in model.column(id).map { (id, $0.name) } },
+                    selection: Binding(get: { model.inspectedColumn }, set: { $0.map(model.inspect) })
                 )
                 Text(info?.displayType ?? "")
                     .font(.caption).foregroundStyle(.secondary)
@@ -118,14 +105,13 @@ struct ColumnAnalysisView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if analysis.matches(filtered: model.filtered, column: column) {
+                    if analysis.shows(model.displayed.rowSet, column: column) {
                         VStack(alignment: .leading, spacing: 6) {
-                            detail("Rows", formatCount(analysis.rowCount))
+                            detail("Rows", formatCount(rowCount))
                             if let count = analysis.nullCount {
-                                detail("Missing", countWithPercent(count, total: analysis.rowCount))
+                                detail("Missing", countWithPercent(count, total: rowCount))
                             }
                         }
-                        if let error = analysis.error { failure(error) }
                         if let error = analysis.errors[.overview] { failure(error) }
                         ForEach(analysis.sections.filter { $0 != .overview }, id: \.self) { section in
                             DisclosureGroup(isExpanded: expansion(section)) {
@@ -150,18 +136,12 @@ struct ColumnAnalysisView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task(id: request) {
-            guard let info else { return }
-            await analysis.load(
-                column: info, dataset: model.dataset, viewer: model.viewer,
-                expanded: expanded, bins: settings.histogramBins, scale: histogramScale)
-        }
-        .onDisappear { analysis.cancel() }
+        .task(id: request) { await analysis.load(request) }
     }
 
     private func expansion(_ section: InspectorSection) -> Binding<Bool> {
         Binding(
-            get: { expanded & section.mask != 0 },
+            get: { expanded.contains(section) },
             set: { open in
                 settings.setExpanded(section, open)
             })
@@ -170,7 +150,7 @@ struct ColumnAnalysisView: View {
     private func failure(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-            Button("Retry") { retry += 1 }.controlSize(.small)
+            Button("Retry") { attempt += 1 }.controlSize(.small)
         }
     }
 
@@ -212,7 +192,7 @@ struct ColumnAnalysisView: View {
                             "Candidate selection may be approximate; counts use all rows in the current results. Missing values are excluded."
                         )
                     ForEach(Array(summary.values.enumerated()), id: \.offset) { _, item in
-                        FrequencyRow(label: item.label, count: item.count, total: analysis.rowCount)
+                        FrequencyRow(label: item.label, count: item.count, total: rowCount)
                     }
                 }
             }

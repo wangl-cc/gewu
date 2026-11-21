@@ -4,7 +4,7 @@ Explicit column filters narrow the displayed rows. Toolbar Find is separate: it 
 
 ## Find
 
-Find searches all visible (`visibleColumns`) columns in the current ordered row set, including columns outside the rendered viewport. Matches follow display row and visible-column order. Next and Previous wrap, and navigation reveals the row and column. Highlights cover only the rows and columns on screen. Find caches them per column in 64-row blocks and reads missing blocks in runs of up to 256 rows, so each column's predicate compiles once per run; scrolling never cancels a read in flight, and the next read follows the latest viewport. Navigation pages continue through the complete view without a hit-count ceiling. Find does not report an exact total unless one is computed separately.
+Find searches all visible (`visibleColumns`) columns in the current ordered row set, including columns outside the rendered viewport. Matches follow display row and visible-column order. Next and Previous wrap, and navigation reveals the row and column. Highlights cover only the rows and columns on screen. Find caches them per column in 64-row blocks and reads the missing blocks of the viewport in one request; scrolling never cancels a read in flight, and the next read follows the latest viewport. Each navigation step scans only as far as the next match, through the complete view without a hit-count ceiling, and presses made during a scan are taken together by the next one. Find does not report an exact total unless one is computed separately.
 
 Changing Find does not alter filters, sorts, row contents, export contents or inspector statistics. The UI replaces and stops its Find session when sorting, filtering, showing/hiding columns or closing the document (reordering visible columns updates Find while preserving the current match when possible). Existing backend `Find` objects remain bound to their captured `OrderedView` data until released.
 
@@ -22,7 +22,7 @@ A normal header click clears other keys and cycles unsorted → ascending → de
 
 - Each column has at most one filter. Filters on different columns combine with **AND**.
 - Exact selection matches **any selected value**, or excludes those values when `exclude` is true.
-- `include_nulls` applies independently to every filter kind. It does not bypass another column's filter.
+- `include_nulls` applies independently to every condition kind. It does not bypass another column's filter.
 - Invalid explicit filter inputs are errors; a failed query leaves the applied view intact.
 
 ## Filter operations
@@ -33,7 +33,7 @@ A normal header click clears other keys and cycles unsorted → ascending → de
 | `Text { text, mode, case_sensitive }` | Match text values, with optional case sensitivity; dictionary-encoded text is supported. `Contains` matches a substring; `Equals` matches the whole value, so `A1` does not match `A10`. |
 | `Exact { values, exclude }` | Parse non-null text values using the source column's type; select or exclude the resulting values. |
 
-`Filter` wraps one condition and `include_nulls`. Null never occupies a `values` entry. Empty exact inclusion matches no non-null rows; empty exclusion matches every non-null row. Combined with `include_nulls`, these represent null-only, non-null-only, all rows or no rows without extra filter variants.
+A `Filter` is `OnlyNulls`, `NotNull`, or `Condition { condition, include_nulls }`. Null never occupies a `values` entry. Empty exact inclusion matches no non-null rows and empty exclusion matches every non-null row; these describe a value list with nothing selected or nothing excluded, not a null mode.
 
 Parsing, precision, case sensitivity and nested-value behavior are defined in [data types](data-types.md). Find's period and precision expansion does not apply to explicit filters. Candidates carry separate display labels and exact value text; send value text back unchanged. Histogram ranges likewise carry exact endpoint text separately from labels and approximate coordinates.
 
@@ -47,7 +47,7 @@ Candidate values and range distributions are requested on demand. Value selectio
 
 A column's filter editor describes its **facet**: an independent `FilteredView` over the rows that pass the applied filters on **other** columns, ignoring the column's own filter and all sorting. Its own condition therefore never hides its alternatives: after selecting `bj` for a city column, the city editor still lists every city that the other filters allow. When the column has no filter of its own, the facet is the applied `FilteredView`.
 
-Only values present in the facet are listed; values excluded by other columns' filters are absent, as in a spreadsheet AutoFilter. A selected value that is absent from the facet stays in the filter without being listed. The backend `filter_choices` and `filter_distribution` methods describe whichever `FilteredView` they are given; the app obtains the facet with `FilteredView::facet(column)`, which derives a view over the source rows using the snapshot's remaining filters. The result can include rows absent from the original view. Calling `facet` again on that result removes another filter without restoring the first. Core does not implicitly remove the edited column's filter from `filter_choices` or `filter_distribution`. Applying a candidate updates the window's `[ColumnFilter]` list, computes a new `FilteredView` from the full Dataset via `Dataset::filter`, and re-sorts it via `FilteredView::sort`.
+Only values present in the facet are listed; values excluded by other columns' filters are absent, as in a spreadsheet AutoFilter. A selected value that is absent from the facet stays in the filter without being listed. `FilteredView::filter_choices(column)` and `filter_distribution(column, ..)` describe that facet directly, so their rows can include rows absent from the view itself. Applying a candidate updates the window's `[ColumnFilter]` list; the new rows come from the full Dataset, sorted again.
 
 Searching within a candidate list only narrows the candidates shown. It uses case-insensitive substring matching and does not change the current view. Selecting a candidate uses its exact, case-sensitive value. `FilterChoices.null_count` reports missing values separately. Complete bounded candidates are returned as `Some(values)`; `None` means no complete bounded list is available, while `Some([])` is an empty list.
 

@@ -1,11 +1,12 @@
+import GewuKit
 import SwiftUI
 
 /// The same native column chooser for analysis and chart axes.
 struct InspectorColumnPicker: NSViewRepresentable {
     let label: String
-    let columns: [(ColumnId, String)]
+    let columns: [(ColumnID, String)]
     var emptySelectionTitle: String? = nil
-    @Binding var selection: ColumnId?
+    @Binding var selection: ColumnID?
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
 
@@ -23,7 +24,7 @@ struct InspectorColumnPicker: NSViewRepresentable {
 
     func updateNSView(_ button: NSPopUpButton, context: Context) {
         context.coordinator.selection = $selection
-        var items: [(ColumnId?, String)] = columns.map { ($0.0, $0.1) }
+        var items: [(ColumnID?, String)] = columns.map { ($0.0, $0.1) }
         if emptySelectionTitle != nil || selection == nil {
             items.insert((nil, emptySelectionTitle ?? "Select column"), at: 0)
         }
@@ -48,10 +49,11 @@ struct InspectorColumnPicker: NSViewRepresentable {
         CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width, height: nsView.intrinsicContentSize.height)
     }
 
+    @MainActor
     final class Coordinator: NSObject {
-        var selection: Binding<ColumnId?>
-        var items: [ColumnId?] = []
-        init(selection: Binding<ColumnId?>) { self.selection = selection }
+        var selection: Binding<ColumnID?>
+        var items: [ColumnID?] = []
+        init(selection: Binding<ColumnID?>) { self.selection = selection }
 
         @objc func selectColumn(_ sender: NSPopUpButton) {
             let index = sender.indexOfSelectedItem

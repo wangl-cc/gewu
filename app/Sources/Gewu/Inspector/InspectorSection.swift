@@ -1,3 +1,5 @@
+import GewuKit
+
 /// UI sections and preference keys, independent of the backend analysis API.
 enum InspectorSection: Hashable {
     case overview
@@ -25,18 +27,6 @@ enum InspectorSection: Hashable {
         case .values: "Values"
         case .lengths: "Lengths"
         case .structure: "Structure"
-        }
-    }
-
-    // Stable preference bits, independent of presentation order.
-    var mask: Int {
-        switch self {
-        case .overview: 1
-        case .statistics: 2
-        case .distribution: 4
-        case .values: 8
-        case .lengths: 16
-        case .structure: 32
         }
     }
 }

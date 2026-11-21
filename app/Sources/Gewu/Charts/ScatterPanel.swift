@@ -1,41 +1,26 @@
+import GewuKit
 import Observation
 import SwiftUI
 
 struct ScatterPanel: View {
-    @Bindable var model: DocumentModel
+    @Bindable var model: TableModel
+    @Bindable var settings: InspectorSettings
     @State private var chart = ScatterModel()
     @State private var hovered: ScatterPoint?
-    @State private var retry = 0
-    @ObservedObject private var settings: InspectorSettings
-    @AppStorage("RowNumberBase") private var rowNumberBase = 0
+    @State private var attempt = 0
+    @AppStorage(Preferences.rowNumberBase) private var rowNumberBase
 
-    init(model: DocumentModel) {
-        self.model = model
-        _settings = ObservedObject(wrappedValue: model.inspectorSettings)
+    private var columns: [ColumnID] {
+        model.visibleColumns.filter { model.column($0)?.capabilities.scatter == true }
     }
 
-    private var columns: [ColumnId] {
-        model.visibleColumns.filter { model.columnInfo[$0]?.capabilities.scatter == true }
-    }
-
-    private struct Request: Equatable {
-        let filtered: ObjectIdentifier
-        let x: ColumnId?
-        let y: ColumnId?
-        let retry: Int
-        let pointLimit: UInt32
-        let rowNumberBase: Int
-        let xScale: AxisScale
-        let yScale: AxisScale
-    }
-
-    private var request: Request {
-        Request(
-            filtered: ObjectIdentifier(model.filtered),
-            x: model.chartX, y: model.chartY, retry: retry, pointLimit: settings.scatterPointLimit,
-            rowNumberBase: rowNumberBase,
+    private var request: ScatterModel.Request? {
+        guard let y = model.chartY, columns.contains(y) else { return nil }
+        return ScatterModel.Request(
+            rows: model.displayed.rowSet, x: model.chartX, y: y, limit: settings.scatterPointLimit,
             xScale: supportsLog(model.chartX) ? settings.scatterXScale : .linear,
-            yScale: supportsLog(model.chartY) ? settings.scatterYScale : .linear)
+            yScale: supportsLog(model.chartY) ? settings.scatterYScale : .linear,
+            rowNumberBase: rowNumberBase, attempt: attempt)
     }
 
     var body: some View {
@@ -85,7 +70,7 @@ struct ScatterPanel: View {
                             }
                             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Plot display options")
                         }.controlSize(.small)
-                        if request.xScale == .log10 || request.yScale == .log10 {
+                        if let request, request.xScale == .log10 || request.yScale == .log10 {
                             Text(
                                 "Logarithmic: \([request.xScale == .log10 ? "X" : nil, request.yScale == .log10 ? "Y" : nil].compactMap { $0 }.joined(separator: ", "))"
                             )
@@ -94,7 +79,7 @@ struct ScatterPanel: View {
                         if chart.loading { ProgressView().controlSize(.small) }
                         if let error = chart.error {
                             Text(error).font(.caption).foregroundStyle(.red)
-                            Button("Retry") { retry += 1 }
+                            Button("Retry") { attempt += 1 }
                         }
                         if let result = chart.result {
                             if result.points.isEmpty {
@@ -115,7 +100,7 @@ struct ScatterPanel: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 if !result.points.isEmpty {
                                     Text(
-                                        result.eligibleRows > UInt64(result.points.count)
+                                        result.isSampled
                                             ? "\(formatCount(UInt64(result.points.count))) sampled of \(formatCount(result.eligibleRows)) pairs"
                                             : "\(formatCount(result.eligibleRows)) pairs")
                                 }
@@ -170,32 +155,41 @@ struct ScatterPanel: View {
         }
         .task(id: request) {
             hovered = nil
-            guard let y = model.chartY, columns.contains(y) else { return }
-            await chart.load(
-                viewer: model.viewer, x: model.chartX,
-                y: y,
-                limit: settings.scatterPointLimit, rowNumberBase: rowNumberBase,
-                xScale: request.xScale, yScale: request.yScale)
+            await chart.load(request)
         }
-        .onDisappear { chart.cancel() }
     }
 
-    private func axisPicker(_ axis: String, selection: Binding<ColumnId?>, allowsSourceRow: Bool) -> some View {
+    private func axisPicker(_ axis: String, selection: Binding<ColumnID?>, allowsSourceRow: Bool) -> some View {
         InspectorColumnPicker(
             label: "\(axis) axis",
-            columns: columns.compactMap { id in model.columnInfo[id].map { (id, $0.name) } },
+            columns: columns.compactMap { id in model.column(id).map { (id, $0.name) } },
             emptySelectionTitle: allowsSourceRow ? "Source row" : nil, selection: selection
         ).frame(maxWidth: .infinity)
     }
 
-    private func supportsLog(_ column: ColumnId?) -> Bool {
-        column.flatMap { model.columnInfo[$0]?.capabilities.logarithmic } ?? false
+    private func supportsLog(_ column: ColumnID?) -> Bool {
+        column.flatMap { model.column($0)?.capabilities.logarithmic } ?? false
     }
 }
 
+/// The sample shown for one scatter request. The row set computes and caches
+/// the sample; this model adds presentation only. The panel runs
+/// ``load(_:)`` in `.task(id:)`, so a new request cancels the previous one.
 @MainActor
 @Observable
 final class ScatterModel {
+    struct Request: Equatable {
+        let rows: RowSet
+        let x: ColumnID?
+        let y: ColumnID
+        let limit: UInt32
+        let xScale: AxisScale
+        let yScale: AxisScale
+        let rowNumberBase: Int
+        /// Changed by Retry, to run the same request again.
+        let attempt: Int
+    }
+
     private(set) var result: ScatterResult?
     private(set) var totalRows: UInt64 = 0
     private(set) var xDates: [Date]?
@@ -204,88 +198,34 @@ final class ScatterModel {
     private(set) var yScale: AxisScale = .linear
     private(set) var loading = false
     private(set) var error: String?
-    @ObservationIgnored private var request: UInt64 = 0
-    @ObservationIgnored private var work: Task<Void, Never>?
 
-    /// Cancel this panel's pending sample and presentation work.
-    func cancel() {
-        request &+= 1
-        work?.cancel()
-        work = nil
-        loading = false
-    }
-
-    func load(
-        viewer: Viewer, x: ColumnId?, y: ColumnId,
-        limit: UInt32 = 2048,
-        rowNumberBase: Int = 0,
-        xScale: AxisScale = .linear,
-        yScale: AxisScale = .linear
-    ) async {
-        guard !Task.isCancelled else { return }
-        cancel()
-        let ticket = request
-        let filtered = viewer.filtered
-        let task = Task {
-            await performLoad(
-                viewer: viewer, filtered: filtered, x: x, y: y, limit: limit, rowNumberBase: rowNumberBase,
-                xScale: xScale, yScale: yScale, ticket: ticket)
-        }
-        work = task
-        await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        if request == ticket { work = nil }
-    }
-
-    private func performLoad(
-        viewer: Viewer, filtered: GewuFilteredView, x: ColumnId?, y: ColumnId, limit: UInt32,
-        rowNumberBase: Int, xScale: AxisScale, yScale: AxisScale, ticket: UInt64
-    ) async {
-        guard !Task.isCancelled, ticket == request, viewer.filtered === filtered else { return }
-        defer {
-            if ticket == request { loading = false }
-        }
+    func load(_ request: Request?) async {
         result = nil
         error = nil
+        guard let request else { return }
         loading = true
+        defer { loading = false }
         do {
+            var sample = try await request.rows.scatter(
+                x: request.x, y: request.y, limit: request.limit, xScale: request.xScale, yScale: request.yScale)
             try Task.checkCancellation()
-            let rowCount = filtered.rowCount()
-            let sample = try await viewer.scatter(
-                x: x, y: y, limit: limit, xScale: xScale, yScale: yScale)
-            try Task.checkCancellation()
-            // Row numbering depends on display settings, so only the raw sample is cached.
-            let loaded = await Task.detached(priority: .userInitiated) {
-                var result = sample
-                if x == nil {
-                    for index in result.points.indices {
-                        let sourceRow = result.points[index].sourceRow
-                        result.points[index].x = Double(rowNumber(sourceRow, base: rowNumberBase))
-                        result.points[index].xLabel = formatRowNumber(sourceRow, base: rowNumberBase)
-                    }
+            // Row numbering follows display settings, so only the raw sample is cached.
+            if request.x == nil {
+                for index in sample.points.indices {
+                    let row = sample.points[index].sourceRow
+                    sample.points[index].x = Double(rowNumber(row, base: request.rowNumberBase))
+                    sample.points[index].xLabel = formatRowNumber(row, base: request.rowNumberBase)
                 }
-                return (
-                    result,
-                    ScatterDates.make(points: result.points, x: true, kind: result.xAxisKind),
-                    ScatterDates.make(points: result.points, x: false, kind: result.yAxisKind)
-                )
-            }.value
-            try Task.checkCancellation()
-            guard !Task.isCancelled, ticket == request, viewer.filtered === filtered else { return }
-            xDates = loaded.1
-            yDates = loaded.2
-            self.xScale = xScale
-            self.yScale = yScale
-            totalRows = rowCount
-            result = loaded.0
-        } catch {
-            guard !Task.isCancelled, ticket == request else { return }
-            if !(error is CancellationError) {
-                self.error = error.userMessage
             }
+            xDates = ScatterDates.make(points: sample.points, x: true, kind: sample.xAxisKind)
+            yDates = ScatterDates.make(points: sample.points, x: false, kind: sample.yAxisKind)
+            xScale = request.xScale
+            yScale = request.yScale
+            totalRows = UInt64(request.rows.count)
+            result = sample
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
+            self.error = ErrorPresentation(error).text
         }
     }
 }

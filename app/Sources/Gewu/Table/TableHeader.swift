@@ -1,4 +1,5 @@
 import AppKit
+import GewuKit
 
 private func funnel(filled: Bool, color: NSColor) -> NSImage? {
     NSImage(

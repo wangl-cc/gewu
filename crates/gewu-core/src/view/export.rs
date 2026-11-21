@@ -3,12 +3,39 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use super::OrderedView;
-use crate::{ColumnId, Export, FileType, Result};
+use crate::{row_ids::RowIds, ColumnId, Export, FileType, Result};
 
 impl OrderedView {
-    /// Capture a view and column order for export without copying its cells or
-    /// row indices. The returned job remains valid when the current view changes.
+    /// Capture every row of this view and a column order for export without
+    /// copying cells or row indices. The job stays valid when the current view
+    /// changes. Nested columns are checked when writing, where
+    /// [`crate::ExportOptions::nested_as_text`] decides whether they are allowed.
     pub fn export(&self, columns: &[ColumnId], format: FileType) -> Result<Export> {
+        self.export_with_rows(self.rows.clone(), columns, format)
+    }
+
+    /// Capture the display rows in `ranges`, in order, for export. Ranges are
+    /// clipped to the available rows; overlapping ranges repeat their rows.
+    pub fn export_rows(
+        &self,
+        ranges: &[std::ops::Range<u64>],
+        columns: &[ColumnId],
+        format: FileType,
+    ) -> Result<Export> {
+        let mut rows = Vec::new();
+        for range in ranges {
+            let count = u32::try_from(range.end.saturating_sub(range.start)).unwrap_or(u32::MAX);
+            rows.extend(self.row_window(range.start, count).iter_u32());
+        }
+        self.export_with_rows(RowIds::Selected(rows.into()), columns, format)
+    }
+
+    fn export_with_rows(
+        &self,
+        rows: RowIds,
+        columns: &[ColumnId],
+        format: FileType,
+    ) -> Result<Export> {
         format.require_enabled()?;
         if columns.is_empty() {
             return Err(crate::ColumnError::EmptySelection {
@@ -31,43 +58,13 @@ impl OrderedView {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let indices = columns.iter().map(|c| c.index()).collect::<Vec<_>>();
         let schema = Arc::new(self.dataset.schema.project(&indices)?);
-        if format != FileType::Parquet {
-            let nested: Vec<ColumnId> = columns
-                .iter()
-                .copied()
-                .filter(|&column| {
-                    self.dataset.columns()[column.index()]
-                        .array()
-                        .data_type()
-                        .is_nested()
-                })
-                .collect();
-            if !nested.is_empty() {
-                return Err(crate::ExportError::NestedColumns {
-                    format,
-                    columns: nested,
-                }
-                .into());
-            }
-        }
         Ok(Export::new(
             self.dataset.source_path.clone(),
             schema,
             arrays,
-            self.rows.clone(),
+            columns.to_vec(),
+            rows,
             format,
         ))
-    }
-
-    /// Names of selected nested columns, which require Parquet for export.
-    /// Inspect types only; this does not scan or copy any cells.
-    pub fn nested_export_columns(&self, columns: &[ColumnId]) -> Result<Vec<String>> {
-        let mut nested = Vec::new();
-        for &column in columns {
-            if self.column(column)?.array().data_type().is_nested() {
-                nested.push(self.dataset.schema.field(column.index()).name().clone());
-            }
-        }
-        Ok(nested)
     }
 }

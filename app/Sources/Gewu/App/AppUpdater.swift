@@ -1,20 +1,35 @@
-import Combine
 import Foundation
+import Observation
 import Sparkle
 
 /// Bridges Sparkle's preferences and availability to SwiftUI. Sparkle owns
 /// scheduling, persistence, signature verification and installation.
 @MainActor
-final class AppUpdater: ObservableObject {
-    @Published private(set) var canCheckForUpdates = false
-    @Published private(set) var automaticallyChecksForUpdates = false
-    @Published private(set) var automaticallyDownloadsUpdates = false
+@Observable
+final class AppUpdater {
+    private(set) var canCheckForUpdates = false
+    var automaticallyChecksForUpdates = false {
+        didSet {
+            if updater?.automaticallyChecksForUpdates != automaticallyChecksForUpdates {
+                updater?.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+            }
+        }
+    }
+    var automaticallyDownloadsUpdates = false {
+        didSet {
+            if updater?.automaticallyDownloadsUpdates != automaticallyDownloadsUpdates {
+                updater?.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+            }
+        }
+    }
 
-    private let controller: SPUStandardUpdaterController?
+    @ObservationIgnored private let controller: SPUStandardUpdaterController?
+    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
+
+    /// `nil` for local builds without the release key, which must not offer production updates.
     var updater: SPUUpdater? { controller?.updater }
 
     init() {
-        // Local builds without the release key must not offer production updates.
         guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String, !key.isEmpty else {
             controller = nil
             return
@@ -22,9 +37,19 @@ final class AppUpdater: ObservableObject {
         let controller = SPUStandardUpdaterController(
             startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
         self.controller = controller
-        controller.updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheckForUpdates)
-        controller.updater.publisher(for: \.automaticallyChecksForUpdates).assign(to: &$automaticallyChecksForUpdates)
-        controller.updater.publisher(for: \.automaticallyDownloadsUpdates).assign(to: &$automaticallyDownloadsUpdates)
+        let updater = controller.updater
+        // Sparkle changes these on the main thread; mirror them for SwiftUI.
+        observations = [
+            updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.canCheckForUpdates = updater.canCheckForUpdates }
+            },
+            updater.observe(\.automaticallyChecksForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates }
+            },
+            updater.observe(\.automaticallyDownloadsUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates }
+            },
+        ]
         controller.startUpdater()
     }
 

@@ -133,9 +133,24 @@ pub enum ParquetCompression {
 
 /// Encoding options for an export. Format-specific options are ignored by
 /// other formats; row and column selection belong to the export snapshot.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportOptions {
     pub parquet_compression: ParquetCompression,
+    /// Write nested columns to CSV, TSV and XLSX as their display text, such
+    /// as `[a, b]`, instead of rejecting them. Parquet always keeps their structure.
+    pub nested_as_text: bool,
+    /// Start CSV and TSV output with a row of column names.
+    pub include_header: bool,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            parquet_compression: ParquetCompression::default(),
+            nested_as_text: false,
+            include_header: true,
+        }
+    }
 }
 
 /// Metadata that belongs to a particular file format.
@@ -269,7 +284,7 @@ mod tests {
 
 /// Borrowed export snapshot. Codecs decide whether to access source rows
 /// directly or gather them into batches; no mandatory intermediate copy.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[cfg_attr(
     not(any(feature = "parquet", feature = "csv", feature = "xlsx")),
     expect(
@@ -278,17 +293,21 @@ mod tests {
     )
 )]
 pub(crate) struct ExportData<'a> {
-    pub schema: &'a SchemaRef,
+    /// The written schema: nested columns written as text appear as `Utf8`.
+    pub schema: SchemaRef,
     pub columns: &'a [ArrayRef],
     pub rows: RowSlice<'a>,
+    /// One flag per column: write its display text instead of its values.
+    pub as_text: &'a [bool],
 }
 
 #[cfg(any(feature = "parquet", feature = "csv"))]
 impl ExportData<'_> {
     /// Borrow contiguous source rows; gather sorted/filtered rows only for the
-    /// current bounded chunk. Neither codec needs a whole-column copy.
-    fn batch(self, rows: RowWindow<'_>) -> Result<RecordBatch, crate::InternalError> {
-        let columns = if let Some(range) = rows.contiguous_range() {
+    /// current bounded chunk. Neither codec needs a whole-column copy. Columns
+    /// written as text are formatted for this chunk only.
+    fn batch(&self, rows: RowWindow<'_>) -> Result<RecordBatch, crate::InternalError> {
+        let columns: Vec<ArrayRef> = if let Some(range) = rows.contiguous_range() {
             self.columns
                 .iter()
                 .map(|array| array.slice(range.start, range.len()))
@@ -300,8 +319,38 @@ impl ExportData<'_> {
                 .map(|array| arrow::compute::take(array.as_ref(), &indices, None))
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
+        let columns = columns
+            .into_iter()
+            .zip(self.as_text)
+            .map(|(array, &as_text)| {
+                if as_text {
+                    display_text(array.as_ref())
+                } else {
+                    Ok(array)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(RecordBatch::try_new(self.schema.clone(), columns)?)
     }
+}
+
+/// The display text of every value, keeping nulls.
+#[cfg(any(feature = "parquet", feature = "csv"))]
+fn display_text(array: &dyn arrow::array::Array) -> Result<ArrayRef, crate::InternalError> {
+    use std::fmt::Write as _;
+    let formatter = crate::format::formatter(array)?;
+    let mut builder = arrow::array::StringBuilder::with_capacity(array.len(), array.len() * 8);
+    let mut text = String::new();
+    for row in 0..array.len() {
+        if array.is_null(row) {
+            builder.append_null();
+        } else {
+            text.clear();
+            write!(text, "{}", formatter.value(row)).expect("formatting into String succeeds");
+            builder.append_value(&text);
+        }
+    }
+    Ok(std::sync::Arc::new(builder.finish()))
 }
 
 #[derive(Clone, Copy)]
@@ -344,9 +393,9 @@ pub(crate) fn write(
         #[cfg(feature = "parquet")]
         FileType::Parquet => parquet::write(file, options.parquet_compression, data, progress),
         #[cfg(feature = "csv")]
-        FileType::Csv => delimited::write(file, b',', data, progress),
+        FileType::Csv => delimited::write(file, b',', options.include_header, data, progress),
         #[cfg(feature = "csv")]
-        FileType::Tsv => delimited::write(file, b'\t', data, progress),
+        FileType::Tsv => delimited::write(file, b'\t', options.include_header, data, progress),
         #[cfg(feature = "xlsx")]
         FileType::Xlsx => xlsx::write(file, data, progress),
         #[allow(unreachable_patterns)]
@@ -356,4 +405,75 @@ pub(crate) fn write(
         }
     };
     result.map_err(|error| ExportError::encode(format, error))
+}
+
+/// Write a CSV or TSV export into memory, failing with
+/// [`ExportError::SizeLimit`] as soon as it would exceed `limit` bytes.
+pub(crate) fn write_delimited_to_memory(
+    format: FileType,
+    options: &ExportOptions,
+    data: ExportData<'_>,
+    progress: WriteProgress<'_>,
+    limit: usize,
+) -> Result<Vec<u8>, ExportError> {
+    let delimiter = match format {
+        FileType::Csv => b',',
+        FileType::Tsv => b'\t',
+        other => {
+            return Err(crate::InternalError::Invariant(format!(
+                "{other} exports cannot be written to memory"
+            ))
+            .into())
+        }
+    };
+    format
+        .require_enabled()
+        .map_err(|_| ExportError::FormatDisabled { format })?;
+    let mut buffer = LimitedBuffer {
+        bytes: Vec::new(),
+        limit,
+        exceeded: false,
+    };
+    #[cfg(feature = "csv")]
+    let result = delimited::write(
+        &mut buffer,
+        delimiter,
+        options.include_header,
+        data,
+        progress,
+    );
+    #[cfg(not(feature = "csv"))]
+    let result = {
+        let _ = (delimiter, options, data, progress);
+        Err(ExportError::FormatDisabled { format })
+    };
+    if buffer.exceeded {
+        return Err(ExportError::SizeLimit {
+            limit: limit as u64,
+        });
+    }
+    result.map_err(|error| ExportError::encode(format, error))?;
+    Ok(buffer.bytes)
+}
+
+/// An in-memory destination that refuses to grow past its limit.
+struct LimitedBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl std::io::Write for LimitedBuffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + data.len() > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("export exceeds its size limit"));
+        }
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }

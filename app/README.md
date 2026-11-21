@@ -4,29 +4,66 @@ The SwiftUI and AppKit interface to [gewu-core](../crates/gewu-core/README.md), 
 
 See [App updates](../docs/app-updates.md) for Sparkle signing and publication configuration.
 
+## Layers
+
+| Layer | Location | Responsibility |
+| --- | --- | --- |
+| App | `app/Sources/Gewu` | SwiftUI and AppKit views, window and table models, presentation and preferences. Never sees FFI types. |
+| GewuKit | `app/GewuKit` | The only module that imports the generated bindings (`GewuBindings`, `gewuFFI`). Exposes Swift value types, `GewuKitError`, async APIs and the scheduling of all Rust calls. |
+| FFI and Core | `crates/` | See the [FFI contract](../crates/gewu-uniffi/README.md) and [Core](../crates/gewu-core/README.md). |
+
+GewuKit models a table with three immutable results, each an identity the App compares to decide what to keep:
+
+| Type | Is | Keeps |
+| --- | --- | --- |
+| `TableSource` | the opened file | column metadata and file information |
+| `RowSet` | the rows passing a set of filters | every analysis and filter-editor option, computed on the session's analysis worker; the engine keeps each result with these rows |
+| `DisplayRows` | a `RowSet` in display order | text, source row numbers, cell search, copying and export of exactly these rows |
+
+Two value types hold the rules of what the user edits, so App models only run and present them: `TableState` keeps the query, visible columns and the selected, inspected and charted columns consistent (filters in schema order, hidden columns lose their conditions, choices fall back to visible columns), and `FilterDraft` is one column's filter while its editor is open, with exact values compared by UTF-8 bytes (`ExactValue`).
+
+`TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise. The engine alone decides what is reused; GewuKit asks it whether the views it returned are the ones `current` holds and keeps the matching Swift results. `TableQuery` compares filter literals by UTF-8 bytes, as the engine does, and keeps its filters in column order, so two queries are equal exactly when they select the same rows in the same order.
+
+Each session runs synchronous Rust calls on its own serial workers (`query`, `analysis`, `read` for text, `find`), off Swift's cooperative pool. Work that must neither wait behind nor delay those queues (export writes, copies and worksheet listing) runs on a worker created for that one call. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers are read in place from Rust memory, and copied text is read in place and copied once into `Data`.
+
+`GewuKitError` carries the engine's structured kind and its English diagnostic but no user-facing wording. The App's [ErrorPresentation](Sources/Gewu/App/ErrorPresentation.swift) is the one place that words failures, so alerts, panels and the open-failure page read alike.
+
 ## Code map
 
 Start with [GewuApp](Sources/Gewu/App/GewuApp.swift) for scenes and commands.
 
-Views and state are grouped by feature under `app/Sources/Gewu`:
-
 | Directory | Responsibility |
 | --- | --- |
-| `App/` | App entry point, file opening, settings, commands, Sparkle updates and shared display formatting. |
-| `Document/` | Workbook window, sheet loading, per-table query state and file information. |
-| `Table/` | AppKit table, segment cache, copying and row gutter. |
-| `Filter/` | Filter editors and facets. |
-| `Inspector/` | Column analysis presentation and requests. |
-| `Export/` | Save panel, export jobs, progress and format selection. |
+| `App/` | App entry point, file opening, settings, commands, Sparkle updates, [Preferences](Sources/Gewu/App/Preferences.swift), display formatting and error wording. |
+| `Window/` | Window model and scene, worksheet loading, alerts, Find field and file information. |
+| `Table/` | Table model, Find, copying, the AppKit table and its text cache. |
+| `Filter/` | Filter editors. |
+| `Inspector/` | Column analysis presentation. |
+| `Export/` | Save panel, export progress and formats. |
 | `Charts/` | Histograms, scatter plots and chart labels. |
 
-[WorkbookModel](Sources/Gewu/Document/WorkbookModel.swift) owns the window and sheet-loading lifecycle. Each successfully opened table uses Swift's Observation framework (`@Observable`) across [DocumentModel](Sources/Gewu/Document/DocumentModel.swift), [Viewer](Sources/Gewu/Document/Viewer.swift), [FindModel](Sources/Gewu/Document/FindModel.swift), [CopyModel](Sources/Gewu/Table/CopyModel.swift), [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift) and [ScatterModel](Sources/Gewu/Charts/ScatterPanel.swift). [DocumentModel](Sources/Gewu/Document/DocumentModel.swift) owns the table's selection, frontend-owned `visibleColumns: [ColumnId]` and presentation state; [Viewer](Sources/Gewu/Document/Viewer.swift) owns the applied `GewuFilteredView` and `GewuOrderedView`, applied `ColumnFilter` and `ColumnSort` lists, and completed analysis results; and [FindModel](Sources/Gewu/Document/FindModel.swift) owns bounded cell navigation and visible highlights. [DataTable](Sources/Gewu/Table/DataTable.swift) isolates Observation tracking by reading `model.tableInput` (`DocumentModel.TableInput`), which carries only `ordered`, `visibleColumns`, applied `filters` and `sorts`, `selectedColumn`, and `inspectedColumn`. [TableSegmentLoader](Sources/Gewu/Table/TableSegmentLoader.swift) plans reads from the current viewport and owns a bounded [LRUCache](Sources/Gewu/Table/LRUCache.swift) of column segments; `DataTableController` renders delivered segments and handles native table interactions. For copying, start with [CopyModel](Sources/Gewu/Table/CopyModel.swift); for analysis requests, start with [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift). Consult the [FFI contract](../crates/gewu-uniffi/README.md) when changing snapshot identity, cancellation or data transfer.
+Each piece of state has one owner whose lifetime matches it. Every model is `@Observable`; models never refer to views.
 
-[TableHeader](Sources/Gewu/Table/TableHeader.swift) contains header drawing and mouse handling; [SortingView](Sources/Gewu/Table/SortingView.swift) contains the sort editor. Column hiding confirmation is shared by the picker and header menu through [ColumnsView](Sources/Gewu/Table/ColumnsView.swift). Commands in [ViewerCommands](Sources/Gewu/App/ViewerCommands.swift) resolve the active table via `@FocusedValue(DocumentModel.self)` (published by `.focusedSceneValue(model)` in [DocumentScene](Sources/Gewu/Document/DocumentScene.swift)); ExportModel owns the save panel and job. These presentation actions call DocumentModel to apply changes without putting native dialogs in the model. Text contains/equality editing lives in [TextMatchEditor](Sources/Gewu/Filter/TextMatchEditor.swift).
+| Model | Lifetime | Owns |
+| --- | --- | --- |
+| [WindowModel](Sources/Gewu/Window/WindowModel.swift) | window | file URL, worksheet list and loading, import options, Inspector visibility and page, [InspectorSettings](Sources/Gewu/Inspector/InspectorSettings.swift), Find field focus, [Alerts](Sources/Gewu/Window/Alerts.swift) (the window's only error channel) |
+| [TableModel](Sources/Gewu/Table/TableModel.swift) | opened worksheet | `TableSession`, `displayed: DisplayRows`, the `TableState` (draft query, visible columns, selected and inspected columns, chart axes), the open filter editor, reveal requests |
+| [FindModel](Sources/Gewu/Table/FindModel.swift), [CopyModel](Sources/Gewu/Table/CopyModel.swift), [ExportModel](Sources/Gewu/Export/ExportModel.swift) | table | their own task and state |
+| [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift), `ScatterModel` | panel view | the results on screen; the `RowSet` computes and caches them |
+
+Query edits change `draft` at once and run in the background; `displayed` changes only when a query succeeds, so the status bar, headers, Find and analyses describe one result. A failed query keeps `displayed` and returns the draft to it. Column visibility is presentation: it applies immediately, and hiding a column removes its conditions from the draft.
+
+Background work follows one pattern. Panels load in `.task(id:)` keyed by the `RowSet` (or `DisplayRows`), column and parameters, so SwiftUI cancels obsolete work. Models hold a single `Task` per activity and cancel it on replacement. A cancelled task changes no state when it ends, whether it succeeded or failed: every handler checks for cancellation before touching the model or reporting an error. Swift 6 language mode checks data-race safety at compile time; the App has no `@unchecked Sendable`.
+
+## The table
+
+[DataTable](Sources/Gewu/Table/DataTable.swift) builds a `TablePresentation` value from the table model and passes it to [TableViewController](Sources/Gewu/Table/TableViewController.swift), which applies only what changed and turns gestures into `TableModel` intents. When the presentation names new rows, the controller keeps showing its current rows while [TableTextCache](Sources/Gewu/Table/TableTextCache.swift) reads the new viewport, re-reading if the table scrolls or resizes meanwhile, then switches rows, headers and cells in one main-actor turn. Requests to scroll somewhere (Find navigation, locating a filtered column) arrive as `RevealRequest` values with their own identity.
+
+The cache reads one column over an aligned 64-row block per call, keeps viewport blocks apart from a byte-bounded LRU, and drops everything when rows change. The row gutter reads source row numbers synchronously from the shown rows when it draws. Cells, header menus and filter editors, and column widths live in the controller's `+Cells` and `+Columns` extensions; widths are measured off the main actor from sampled rows.
 
 ## Workspace interaction
 
-The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. Both the Inspector column chooser and the Scatter X/Y axis pickers list only currently `visibleColumns`. `DocumentModel.reconcileVisibleColumnSelections()` owns fallback for selection, inspection, `chartX`, and `chartY` whenever columns are hidden or shown again (`visibleColumns.first` for selection and inspection, `nil` / Source row for `chartX`, and the first visible scatter-capable column for `chartY`); if no columns remain visible, the Inspector shows a `No Columns` empty state. Chart axes and display settings survive page changes.
+The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. Both the Inspector column chooser and the Scatter X/Y axis pickers list only currently visible columns. `TableState` owns fallback for selection, inspection, `chartX`, and `chartY` whenever columns are hidden or shown again (`visibleColumns.first` for selection and inspection, `nil` / Source row for `chartX`, and the first visible scatter-capable column for `chartY`); if no columns remain visible, the Inspector shows a `No Columns` empty state. Chart axes and display settings survive page changes.
 
 The existing status bar shows applied result and source row counts when filters are active, plus clickable filtered-column and sorted-column counts. The filter summary can locate a column in the table or clear individual or all filters; the sort summary opens the sort editor at the status bar. These summaries describe the applied views while a new query is pending and do not add another row above the table.
 
@@ -36,17 +73,9 @@ Find uses a native NSSearchField in the toolbar, with bounded input width and sy
 
 Filter editors show mode selection only when multiple modes are available. Bounded value lists remain the preferred default. Select All and Deselect All include the Missing checkbox; missing values remain distinct from literal text. Range editing puts exact bounds before the distribution preview; the fixed-width preview requests at most 40 bins, and axis display options are secondary. Reset clears the entire draft, including missing-value handling; Apply submits it, while closing discards changes. Clear Column Filter in the header menu removes the applied filter immediately. Text and Range retain separate missing-value options. Inspector distributions retain configurable bin counts in their display menu. Frequency rows display counts and proportions without task-progress controls.
 
-## View ownership and background work
+## Copying and export
 
-Each `DocumentModel` holds a shared `GewuDataset`, `columnInfo: [ColumnId: ColumnInfo]` (including `capabilities` and `analysis` capabilities, eliminating separate capability FFI calls), frontend-owned `visibleColumns` and `draftVisibleColumns`, `draftFilters` and `draftSorts`, and a `Viewer`. Filter and sort tasks run on `Viewer`'s serial query worker: changing filters runs `dataset.filter` followed by `filtered.sort`, whereas pure sort changes skip filtering and call `filtered.sort` on the existing `GewuFilteredView`. `DocumentModel` owns the request task and preloads the target viewport in `nextOrdered` before committing. The previous `ordered` view and rows remain applied during both query and row reads; `DataTableController` renews the target viewport when scrolling or resizing occurs during preloading. `DocumentModel` then explicitly commits the resolved views, `visibleColumns` and prepared cells in one main-actor turn. Superseded requests cannot commit; query or row-read failures preserve the applied views and restore the drafts. Unchanged pending inputs do not run a query, and returning to the applied state cancels any pending replacement. Reordering or toggling `visibleColumns` without changing filters or sorts updates `visibleColumns` directly with zero FFI query work, keeping the existing `GewuOrderedView` and cached segments intact (reordering also preserves the current Find match).
-
-The table installs its initial `GewuOrderedView` when created. Subsequent row replacements go through `commit`, which installs the prepared viewport, updates row counts and fills visible cells directly. Ordinary SwiftUI updates handle column layout and visibility (`visibleColumns`), headers, text style and Find decoration. Cells read available content synchronously. The viewport loader reads missing text on a background worker, one column and one aligned 64-row range per call. The byte-bounded LRU retains and evicts column segments individually. The current viewport retains its segments separately, so cells can rebind even if a segment was oversized or evicted. Scrolling replaces pending demand, and a replaced ordered view drops cached text. The row gutter reads source row numbers synchronously from the displayed ordered view when it draws: a slice of the view's row mapping with no formatting, so numbers never lag behind scrolling.
-
-Copy serializes the selected cells' display text, including nested values, reading each column in chunks of up to 4,096 rows, and writes it to the pasteboard as plain text and TSV. It is limited to 64 MiB and suggests File > Export… beyond that; it shows no progress, and a newer copy cancels an unfinished one.
-
-For each applied `GewuFilteredView` (`Epoch`), the `Viewer` retains at most 32 result slots with LRU eviction and latest-parameter reservations. Distributions and lengths retain only the latest parameters per column; scatter retains only the latest request. Only completed values are shared. Each panel owns and cancels its pending scan independently, including requests for the same parameters. Analysis scans run on one serial `OperationQueue` worker; cancelled queued operations do not enter Core. Filter facet resolution (`GewuFilteredView.facet(column:)`, a bitmap intersection in Core) and the subsequent scan share one captured `GewuFilteredView` context; facet views are not cached. Replacing `filtered` cancels all old queued/pending work and releases its `Epoch` results, whereas pure sort changes (`Viewer.apply(ordered:sorts:)`) and column reordering or visibility changes keep `filtered` and its `Epoch` analysis caches intact because every `GewuFilteredView` analysis is order-independent. Panels verify `filtered` identity and request tickets before publishing. Row reads, copying, Find and export capture immutable `GewuOrderedView` snapshots directly, and export continues after the view changes. Filter editors call `Viewer.filterChoices` and `Viewer.filterDistribution`, which resolve the column's facet internally so the column's own filter does not hide its alternatives. Metadata comes from `DatasetInfo`.
-
-Swift owns request replacement and cancellation. `Viewer` guards queued queries and analysis operations so superseded or cancelled Tasks skip FFI execution before entering Core; Inspector, Chart, Table and Find gate result publication on request identity and current context. The [background helper](Sources/Gewu/App/BackgroundWork.swift) provides `RequestGate` for worker-queue entry checks. Neither `GewuFilteredView` nor `GewuOrderedView` ever becomes stale in Rust, and stopping one window cannot cancel another window's work. Separate DocumentModels can share a Dataset; opening a path twice does not itself deduplicate decoded buffers.
+Copy goes through the export path: it exports the selected display rows and visible columns as TSV into memory, with nested values as display text, and writes the result to the pasteboard as plain text and TSV. It is limited to 64 MiB and suggests File > Export… beyond that; a newer copy cancels an unfinished one. Export captures the displayed rows and visible columns, writes on its own thread with progress sampled into the status bar, and continues after the table changes.
 
 ## App icon
 

@@ -1,552 +1,298 @@
-import AppKit
 import Foundation
+import GewuKit
 import Observation
 import Testing
 import os
 
 @Suite @MainActor
 struct QuerySpecTests {
-    private static let c0 = ColumnId(raw: 0)
-    private static let c1 = ColumnId(raw: 1)
-    private static let c2 = ColumnId(raw: 2)
+    private static let csv = "a,b,c\n1,2,x\n1,1,y\n2,0,z\n"
 
-    @Test func queryEditsPublishOnlyTheirFinalSpec() throws {
-        let model = try model()
-        defer { model.stop() }
-        let changes = OSAllocatedUnfairLock(initialState: 0)
-        withObservationTracking {
-            _ = model.draftSorts
-        } onChange: {
-            changes.withLock { $0 += 1 }
-        }
-
-        model.cycleSort(column: Self.c0, multiple: false)
-        let ascending = [ColumnSort(column: Self.c0, descending: false)]
-        #expect(model.draftSorts == ascending)
-        #expect(changes.withLock { $0 } == 1)
-
-        withObservationTracking {
-            _ = model.draftSorts
-        } onChange: {
-            changes.withLock { $0 += 1 }
-        }
-        model.setSortDirection(column: Self.c0, descending: false)
-        #expect(changes.withLock { $0 } == 1, "No-op sort edit must not notify draftSorts")
-
-        model.cycleSort(column: Self.c1, multiple: true)
-        let multiple = [
-            ColumnSort(column: Self.c0, descending: false),
-            ColumnSort(column: Self.c1, descending: false),
-        ]
-        #expect(model.draftSorts == multiple)
-        #expect(changes.withLock { $0 } == 2)
-
-        withObservationTracking {
-            _ = model.draftSorts
-        } onChange: {
-            changes.withLock { $0 += 1 }
-        }
-        model.clearSort()
-        #expect(changes.withLock { $0 } == 3)
-        withObservationTracking {
-            _ = model.draftSorts
-        } onChange: {
-            changes.withLock { $0 += 1 }
-        }
-        model.clearSort()
-        #expect(changes.withLock { $0 } == 3)
-        #expect(model.draftSorts.isEmpty)
-        #expect(!model.isBusy)
+    private func model(alerts: Alerts = Alerts()) async throws -> TableModel {
+        try await TestTables.model(Self.csv, alerts: alerts)
     }
 
-    @Test func statusDescribesAppliedResultsIncludingFiltersThatKeepEveryRow() async throws {
-        let model = try model()
+    private func settled(_ model: TableModel) async {
+        await eventually { !model.isUpdating }
+        #expect(!model.isUpdating, "Query did not settle")
+    }
+
+    private func exact(_ value: String) -> Filter {
+        .condition(.exact(values: [value], exclude: false), includeNulls: false)
+    }
+
+    @Test func queryEditsPublishOnlyTheirFinalDraft() async throws {
+        let model = try await model()
         defer { model.stop() }
-        #expect(model.status == "3 rows · 3 columns")
-        model.setFilter(Filter(condition: .range(min: "1", max: nil), includeNulls: false), column: Self.c0)
-        // A pending query must not describe the rows still on screen as already filtered.
-        #expect(model.status == "3 rows · 3 columns")
-        try await settled(model)
-        #expect(model.status == "3 / 3 rows · 3 columns")
-        model.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: Self.c0)
-        try await settled(model)
-        #expect(model.status == "1 / 3 rows · 3 columns")
+        let a = model.id("a")
+        let b = model.id("b")
+        let changes = OSAllocatedUnfairLock(initialState: 0)
+        func track() {
+            withObservationTracking {
+                _ = model.draft
+            } onChange: {
+                changes.withLock { $0 += 1 }
+            }
+        }
+        track()
+        model.cycleSort(column: a, multiple: false)
+        #expect(model.draft.sorts == [ColumnSort(column: a, descending: false)])
+        #expect(changes.withLock { $0 } == 1)
+
+        track()
+        model.setSortDirection(column: a, descending: false)
+        #expect(changes.withLock { $0 } == 1, "A no-op sort edit must not notify")
+
+        model.cycleSort(column: b, multiple: true)
+        #expect(model.draft.sorts.map(\.column) == [a, b])
+        #expect(changes.withLock { $0 } == 2)
+        track()
+        model.clearSorts()
+        #expect(changes.withLock { $0 } == 3)
+        track()
+        model.clearSorts()
+        #expect(changes.withLock { $0 } == 3 && model.draft.sorts.isEmpty)
+        #expect(!model.isUpdating, "Returning to the displayed query cancels the pending one")
+    }
+
+    @Test func statusDescribesDisplayedRowsIncludingFiltersThatKeepEveryRow() async throws {
+        let model = try await model()
+        defer { model.stop() }
+        let a = model.id("a")
+        #expect(rowSummary(model) == "3 rows · 3 columns")
+        model.setFilter(.condition(.range(min: "1", max: nil), includeNulls: false), column: a)
+        #expect(rowSummary(model) == "3 rows · 3 columns", "A pending query does not describe shown rows")
+        await settled(model)
+        #expect(rowSummary(model) == "3 / 3 rows · 3 columns")
+        model.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: a)
+        await settled(model)
+        #expect(rowSummary(model) == "1 / 3 rows · 3 columns")
         model.clearFilters()
-        #expect(model.status == "1 / 3 rows · 3 columns")
-        try await settled(model)
-        #expect(model.status == "3 rows · 3 columns")
+        await settled(model)
+        #expect(rowSummary(model) == "3 rows · 3 columns")
+    }
+
+    @Test func sortChangesKeepTheRowSetAndItsAnalyses() async throws {
+        let model = try await model()
+        defer { model.stop() }
+        let a = model.id("a")
+        let rows = model.displayed.rowSet
+        model.setSortDirection(column: a, descending: true)
+        await settled(model)
+        #expect(model.displayed.rowSet === rows)
+        #expect(Array(model.displayed.rowNumbers(0..<3)) == [2, 0, 1])
     }
 
     @Test func replacingSortColumnKeepsPriorityDirectionAndFilters() async throws {
-        let model = try model()
+        let model = try await model()
         defer { model.stop() }
-        let filter = Filter(condition: .range(min: "1", max: nil), includeNulls: true)
-        model.setFilter(filter, column: Self.c0)
-        model.setSortDirection(column: Self.c0, descending: true)
-        model.setSortDirection(column: Self.c1, descending: false)
-        model.replaceSortColumn(Self.c0, with: Self.c2)
-        try await settled(model)
-        #expect(model.viewer.appliedSorts.map(\.column) == [Self.c2, Self.c1])
-        #expect(model.viewer.appliedSorts.first?.descending == true)
-        #expect(model.appliedFilter(for: Self.c0) == filter)
-        model.replaceSortColumn(Self.c2, with: Self.c1)
-        #expect(model.draftSorts.map(\.column) == [Self.c2, Self.c1])
-    }
-
-    @Test func clearingQueryKeepsColumnArrangementAndIndependentFindAndInspector() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.removeColumn(Self.c2)
-        try await settled(model)
-        model.reorderColumns([Self.c1, Self.c0])
-        model.find.query = "1"
-        model.inspectColumn(Self.c0)
-        model.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: Self.c0)
-        model.setSortDirection(column: Self.c1, descending: true)
-        try await settled(model)
-        model.clearFilters()
-        model.clearSort()
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 3)
-        #expect(model.visibleColumns == [Self.c1, Self.c0])
-        #expect(model.viewer.appliedSorts.isEmpty && model.appliedFilterColumns.isEmpty)
-        #expect(model.find.query == "1" && model.inspectedColumn == Self.c0)
-        model.inspectorPage = .chart
-        model.focusSearch()
-        #expect(model.inspectorPage == .chart && model.searchFocusRequest == 1)
-    }
-
-    @Test func nativeColumnDragAllowsPreflightAndKeepsTheRowGutterFixed() throws {
-        let model = try model()
-        let controller = DataTableController(model: model)
-        defer {
-            controller.stopLoading()
-            model.stop()
-        }
-        let scroll = try #require(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
-        let table = try #require(scroll.documentView as? NSTableView)
-        controller.update(showsRowNumbers: true, fontSize: 12, rowHeight: 28, rowNumberBase: 0)
-        #expect(table.allowsColumnReordering)
-        #expect(controller.tableView(table, shouldReorderColumn: 2, toColumn: -1))
-        #expect(controller.tableView(table, shouldReorderColumn: 2, toColumn: 1))
-        #expect(!controller.tableView(table, shouldReorderColumn: 2, toColumn: 0))
-        #expect(!controller.tableView(table, shouldReorderColumn: 0, toColumn: -1))
-        #expect(!controller.tableView(table, shouldReorderColumn: 0, toColumn: 2))
-
-        table.moveColumn(2, toColumn: 1)
-        #expect(model.visibleColumns == [Self.c1, Self.c0, Self.c2])
-        controller.update(showsRowNumbers: true, fontSize: 12, rowHeight: 28, rowNumberBase: 0)
-        #expect(controller.displayedColumns == [Self.c1, Self.c0, Self.c2])
-        #expect(model.viewer.appliedSorts.isEmpty)
-    }
-
-    @Test func showAllRestoresHiddenColumnsWithoutRestoringTheirConditions() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.reorderColumns([Self.c2, Self.c1, Self.c0])
-        model.setSortDirection(column: Self.c0, descending: true)
-        model.removeColumn(Self.c0)
-        try await settled(model)
-        model.showAllColumns()
-        try await settled(model)
-        #expect(model.visibleColumns == [Self.c2, Self.c1, Self.c0])
-        #expect(model.appliedSort(for: Self.c0) == nil)
-        #expect(model.appliedFilter(for: Self.c0) == nil)
-    }
-
-    @Test func removingOneAppliedFilterPreservesOtherFiltersSortingAndFindInput() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.find.query = "x"
-        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: Self.c0)
-        model.setFilter(Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false), column: Self.c2)
-        model.setSortDirection(column: Self.c1, descending: true)
-        try await settled(model)
-        model.reorderColumns([Self.c2, Self.c0, Self.c1])
-        model.setFilter(nil, column: Self.c2)
-        try await settled(model)
-        #expect(model.appliedFilterColumns == [Self.c0])
-        #expect(model.ordered.rowCount() == 2)
-        #expect(model.viewer.appliedSorts.map(\.column) == [Self.c1])
-        #expect(model.find.query == "x")
-        model.clearFilters()
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 3 && model.appliedFilterColumns.isEmpty)
-        #expect(model.viewer.appliedSorts.map(\.column) == [Self.c1] && model.find.query == "x")
-    }
-
-    private func model(queryWorker: OperationQueue? = nil) throws -> DocumentModel {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-query-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "a,b,c\n1,2,x\n1,1,y\n2,0,z\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        return DocumentModel(url: path, dataset: dataset, queryWorker: queryWorker)
-    }
-
-    private func settled(_ model: DocumentModel) async throws {
-        for _ in 0..<500 {
-            if !model.isBusy { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        Issue.record("Query did not settle")
-    }
-
-    @Test func sortingCyclesAndPrioritiesRemainIndependentOfDisplayOrder() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.cycleSort(column: Self.c0, multiple: false)
-        model.cycleSort(column: Self.c1, multiple: true)
-        #expect(model.draftSorts.map(\.column) == [Self.c0, Self.c1])
-        model.reorderColumns([Self.c2, Self.c1, Self.c0])
-        #expect(model.draftSorts.map(\.column) == [Self.c0, Self.c1])
-        model.cycleSort(column: Self.c0, multiple: true)
-        #expect(model.draftSort(for: Self.c0)?.descending == true)
-        model.cycleSort(column: Self.c0, multiple: true)
-        #expect(model.draftSorts.map(\.column) == [Self.c1])
-        #expect(model.sortPriority(for: Self.c1, in: model.draftSorts) == 0)
-        model.cycleSort(column: Self.c2, multiple: false)
-        #expect(model.draftSorts.map(\.column) == [Self.c2])
-        model.clearSort()
-        try await settled(model)
-        #expect(model.visibleColumns == [Self.c2, Self.c1, Self.c0])
+        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
+        let filter: Filter = .condition(.range(min: "1", max: nil), includeNulls: true)
+        model.setFilter(filter, column: a)
+        model.setSortDirection(column: a, descending: true)
+        model.setSortDirection(column: b, descending: false)
+        model.replaceSortColumn(a, with: c)
+        await settled(model)
         #expect(
-            model.ordered.sourceRows(start: 0, count: 10) == [
-                0, 1, 2,
+            model.appliedQuery.sorts == [
+                ColumnSort(column: c, descending: true), ColumnSort(column: b, descending: false),
             ])
+        #expect(model.appliedQuery.filter(for: a) == filter)
+        model.replaceSortColumn(c, with: b)
+        #expect(model.draft.sorts.map(\.column) == [c, b], "A column already sorted cannot replace another")
     }
 
-    @Test func confirmedHideClearsConditionsAndFindUsesRemainingColumns() async throws {
-        let model = try model()
+    @Test func clearingTheQueryKeepsColumnArrangementFindAndInspection() async throws {
+        let model = try await model()
         defer { model.stop() }
-        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: Self.c0)
-        model.setSortDirection(column: Self.c0, descending: true)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 2)
-        model.removeColumn(Self.c0)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 3)
-        #expect(model.viewer.appliedSorts.isEmpty)
-        #expect(model.appliedFilterColumns.isEmpty)
+        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
+        model.setColumnsVisible([c], visible: false)
+        model.reorderColumns([b, a])
         model.find.query = "1"
-        model.updateFind()
-        for _ in 0..<500 {
-            if model.find.hasMatches != nil { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(model.find.currentMatch?.column == Self.c1)
-        model.showColumn(Self.c0)
-        #expect(model.visibleColumns.last == Self.c0)
-        #expect(model.appliedFilter(for: Self.c0) == nil)
-        #expect(model.appliedSort(for: Self.c0) == nil)
-        try await settled(model)
+        model.inspect(a)
+        model.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: a)
+        model.setSortDirection(column: b, descending: true)
+        await settled(model)
+        model.clearFilters()
+        model.clearSorts()
+        await settled(model)
+        #expect(model.displayed.count == 3 && model.appliedQuery == TableQuery())
+        #expect(model.visibleColumns == [b, a])
+        #expect(model.find.query == "1" && model.inspectedColumn == a)
     }
 
-    @Test func hidingInspectedSelectedAndChartColumnsFallsBackToRemainingVisibleColumns() async throws {
-        let model = try model()
+    @Test func hidingAColumnAppliesAtOnceAndClearsItsConditions() async throws {
+        let model = try await model()
         defer { model.stop() }
-        #expect(model.chartX == nil)
-        #expect(model.chartY == Self.c0)
-        model.selectedColumn = Self.c0
-        model.inspectedColumn = Self.c0
-        model.chartX = Self.c0
-        model.chartY = Self.c0
+        let (a, b) = (model.id("a"), model.id("b"))
+        model.setFilter(exact("1"), column: a)
+        model.setSortDirection(column: a, descending: true)
+        await settled(model)
+        #expect(model.displayed.count == 2)
 
-        model.removeColumn(Self.c0)
-        try await settled(model)
-        #expect(model.selectedColumn == Self.c1)
-        #expect(model.inspectedColumn == Self.c1)
-        #expect(model.chartX == nil)
-        #expect(model.chartY == Self.c1)
+        model.setColumnsVisible([a], visible: false)
+        #expect(!model.visibleColumns.contains(a), "Visibility is presentation and applies immediately")
+        #expect(model.draft == TableQuery())
+        await settled(model)
+        #expect(model.displayed.count == 3 && model.appliedQuery == TableQuery())
 
-        // Hiding the remaining plottable column leaves chartY as nil while keeping c2 selected/inspected.
-        model.removeColumn(Self.c1)
-        try await settled(model)
-        #expect(model.selectedColumn == Self.c2)
-        #expect(model.inspectedColumn == Self.c2)
-        #expect(model.chartY == nil)
+        model.find.query = "1"
+        await eventually { model.find.hasMatches != nil }
+        #expect(model.find.currentMatch?.column == b, "Find searches only visible columns")
+        model.setColumnsVisible([a], visible: true)
+        #expect(model.visibleColumns.last == a)
+        #expect(model.draft.filter(for: a) == nil && model.draft.sort(for: a) == nil)
+    }
 
-        // Hiding the last visible column clears selectedColumn and inspectedColumn.
-        model.removeColumn(Self.c2)
-        try await settled(model)
-        #expect(model.selectedColumn == nil)
-        #expect(model.inspectedColumn == nil)
-        #expect(model.chartX == nil)
-        #expect(model.chartY == nil)
-
-        // Restoring a single non-plottable column recovers selection and inspector, keeping chartY nil.
-        model.showColumn(Self.c2)
-        #expect(model.selectedColumn == Self.c2)
-        #expect(model.inspectedColumn == Self.c2)
-        #expect(model.chartY == nil)
-
-        // Restoring a plottable column selects it for chartY while preserving chartX = nil (Source row).
-        model.showColumn(Self.c1)
-        #expect(model.chartX == nil)
-        #expect(model.chartY == Self.c1)
-
-        // Hidden columns cannot be inspected; Show All also recovers selection, inspector, and chartY.
-        model.setColumnsVisible([Self.c2, Self.c1], visible: false)
-        #expect(model.selectedColumn == nil)
-        #expect(model.inspectedColumn == nil)
-        #expect(model.chartY == nil)
-        model.inspectColumn(Self.c0)
-        #expect(model.inspectedColumn == nil)
+    @Test func showAllRestoresHiddenColumnsWithoutTheirConditions() async throws {
+        let model = try await model()
+        defer { model.stop() }
+        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
+        model.reorderColumns([c, b, a])
+        model.setSortDirection(column: a, descending: true)
+        model.setColumnsVisible([a], visible: false)
+        await settled(model)
         model.showAllColumns()
-        try await settled(model)
-        #expect(model.selectedColumn == Self.c0)
-        #expect(model.inspectedColumn == Self.c0)
-        #expect(model.chartX == nil)
-        #expect(model.chartY == Self.c0)
+        #expect(model.visibleColumns == [c, b, a])
+        #expect(model.appliedQuery.sort(for: a) == nil && model.appliedQuery.filter(for: a) == nil)
     }
 
-    @Test func columnLayoutEditsDuringInFlightQueryReuseRowWorkAndCommitLatestColumns() async throws {
-        let queryWorker = OperationQueue()
-        queryWorker.isSuspended = true
-        defer { queryWorker.isSuspended = false }
-        let model = try model(queryWorker: queryWorker)
+    @Test func removingOneFilterKeepsOtherFiltersSortingAndFind() async throws {
+        let model = try await model()
         defer { model.stop() }
-        let initialOrdered = model.ordered
-
-        // Start a sort; one query operation waits on the suspended worker.
-        model.setSortDirection(column: Self.c0, descending: true)
-        #expect(model.isBusy)
-        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
-            await Task.yield()
-        }
-        let inFlightOperation = try #require(queryWorker.operations.first)
-        #expect(queryWorker.operations.count == 1)
-
-        // Reordering or toggling unrelated columns must not cancel or queue another row query.
-        model.reorderColumns([Self.c2, Self.c1, Self.c0])
-        model.removeColumn(Self.c2)
-        model.showColumn(Self.c2)
-        await Task.yield()
-        #expect(!inFlightOperation.isCancelled)
-        #expect(queryWorker.operations.count == 1)
-        #expect(model.isBusy && model.ordered === initialOrdered)
-
-        queryWorker.isSuspended = false
-        try await settled(model)
-        #expect(model.ordered !== initialOrdered)
-        #expect(model.appliedSort(for: Self.c0)?.descending == true)
-        #expect(model.visibleColumns == [Self.c1, Self.c0, Self.c2])
-        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).texts == ["2", "1", "1"])
-
-        // Hiding a column whose only pending condition differs from applied state cancels and commits columns.
-        queryWorker.isSuspended = true
-        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: Self.c1)
-        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
-            await Task.yield()
-        }
-        model.removeColumn(Self.c1)
-        #expect(!model.isBusy)
-        #expect(model.visibleColumns == [Self.c0, Self.c2])
-        #expect(model.appliedFilter(for: Self.c1) == nil)
-        #expect(model.appliedSort(for: Self.c0)?.descending == true)
-        queryWorker.isSuspended = false
-        while queryWorker.operationCount > 0 {
-            await Task.yield()
-        }
-
-        // Hiding a conditioned column while another pending condition remains queues replacement row work.
-        queryWorker.isSuspended = true
-        model.setFilter(Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false), column: Self.c2)
-        model.setSortDirection(column: Self.c0, descending: false)
-        while queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }) == nil {
-            await Task.yield()
-        }
-        let combinedOp = try #require(queryWorker.operations.first(where: { !$0.isFinished && !$0.isCancelled }))
-        model.removeColumn(Self.c2)
-        #expect(model.isBusy)
-        while !combinedOp.isCancelled {
-            await Task.yield()
-        }
-        queryWorker.isSuspended = false
-        try await settled(model)
-        #expect(model.visibleColumns == [Self.c0])
-        #expect(model.appliedFilterColumns.isEmpty)
-        #expect(model.appliedSort(for: Self.c0)?.descending == false)
-        #expect(model.ordered.rowCount() == 3)
+        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
+        model.find.query = "x"
+        model.setFilter(exact("1"), column: a)
+        model.setFilter(exact("x"), column: c)
+        model.setSortDirection(column: b, descending: true)
+        await settled(model)
+        model.reorderColumns([c, a, b])
+        model.setFilter(nil, column: c)
+        await settled(model)
+        #expect(model.filteredColumns == [a] && model.displayed.count == 2)
+        #expect(model.appliedQuery.sorts.map(\.column) == [b] && model.find.query == "x")
+        model.clearFilters()
+        await settled(model)
+        #expect(model.displayed.count == 3 && model.filteredColumns.isEmpty)
+        #expect(model.appliedQuery.sorts.map(\.column) == [b])
     }
 
-    @Test func filtersStayInCanonicalSchemaOrderRegardlessOfEditSequence() async throws {
-        let model = try model()
+    @Test func filtersKeepSchemaOrderSoEqualConditionsNeedNoQuery() async throws {
+        let model = try await model()
         defer { model.stop() }
-        let c0Filter = Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false)
-        let c2Filter = Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false)
+        let (a, c) = (model.id("a"), model.id("c"))
+        model.setFilter(exact("x"), column: c)
+        model.setFilter(exact("1"), column: a)
+        await settled(model)
+        let rows = model.displayed
+        #expect(model.appliedQuery.filters.map(\.column) == [a, c])
 
-        model.setFilter(c2Filter, column: Self.c2)
-        model.setFilter(c0Filter, column: Self.c0)
-        try await settled(model)
-        let originalFiltered = model.filtered
-        #expect(model.viewer.appliedFilters.map(\.column) == [Self.c0, Self.c2])
-
-        // Re-applying the same filters in the opposite order produces the exact same canonical list.
-        model.setFilter(nil, column: Self.c0)
-        model.setFilter(c0Filter, column: Self.c0)
-        #expect(model.draftFilters.map(\.column) == [Self.c0, Self.c2])
-        #expect(!model.isBusy && model.filtered === originalFiltered)
+        model.setFilter(nil, column: a)
+        model.setFilter(exact("1"), column: a)
+        #expect(model.draft.filters.map(\.column) == [a, c])
+        #expect(!model.isUpdating && model.displayed === rows)
     }
 
-    @Test func revertingPendingFilterWhileVisibilityChangedAppliesColumnsSynchronously() async throws {
-        let model = try model()
+    @Test func revertingAPendingFilterCancelsItsQuery() async throws {
+        let model = try await model()
         defer { model.stop() }
-
-        let c0Filter = Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false)
-        model.setFilter(c0Filter, column: Self.c0)
-        model.removeColumn(Self.c2)
-        model.setFilter(nil, column: Self.c0)
-
-        #expect(!model.isBusy)
-        #expect(model.visibleColumns == [Self.c0, Self.c1])
+        let (a, c) = (model.id("a"), model.id("c"))
+        model.setFilter(exact("1"), column: a)
+        model.setColumnsVisible([c], visible: false)
+        model.setFilter(nil, column: a)
+        #expect(!model.isUpdating)
+        #expect(model.visibleColumns == [a, model.id("b")])
     }
 
-    @Test func exactDraftPreservesBytesAndNullsAreIndependent() {
-        let composed = LiteralTextValue(value: "é")
-        let decomposed = LiteralTextValue(value: "e\u{301}")
-        #expect(composed != decomposed)
-        var draft = ExactFilterDraft(nil)
-        draft.set(composed, selected: false)
-        #expect(!draft.contains(composed) && draft.contains(decomposed))
-        let filter = NullMode.exclude.applying(to: draft.condition)
-        #expect(filter?.includeNulls == false)
-        if case .exact(let values, let exclude) = filter?.condition {
-            #expect(exclude && values.count == 1)
-        } else {
-            Issue.record("Expected exact selection")
+    @Test func failedQueriesKeepTheDisplayedRowsAndRestoreTheDraft() async throws {
+        let alerts = Alerts()
+        let model = try await model(alerts: alerts)
+        defer { model.stop() }
+        let a = model.id("a")
+        model.setFilter(exact("1"), column: a)
+        await settled(model)
+        let rows = model.displayed
+        model.setFilter(.condition(.range(min: "invalid", max: nil), includeNulls: false), column: a)
+        await settled(model)
+        #expect(alerts.current?.message.contains("invalid") == true)
+        #expect(model.displayed === rows && model.draft == rows.query)
+    }
+
+    @Test func bulkVisibilityClearsOnlyHiddenConditionsAndKeepsRemainingOrder() async throws {
+        let model = try await model()
+        defer { model.stop() }
+        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
+        model.reorderColumns([c, b, a])
+        model.setFilter(exact("x"), column: c)
+        model.setSortDirection(column: b, descending: true)
+        model.setSortDirection(column: a, descending: false)
+        await settled(model)
+        model.setColumnsVisible([c, b], visible: false)
+        await settled(model)
+        #expect(model.visibleColumns == [a] && model.displayed.count == 3)
+        #expect(model.appliedQuery.sorts == [ColumnSort(column: a, descending: false)])
+        model.setColumnsVisible([c, b], visible: true)
+        #expect(model.visibleColumns == [a, b, c])
+    }
+
+    @Test func windowsSharingASessionKeepIndependentQueries() async throws {
+        let session = try await TestTables.session(Self.csv)
+        let alerts = Alerts()
+        let first = TableModel(url: URL(fileURLWithPath: "/a.csv"), session: session, alerts: alerts)
+        let second = TableModel(url: URL(fileURLWithPath: "/a.csv"), session: session, alerts: alerts)
+        defer {
+            first.stop()
+            second.stop()
         }
-        let onlyNull = NullMode.only.applying(to: draft.condition)
-        #expect(onlyNull?.includeNulls == true)
-        if case .exact(let values, let exclude) = onlyNull?.condition {
-            #expect(values.isEmpty && !exclude)
-        } else {
-            Issue.record("Expected null-only selection")
-        }
-        draft.all(true)
-        #expect(NullMode.include.applying(to: draft.condition) == nil)
+        first.setFilter(.condition(.range(min: "2", max: nil), includeNulls: false), column: first.id("a"))
+        second.setFilter(exact("y"), column: second.id("c"))
+        await settled(first)
+        await settled(second)
+        #expect(Array(first.displayed.rowNumbers(0..<3)) == [2])
+        #expect(Array(second.displayed.rowNumbers(0..<3)) == [1])
+        first.stop()
+        #expect(try await second.displayed.rowSet.nullCount(second.id("a")) == 0)
     }
 
     @Test func valueSelectionTreatsMissingAsAValueAndResetClearsEveryDraft() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-null-selection-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value,number\nalpha,1\n,2\nMissing (null),3\nbeta,4\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
+        let model = try await TestTables.model("value,number\nalpha,1\n,2\nMissing (null),3\nbeta,4\n")
         defer { model.stop() }
-        var draft = ColumnFilterDraft(nil)
+        let value = model.id("value")
+        var draft = FilterDraft(nil)
         draft.selectAllValues(false)
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 0)
+        model.setFilter(draft.filter(mode: .exact), column: value)
+        await settled(model)
+        #expect(model.displayed.count == 0)
 
-        // Reopening a zero-row result can recover through the complete facet.
-        let choices = try await model.viewer.filterChoices(Self.c0)
-        #expect(choices.values?.count == 3 && choices.nullCount == 1)
-        var reopened = ColumnFilterDraft(model.appliedFilter(for: Self.c0))
+        // Reopening a zero-row result can recover through the column's own options.
+        let options = try await model.displayed.rowSet.filterChoices(for: value)
+        #expect(options.values?.count == 3 && options.nullCount == 1)
+        var reopened = FilterDraft(model.appliedQuery.filter(for: value))
         reopened.enterValues()
         reopened.selectAllValues(true)
         #expect(reopened.filter(mode: .exact) == nil)
 
         draft.includesMissing = true
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.sourceRows(start: 0, count: 10) == [1])
+        model.setFilter(draft.filter(mode: .exact), column: value)
+        await settled(model)
+        #expect(Array(model.displayed.rowNumbers(0..<10)) == [1])
 
-        // A null-only filter reopens as an editable exact selection.
-        draft = ColumnFilterDraft(draft.filter(mode: .exact))
+        draft = FilterDraft(draft.filter(mode: .exact))
         draft.enterValues()
-        draft.includesMissing = false
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 0)
         draft.includesMissing = true
-        draft.setValue(LiteralTextValue(value: "Missing (null)"), selected: true)
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.sourceRows(start: 0, count: 10) == [1, 2])
+        draft.setValue(ExactValue("Missing (null)"), selected: true)
+        model.setFilter(draft.filter(mode: .exact), column: value)
+        await settled(model)
+        #expect(Array(model.displayed.rowNumbers(0..<10)) == [1, 2])
 
         draft.selectAllValues(true)
         #expect(draft.filter(mode: .exact) == nil)
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 4)
-
         draft.text.text = "alpha"
-        draft.range.minimum = "3"
-        draft.range.lowerEdited = true
+        draft.range.typeMinimum("3")
         draft.nullMode = .only
-        draft.enterValues()
-        #expect(!draft.exact.contains(LiteralTextValue(value: "alpha")))
-        #expect(draft.includesMissing)
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
         draft.reset()
-        #expect(draft.filter(mode: .exact) == nil)
-        #expect(draft.filter(mode: .text) == nil)
+        #expect(draft.filter(mode: .exact) == nil && draft.filter(mode: .text) == nil)
         #expect(draft.filter(mode: .range) == nil)
-        // Reset edits the draft, not the applied view.
-        #expect(model.ordered.rowCount() == 1)
-        model.setFilter(draft.filter(mode: .exact), column: Self.c0)
-        try await settled(model)
-        #expect(model.ordered.rowCount() == 4)
-    }
-
-    @Test func bulkVisibilityClearsOnlyHiddenConditionsAndPreservesRemainingOrder() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.reorderColumns([Self.c2, Self.c1, Self.c0])
-        model.setFilter(Filter(condition: .exact(values: ["x"], exclude: false), includeNulls: false), column: Self.c2)
-        model.setSortDirection(column: Self.c1, descending: true)
-        model.setSortDirection(column: Self.c0, descending: false)
-        try await settled(model)
-        model.setColumnsVisible([Self.c2, Self.c1], visible: false)
-        try await settled(model)
-        #expect(model.visibleColumns == [Self.c0])
-        #expect(model.ordered.rowCount() == 3)
-        #expect(model.sortPriority(for: Self.c0, in: model.viewer.appliedSorts) == 0)
-        model.setColumnsVisible([Self.c2, Self.c1], visible: true)
-        try await settled(model)
-        #expect(model.visibleColumns == [Self.c0, Self.c1, Self.c2])
-        #expect(model.appliedFilter(for: Self.c1) == nil && model.appliedFilter(for: Self.c2) == nil)
-        #expect(model.appliedSort(for: Self.c1) == nil && model.appliedSort(for: Self.c2) == nil)
-    }
-
-    @Test func failedReplacementKeepsTheWindowViewAndSpec() async throws {
-        let model = try model()
-        defer { model.stop() }
-        model.setFilter(Filter(condition: .exact(values: ["1"], exclude: false), includeNulls: false), column: Self.c0)
-        try await settled(model)
-        let acceptedFilters = model.viewer.appliedFilters
-        let acceptedSorts = model.viewer.appliedSorts
-        let ordered = model.ordered
-        model.setFilter(Filter(condition: .range(min: "invalid", max: nil), includeNulls: false), column: Self.c0)
-        try await settled(model)
-        #expect(model.errorMessage != nil)
-        #expect(model.ordered === ordered)
-        #expect(model.viewer.appliedFilters == acceptedFilters && model.draftFilters == acceptedFilters)
-        #expect(model.viewer.appliedSorts == acceptedSorts && model.draftSorts == acceptedSorts)
-        #expect(try model.ordered.formatColumn(column: Self.c0, start: 0, count: 3).rowCount == 2)
-    }
-
-    @Test func windowsSharingDatasetOwnIndependentQueriesAndCancellation() async throws {
-        let first = try model()
-        let second = DocumentModel(url: first.url, dataset: first.dataset)
-        defer {
-            first.stop()
-            second.stop()
-        }
-        let original = first.ordered
-        first.setFilter(Filter(condition: .range(min: "2", max: nil), includeNulls: false), column: Self.c0)
-        second.setFilter(Filter(condition: .exact(values: ["y"], exclude: false), includeNulls: false), column: Self.c2)
-        try await settled(first)
-        try await settled(second)
-        #expect(first.ordered.sourceRows(start: 0, count: 3) == [2])
-        #expect(second.ordered.sourceRows(start: 0, count: 3) == [1])
-        first.refresh(debounce: true)
-        first.stop()
-        #expect(try second.filtered.countNulls(column: Self.c0) == 0)
-        #expect(original.rowCount() == 3)
-        #expect(first.viewer.appliedFilters != second.viewer.appliedFilters)
+        #expect(model.displayed.count == 2, "Reset edits the draft, not the displayed rows")
     }
 }

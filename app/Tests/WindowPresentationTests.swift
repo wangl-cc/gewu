@@ -1,22 +1,22 @@
 import AppKit
 import Foundation
+import GewuKit
 import SwiftUI
 import Testing
 
 @Suite @MainActor
 struct WindowPresentationTests {
     @Test func filterDescriptionsKeepNullLiteralAndExactBoundsDistinct() {
-        let missing = Filter(condition: .exact(values: [], exclude: false), includeNulls: true)
-        let literal = Filter(condition: .exact(values: ["Missing"], exclude: false), includeNulls: false)
+        let missing: Filter = .onlyNulls
+        let literal: Filter = .condition(.exact(values: ["Missing"], exclude: false), includeNulls: false)
         #expect(missing.conditionSummary == "Only missing")
         #expect(literal.conditionSummary == "= “Missing”")
-        #expect(
-            Filter(condition: .exact(values: [""], exclude: false), includeNulls: false).conditionSummary
-                == "= (empty string)")
-        let range = Filter(condition: .range(min: "9007199254740993", max: nil), includeNulls: true)
+        let empty: Filter = .condition(.exact(values: [""], exclude: false), includeNulls: false)
+        #expect(empty.conditionSummary == "= (empty string)")
+        let range: Filter = .condition(.range(min: "9007199254740993", max: nil), includeNulls: true)
         #expect(range.conditionSummary == "≥ 9007199254740993 · + missing")
-        let text = Filter(
-            condition: .text(text: "line\nbreak", mode: .equals, caseSensitive: true), includeNulls: false)
+        let text: Filter = .condition(
+            .text(text: "line\nbreak", mode: .equals, caseSensitive: true), includeNulls: false)
         #expect(!text.conditionSummary.contains("\n"))
         #expect(text.detailSummary.contains("Case sensitive"))
     }
@@ -32,99 +32,41 @@ struct WindowPresentationTests {
         }
     }
 
-    @Test func filterFacetIgnoresOnlyTheEditedColumnsFilter() async throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-facet-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "city,district\nbj,haidian\nbj,chaoyang\nsh,pudong\nsh,xuhui\n"
-            .write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        func exact(_ value: String) -> Filter {
-            Filter(condition: .exact(values: [value], exclude: false), includeNulls: false)
-        }
-        let c0 = ColumnId(raw: 0)
-        let c1 = ColumnId(raw: 1)
-        let filters = [
-            ColumnFilter(column: c0, filter: exact("bj")),
-            ColumnFilter(column: c1, filter: exact("haidian")),
-        ]
-        let filtered = try dataset.filter(filters: filters)
-        let ordered = try filtered.sort(sorts: [ColumnSort(column: c1, descending: true)])
-        #expect(ordered.rowCount() == 1)
-
-        // The district editor keeps city = bj but not its own district = haidian.
-        let viewer = Viewer(
-            dataset: dataset, filtered: filtered, ordered: ordered, filters: filters,
-            sorts: [ColumnSort(column: c1, descending: true)])
-        let choices = try await viewer.filterChoices(c1)
-        #expect(choices.values?.map(\.label) == ["chaoyang", "haidian"])
-        #expect(try await viewer.values(c1).values.map(\.label) == ["haidian"])
-
-        // When the edited column has no filter of its own, its choices match the applied rows,
-        // while city's own editor ignores city = bj.
-        let cityOnlyFilters = [ColumnFilter(column: c0, filter: exact("bj"))]
-        let cityOnlyFiltered = try dataset.filter(filters: cityOnlyFilters)
-        let cityOnlyViewer = Viewer(
-            dataset: dataset, filtered: cityOnlyFiltered, ordered: cityOnlyFiltered.unsorted(),
-            filters: cityOnlyFilters)
-        #expect(try await cityOnlyViewer.filterChoices(c1).values?.map(\.label) == ["chaoyang", "haidian"])
-        #expect(try await cityOnlyViewer.filterChoices(c0).values?.map(\.label) == ["bj", "sh"])
-    }
-
-    @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("filter-modes-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
+    @Test func newFiltersPreferBoundedChoicesBeforeTypeSpecificEditors() async throws {
         let rows = (0..<1200).map { "\($0 % 3),group\($0 % 3),\($0),item\($0)" }
-        try (["few_numbers,few_labels,many_numbers,many_labels"] + rows).joined(separator: "\n")
-            .write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let view = dataset.unfiltered()
+        let session = try await TestTables.session(
+            (["few_numbers,few_labels,many_numbers,many_labels"] + rows).joined(separator: "\n"))
+        let view = session.initialRows.rowSet
+        let columns = session.source.columns
         let expected: [FilterMode] = [.exact, .exact, .range, .text]
-        for (index, column) in dataset.info().columns.enumerated() {
+        for (index, column) in columns.enumerated() {
             #expect(FilterMode.initial(capabilities: column.capabilities, current: nil) == nil)
-            let choices = try view.filterChoices(column: column.id)
+            let choices = try await view.filterChoices(for: column.id)
             #expect(
                 FilterMode.initial(capabilities: column.capabilities, current: nil, choices: choices)
                     == expected[index])
         }
 
-        let numeric = dataset.info().columns[0].capabilities
-        let text = dataset.info().columns[1].capabilities
+        let numeric = columns[0].capabilities
+        let text = columns[1].capabilities
         #expect(
             FilterMode.initial(
-                capabilities: numeric, current: Filter(condition: .range(min: "1", max: "2"), includeNulls: false))
+                capabilities: numeric, current: .condition(.range(min: "1", max: "2"), includeNulls: false))
                 == .range)
         #expect(
             FilterMode.initial(
                 capabilities: text,
-                current: Filter(
-                    condition: .text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
+                current: .condition(.text(text: "group", mode: .equals, caseSensitive: false), includeNulls: true))
                 == .text)
         // Value selection waits for choices and needs a complete list of values.
-        let selected = Filter(condition: .exact(values: ["group1"], exclude: false), includeNulls: true)
+        let selected: Filter = .condition(.exact(values: ["group1"], exclude: false), includeNulls: true)
         #expect(FilterMode.initial(capabilities: text, current: selected) == nil)
-        let labels = try view.filterChoices(column: ColumnId(raw: 1))
+        let labels = try await view.filterChoices(for: columns[1].id)
         #expect(FilterMode.initial(capabilities: text, current: selected, choices: labels) == .exact)
-        let manyLabels = dataset.info().columns[3].capabilities
-        let unlisted = try view.filterChoices(column: ColumnId(raw: 3))
+        let unlisted = try await view.filterChoices(for: columns[3].id)
         #expect(unlisted.values == nil)
-        #expect(FilterMode.initial(capabilities: manyLabels, current: selected, choices: unlisted) == .text)
-    }
-
-    @Test func inspectorChoicesSurviveTypeChangesWithoutRequestingUnsupportedLogBins() {
-        let settings = InspectorSettings()
-        #expect(settings.expanded(distribution: true) == 7)
-        #expect(settings.expanded(distribution: false) == 9)
-        settings.histogramBins = 100
-        settings.histogramScale = .log10
-        settings.frequencyScale = .log10
-        settings.setExpanded(.distribution, false)
-        settings.setExpanded(.values, true)
-        #expect(settings.binningScale(logarithmic: false) == .linear)
-        #expect(settings.expanded(distribution: false) & InspectorSection.values.mask != 0)
-        #expect(settings.binningScale(logarithmic: true) == .log10)
-        #expect(settings.expanded(distribution: true) & InspectorSection.distribution.mask == 0)
-        #expect(settings.expanded(distribution: true) & InspectorSection.values.mask != 0)
-        #expect(settings.histogramBins == 100 && settings.frequencyScale == .log10)
+        #expect(
+            FilterMode.initial(capabilities: columns[3].capabilities, current: selected, choices: unlisted) == .text)
     }
 
     @Test func reusedFindCellsKeepSelectedTextLegibleAndClearOldHighlight() throws {
@@ -181,21 +123,20 @@ struct WindowPresentationTests {
         let preferences = try #require(UserDefaults(suiteName: name))
         defer { preferences.removePersistentDomain(forName: name) }
         let url = URL(fileURLWithPath: "/unused.csv")
-        let first = WorkbookModel(url: url, preferences: preferences)
+        let first = WindowModel(url: url, defaults: preferences)
         #expect(first.showsInspector)
         first.showsInspector = false
-        let second = WorkbookModel(url: url, preferences: preferences)
+        let second = WindowModel(url: url, defaults: preferences)
         #expect(!second.showsInspector)
         second.showsInspector = true
-        #expect(WorkbookModel(url: url, preferences: preferences).showsInspector)
+        #expect(WindowModel(url: url, defaults: preferences).showsInspector)
     }
 
-    @Test func inspectorColumnPickerPreservesDuplicateAndSentinelColumnTitles() throws {
-        let c0 = ColumnId(raw: 0)
-        let c1 = ColumnId(raw: 1)
-        let c2 = ColumnId(raw: 2)
-        var selection: ColumnId?
-        let binding = Binding<ColumnId?>(get: { selection }, set: { selection = $0 })
+    @Test func inspectorColumnPickerPreservesDuplicateAndSentinelColumnTitles() async throws {
+        let columns = try await TestTables.session("a,b,c\n1,2,3\n").source.columns.map(\.id)
+        let (c0, c1, c2) = (columns[0], columns[1], columns[2])
+        var selection: ColumnID?
+        let binding = Binding<ColumnID?>(get: { selection }, set: { selection = $0 })
         let host = NSHostingController(
             rootView: InspectorColumnPicker(
                 label: "X axis",

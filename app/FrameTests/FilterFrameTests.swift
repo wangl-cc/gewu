@@ -1,6 +1,7 @@
 import AppKit
 import CoreMedia
 import CryptoKit
+import GewuKit
 import ScreenCaptureKit
 import SwiftUI
 import XCTest
@@ -17,23 +18,26 @@ final class FilterFrameTests: XCTestCase {
         let lines = (0..<8192).map { "\($0.isMultiple(of: 16) ? "Keep" : "Other"),specimen-\($0),\($0)" }
         try ("cohort,specimen,index\n" + lines.joined(separator: "\n")).write(
             to: url, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: url.path)
-        let model = DocumentModel(url: url, dataset: dataset)
+        let model = TableModel(url: url, session: try await TableSession.open(url), alerts: Alerts())
         defer { model.stop() }
 
         let viewport = NSRect(x: 40, y: 48, width: 640, height: 400)
         let window = NSWindow(contentRect: viewport, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: DataTable(model: model, showsRowNumbers: true))
+        let host = NSHostingView(rootView: DataTable(model: model, inspectorVisible: false, analyze: { _ in }))
         host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: viewport.size)
         window.contentView = host
         window.setContentSize(viewport.size)
         window.orderFrontRegardless()
         host.layoutSubtreeIfNeeded()
-        try await waitUntil("the table to be installed") { model.table != nil }
-        let scroll = try XCTUnwrap(model.table?.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? TableScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+        try await waitUntil("the table to be installed") { findScroll(host) != nil }
+        let scroll = try XCTUnwrap(findScroll(host))
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let specimenColumn = try XCTUnwrap(table.tableColumns.firstIndex { $0.identifier.rawValue == "c1" })
         try await waitUntil("the native table to draw its initial rows") {
@@ -48,7 +52,7 @@ final class FilterFrameTests: XCTestCase {
         try XCTUnwrap(table.headerView).addSubview(marker)
         marker.wantsLayer = true
         let pulse = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
-            marker.isHidden.toggle()
+            MainActor.assumeIsolated { marker.isHidden.toggle() }
         }
         marker.layer?.backgroundColor = NSColor.red.cgColor
         defer { pulse.invalidate() }
@@ -79,11 +83,11 @@ final class FilterFrameTests: XCTestCase {
         try await stream.startCapture()
 
         do {
-            let c0 = ColumnId(raw: 0)
-            let keep = Filter(condition: .exact(values: ["Keep"], exclude: false), includeNulls: false)
+            let c0 = model.source.columns[0].id
+            let keep: Filter = .condition(.exact(values: ["Keep"], exclude: false), includeNulls: false)
             @MainActor func settle(filtered: Bool) async throws -> SHA256.Digest {
                 try await waitUntil("the expected second row after filtering=\(filtered)") {
-                    guard !model.isBusy, model.ordered.rowCount() == (filtered ? 512 : 8192),
+                    guard !model.isUpdating, model.displayed.count == (filtered ? 512 : 8192),
                         table.numberOfRows == (filtered ? 512 : 8192),
                         let cell = table.view(atColumn: specimenColumn, row: 1, makeIfNecessary: false)
                             as? NSTableCellView

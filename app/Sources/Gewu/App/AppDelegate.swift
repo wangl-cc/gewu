@@ -1,19 +1,19 @@
 import AppKit
-import Combine
+import GewuKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 /// Bridges file-open events and native panels; SwiftUI owns the windows and menus.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(didFinishRestoringWindows),
-            name: NSApplication.didFinishRestoringWindowsNotification, object: nil)
-    }
+    private var restorationObserver: (any NSObjectProtocol)?
 
-    @objc private func didFinishRestoringWindows(_ notification: Notification) {
-        FileCoordinator.shared.didFinishRestoringWindows()
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        restorationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishRestoringWindowsNotification, object: NSApp, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { FileCoordinator.shared.didFinishRestoringWindows() }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -44,18 +44,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-final class FileCoordinator: ObservableObject {
+@Observable
+final class FileCoordinator {
     static let shared = FileCoordinator()
-    @Published private(set) var recentURLs = NSDocumentController.shared.recentDocumentURLs
-    private var openWindow: ((URL) -> Void)?
-    private var pending: [URL] = []
-    private var panel: NSOpenPanel?
-    private var launchFinished = false
-    private var restorationFinished = false
-    private var initialPresentationHandled = false
-    private var receivedDocument = false
-    private let makePanel: @MainActor () -> NSOpenPanel
-    private let hasExistingWindows: @MainActor () -> Bool
+    private(set) var recentURLs = NSDocumentController.shared.recentDocumentURLs
+    @ObservationIgnored private var openWindow: ((URL) -> Void)?
+    @ObservationIgnored private var pending: [URL] = []
+    @ObservationIgnored private var panel: NSOpenPanel?
+    @ObservationIgnored private var launchFinished = false
+    @ObservationIgnored private var restorationFinished = false
+    @ObservationIgnored private var initialPresentationHandled = false
+    @ObservationIgnored private var receivedDocument = false
+    @ObservationIgnored private let makePanel: @MainActor () -> NSOpenPanel
+    @ObservationIgnored private let hasExistingWindows: @MainActor () -> Bool
 
     static func hasViewerWindows(in windows: [NSWindow]) -> Bool {
         windows.contains { window in

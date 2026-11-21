@@ -240,7 +240,8 @@ pub(super) fn write(
     if data
         .columns
         .iter()
-        .any(|column| column.data_type().is_nested())
+        .zip(data.as_text)
+        .any(|(column, &as_text)| !as_text && column.data_type().is_nested())
     {
         return Err(crate::InternalError::Invariant(
             "nested columns reached the XLSX writer despite export validation".into(),
@@ -486,9 +487,10 @@ mod tests {
         write(
             file.as_file_mut(),
             ExportData {
-                schema: &batch.schema(),
+                schema: batch.schema(),
                 columns: batch.columns(),
                 rows: crate::row_ids::RowSlice::Selected(&[1, 0]),
+                as_text: &[false; 8][..batch.num_columns()],
             },
             WriteProgress {
                 cancelled: &cancelled,
@@ -577,15 +579,16 @@ mod tests {
         let rows_written = AtomicU64::new(0);
         let schema = batch.schema();
         let data = ExportData {
-            schema: &schema,
+            schema: schema.clone(),
             columns: batch.columns(),
             rows: crate::row_ids::RowSlice::Selected(&[]),
+            as_text: &[false; 8][..batch.num_columns()],
         };
         let progress = WriteProgress {
             cancelled: &cancelled,
             rows_written: &rows_written,
         };
-        write(file.as_file_mut(), data, progress).unwrap();
+        write(file.as_file_mut(), data.clone(), progress).unwrap();
         let loaded = read(file.reopen().unwrap(), &OpenOptions::default()).unwrap();
         assert_eq!(loaded.batch.num_rows(), 0);
         assert_eq!(loaded.batch.schema().field(0).name(), "id");
@@ -596,7 +599,7 @@ mod tests {
                 file.as_file_mut(),
                 ExportData {
                     rows: crate::row_ids::RowSlice::Selected(&excessive_rows),
-                    ..data
+                    ..data.clone()
                 },
                 progress
             ),
@@ -608,7 +611,7 @@ mod tests {
                 file.as_file_mut(),
                 ExportData {
                     columns: &excessive_columns,
-                    ..data
+                    ..data.clone()
                 },
                 progress
             ),

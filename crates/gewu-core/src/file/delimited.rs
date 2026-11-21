@@ -97,12 +97,14 @@ fn preserve_integer_precision(
 pub(super) fn write(
     file: impl Write,
     delimiter: u8,
+    header: bool,
     data: ExportData<'_>,
     progress: WriteProgress<'_>,
 ) -> Result<(), crate::ExportError> {
     progress.check()?;
     let mut writer = arrow_csv::WriterBuilder::new()
         .with_delimiter(delimiter)
+        .with_header(header)
         .with_line_terminator(arrow_csv::writer::Terminator::CRLF)
         .build(file);
     // Emit headers even when the snapshot has no rows; this also validates
@@ -142,9 +144,10 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let written = AtomicU64::new(0);
         let data = ExportData {
-            schema: &schema,
+            schema: schema.clone(),
             columns: batch.columns(),
             rows: crate::row_ids::RowSlice::Selected(&rows),
+            as_text: &[false; 8][..batch.num_columns()],
         };
         let progress = WriteProgress {
             cancelled: &cancelled,
@@ -166,7 +169,7 @@ mod tests {
             }
         }
         assert!(matches!(
-            write(CancellingWriter(&cancelled), b',', data, progress),
+            write(CancellingWriter(&cancelled), b',', true, data, progress),
             Err(crate::ExportError::Cancelled)
         ));
         assert!(written.load(Ordering::Relaxed) > 0);
@@ -188,16 +191,17 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let written = AtomicU64::new(0);
         let data = ExportData {
-            schema: &schema,
+            schema: schema.clone(),
             columns: batch.columns(),
             rows: crate::row_ids::RowSlice::Selected(&[0, 1]),
+            as_text: &[false; 8][..batch.num_columns()],
         };
         let progress = WriteProgress {
             cancelled: &cancelled,
             rows_written: &written,
         };
         let mut bytes = Vec::new();
-        write(&mut bytes, b',', data, progress).unwrap();
+        write(&mut bytes, b',', true, data, progress).unwrap();
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
             "dictionary,null\r\n,\r\n,\r\n"

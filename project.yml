@@ -16,20 +16,71 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: '15.0'
     ARCHS: $(NATIVE_ARCH_ACTUAL)
     ONLY_ACTIVE_ARCH: YES
-    SWIFT_VERSION: '5.0'
+    SWIFT_VERSION: '6.0'
     RUST_PROFILE: release
+    SWIFT_INCLUDE_PATHS: $(inherited) $(BUILT_PRODUCTS_DIR)/gewuFFI
 targets:
+  GewuBindings:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: $(DERIVED_FILE_DIR)/GewuBindings.swift
+        type: file
+        optional: true
+        buildPhase: sources
+    settings:
+      base:
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        SKIP_INSTALL: YES
+    preBuildScripts:
+      - script: exec /bin/bash "$SRCROOT/scripts/build-rust.sh"
+        name: Build Rust and generate UniFFI bindings
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/libgewu.a
+          - $(DERIVED_FILE_DIR)/GewuBindings.swift
+          - $(BUILT_PRODUCTS_DIR)/gewuFFI/gewuFFI.h
+          - $(BUILT_PRODUCTS_DIR)/gewuFFI/gewu_data.h
+          - $(BUILT_PRODUCTS_DIR)/gewuFFI/module.modulemap
+  GewuKit:
+    type: framework
+    platform: macOS
+    sources:
+      - path: app/GewuKit/Sources
+        includes: ['**/*.swift']
+    dependencies:
+      - target: GewuBindings
+        link: true
+      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.kit
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: '-'
+        SKIP_INSTALL: YES
+        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
+  GewuKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: app/GewuKit/Tests
+        includes: ['**/*.swift']
+    dependencies:
+      - target: GewuKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.kit.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: '-'
   Gewu:
     type: application
     platform: macOS
     sources:
       - path: app/Sources/Gewu
         includes: ['**/*.swift']
-        excludes: [Generated]
-      - path: $(DERIVED_FILE_DIR)/gewu.swift
-        type: file
-        optional: true
-        buildPhase: sources
       - path: app/Icons/Gewu.icon
         type: file
         buildPhase: resources
@@ -38,8 +89,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
-      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
-        embed: false
+      - target: GewuKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu
@@ -53,22 +103,16 @@ targets:
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(DERIVED_FILE_DIR)/gewuFFI.modulemap"
-        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
       configs:
         Performance:
           PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.performance
     preBuildScripts:
-      - script: exec /bin/bash "$SRCROOT/scripts/build-rust.sh"
-        name: Build Rust and generate UniFFI bindings
+      - script: exec /bin/bash "$SRCROOT/scripts/app-info-plist.sh"
+        name: Prepare Info.plist
         shell: /bin/bash
         basedOnDependencyAnalysis: false
         showEnvVars: false
         outputFiles:
-          - $(BUILT_PRODUCTS_DIR)/libgewu.a
-          - $(DERIVED_FILE_DIR)/gewu.swift
-          - $(DERIVED_FILE_DIR)/gewuFFI.h
-          - $(DERIVED_FILE_DIR)/gewuFFI.modulemap
           - $(DERIVED_FILE_DIR)/Info.plist
   GewuTests:
     type: bundle.unit-test
@@ -76,11 +120,7 @@ targets:
     sources:
       - path: app/Sources/Gewu
         includes: ['**/*.swift']
-        excludes: [Generated, App/GewuApp.swift]
-      - path: $(GEWU_DERIVED_SOURCES)/gewu.swift
-        type: file
-        optional: true
-        buildPhase: sources
+        excludes: [App/GewuApp.swift]
       - path: app/Tests
         includes: ['*.swift']
       - path: app/FrameTests
@@ -90,19 +130,13 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
-      - target: Gewu
-        link: false
-      - framework: $(BUILT_PRODUCTS_DIR)/libgewu.a
-        embed: false
+      - target: GewuKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.wangl-cc.gewu.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: ''
         BUNDLE_LOADER: ''
-        GEWU_DERIVED_SOURCES: $(PROJECT_TEMP_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/Gewu.build/DerivedSources
-        OTHER_SWIFT_FLAGS: $(inherited) -Xcc -fmodule-map-file="$(GEWU_DERIVED_SOURCES)/gewuFFI.modulemap"
-        OTHER_LDFLAGS: ['$(inherited)', '-liconv']
         CODE_SIGN_IDENTITY: '-'
   GewuUITests:
     type: bundle.ui-testing
@@ -125,6 +159,15 @@ targets:
         TEST_TARGET_NAME: Gewu
         CODE_SIGN_IDENTITY: '-'
 schemes:
+  GewuKit:
+    build:
+      targets:
+        GewuKit: all
+    test:
+      config: Debug
+      targets:
+        - name: GewuKitTests
+
   GewuPerformance:
     build:
       targets:
@@ -148,6 +191,7 @@ schemes:
     test:
       config: Debug
       targets:
+        - name: GewuKitTests
         - name: GewuTests
           skippedTests: [FilterFrameTests]
     profile:

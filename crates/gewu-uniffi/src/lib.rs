@@ -4,8 +4,9 @@
 //! Dataset and View handles share immutable data.
 
 mod analysis;
+mod cache;
 mod column;
-mod column_segment;
+mod data;
 mod dataset;
 mod error;
 mod export;
@@ -20,28 +21,17 @@ mod scatter;
 #[cfg(test)]
 mod tests;
 
-pub use analysis::{
-    AnalysisCapabilities, AnalysisField, Histogram, LengthSummary, LengthUnit, NumericStatistics,
-    ValueFrequency, ValueSummary,
-};
-pub use column::{ColumnCapabilities, ColumnId, ColumnInfo, ValueCategory};
-pub use column_segment::FormattedColumnSegment;
-pub use dataset::{DatasetInfo, GewuDataset};
+pub use data::{ColumnText, GewuBytes, GewuExportedBytes, GewuSourceRows};
+pub use dataset::{DatasetInfo, GewuDataset, OpenOptions};
 pub use error::{
-    AnalysisErrorKind, AnalysisOperation, ExportErrorKind, FileErrorKind, FilterErrorKind,
-    FindErrorKind, GewuError, IoOperation, LimitErrorKind, ValueParseError,
+    AnalysisErrorKind, ExportErrorKind, FileErrorKind, FilterErrorKind, FindErrorKind, GewuError,
+    LimitErrorKind,
 };
-pub use export::{ExportOptions, ExportProgress, GewuExport, ParquetCompression};
-pub use file::{xlsx_sheet_names, FileMetadata, FileType, KeyValue};
-pub use filter::{
-    Filter, FilterChoices, FilterCondition, RangeBound, RangeBounds, RangeHistogram, TextMatch,
-    ValueChoice,
-};
+pub use export::GewuExport;
+pub use file::{xlsx_sheet_names, FileMetadata, KeyValue};
 pub use filtered_view::GewuFilteredView;
-pub use find::{find_limits, CellMatch, ColumnHighlight, FindHighlight, FindLimits, FindSession};
-pub use ordered_view::GewuOrderedView;
-pub use query::{ColumnFilter, ColumnSort};
-pub use scale::AxisScale;
+pub use find::GewuFind;
+pub use ordered_view::{GewuOrderedView, RowRange};
 pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult};
 
 uniffi::setup_scaffolding!();

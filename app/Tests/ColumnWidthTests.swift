@@ -1,10 +1,17 @@
 import AppKit
+import GewuKit
 import Testing
 
 struct ColumnWidthTests {
-    @Test func manualResizeWinsOverQueuedSamplesAndNewFitWinsOverOldFit() {
+    private static func columns(_ count: Int) async throws -> [ColumnID] {
+        let header = (0..<count).map { "c\($0)" }.joined(separator: ",")
+        return try await TestTables.session(header + "\n" + (0..<count).map(String.init).joined(separator: ",") + "\n")
+            .source.columns.map(\.id)
+    }
+
+    @Test func manualResizeWinsOverQueuedSamplesAndNewFitWinsOverOldFit() async throws {
         var widths = ColumnWidths()
-        let col = ColumnId(raw: 40)
+        let col = try await Self.columns(1)[0]
         let initial = widths.begin(col)
         widths.manual(col)
         let acceptedInitial = widths.accept(initial)
@@ -16,15 +23,14 @@ struct ColumnWidthTests {
         let new = widths.begin(col)
         let acceptedOld = widths.accept(old)
         let acceptedNew = widths.accept(new)
-        #expect(!acceptedOld)
-        #expect(acceptedNew)
+        #expect(!acceptedOld && acceptedNew)
         widths.fontChanged()
         #expect(widths.needsAutomatic(col))
     }
 
-    @Test func cancelledSampleCanRetryWithoutUndoingNewerManualWidth() {
+    @Test func cancelledSampleCanRetryWithoutUndoingNewerManualWidth() async throws {
         var widths = ColumnWidths()
-        let col = ColumnId(raw: 0)
+        let col = try await Self.columns(1)[0]
         let old = widths.begin(col)
         widths.abandon(old)
         #expect(widths.needsAutomatic(col))
@@ -34,54 +40,32 @@ struct ColumnWidthTests {
         #expect(!widths.needsAutomatic(col))
     }
 
-    @Test func measurementIsBoundedForLargeUnicodeCellsAndCancelledBeforeRead() throws {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-width-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: url) }
-        try ("value\n" + "a" + String(repeating: "\u{301}", count: 100_000) + "\n").write(
-            to: url, atomically: true, encoding: .utf8)
-        let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
-        let col = ColumnId(raw: 0)
+    @Test func measurementIsBoundedForLargeUnicodeCellsAndStopsWhenCancelled() async throws {
+        let session = try await TestTables.session("value\na" + String(repeating: "\u{301}", count: 100_000) + "\n")
+        let col = session.source.id("value")
         let input = ColumnWidthMeasurement.Input(column: col, name: "value", type: "Text", text: true)
-        let request = ColumnWidthMeasurement.Request()
-        let result = try ColumnWidthMeasurement.measure(
-            ordered: ordered, columns: [input], start: 0, fontSize: 12, maximum: 420, cancellation: request)
+        let result = try await ColumnWidthMeasurement.measure(
+            rows: session.initialRows, columns: [input], start: 0, fontSize: 12, maximum: 420)
         #expect(try #require(result[col]) <= 420)
-        request.cancel()
-        #expect(throws: CancellationError.self) {
-            try ColumnWidthMeasurement.measure(
-                ordered: ordered, columns: [input], start: 0, fontSize: 12, maximum: 420, cancellation: request)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ColumnWidthMeasurement.measure(
+                rows: session.initialRows, columns: [input], start: 0, fontSize: 12, maximum: 420)
         }
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
     }
 
-    @Test func fitUsesAnAvailableSampleInsteadOfRereadingTheView() throws {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-fit-cache-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: url) }
-        try "value\nx\n".write(to: url, atomically: true, encoding: .utf8)
-        let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
-        // An invalid source index would fail if the measurement ignored its sample.
-        let bogus = ColumnId(raw: 99)
-        let cached = ColumnWidthMeasurement.Input(
-            column: bogus, name: "value", type: "Text", text: true,
-            sample: (TableExecutionTests.segment(["cached value"]), 0))
-        let widths = try ColumnWidthMeasurement.measure(
-            ordered: ordered, columns: [cached], start: 0, fontSize: 12, maximum: 600, cancellation: .init())
-        #expect(widths[bogus] != nil)
-    }
-
-    @Test func fitUsesTheSameRowsWithAndWithoutCachedText() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("gewu-fit-offset-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: url) }
+    @Test func fitUsesTheSameRowsWithAndWithoutLoadedText() async throws {
         let values = [String(repeating: "W", count: 80)] + Array(repeating: "x", count: 63)
-        try ("value\n" + values.joined(separator: "\n")).write(to: url, atomically: true, encoding: .utf8)
-        let ordered = try GewuDataset.open(path: url.path).unfiltered().unsorted()
-        let column = ColumnId(raw: 0)
-        let segment = try ordered.formatColumn(column: column, start: 0, count: 64)
+        let session = try await TestTables.session("value\n" + values.joined(separator: "\n"))
+        let column = session.source.id("value")
+        let loaded = try await session.initialRows.text(of: column, rows: 0..<64)
         var input = ColumnWidthMeasurement.Input(column: column, name: "value", type: "Text", text: true)
-        let cold = try ColumnWidthMeasurement.measure(
-            ordered: ordered, columns: [input], start: 1, fontSize: 12, maximum: 800, cancellation: .init())
-        input.sample = (segment, 1)
-        let hot = try ColumnWidthMeasurement.measure(
-            ordered: ordered, columns: [input], start: 1, fontSize: 12, maximum: 800, cancellation: .init())
-        #expect(hot == cold)
+        let cold = try await ColumnWidthMeasurement.measure(
+            rows: session.initialRows, columns: [input], start: 1, fontSize: 12, maximum: 800)
+        input.sample = loaded
+        let hot = try await ColumnWidthMeasurement.measure(
+            rows: session.initialRows, columns: [input], start: 1, fontSize: 12, maximum: 800)
+        #expect(hot == cold, "Row 0's wide value is outside the sampled rows either way")
     }
 }

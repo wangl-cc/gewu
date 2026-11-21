@@ -1,19 +1,21 @@
+import GewuKit
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var updater: AppUpdater
-    @AppStorage("TableFontSize") private var fontSize = 12.0
-    @AppStorage("TableRowHeight") private var rowHeight = 28.0
-    @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
-    @AppStorage("RowNumberBase") private var rowNumberBase = 0
-    @AppStorage("CopyIncludesHeaders") private var copyIncludesHeaders = true
-    @AppStorage("StatisticsSignificantDigits") private var significantDigits = 8
-    @AppStorage("RememberExportFormat") private var rememberExportFormat = true
+    @Bindable var updater: AppUpdater
+    @AppStorage(Preferences.tableFontSize) private var fontSize: Double
+    @AppStorage(Preferences.tableRowHeight) private var rowHeight: Double
+    @AppStorage(Preferences.showsRowNumbers) private var showsRowNumbers: Bool
+    @AppStorage(Preferences.rowNumberBase) private var rowNumberBase: Int
+    @AppStorage(Preferences.copyIncludesHeaders) private var copyIncludesHeaders: Bool
+    @AppStorage(Preferences.statisticsSignificantDigits) private var significantDigits: Int
+    @AppStorage(Preferences.remembersExportFormat) private var rememberExportFormat: Bool
 
     var body: some View {
         Form {
             Picker("Text size:", selection: $fontSize) {
-                ForEach(10...20, id: \.self) { size in
+                ForEach(Int(Preferences.fontSizes.lowerBound)...Int(Preferences.fontSizes.upperBound), id: \.self) {
+                    size in
                     Text("\(size) pt").tag(Double(size))
                 }
             }
@@ -38,20 +40,11 @@ struct SettingsView: View {
                 }
             }
             .help("Applies to approximate statistics. Original values and exact statistics retain their precision.")
-            if let sparkle = updater.updater {
+            if updater.updater != nil {
                 Divider()
-                Toggle(
-                    "Automatically check for updates",
-                    isOn: Binding(
-                        get: { updater.automaticallyChecksForUpdates },
-                        set: { sparkle.automaticallyChecksForUpdates = $0 }))
-                Toggle(
-                    "Automatically download and install updates",
-                    isOn: Binding(
-                        get: { updater.automaticallyDownloadsUpdates },
-                        set: { sparkle.automaticallyDownloadsUpdates = $0 })
-                )
-                .disabled(!updater.automaticallyChecksForUpdates)
+                Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
+                Toggle("Automatically download and install updates", isOn: $updater.automaticallyDownloadsUpdates)
+                    .disabled(!updater.automaticallyChecksForUpdates)
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
             }

@@ -1,9 +1,17 @@
 import Foundation
+import GewuKit
 
 extension Filter {
     /// A compact condition description for query summaries and the header tooltip.
     /// This is display text only; filtering continues to use the original literals.
     var conditionSummary: String {
+        let condition: FilterCondition
+        let includeNulls: Bool
+        switch self {
+        case .onlyNulls: return "Only missing"
+        case .notNull: return "Not missing"
+        case .condition(let value, let nulls): (condition, includeNulls) = (value, nulls)
+        }
         let description: String
         switch condition {
         case .exact(let values, let exclude):
@@ -37,7 +45,9 @@ extension Filter {
         if case .text(_, _, let caseSensitive) = condition {
             text += caseSensitive ? "\nCase sensitive" : "\nCase insensitive"
         }
-        text += includeNulls ? "\nIncludes missing values" : "\nExcludes missing values"
+        if case .condition(_, let includeNulls) = self {
+            text += includeNulls ? "\nIncludes missing values" : "\nExcludes missing values"
+        }
         return text
     }
 
