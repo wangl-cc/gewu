@@ -14,7 +14,7 @@ Typical use shapes the requirements. A user opens a 2-million-row Parquet file, 
 
 - **SwiftUI's `Table`.** It is the simplest to write and native. But it slows badly with very large row counts and offers little control over scrolling and loading. At the outset it was judged fine up to tens of thousands of rows, not millions.
 - **AppKit's `NSTableView`.** It is view-based and virtualized: it creates cells only for visible rows, reuses them, and asks for a row's content only when it is about to show it. Column resizing, header clicks, multiple selection and copying come built in. It needs more imperative code than SwiftUI.
-- **gpui**, a Rust UI framework. The whole app would be in one language, with no cross-language boundary. It was rejected as too unstable to build on; that is the only reason on record.
+- **gpui**, a Rust UI framework. The whole app would be in one language, with no cross-language boundary. It was rejected because it was unstable and poorly documented, and it was not clear it would suit this kind of app. This was a judgment from evaluating it, not from trying it: gpui was never actually used in Gewu.
 
 ### Data engine
 
