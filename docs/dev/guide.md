@@ -1,73 +1,75 @@
 # Development guide
 
-How to change the code without breaking its model. It assumes the vocabulary of the [architecture](architecture.md), which gives the reasons; this guide gives the rules. Commands are in [DEVELOPMENT.md](../../DEVELOPMENT.md).
+How to make common changes. It uses the vocabulary of the [architecture](architecture.md). Commands are in [DEVELOPMENT.md](../../DEVELOPMENT.md).
 
-## General rules
+## Conventions
 
 - **One clear model.** A change leaves one way of doing each thing. When a concept is replaced, remove it everywhere: types, names, comments, tests and docs. A name means the same thing in every layer.
-- **Development operations in one place, component knowledge next to the component.** How to build, test, measure and release lives in DEVELOPMENT.md and `docs/dev`. A crate or app README says what the component is, where its code is, and its API contract. Product behavior lives in the [spec](../spec). Each fact has one home; link instead of restating.
-- **Docs change with the code**, in the same change: the architecture when a layer's role or the data plane changes, this guide when a rule changes, the spec when behavior changes.
-- **Trade-offs are written where the rule lives**, with the rejected alternative in a sentence. A design that reshapes a layer gets a [design document](design/README.md).
-- **Issues are for discussion, not record.** A settled conclusion goes into this guide, the architecture or a design document; docs never cite a thread as the source of a rule.
-- **Test behavior once, at the boundary that owns it.** A regression test must fail without the fix.
-- **Generated files are outputs.** Edit the Rust interface and `project.yml`, never the generated bindings or `Gewu.xcodeproj`.
-- **Report what was verified**: build, which tests, the running app and measurements are different claims.
+- **Each fact in one place.**
+  - Development operations (build, test, measure, release) live in DEVELOPMENT.md and `docs/dev`.
+  - A crate or app README says what the component is, where its code is, and its API contract.
+  - Product behavior lives in the [spec](../spec).
 
-## Rust conventions
-
-- **Multi-file modules use `<module>/mod.rs`**, not `<module>.rs` beside a directory.
-- **Unit tests live in a sibling file**: `mod.rs` with `tests.rs`, `foo.rs` with `foo_tests.rs`, declared as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`. They remain child modules with access to private items, and the implementation file stays readable. There is no size threshold, which would bring back inconsistency, and `foo.rs` is not turned into a directory just for tests. A test fixture shared across modules follows the same pattern: `foo_fixture.rs`, declared as `mod fixture`. Tests that cross modules go in `crates/*/tests/`.
-- **No binding derives or attributes in Core**, not even behind a feature. Boundary shapes are declared in the FFI crate with `#[uniffi::remote]` or as FFI types. This has been proposed and rejected more than once.
-- **Units chosen for display belong to the FFI**, not Core. For example, scatter temporal coordinates are converted to seconds in the FFI because that is what the App plots; Core keeps the column's native unit.
-
-## Rules by layer
-
-The architecture lists what each layer must not contain. These are the further rules a change must keep.
-
-### Core
-
-- Filters run against the whole dataset, never against the previous view.
-- A column's filter editor ignores the column's own filter, so its condition never hides its alternatives.
-- Nulls sort last in both directions; equal keys keep source order.
-- Exact values and range bounds round-trip losslessly as text; dictionary codes never leave Core.
-- Queries read native Arrow arrays; they do not format or widen whole columns.
-- Export replaces the destination only on completion and never overwrites its source.
-- Errors belong to the module that owns the failed operation and keep their source.
-- Each codec feature builds and passes alone. CI does not check this; test it when touching formats.
-
-### FFI and the data plane
-
-- `apply` returns the same view when nothing changed and keeps the filtered view when only the sort changed. Swift follows `is_same_view` rather than deciding reuse.
-- The analysis cache keeps one result per analysis and column, never caches failures, and stays bounded by the schema.
-- A lent pointer points into memory its UniFFI object owns and never mutates. Each lending function consumes exactly one cloned handle, and every `unsafe` block states its `SAFETY` argument.
-- New bulk data is a packed value, or a typed pointer through `gewu_data.h` for resident data. Never pass pointers as integers through UniFFI.
-- Only contract violations become `Internal`; a filter failure keeps its `Filter` kind wherever it arises.
-- Interface changes are tested on both sides, because Rust tests do not compile the generated Swift.
-
-### GewuKit
-
-- The three result types are immutable and compare by identity.
-- Filter literals compare by UTF-8 bytes and filters keep column order, so equal queries select the same rows.
-- Every Rust call runs on a serial worker. Cancellation from either side surfaces as `CancellationError`, and one waiter cancelling never cancels another's shared analysis.
-- Edit rules live in `TableState` and `FilterDraft`, not in App models.
-
-### App
-
-- The displayed result changes only when a query succeeds. A failed query keeps it and returns the draft to it.
-- A cancelled task changes no state when it ends, whether it succeeded or failed.
-- The table never shows a blank, partial or mixed frame while rows change.
-- Column visibility and order apply at once and never run a query.
-- Panels load in `.task(id:)` keyed by result identity, column and parameters.
-- Copy is exactly a TSV export of the selected rows and visible columns.
+  Link instead of restating.
+- **Docs change with the code**, in the same change: the architecture when the system's shape changes, the spec when behavior changes, and a new [design note](design/README.md) when a key decision is made or replaced.
+- **Discussions are not records.** When an issue or review thread settles something, write it into the docs. The docs never cite a thread.
+- **Test once, at the boundary that owns the behavior.** A regression test must fail without the fix.
+- **Rust modules and tests.**
+  - Multi-file modules use `<module>/mod.rs`.
+  - Unit tests live in a sibling file: `mod.rs` with `tests.rs`, `foo.rs` with `foo_tests.rs`, declared as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`. They stay child modules with access to private items, and the implementation stays readable. There is no size threshold, which would bring back inconsistency, and a file is not turned into a directory just for tests.
+  - A test fixture shared across modules follows the same pattern: `foo_fixture.rs`, declared as `mod fixture`.
+  - Tests that cross modules go in `crates/*/tests/`.
+- **Screenshots are generated.** README screenshots come from a script, never hand captures. Regenerate them in any change that alters what they show.
+- **Generated files are outputs.** Edit the Rust interface and `project.yml`, never the generated bindings, C header or `Gewu.xcodeproj`.
+- **Report what was verified.** A build, specific test suites, a check in the running app and a measurement are different claims.
 
 ## Common changes
 
-**An FFI method.** Put the behavior in Core if it is a data question, in the FFI only if it is reuse, caching or a boundary rule. Export it from the owning object, wrap it in GewuKit on the right worker, test where the behavior is owned, and update the [FFI README](../../crates/gewu-uniffi/README.md). The App changes only if GewuKit's API does.
+### Add or change an FFI method
 
-**An analysis.** A Core kernel that does not depend on row order, plus its capability flag. A `GewuFilteredView` method that goes through the analysis cache. A GewuKit value and a `RowSet` method on the analysis worker. An Inspector panel.
+The FFI is where Swift meets Core. Most methods expose a Core operation; a few hold reuse or caching rules.
 
-**A user-facing failure.** A variant in the owning Core module's error, a structured FFI kind with the values needed to describe it, the matching `GewuKitError` case, and its wording in `ErrorPresentation`. The exhaustive switches point to each step.
+1. Put the behavior in Core if it is a question about data, and in the FFI only if it is reuse, caching or a boundary shape.
+2. Export it from the object that owns it. Declare suitable Core types with `#[uniffi::remote]`; never add binding derives or attributes to Core, which would tie the engine to one binding generator.
+3. Wrap it in GewuKit as a method on the matching result type, run on the session worker for its kind of work, returning Swift values. No binding type may appear in GewuKit's public API, so the App never names an FFI type.
+4. Test it where the behavior is owned. Also build and test GewuKit, because Rust tests do not compile the generated Swift.
+5. Update the [FFI README](../../crates/gewu-uniffi/README.md) contract.
 
-**Filter, Find or value semantics.** Update the [spec](../spec) first: it is the contract. Then change Core and its tests.
+### Move bulk data across the boundary
 
-**A file format.** Core `file/`, behind its Cargo feature; a disabled format still compiles and reports itself disabled. Update [file formats](../spec/file-formats.md) and the README's format table.
+1. Data computed per request, such as formatted text, goes by value in one packed buffer.
+2. Data already resident in Rust can be lent through a new function in `gewu_data.h` that consumes one cloned handle and returns a typed pointer into memory the object owns and never mutates. Write a `SAFETY` comment on every `unsafe` block.
+3. Never pass a pointer as integers through UniFFI. It would be untyped and outside the header's contract.
+
+### Add an analysis
+
+1. Core: a kernel under `stats/` that reads native Arrow arrays through the selection, without formatting or widening the whole column. Its result must not depend on row order, so every ordering of the rows can share it. Add a capability flag so the UI can tell without scanning.
+2. FFI: a `GewuFilteredView` method that goes through the analysis cache, keyed by column and parameters.
+3. GewuKit: a value type and a `RowSet` method on the analysis worker.
+4. App: an Inspector panel that loads in `.task(id:)` keyed by result identity, column and parameters, so SwiftUI cancels obsolete work.
+
+### Add a user-facing failure
+
+1. Core: a variant in the error of the module that owns the operation, keeping its source.
+2. FFI: a structured kind with the values needed to describe it. Use `Internal` only for failures a correct UI cannot cause.
+3. GewuKit: the matching `GewuKitError` kind. The switches are exhaustive, so the compiler points to each step.
+4. App: the wording in `ErrorPresentation`, the only place that words failures, so that they can be localized later.
+
+### Change filter, Find, sort or value semantics
+
+1. Update the [spec](../spec) first. It is the contract the change must meet.
+2. Change Core and its tests. Filter values cross as exact text and compare by UTF-8 bytes. Never send labels, plot coordinates or dictionary codes as filter input.
+3. If the change affects what the user edits (sort cycling, hiding a column, filter drafts), change `TableState` or `FilterDraft` in GewuKit, not the App models.
+
+### Add or change a file format
+
+1. Core `file/`, behind its own Cargo feature. A disabled format still compiles and reports itself disabled.
+2. Test Core with no default features and with the feature alone; CI does not cover these combinations.
+3. Update [file formats](../spec/file-formats.md) and the format table in the README.
+
+### Change the App
+
+1. Give each piece of state one owner whose lifetime matches it. Models are `@Observable` and never refer to views.
+2. Run Rust work through GewuKit, never directly. Check for cancellation before a finished task touches state, whether it succeeded or failed.
+3. Keep Swift 6 language mode clean, without `@unchecked Sendable`.
+4. If the change alters what a README screenshot shows, regenerate it.

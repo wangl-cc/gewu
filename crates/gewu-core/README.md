@@ -41,7 +41,7 @@ Scans compile typed predicates once per call against the original arrays and pro
 
 Value lists exist only for columns with a compact dictionary; high-cardinality columns are filtered with Text or Range conditions instead. Complete dictionary choices omit zero-count values; `filter_choices(column)` and `filter_distribution(column, ..)` count the column's facet, so the column's own filter does not hide its alternatives.
 
-Dictionary construction is synchronized once per column and publishes a complete encoding or a confirmed unsupported/high-cardinality result; concurrent or subsequent requests reuse that shared encoding. In-memory operations and file decoding run to completion; only export can be cancelled, before destination commit ([why](../../docs/dev/architecture.md#concurrency-and-cancellation)).
+Dictionary construction is synchronized once per column and publishes a complete encoding or a confirmed unsupported/high-cardinality result; concurrent or subsequent requests reuse that shared encoding. In-memory operations and file decoding run to completion; only export can be cancelled, before destination commit ([why](../../docs/dev/design/in-memory-without-cancellation.md)).
 
 `filtered.filter_distribution(column, bins, scale)` returns optional distributions with exact bounds for each bin, with 1–60 requested bins. Geometry may use bin indexes, while filtering submits those bounds directly. Dictionary columns can support range filtering without a histogram.
 

@@ -2,7 +2,7 @@
 
 The Rust–Swift boundary for [gewu](../../README.md). This crate exposes Core through UniFFI objects, keeps the app-level semantics that are clearer in Rust (view reuse, analysis caching, wrapping Find navigation), lends resident data to Swift without copying, and maps Core errors to `GewuError`. Query algorithms and file codecs remain in Core.
 
-The [architecture](../../docs/dev/architecture.md#ffi-the-boundary-plus-app-semantics-that-read-better-in-rust) describes where this layer sits, what it must not contain and why its only consumer is GewuKit; the [spec](../../docs/spec) defines the behavior behind these calls. This README is the Rust–Swift contract GewuKit relies on. Method names use Rust spelling; Swift uses camel case.
+The [architecture](../../docs/dev/architecture.md#layer-responsibilities) describes where this layer sits and why GewuKit is its only consumer; the [spec](../../docs/spec) defines the behavior behind these calls. This README is the Rust–Swift contract GewuKit relies on. Method names use Rust spelling; Swift uses camel case.
 
 ## Types
 
@@ -57,7 +57,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | Metadata, `rows`, `filtered`, `find` and `export` creation, `column_structure`, lending functions | Metadata access or O(1) shared snapshot capture. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
-Calls run to completion in Rust without cooperative cancellation; Swift owns request replacement (see [concurrency and cancellation](../../docs/dev/architecture.md#concurrency-and-cancellation)). A `GewuFind` or `GewuExport` stays valid whatever later queries do.
+Calls run to completion in Rust without cooperative cancellation; Swift owns request replacement (see [concurrency](../../docs/dev/architecture.md#concurrency)). A `GewuFind` or `GewuExport` stays valid whatever later queries do.
 
 ## Analyses
 

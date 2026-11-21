@@ -45,7 +45,7 @@ Find highlights are cached per column in the same 64-row blocks; the missing blo
 
 ## Copying and export
 
-Copy is an export of the selection ([architecture](../docs/dev/architecture.md#concurrency-and-cancellation)) capped at 64 MiB in `CopyModel`; `DelimitedText` in GewuKit runs it and reads the result in place. Export writes on a worker of its own, with progress sampled into the status bar. The [interface spec](../docs/spec/interface.md) describes what users see.
+Copy is an export of the selection ([architecture](../docs/dev/architecture.md#data-plane)) capped at 64 MiB in `CopyModel`; `DelimitedText` in GewuKit runs it and reads the result in place. Export writes on a worker of its own, with progress sampled into the status bar. The [interface spec](../docs/spec/interface.md) describes what users see.
 
 ## App icon
 

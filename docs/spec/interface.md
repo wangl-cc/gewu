@@ -4,7 +4,7 @@ How the window behaves. [Find and filtering](search-and-filter.md) covers what F
 
 ## Workspace
 
-The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. The Inspector column chooser and the scatter X and Y pickers list only visible columns.
+The table is always the main workspace. While a new result loads, the table keeps showing the previous rows, then switches rows, headers and cells together; it never shows a blank or partially updated table. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. The Inspector column chooser and the scatter X and Y pickers list only visible columns.
 
 When columns are hidden, selection and inspection fall back to the first visible column, the scatter X axis to the source row, and the Y axis to the first visible column that can be plotted. If no columns remain visible, the Inspector shows a No Columns state. Chart axes and display settings survive page changes.
 

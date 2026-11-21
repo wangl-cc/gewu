@@ -74,7 +74,7 @@ Lint changed Markdown with `pnx markdownlint-cli2 --config .markdownlint.yaml <c
 
 - **Understanding the code:** the [architecture](docs/dev/architecture.md).
 - **Changing or reviewing code:** the [development guide](docs/dev/guide.md).
-- **Why a large part looks the way it does:** the [design documents](docs/dev/design/README.md).
+- **Why a key decision was made:** the [design notes](docs/dev/design/README.md).
 - **Changing what users see:** the [spec](docs/spec).
 - **A component's API and code layout:** the [Core](crates/gewu-core/README.md), [FFI](crates/gewu-uniffi/README.md) and [app](app/README.md) READMEs.
 - **Publishing a release:** [release](docs/release.md).

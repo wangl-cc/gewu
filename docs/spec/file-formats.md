@@ -6,7 +6,7 @@ The whole file is decoded into memory when opened. Compressed file size does not
 
 In the app, **File → Import Options…** changes header interpretation for CSV, TSV and XLSX, including when the initial open fails. Reopening resets Find, filters and sorting. For XLSX, the header is the first occupied row, and the chosen policy also applies when switching worksheets.
 
-**File → Export…** offers the supported formats in the system format menu and compression options for Parquet. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression.
+**File → Export…** offers the supported formats in the system format menu and compression options for Parquet. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression. An existing destination is replaced only when the export completes; a failed or cancelled export leaves it unchanged. Export never overwrites the open source file.
 
 ## Parquet
 

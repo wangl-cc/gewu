@@ -1,12 +1,38 @@
 # Architecture
 
-What stands between a file and a table cell, what each layer owns and must not contain, and why. The [development guide](guide.md) turns this into working rules; the [design documents](design/README.md) hold the history behind the larger choices.
+How Gewu is built today. This page describes; the [development guide](guide.md) says how to change it, and the [design notes](design/README.md) record why the key choices were made.
 
-## Mental model
+## Overview
 
-Gewu is a read-only viewer for large tables: a native macOS app (SwiftUI shell, AppKit `NSTableView` grid) over a Rust library on arrow-rs, joined by UniFFI. All data computation is in Rust, so there is one set of value semantics and one formatter. Opening a file decodes it into memory once; after that a filter produces source row numbers, a sort produces an order over them, and the table formats only the cells it shows.
+Gewu is a read-only viewer for large tables: a native macOS app over a Rust engine. Opening a file decodes it into memory once. After that a filter produces source row numbers, a sort produces an order over them, and the table formats only the cells it shows. All data computation is in Rust, so there is one set of value semantics and one formatter.
 
-Three immutable objects describe what is on screen, one per granularity of invalidation:
+```mermaid
+flowchart TB
+  App["App: app/Sources/Gewu<br/>SwiftUI shell, AppKit table, Inspector, system shell"]
+  Kit["GewuKit: app/GewuKit<br/>Swift domain types, edit rules, scheduling, errors"]
+  FFI["FFI: crates/gewu-uniffi<br/>UniFFI objects, reuse, analysis cache, data plane"]
+  Core["Core: crates/gewu-core<br/>Arrow data, filters, sort, Find, statistics, codecs"]
+  App --> Kit --> FFI --> Core
+```
+
+Dependencies point one way, and each layer sees only the one below it.
+
+## Scope and non-goals
+
+Gewu views, filters, sorts, inspects and exports one table at a time. Deeper analysis is left to Python and the exported formats. These are intentionally not done:
+
+- **Editing and undo.** A viewer changes no data; clearing filters is the way back.
+- **Larger-than-memory files.** Deferred, not ruled out ([note](design/in-memory-without-cancellation.md)).
+- **Cancelling in-memory scans.** They run to completion ([note](design/in-memory-without-cancellation.md)).
+- **A CLI.** Core is a resident engine holding views, a poor fit for one-shot commands; an early CLI was removed. MCP, RPC or a daemon are possible future directions, not plans.
+- **gpui.** It would keep one language, but it was too unstable to build on.
+- **Polars.** Core works on arrow-rs directly. DataFusion is the candidate if larger-than-memory support is ever added.
+- **NSDocument.** Saving, versions and autosave have no use in a viewer.
+- **Localization, for now.** Kept possible by [structured errors](design/structured-errors.md).
+
+## Result objects
+
+Three immutable objects describe what is on screen, one per granularity of invalidation ([note](design/three-result-objects.md)):
 
 | Object | Answers | Replaced when | Core / FFI / GewuKit |
 | --- | --- | --- | --- |
@@ -14,80 +40,82 @@ Three immutable objects describe what is on screen, one per granularity of inval
 | FilteredView | Which rows pass the filters? | the filters change | `FilteredView` / `GewuFilteredView` / `RowSet` |
 | OrderedView | In what order are they shown? | the filters or the sort change | `OrderedView` / `GewuOrderedView` / `DisplayRows` |
 
-A sort keeps the FilteredView and every analysis cached on it; a single view type would discard them on each sort or need its own cache keys. Visible columns belong to no layer, so showing, hiding or reordering an unconditioned column costs no row computation. Find and export capture one OrderedView and stay valid whatever later queries do.
+A Dataset holds the decoded columns, schema, file metadata and lazily built per-column dictionaries. A FilteredView holds its source rows and every analysis computed on them, including filter-editor choices. An OrderedView holds a display order and serves text, Find and export. Visible columns belong to none of them. GewuKit's result types compare by identity. Find and export capture one `DisplayRows` and stay valid whatever later queries do. The caller decides which result is current; two windows can share a session and keep independent queries.
 
-Results are immutable and the caller decides which one is current. Filters always run against the whole dataset. An earlier design kept a mutable document in Rust with a version every read had to check; it made Rust own window state and every reader handle stale versions.
+## Query flow
 
-## Layers
+```mermaid
+sequenceDiagram
+  participant E as Filter editor
+  participant M as TableModel (App)
+  participant S as TableSession (GewuKit)
+  participant F as GewuOrderedView (FFI)
+  participant C as Core
+  participant T as Table controller
+  E->>M: apply Filter
+  M->>M: update TableState draft
+  M->>S: apply(draft, after: displayed), one task
+  S->>F: apply(filters, sorts) on the query worker
+  alt nothing changed
+    F-->>S: same view
+  else only the sort changed
+    F->>C: sort the same FilteredView
+    F-->>S: new view, same filtered view
+  else filters changed
+    F->>C: filter the whole Dataset, then sort
+    F-->>S: new views
+  end
+  S->>F: is_same_view, keep matching RowSet / DisplayRows
+  S-->>M: DisplayRows
+  M->>M: set displayed (unless cancelled)
+  M->>T: new presentation
+  T->>F: format_column for the viewport (read worker)
+  T->>T: switch rows, headers and cells in one turn
+```
 
-Dependencies point one way: App → GewuKit → FFI → Core. To place new logic, ask whether it is true of the data (Core), a rule about reusing or caching engine results (FFI), or a rule about what the user is editing (Swift).
+A newer draft cancels the task, and so does returning to the displayed query. A failed query leaves `displayed` unchanged and returns the draft to it. Core compiles each filter once, evaluates it into a selection bitmap over all source rows, intersects the bitmaps, and sorts with per-key columnar kernels. Inspector panels reload keyed by the `RowSet`, column and parameters, and hit the FFI's cache when nothing changed.
 
-### Core: general data semantics
+Filter values cross the boundary as exact text, never as display labels, plot coordinates or dictionary codes. Core parses them against the column's type. Exact values compare by UTF-8 bytes on both sides, because Swift's `String` equality merges spellings Core keeps apart.
 
-Decoded data and everything true of it regardless of who displays it: typed filters and Find, sorting, statistics, filter-editor choices, file codecs.
+## Data plane
 
-Must not contain:
+UniFFI carries the control plane: objects, records and errors. Large data takes one of two routes ([note](design/data-plane.md)):
 
-- Frontend concepts: windows, visible columns, selection, wording, a current view, or display units chosen for one UI.
-- UniFFI or any binding generator, including derives. Core types that suit the boundary are declared in the FFI crate with `#[uniffi::remote]`; derives in Core would tie the engine to one binding, and mirror types would be conversion code that drifts.
-- Cancellation checks in in-memory scans (see [Concurrency](#concurrency-and-cancellation)).
+- **Computed text moves by value.** A block of one column's display text returns as one `ColumnText` buffer: `u32` offsets, a validity bitmap, then UTF-8. Swift decodes a cell only when it shows it.
+- **Resident data is lent in place.** Two hand-written C functions in [gewu_data.h](../../crates/gewu-uniffi/include/gewu_data.h) lend an ordered view's source rows and an in-memory export's bytes. Each consumes a cloned UniFFI handle and returns a typed pointer into memory that object owns and never mutates. The pointer is valid while Swift keeps the object alive.
 
-### FFI: the boundary, plus app semantics that read better in Rust
+Copy is a TSV export into memory with a byte cap, read in place, so copy and export share one serializer.
 
-Projects Core to Swift and keeps the application rules clearest next to the data: `apply(filters, sorts)` reuses what did not change, filtered views cache their analyses, Find steps and wraps, scatter temporal coordinates become seconds. Swift follows the engine's reuse instead of deciding it again. A stateless first version left these rules in Swift, where reuse was decided twice and Swift needed its own caches.
+## Concurrency
 
-Must not contain query algorithms or codecs, interaction state (drafts, edit rules, selection), or scheduling: every export is synchronous.
-
-### GewuKit: the Swift domain layer
-
-The only module that imports the generated bindings, with `internal import`; CI rejects imports elsewhere. It exposes the three result types, `TableSession`, Find and export jobs, typed errors, and the value types holding edit rules (`TableState`, `FilterDraft`). It runs every Rust call on a serial worker. Before it existed, App views named FFI types and every boundary change rippled into the UI.
-
-Must not contain public binding types, user-facing wording, or presentation policy (viewport blocks, caches, layout).
-
-### App: presentation
-
-Windows, the table, filter editors, Inspector and charts, settings, and the system shell. Models are `@Observable`, each piece of state has one owner whose lifetime matches it, and Swift 6 checks data races.
-
-Must not contain binding imports or FFI type names, data computation or reuse decisions, or `@unchecked Sendable`.
-
-## Where state lives
-
-Decoded data and per-column caches live in Core's `Dataset`; rows and order in Core views held by FFI objects; analysis results on the FFI filtered view, shared by every ordering. Interaction state (the applied result, the draft query, visible and selected columns, an open filter draft) lives in the App, with its rules in GewuKit. Text blocks, viewport and widths are App presentation state. Two windows can share a session and keep independent queries.
-
-Filter values cross the boundary as exact text, never as labels, plot coordinates or dictionary codes, and compare by UTF-8 bytes on both sides, because Swift's `String` equality merges spellings Core keeps apart. Dictionary keys were tried and rejected: they exist only for encoded columns and tie the protocol to one encoding.
-
-## The data plane
-
-UniFFI handles the control plane: objects, records, errors. Its returned byte vectors are copied into Swift arrays, and it cannot lend memory Rust already holds. Large data therefore takes one of two routes:
-
-- **Computed results move by value in one buffer.** A block of one column's display text returns as one `ColumnText` record (offsets, validity bits, UTF-8), decoded per cell only when shown.
-- **Resident data is lent in place** through two hand-written C functions in [gewu_data.h](../../crates/gewu-uniffi/include/gewu_data.h): an ordered view's source rows and an in-memory export's bytes. Each consumes a cloned UniFFI handle and returns a typed pointer into memory that object owns, valid while Swift keeps the object alive.
-
-Mixing the two is deliberate. UniFFI alone cannot lend; a pure C ABI would mean hand-writing the whole control plane. Passing an address and length through UniFFI (a `BufferView` record, or a handle with `address()`, both tried in #17) is still a pointer, only untyped and outside any declared contract; the C header gives Swift a real `UnsafePointer` with the safety contract beside it. Add a data-plane function only for data already resident in Rust; anything computed per request goes by value.
-
-Evidence is partial: the C route has not been measured against returning the same data by value. What was measured (2026-11-19) is that decoding dominates and that contiguous per-column buffers made table text 50–55% faster.
-
-## Concurrency and cancellation
-
-Rust calls are synchronous and run to completion. In-memory filters, sorts, analyses and Find have no cancellation checks: they are bounded CPU work, and checkpoints added a branch and an error path to every kernel. GewuKit gives each session serial workers off Swift's cooperative pool, so a long scan never blocks scrolling. A call cancelled before it starts never enters Rust; one already running finishes and its result is discarded. UniFFI async exports were not used: they need a Rust executor, and dropping a future would not stop a running scan.
-
-Export is the one operation Rust stops midway, because it writes files and can run long; it replaces the destination only on completion. Copy is a TSV export into memory, so there is no second serializer.
+Rust calls are synchronous and run to completion. GewuKit gives each session four serial workers (query, analysis, read and find) on dispatch queues off Swift's cooperative pool. Export, copy and worksheet listing each get a worker of their own. A call cancelled before it starts never enters Rust. A call already running finishes, and the App discards its result: every task handler checks for cancellation before touching state. Export alone stops midway in Rust, and replaces its destination only on completion ([note](design/in-memory-without-cancellation.md)).
 
 ## Errors
 
-Core keeps concrete, module-owned errors. The FFI projects every failure a correct UI can meet into `GewuError` with a structured kind and the values involved; contract violations become `Internal`. GewuKit carries kind and diagnostic, and only the App's `ErrorPresentation` words them. Kinds stay structured so messages can be localized in Swift; a proposed refactor once nearly folded them into strings, which would have fixed every message's language in Rust.
+Core keeps concrete, module-owned errors. The FFI projects each failure a correct UI can meet into `GewuError`, with a structured kind and the values involved; contract violations become `Internal`. GewuKit carries the kind and an English diagnostic as `GewuKitError`, and turns cancellation from either side into `CancellationError`. The App's `ErrorPresentation` is the only place that words failures ([note](design/structured-errors.md)).
 
-## Intentionally not done
+## Layer responsibilities
 
-- **Undo.** A read-only viewer changes no data; clearing filters is the way back.
-- **Cancelling in-memory operations.** See [Concurrency](#concurrency-and-cancellation).
-- **A CLI.** Core is a resident, interactive engine holding views, a poor fit for one-shot commands; a CLI shipped first and was removed. MCP, RPC or a daemon are possible future directions, not plans.
-- **gpui.** One language, but too unstable to build on.
-- **Polars.** Core works on arrow-rs directly; DataFusion is the candidate if larger-than-memory files are ever needed.
-- **Larger-than-memory files.** Every query and scroll would depend on I/O. Deferred, not ruled out.
-- **NSDocument.** Saving, versions and autosave have no use in a viewer.
-- **Localization, for now.** Kept possible by structured errors and one place for wording.
+See [where semantics live](design/layer-semantics.md) for why the lines fall here.
+
+- **Core** answers questions about data, whoever displays it: decoding and export, typed filters and Find, sorting, statistics, and filter-editor facets (the rows passing every other filter). It knows nothing of windows, visible columns, selection, wording or display units, and depends on no binding generator. Its types reach Swift through `#[uniffi::remote]` declarations in the FFI crate.
+- **The FFI** projects Core to Swift and keeps the application rules clearest next to the data:
+  - `apply` reuses what did not change, and Swift follows `is_same_view`;
+  - each filtered view caches one result per analysis and column, never caches failures, and stays bounded by the schema;
+  - Find steps and wraps internally;
+  - scatter temporal coordinates become seconds.
+
+  It defines its own types only where the boundary needs another shape. It holds no interaction state and schedules nothing.
+- **GewuKit** is the only module that imports the generated bindings, with `internal import`; CI checks this. It exposes the result types, `TableSession`, Find and export jobs, and typed errors. It keeps the rules of what the user edits in value types: `TableState` (query, visible and chosen columns) and `FilterDraft`. It decides where each Rust call runs, but contains no wording and no presentation policy.
+- **The App** presents. Models are `@Observable`, each piece of state has one owner whose lifetime matches it, and models never refer to views. It is compiled in Swift 6 language mode, with no `@unchecked Sendable`. It owns presentation policy: viewport blocks, the table text cache and column widths.
 
 ## Reading the code
 
-Follow one query from the bottom up: Core's [Dataset](../../crates/gewu-core/src/dataset/mod.rs) and [views](../../crates/gewu-core/src/view/mod.rs); the FFI's [ordered_view.rs](../../crates/gewu-uniffi/src/ordered_view.rs) (`apply`) and [data.rs](../../crates/gewu-uniffi/src/data.rs); GewuKit's [TableSession.swift](../../app/GewuKit/Sources/Table/TableSession.swift); the App's [TableModel.swift](../../app/Sources/Gewu/Table/TableModel.swift) (`applyDraft`). Each layer's tests state its contract by name.
+Follow one query from the bottom up:
+
+1. Core's [Dataset](../../crates/gewu-core/src/dataset/mod.rs) and [views](../../crates/gewu-core/src/view/mod.rs).
+2. The FFI's [ordered_view.rs](../../crates/gewu-uniffi/src/ordered_view.rs) (`apply`), [cache.rs](../../crates/gewu-uniffi/src/cache.rs) and [data.rs](../../crates/gewu-uniffi/src/data.rs).
+3. GewuKit's [TableSession.swift](../../app/GewuKit/Sources/Table/TableSession.swift) and [TableState.swift](../../app/GewuKit/Sources/Model/TableState.swift).
+4. The App's [TableModel.swift](../../app/Sources/Gewu/Table/TableModel.swift) (`applyDraft`) and [TableViewController.swift](../../app/Sources/Gewu/Table/TableViewController.swift).
+
+Each layer's tests state its contract by name.
