@@ -54,8 +54,8 @@ Gewu decodes the opened table into memory, so the dataset size you can explore d
 | Format | Read and export | Main considerations |
 | --- | --- | --- |
 | Parquet | Typed tables, including lists and structs. | Preferred for preserving types, nested values and nulls. |
-| CSV / TSV | Flat tables with inferred column types. | Types are not preserved; empty strings and nulls read as null. Nested columns cannot be exported. |
-| XLSX | Read individual worksheets; export one worksheet. | Dates/times and high-precision numbers export as text. Nested columns cannot be exported; workbook formatting and formulas are not preserved. |
+| CSV / TSV | Flat tables with inferred column types. | Types are not preserved; empty strings and nulls read as null. Nested columns export as display text. |
+| XLSX | Read individual worksheets; export one worksheet. | Dates/times, high-precision numbers and nested columns export as text; workbook formatting and formulas are not preserved. |
 
 See [format details](docs/file-formats.md) for type inference, date handling and conversion rules.
 
@@ -64,7 +64,8 @@ See [format details](docs/file-formats.md) for type inference, date handling and
 
 ## Documentation
 
-- [Development](DEVELOPMENT.md) — Rust and macOS UI build, run and test workflows.
+- [Development](DEVELOPMENT.md) — reading path, Rust and macOS UI build, run and test workflows.
+- [Architecture](docs/architecture.md) — how the code is organized, with [decision records](docs/decisions/README.md) and the [review checklist](docs/review-checklist.md).
 - [Data types](docs/data-types.md) — values, precision and typed input.
 - [Find and filtering](docs/search-and-filter.md) — typed cell navigation and filter conditions.
 - [File formats](docs/file-formats.md) — reading, exporting and format limits.

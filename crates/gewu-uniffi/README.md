@@ -2,7 +2,7 @@
 
 The Rust–Swift boundary for [gewu](../../README.md). This crate exposes Core through UniFFI objects, keeps the app-level semantics that are clearer in Rust (view reuse, analysis caching, wrapping Find navigation), lends resident data to Swift without copying, and maps Core errors to `GewuError`. Query algorithms and file codecs remain in Core.
 
-See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), [file formats](../../docs/file-formats.md) and the [development guide](../../DEVELOPMENT.md). Method names below use Rust spelling; Swift uses camel case.
+For where this layer sits and what it must not contain, see the [architecture](../../docs/architecture.md#ffi-the-boundary-plus-app-semantics-that-read-better-in-rust). See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), [file formats](../../docs/file-formats.md) and the [development guide](../../DEVELOPMENT.md). Method names below use Rust spelling; Swift uses camel case.
 
 ## Consumer
 

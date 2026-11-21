@@ -4,7 +4,7 @@ The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core
 
 Behavior references: [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), and [file formats](../../docs/file-formats.md). This document covers engine ownership, APIs and implementation.
 
-For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
+For how Core fits with the FFI and the app, see the [architecture](../../docs/architecture.md). For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
 ## Dataset and immutable views
 
@@ -99,7 +99,7 @@ gewu-core = { path = "crates/gewu-core", default-features = false, features = ["
 
 ## Type projections
 
-[types/](src/types) contains shared Arrow structure helpers and display-type projection. Arrow `DataType` remains the source of truth; `Column` does not store a second logical type. [Column metadata](src/column/metadata.rs) populates `ColumnInfo` (`id`, `name`, `value_category`, `display_type`, `technical_type`, `nullable`, `capabilities`, `analysis`) directly from Arrow. Scatter results carry their own axis presentation kinds. Nested-analysis fields use the same direct display-type projection and retain the full Arrow type as technical text; no intermediate logical-type enum is transmitted. Schema-description validation preserves rejection of unsupported nested types when a column is loaded; it does not decide which operations are available.
+[types/](src/types) contains shared Arrow structure helpers and display-type projection. Arrow `DataType` remains the source of truth; `Column` does not store a second logical type. [Column metadata](src/column/metadata.rs) populates `ColumnInfo` (`id`, `name`, `value_category`, `display_type`, `technical_type`, `nullable`, `nested`, `capabilities`, `analysis`) directly from Arrow. Scatter results carry their own axis presentation kinds. Nested-analysis fields use the same direct display-type projection and retain the full Arrow type as technical text; no intermediate logical-type enum is transmitted. Schema-description validation preserves rejection of unsupported nested types when a column is loaded; it does not decide which operations are available.
 
 Each operation owns its type support and execution rules by matching Arrow `DataType` directly. Find privately dispatches on the array type and parses text while compiling predicates, including nested children; callers never select a search strategy. Filter support lives alongside predicate compilation. Statistics, histogram binning, scatter coordinates and logarithmic scales report the storage types their implementations handle. `column/metadata` aggregates these queries for the frontend without scanning data. Analysis capabilities and length units belong to their respective `stats` modules. Internal execution uses those local rules rather than reading the frontend capability summary.
 

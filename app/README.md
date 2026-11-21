@@ -6,6 +6,8 @@ See [App updates](../docs/app-updates.md) for Sparkle signing and publication co
 
 ## Layers
 
+The [architecture](../docs/architecture.md) describes all four layers and the rules between them; this section covers the two Swift layers.
+
 | Layer | Location | Responsibility |
 | --- | --- | --- |
 | App | `app/Sources/Gewu` | SwiftUI and AppKit views, window and table models, presentation and preferences. Never sees FFI types. |

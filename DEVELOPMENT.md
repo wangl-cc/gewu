@@ -2,6 +2,18 @@
 
 Choose the path that matches the code you are changing. Run all commands from the repository root. For Markdown-only changes, run `pnx markdownlint-cli2 --config .markdownlint.yaml <changed-files>`.
 
+## Reading the code
+
+Start with the [architecture](docs/architecture.md): the three result objects, the four layers and what each must not contain. Then follow one query from the bottom up:
+
+1. **Core results.** [dataset/mod.rs](crates/gewu-core/src/dataset/mod.rs) (`Dataset`), [dataset/filter.rs](crates/gewu-core/src/dataset/filter.rs) (`Dataset::filter`), then [view/mod.rs](crates/gewu-core/src/view/mod.rs) for `FilteredView` and `OrderedView`. [row_ids.rs](crates/gewu-core/src/row_ids.rs) shows how rows are represented without copying data.
+2. **Core operations, as needed.** [execution/](crates/gewu-core/src/execution) for selections and sorting, [column/predicate/](crates/gewu-core/src/column/predicate) for filters and Find, [stats/](crates/gewu-core/src/stats) for analyses, [file/](crates/gewu-core/src/file) for codecs. The [Core code map](crates/gewu-core/README.md#code-map) lists the rest.
+3. **The boundary.** [ordered_view.rs](crates/gewu-uniffi/src/ordered_view.rs) (`apply` and reuse), [filtered_view.rs](crates/gewu-uniffi/src/filtered_view.rs) with [cache.rs](crates/gewu-uniffi/src/cache.rs) (analyses), [data.rs](crates/gewu-uniffi/src/data.rs) with [gewu_data.h](crates/gewu-uniffi/include/gewu_data.h) (bulk data), [error.rs](crates/gewu-uniffi/src/error.rs).
+4. **GewuKit.** [TableSession.swift](app/GewuKit/Sources/Table/TableSession.swift), then [RowSet.swift](app/GewuKit/Sources/Table/RowSet.swift) and [DisplayRows.swift](app/GewuKit/Sources/Table/DisplayRows.swift), [SerialWorker.swift](app/GewuKit/Sources/Execution/SerialWorker.swift) for scheduling and cancellation, [TableState.swift](app/GewuKit/Sources/Model/TableState.swift) for edit rules, [GewuKitError.swift](app/GewuKit/Sources/GewuKitError.swift).
+5. **The App.** [GewuApp.swift](app/Sources/Gewu/App/GewuApp.swift) for scenes, [WindowModel.swift](app/Sources/Gewu/Window/WindowModel.swift), then [TableModel.swift](app/Sources/Gewu/Table/TableModel.swift) (`applyDraft` is the query path), and [TableViewController.swift](app/Sources/Gewu/Table/TableViewController.swift) with [TableTextCache.swift](app/Sources/Gewu/Table/TableTextCache.swift) for how rows reach the screen.
+
+Tests are the second reading path: each layer's tests state its contract by name ([Core](crates/gewu-core/tests), [FFI](crates/gewu-uniffi/src/tests.rs), [GewuKit](app/GewuKit/Tests), [App](app/Tests)). When something looks odd, check the [decision records](docs/decisions/README.md) before changing it. Before reviewing or opening a pull request, read the [review checklist](docs/review-checklist.md).
+
 ## Rust Core
 
 Building requires stable Rust and a native compiler/linker; on macOS, Command Line Tools are sufficient.
