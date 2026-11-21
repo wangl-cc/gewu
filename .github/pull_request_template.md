@@ -1,19 +1,19 @@
-## Summary
+## Motivation
 
-<!-- What changes and why. Link the issue or discussion if there is one. -->
+<!-- Why this change. Link the issue or discussion if there is one. For a small change, this section is enough. -->
 
-## Review
+## Solution
 
-<!-- Tick what applies. The review checklist lists the rules and what guards each one. -->
+<!-- Design choices and trade-offs not visible in the diff, and anything you are unsure of. -->
 
-- [ ] Layers touched: Core / FFI / GewuKit / App. Each change sits in the layer that owns it ([architecture](https://github.com/wangl-cc/gewu/blob/main/docs/architecture.md#layers)).
-- [ ] Rules in the [review checklist](https://github.com/wangl-cc/gewu/blob/main/docs/review-checklist.md) for those layers still hold; rules guarded only by review are called out below.
-- [ ] `unsafe`, the C data plane or lent memory: lifetimes re-checked.
-- [ ] New or changed failures keep structured kinds through to `ErrorPresentation`.
-- [ ] Architecture, decision records and READMEs match the code. A new decision has a record.
+## Impact and testing
 
-## Verification
+<!-- User-visible or breaking changes. What you verified beyond CI (tests run, app checked, performance measured), and what you did not verify. -->
 
-<!-- Say which ran: build, automated tests (which), UI checked in the running app, performance measured. -->
+## AI assistance
+
+<!-- Which tool, and which parts it wrote. Write "None" if not used. -->
+
+- [ ] I have reviewed all changes and can explain each of them.
 
 <!-- markdownlint-disable-file MD041 -->

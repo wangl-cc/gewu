@@ -2,11 +2,7 @@
 
 The Rust–Swift boundary for [gewu](../../README.md). This crate exposes Core through UniFFI objects, keeps the app-level semantics that are clearer in Rust (view reuse, analysis caching, wrapping Find navigation), lends resident data to Swift without copying, and maps Core errors to `GewuError`. Query algorithms and file codecs remain in Core.
 
-For where this layer sits and what it must not contain, see the [architecture](../../docs/architecture.md#ffi-the-boundary-plus-app-semantics-that-read-better-in-rust). See [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), [file formats](../../docs/file-formats.md) and the [development guide](../../DEVELOPMENT.md). Method names below use Rust spelling; Swift uses camel case.
-
-## Consumer
-
-[GewuKit](../../app/GewuKit/Sources) is the only consumer. The generated Swift forms the `GewuBindings` module, which only GewuKit imports, so the App cannot name an FFI type; CI rejects imports of `GewuBindings` or `gewuFFI` outside GewuKit. GewuKit wraps these objects in Swift value types, typed errors and async methods, and schedules every call on its own serial workers. This README describes the Rust–Swift contract GewuKit relies on.
+The [architecture](../../docs/dev/architecture.md#ffi-the-boundary-plus-app-semantics-that-read-better-in-rust) describes where this layer sits, what it must not contain and why its only consumer is GewuKit; the [spec](../../docs/spec) defines the behavior behind these calls. This README is the Rust–Swift contract GewuKit relies on. Method names use Rust spelling; Swift uses camel case.
 
 ## Types
 
@@ -25,11 +21,9 @@ The crate defines its own types only where the boundary needs another shape: `Da
 | `GewuExport` | Captures row/column data, progress and cancellation for one write to a file or to memory. |
 | `GewuExportedBytes` | Owns the result of an export into memory; Swift reads it in place. |
 
-Objects carry the `Gewu` prefix and records do not. GewuKit gives values and error kinds the same names as this crate and Core, and wraps the objects in its own domain types (`GewuDataset` in `TableSource`, `GewuFilteredView` in `RowSet`, `GewuOrderedView` in `DisplayRows`, `GewuFind` in `CellFind`, `GewuExport` in `ExportJob`).
+Objects carry the `Gewu` prefix and records do not.
 
 UniFFI manages object lifetimes through generated Swift classes. Views retain their `Dataset` independently of the `GewuDataset` handle; an ordered view retains its filtered view. Find, export and exported-byte objects retain what they need. Source Arrow buffers and caches stay shared among all views.
-
-There is no backend current view, column projection or query registration. Callers own which result is current.
 
 ## Open, query and read
 
@@ -63,7 +57,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | Metadata, `rows`, `filtered`, `find` and `export` creation, `column_structure`, lending functions | Metadata access or O(1) shared snapshot capture. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
-Calls run to completion in Rust without cooperative cancellation. Swift owns request replacement: GewuKit runs each call on a serial worker that skips calls whose task was cancelled before they start, and callers discard results they no longer need. A `GewuFind` or `GewuExport` stays valid whatever later queries do.
+Calls run to completion in Rust without cooperative cancellation; Swift owns request replacement (see [concurrency and cancellation](../../docs/dev/architecture.md#concurrency-and-cancellation)). A `GewuFind` or `GewuExport` stays valid whatever later queries do.
 
 ## Analyses
 
@@ -86,7 +80,7 @@ Results contain concrete data, without request context; [Core](../gewu-core/READ
 
 ### Filter editors
 
-`filter_choices(column)` and `filter_distribution(column, ..)` describe the column's facet: the rows passing every filter except the column's own, so its own condition never hides its alternatives. `FilterChoices.values` is `Some` only for a complete bounded list (`Some([])` is empty); counts omit zero-count values, and nulls are counted separately. Value selection is exact: Swift must compare UTF-8 bytes, because `String` equality merges canonically equivalent spellings. Send `RangeBound.value` back unchanged; labels and coordinates are display only. See [Find and filtering](../../docs/search-and-filter.md).
+`filter_choices(column)` and `filter_distribution(column, ..)` describe the column's facet: the rows passing every filter except the column's own, so its own condition never hides its alternatives. `FilterChoices.values` is `Some` only for a complete bounded list (`Some([])` is empty); counts omit zero-count values, and nulls are counted separately. Value selection is exact: Swift must compare UTF-8 bytes, because `String` equality merges canonically equivalent spellings. Send `RangeBound.value` back unchanged; labels and coordinates are display only. See [Find and filtering](../../docs/spec/search-and-filter.md#values-and-counts-in-an-editor).
 
 `Filter` is `OnlyNulls`, `NotNull`, or `Condition { condition, include_nulls }`.
 
@@ -120,6 +114,6 @@ Core retains concrete module errors and source chains. A filter failure keeps it
 
 Cargo package `gewu-uniffi` builds library `gewu` (`libgewu.a` and `libgewu.dylib` on macOS). The `GewuBindings` target's [Rust build phase](../../scripts/build-rust.sh) generates the Swift bindings and the `gewuFFI` C module, which holds UniFFI's header and [gewu_data.h](include/gewu_data.h). Never edit generated outputs.
 
-Validate interface changes on both sides: `cargo test --locked -p gewu-uniffi` for the Rust boundary, and the `GewuKit` scheme's tests for the Swift consumer through the generated bindings (see the [development guide](../../DEVELOPMENT.md)).
+Validate interface changes on both sides: `cargo test --locked -p gewu-uniffi` for the Rust boundary, and the `GewuKit` scheme's tests for the Swift consumer through the generated bindings (see [development](../../DEVELOPMENT.md)).
 
 The objects are in [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [cache.rs](src/cache.rs) holds the analysis cache and [data.rs](src/data.rs) the bulk-data types and lending functions. The remaining modules declare remote types or boundary records; [error.rs](src/error.rs) maps errors.

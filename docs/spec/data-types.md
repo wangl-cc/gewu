@@ -60,6 +60,4 @@ Binary columns are excluded from Find, and map columns are not searched. Binary 
 
 ## Nulls
 
-Null is a missing value, distinct from an empty string, zero, false and NaN. Use null-only or non-null filtering to select missingness explicitly. Every filter kind has an independent `include_nulls` flag. Exact selection contains only non-null values: an empty inclusion matches no non-null rows, and an empty exclusion matches every non-null row. The flag separately determines whether either selection includes nulls.
-
-Sorting places nulls last in either direction. See [filter composition](search-and-filter.md#combining-filter-conditions) for how null-inclusive conditions interact with other filters.
+Null is a missing value, distinct from an empty string, zero, false and NaN. Filters select missing values explicitly; see [combining filters](search-and-filter.md#combining-filters) and [conditions](search-and-filter.md#conditions).

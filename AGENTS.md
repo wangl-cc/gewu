@@ -1,29 +1,38 @@
 # Repository guidance
 
-## Editing entry points
+## Commands
 
-- Edit `project.yml`, not the generated `Gewu.xcodeproj`. Regenerate after adding or moving sources or changing project configuration.
-- Edit Rust interfaces, not generated UniFFI Swift bindings, C headers or module maps. The GewuKit build generates them; only GewuKit may use them.
+Run from the repository root. [DEVELOPMENT.md](DEVELOPMENT.md) has the full setup; this list is the one place it is repeated.
 
-## Keep the design documents in sync
+```sh
+cargo test --locked -p gewu-core            # or -p gewu-uniffi, or --workspace
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo +nightly fmt --all --check
+xcodegen generate --use-cache
+xcodebuild -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
+  -destination 'platform=macOS' -derivedDataPath build/xcode test
+xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests
+pnx markdownlint-cli2 --config .markdownlint.yaml <changed-files>
+```
 
-- Read the [architecture](docs/architecture.md) before changing code, and check the [decision records](docs/decisions/README.md) before reversing something that looks odd.
-- In the same change: update the architecture when a layer's responsibilities, its forbidden contents, the result objects or the data plane change; add a decision record for a new decision or one that replaces an earlier record; update the [review checklist](docs/review-checklist.md) when a rule or the test that guards it is added, renamed or removed.
-- Fix or delete documentation that a change makes wrong. Do not leave names or concepts from before a refactor.
+The Xcode commands need macOS. Documentation-only changes need only the Markdown lint.
 
-## Validation
+## Before acting
 
-- Follow the [development guide](DEVELOPMENT.md) for Rust and Swift build, test and formatting commands. Choose checks for the affected behavior; documentation-only changes do not require an App build or Rust tests.
-- For FFI interface changes, validate both the Rust boundary and GewuKit, its only Swift consumer, through the generated bindings.
-- Test behavior at its owning stable boundary; avoid repeating the same test matrix across Core, FFI and Swift. Regression tests should expose the original failure.
-- Distinguish build success, automated tests and actual UI verification. Report what was checked.
+- Read the [architecture](docs/dev/architecture.md) and the [development guide](docs/dev/guide.md) before changing code. They are the shared knowledge for humans and agents; this file adds only what applies to agents.
+- Before reversing a design that looks odd, check the architecture (including "Intentionally not done") and the [design documents](docs/dev/design/README.md).
+- Before changing what users see, check the [spec](docs/spec), and update it in the same change.
+- Keep docs in the same change as the code, as the guide's general rules describe.
 
-## Read as needed
+## Contributing on behalf of a human
 
-- [Review checklist](docs/review-checklist.md): rules a change must not break, and what guards each.
-- [Core README](crates/gewu-core/README.md): engine architecture, API contracts and benchmarks.
-- [FFI README](crates/gewu-uniffi/README.md): Rust/Swift calling contract.
-- [App README](app/README.md): App and GewuKit layers, UI code navigation and icon assets.
-- [Data types](docs/data-types.md), [search and filtering](docs/search-and-filter.md), and [file formats](docs/file-formats.md): consult the relevant contract when changing data behavior.
+- **Discuss first.** Do not change code, open threads or pull requests, or take any other action unless the human explicitly asks. A question or critique is a request to discuss, not to act.
+- **Agree on the design first.** For a new feature or a change beyond a few hundred lines, confirm there is an agreed design (in the discussion, an issue or a [design document](docs/dev/design/README.md)). If there is none, stop and say so.
+- **Stay in scope.** Report unrelated problems you notice instead of fixing them in the same change.
+- **Keep the diff lean.** Follow existing patterns. No explanatory comment blocks, speculative defensive code, compatibility shims for removed concepts, or committed conversation summaries.
+- **Never edit generated files.** Edit `project.yml`, not `Gewu.xcodeproj`; edit the Rust interface, not the generated UniFFI Swift, C headers or module maps.
+- **Report honestly.** Say which of build, automated tests and checks in the running app actually ran, and what was not verified. Mark guesses as guesses.
+- **The human reviews before anything is published.** Never tick the "I have reviewed all changes" box in the pull request; only the human does.
+- **Write the pull request from the [template](.github/pull_request_template.md)**, briefly, with AI assistance stated honestly. Do not write review replies in the human's name.
 
 Use Conventional Commit titles.
