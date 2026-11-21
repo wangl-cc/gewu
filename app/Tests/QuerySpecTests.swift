@@ -177,61 +177,6 @@ struct QuerySpecTests {
         #expect(model.appliedQuery.sorts.map(\.column) == [b])
     }
 
-    @Test func sortingCyclesAndPrioritiesAreIndependentOfDisplayOrder() async throws {
-        let model = try await model()
-        defer { model.stop() }
-        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
-        model.cycleSort(column: a, multiple: false)
-        model.cycleSort(column: b, multiple: true)
-        #expect(model.draft.sorts.map(\.column) == [a, b])
-        model.reorderColumns([c, b, a])
-        #expect(model.draft.sorts.map(\.column) == [a, b])
-        model.cycleSort(column: a, multiple: true)
-        #expect(model.draft.sort(for: a)?.descending == true)
-        model.cycleSort(column: a, multiple: true)
-        #expect(model.draft.sorts.map(\.column) == [b])
-        model.cycleSort(column: c, multiple: false)
-        #expect(model.draft.sorts.map(\.column) == [c])
-        model.reorderSorts([c])
-        model.clearSorts()
-        await settled(model)
-        #expect(model.visibleColumns == [c, b, a])
-        #expect(Array(model.displayed.rowNumbers(0..<10)) == [0, 1, 2])
-    }
-
-    @Test func hidingSelectedInspectedAndChartColumnsFallsBackToVisibleOnes() async throws {
-        let model = try await model()
-        defer { model.stop() }
-        let (a, b, c) = (model.id("a"), model.id("b"), model.id("c"))
-        #expect(model.chartX == nil && model.chartY == a)
-        model.select(a)
-        model.inspect(a)
-        model.chartX = a
-
-        model.setColumnsVisible([a], visible: false)
-        #expect(model.selectedColumn == b && model.inspectedColumn == b)
-        #expect(model.chartX == nil && model.chartY == b)
-
-        // Without a plottable column, the Y axis is empty while selection stays on c.
-        model.setColumnsVisible([b], visible: false)
-        #expect(model.selectedColumn == c && model.inspectedColumn == c && model.chartY == nil)
-
-        model.setColumnsVisible([c], visible: false)
-        #expect(model.selectedColumn == nil && model.inspectedColumn == nil)
-        #expect(model.chartX == nil && model.chartY == nil)
-
-        model.setColumnsVisible([c], visible: true)
-        #expect(model.selectedColumn == c && model.inspectedColumn == c && model.chartY == nil)
-        model.setColumnsVisible([b], visible: true)
-        #expect(model.chartX == nil && model.chartY == b)
-
-        model.setColumnsVisible([c, b], visible: false)
-        model.inspect(a)
-        #expect(model.inspectedColumn == nil, "Hidden columns cannot be inspected")
-        model.showAllColumns()
-        #expect(model.selectedColumn == a && model.inspectedColumn == a && model.chartY == a)
-    }
-
     @Test func filtersKeepSchemaOrderSoEqualConditionsNeedNoQuery() async throws {
         let model = try await model()
         defer { model.stop() }
@@ -309,31 +254,11 @@ struct QuerySpecTests {
         #expect(try await second.displayed.rowSet.nullCount(second.id("a")) == 0)
     }
 
-    @Test func exactDraftPreservesBytesAndNullsAreIndependent() {
-        let composed = LiteralTextValue(value: "é")
-        let decomposed = LiteralTextValue(value: "e\u{301}")
-        #expect(composed != decomposed)
-        var draft = ExactFilterDraft(nil)
-        draft.set(composed, selected: false)
-        #expect(!draft.contains(composed) && draft.contains(decomposed))
-        let filter = NullMode.exclude.applying(to: draft.condition)
-        #expect(filter?.passesNulls == false)
-        guard case .exact(let values, let exclude) = filter?.condition else {
-            Issue.record("Expected exact selection")
-            return
-        }
-        #expect(exclude && values.count == 1)
-        let onlyNull = NullMode.only.applying(to: draft.condition)
-        #expect(onlyNull == .onlyNulls)
-        draft.all(true)
-        #expect(NullMode.include.applying(to: draft.condition) == nil)
-    }
-
     @Test func valueSelectionTreatsMissingAsAValueAndResetClearsEveryDraft() async throws {
         let model = try await TestTables.model("value,number\nalpha,1\n,2\nMissing (null),3\nbeta,4\n")
         defer { model.stop() }
         let value = model.id("value")
-        var draft = ColumnFilterDraft(nil)
+        var draft = FilterDraft(nil)
         draft.selectAllValues(false)
         model.setFilter(draft.filter(mode: .exact), column: value)
         await settled(model)
@@ -342,7 +267,7 @@ struct QuerySpecTests {
         // Reopening a zero-row result can recover through the column's own options.
         let options = try await model.displayed.rowSet.filterOptions(for: value)
         #expect(options.values?.count == 3 && options.nullCount == 1)
-        var reopened = ColumnFilterDraft(model.appliedQuery.filter(for: value))
+        var reopened = FilterDraft(model.appliedQuery.filter(for: value))
         reopened.enterValues()
         reopened.selectAllValues(true)
         #expect(reopened.filter(mode: .exact) == nil)
@@ -352,10 +277,10 @@ struct QuerySpecTests {
         await settled(model)
         #expect(Array(model.displayed.rowNumbers(0..<10)) == [1])
 
-        draft = ColumnFilterDraft(draft.filter(mode: .exact))
+        draft = FilterDraft(draft.filter(mode: .exact))
         draft.enterValues()
         draft.includesMissing = true
-        draft.setValue(LiteralTextValue(value: "Missing (null)"), selected: true)
+        draft.setValue(ExactValue("Missing (null)"), selected: true)
         model.setFilter(draft.filter(mode: .exact), column: value)
         await settled(model)
         #expect(Array(model.displayed.rowNumbers(0..<10)) == [1, 2])
@@ -363,8 +288,7 @@ struct QuerySpecTests {
         draft.selectAllValues(true)
         #expect(draft.filter(mode: .exact) == nil)
         draft.text.text = "alpha"
-        draft.range.minimum = "3"
-        draft.range.lowerEdited = true
+        draft.range.typeMinimum("3")
         draft.nullMode = .only
         draft.reset()
         #expect(draft.filter(mode: .exact) == nil && draft.filter(mode: .text) == nil)

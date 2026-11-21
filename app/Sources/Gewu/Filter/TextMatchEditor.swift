@@ -1,22 +1,6 @@
 import GewuKit
 import SwiftUI
 
-struct TextMatchDraft {
-    var text = ""
-    var mode = TextMatch.contains
-    var caseSensitive = false
-    init(_ filter: Filter?) {
-        if let filter, case .text(let text, let mode, let caseSensitive) = filter.condition {
-            self.text = text
-            self.mode = mode
-            self.caseSensitive = caseSensitive
-        }
-    }
-    var condition: FilterCondition? {
-        text.isEmpty ? nil : .text(text: text, mode: mode, caseSensitive: caseSensitive)
-    }
-}
-
 struct TextMatchEditor: View {
     @Binding var draft: TextMatchDraft
     var body: some View {

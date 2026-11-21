@@ -20,6 +20,8 @@ GewuKit models a table with three immutable results, each an identity the App co
 | `RowSet` | the rows passing a set of filters | every analysis and filter-editor option, computed on the session's analysis worker; the engine keeps each result with these rows |
 | `DisplayRows` | a `RowSet` in display order | text, source row numbers, cell search, copying and export of exactly these rows |
 
+Two value types hold the rules of what the user edits, so App models only run and present them: `TableState` keeps the query, visible columns and the selected, inspected and charted columns consistent (filters in schema order, hidden columns lose their conditions, choices fall back to visible columns), and `FilterDraft` is one column's filter while its editor is open, with exact values compared by UTF-8 bytes (`ExactValue`).
+
 `TableSession` opens a file and answers `apply(query, after: current)`: the same `DisplayRows` when nothing changed, a new order over `current.rowSet` when only the sort changed, and a new `RowSet` otherwise; the engine makes the same reuse underneath. Each session runs synchronous Rust calls on its own serial workers (query, analysis, text, Find), off Swift's cooperative pool. A call whose task is cancelled before it reaches its worker never enters Rust; a call already running finishes and its result is discarded. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers and copied text are read in place from Rust memory.
 
 ## Code map
@@ -41,7 +43,7 @@ Each piece of state has one owner whose lifetime matches it. Every model is `@Ob
 | Model | Lifetime | Owns |
 | --- | --- | --- |
 | [WindowModel](Sources/Gewu/Window/WindowModel.swift) | window | file URL, worksheet list and loading, import options, Inspector visibility and page, [InspectorSettings](Sources/Gewu/Inspector/InspectorSettings.swift), Find field focus, [Alerts](Sources/Gewu/Window/Alerts.swift) (the window's only error channel) |
-| [TableModel](Sources/Gewu/Table/TableModel.swift) | opened worksheet | `TableSession`, `displayed: DisplayRows`, the `draft` query, visible columns, selected and inspected columns, chart axes, the open filter editor, reveal requests |
+| [TableModel](Sources/Gewu/Table/TableModel.swift) | opened worksheet | `TableSession`, `displayed: DisplayRows`, the `TableState` (draft query, visible columns, selected and inspected columns, chart axes), the open filter editor, reveal requests |
 | [FindModel](Sources/Gewu/Table/FindModel.swift), [CopyModel](Sources/Gewu/Table/CopyModel.swift), [ExportModel](Sources/Gewu/Export/ExportModel.swift) | table | their own task and state |
 | [InspectorModel](Sources/Gewu/Inspector/InspectorModel.swift), `ScatterModel` | panel view | the results on screen; the `RowSet` computes and caches them |
 

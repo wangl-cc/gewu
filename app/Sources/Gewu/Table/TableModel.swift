@@ -15,11 +15,10 @@ struct RevealRequest: Equatable {
 /// is editing. Rust owns the data; this model holds immutable query results
 /// from GewuKit and never refers to the views that present it.
 ///
-/// Query edits change `draft` at once and run in the background. `displayed`
-/// changes only when a query succeeds, so the table, status bar, Find and
-/// analyses always describe one consistent result. Column visibility is
-/// presentation and applies immediately; hiding a column removes its
-/// conditions from the draft.
+/// Edits change ``TableState``, which keeps columns and query consistent,
+/// at once; a changed query runs in the background. `displayed` changes only
+/// when a query succeeds, so the table, status bar, Find and analyses always
+/// describe one consistent result.
 @MainActor
 @Observable
 final class TableModel {
@@ -32,16 +31,10 @@ final class TableModel {
 
     /// The rows the table shows. Their query is the applied query.
     private(set) var displayed: DisplayRows
-    /// The query being edited; differs from `displayed.query` while one runs.
-    private(set) var draft = TableQuery()
-    private(set) var visibleColumns: [ColumnID]
+    /// Observed per property below, so a view reading one of them updates
+    /// only when that one changes.
+    @ObservationIgnored private var state: TableState
     private(set) var isUpdating = false
-
-    private(set) var selectedColumn: ColumnID?
-    /// The column the Inspector analyzes, independent of selection.
-    private(set) var inspectedColumn: ColumnID?
-    var chartX: ColumnID?
-    var chartY: ColumnID?
 
     /// The column whose filter editor is open.
     var filterEditor: ColumnID?
@@ -51,19 +44,13 @@ final class TableModel {
 
     @ObservationIgnored private var queryTask: Task<Void, Never>?
     @ObservationIgnored private var submitted: TableQuery?
-    @ObservationIgnored private let columnOrder: [ColumnID: Int]
 
     init(url: URL, session: TableSession, alerts: Alerts) {
         self.url = url
         self.session = session
         self.alerts = alerts
         displayed = session.initialRows
-        let columns = session.source.columns
-        visibleColumns = columns.map(\.id)
-        columnOrder = Dictionary(uniqueKeysWithValues: columns.enumerated().map { ($1.id, $0) })
-        selectedColumn = columns.first?.id
-        inspectedColumn = columns.first?.id
-        chartY = columns.first { $0.capabilities.scatter }?.id
+        state = TableState(columns: session.source.columns)
         find = FindModel(alerts: alerts)
         copying = CopyModel(alerts: alerts)
         export = ExportModel(alerts: alerts)
@@ -71,6 +58,54 @@ final class TableModel {
             self?.reveal = RevealRequest(row: match.displayRow, column: match.column, focusesTable: false)
         }
         find.update(rows: displayed, columns: visibleColumns)
+    }
+
+    /// The query being edited; differs from `displayed.query` while one runs.
+    var draft: TableQuery {
+        access(keyPath: \.draft)
+        return state.query
+    }
+    var visibleColumns: [ColumnID] {
+        access(keyPath: \.visibleColumns)
+        return state.visibleColumns
+    }
+    var selectedColumn: ColumnID? {
+        access(keyPath: \.selectedColumn)
+        return state.selectedColumn
+    }
+    /// The column the Inspector analyzes, independent of selection.
+    var inspectedColumn: ColumnID? {
+        access(keyPath: \.inspectedColumn)
+        return state.inspectedColumn
+    }
+    var chartX: ColumnID? {
+        get {
+            access(keyPath: \.chartX)
+            return state.chartX
+        }
+        set { edit { $0.setChartX(newValue) } }
+    }
+    var chartY: ColumnID? {
+        get {
+            access(keyPath: \.chartY)
+            return state.chartY
+        }
+        set { edit { $0.setChartY(newValue) } }
+    }
+
+    /// Change `state`, notifying observers of each property that changed.
+    /// Returns the state before the edit.
+    @discardableResult
+    private func edit(_ change: (inout TableState) -> Void) -> TableState {
+        let old = state
+        change(&state)
+        if state.query != old.query { withMutation(keyPath: \.draft) {} }
+        if state.visibleColumns != old.visibleColumns { withMutation(keyPath: \.visibleColumns) {} }
+        if state.selectedColumn != old.selectedColumn { withMutation(keyPath: \.selectedColumn) {} }
+        if state.inspectedColumn != old.inspectedColumn { withMutation(keyPath: \.inspectedColumn) {} }
+        if state.chartX != old.chartX { withMutation(keyPath: \.chartX) {} }
+        if state.chartY != old.chartY { withMutation(keyPath: \.chartY) {} }
+        return old
     }
 
     var source: TableSource { session.source }
@@ -89,14 +124,12 @@ final class TableModel {
     // MARK: Selection and navigation
 
     func select(_ column: ColumnID?) {
-        guard selectedColumn != column else { return }
-        selectedColumn = column
+        edit { $0.select(column) }
     }
 
     /// Analyze `column` in the Inspector.
     func inspect(_ column: ColumnID) {
-        guard visibleColumns.contains(column), inspectedColumn != column else { return }
-        inspectedColumn = column
+        edit { $0.inspect(column) }
     }
 
     func revealColumn(_ column: ColumnID, focusingTable: Bool = false) {
@@ -112,124 +145,65 @@ final class TableModel {
         filterEditor = column
     }
 
-    // MARK: Sorting
+    // MARK: Query
 
     func cycleSort(column: ColumnID, multiple: Bool) {
-        guard visibleColumns.contains(column) else { return }
-        let old = draft.sort(for: column)
-        var sorts = multiple ? draft.sorts : []
-        if old?.descending == true {
-            sorts.removeAll { $0.column == column }
-        } else if let index = sorts.firstIndex(where: { $0.column == column }) {
-            sorts[index].descending = true
-        } else {
-            sorts.append(ColumnSort(column: column, descending: old != nil))
-        }
-        editSorts(sorts)
+        editQuery { $0.cycleSort(column, multiple: multiple) }
     }
 
     func setSortDirection(column: ColumnID, descending: Bool) {
-        guard visibleColumns.contains(column) else { return }
-        var sorts = draft.sorts
-        if let index = sorts.firstIndex(where: { $0.column == column }) {
-            sorts[index].descending = descending
-        } else {
-            sorts.append(ColumnSort(column: column, descending: descending))
-        }
-        editSorts(sorts)
+        editQuery { $0.setSortDirection(column, descending: descending) }
     }
 
     func removeSort(column: ColumnID) {
-        editSorts(draft.sorts.filter { $0.column != column })
+        editQuery { $0.removeSort(column) }
     }
 
     func clearSorts() {
-        editSorts([])
+        editQuery { $0.clearSorts() }
     }
 
     /// Sort by `replacement` instead of `column`, keeping the rule's priority and direction.
     func replaceSortColumn(_ column: ColumnID, with replacement: ColumnID) {
-        guard visibleColumns.contains(replacement), draft.sort(for: replacement) == nil,
-            let index = draft.sorts.firstIndex(where: { $0.column == column })
-        else { return }
-        var sorts = draft.sorts
-        sorts[index].column = replacement
-        editSorts(sorts)
+        editQuery { $0.replaceSortColumn(column, with: replacement) }
     }
 
     /// Reorder sort priority; `columns` must hold exactly the sorted columns.
     func reorderSorts(_ columns: [ColumnID]) {
-        guard columns.count == draft.sorts.count, Set(columns) == Set(draft.sorts.map(\.column)) else { return }
-        editSorts(columns.compactMap(draft.sort(for:)))
+        editQuery { $0.reorderSorts(columns) }
     }
-
-    private func editSorts(_ sorts: [ColumnSort]) {
-        guard sorts != draft.sorts else { return }
-        draft.sorts = sorts
-        applyDraft()
-    }
-
-    // MARK: Filtering
 
     func setFilter(_ filter: Filter?, column: ColumnID) {
-        guard visibleColumns.contains(column) else { return }
-        var filters = draft.filters
-        if let filter {
-            if let index = filters.firstIndex(where: { $0.column == column }) {
-                filters[index].filter = filter
-            } else {
-                filters.append(ColumnFilter(column: column, filter: filter))
-                // Keep a stable order, so equal conditions compare equal.
-                filters.sort { (columnOrder[$0.column] ?? .max) < (columnOrder[$1.column] ?? .max) }
-            }
-        } else {
-            filters.removeAll { $0.column == column }
-        }
-        guard filters != draft.filters else { return }
-        draft.filters = filters
-        applyDraft()
+        editQuery { $0.setFilter(filter, for: column) }
     }
 
     func clearFilters() {
-        guard !draft.filters.isEmpty else { return }
-        draft.filters = []
-        applyDraft()
+        editQuery { $0.clearFilters() }
     }
 
     var canClearFilters: Bool { !draft.filters.isEmpty }
+
+    /// Apply an edit, running the query when it changed.
+    private func editQuery(_ change: (inout TableState) -> Void) {
+        if edit(change).query != state.query { applyDraft() }
+    }
 
     // MARK: Columns
 
     /// Reorder visible columns; `columns` must hold exactly the visible columns.
     func reorderColumns(_ columns: [ColumnID]) {
-        guard columns != visibleColumns, columns.count == visibleColumns.count,
-            Set(columns) == Set(visibleColumns)
-        else { return }
-        visibleColumns = columns
+        guard edit({ $0.reorderColumns(columns) }).visibleColumns != state.visibleColumns else { return }
         // Same rows and the same matches, in a new order: keep the current match.
-        if !isUpdating { find.update(rows: displayed, columns: columns, keepingMatch: true) }
+        if !isUpdating { find.update(rows: displayed, columns: visibleColumns, keepingMatch: true) }
     }
 
     /// Show or hide columns after any confirmation. Shown columns go to the
     /// end in file order; hiding clears their filters and sorts.
     func setColumnsVisible(_ columns: [ColumnID], visible: Bool) {
-        let targets = Set(columns.filter { source.column($0) != nil })
-        if visible {
-            let shown = Set(visibleColumns)
-            let added = source.columns.map(\.id).filter { targets.contains($0) && !shown.contains($0) }
-            guard !added.isEmpty else { return }
-            visibleColumns += added
-        } else {
-            let remaining = visibleColumns.filter { !targets.contains($0) }
-            guard remaining != visibleColumns else { return }
-            visibleColumns = remaining
-        }
-        reconcileColumnSelections()
-        var query = draft
-        query.filters.removeAll { !visibleColumns.contains($0.column) }
-        query.sorts.removeAll { !visibleColumns.contains($0.column) }
-        if query != draft {
-            draft = query
+        let old = edit { $0.setColumnsVisible(columns, visible: visible) }
+        guard state.visibleColumns != old.visibleColumns else { return }
+        if let filterEditor, !state.isVisible(filterEditor) { self.filterEditor = nil }
+        if state.query != old.query {
             applyDraft()
         } else if !isUpdating {
             find.update(rows: displayed, columns: visibleColumns)
@@ -238,19 +212,6 @@ final class TableModel {
 
     func showAllColumns() {
         setColumnsVisible(source.columns.map(\.id), visible: true)
-    }
-
-    /// Selection, analysis and chart axes fall back to visible columns.
-    private func reconcileColumnSelections() {
-        let visible = Set(visibleColumns)
-        func plottable(_ column: ColumnID) -> Bool {
-            visible.contains(column) && source.column(column)?.capabilities.scatter == true
-        }
-        if selectedColumn.map({ !visible.contains($0) }) ?? true { selectedColumn = visibleColumns.first }
-        if inspectedColumn.map({ !visible.contains($0) }) ?? true { inspectedColumn = visibleColumns.first }
-        if let chartX, !plottable(chartX) { self.chartX = nil }
-        if chartY.map({ !plottable($0) }) ?? true { chartY = visibleColumns.first(where: plottable) }
-        if let filterEditor, !visible.contains(filterEditor) { self.filterEditor = nil }
     }
 
     // MARK: Running queries
@@ -293,7 +254,6 @@ final class TableModel {
         submitted = nil
         isUpdating = false
         displayed = rows
-        reconcileColumnSelections()
         copying.cancel()
         find.update(rows: rows, columns: visibleColumns)
     }
@@ -303,7 +263,7 @@ final class TableModel {
         queryTask = nil
         submitted = nil
         isUpdating = false
-        draft = displayed.query
+        edit { $0.revert(to: displayed.query) }
         alerts.report(error, title: "Could Not Update the Table")
         find.update(rows: displayed, columns: visibleColumns)
     }
@@ -314,7 +274,7 @@ final class TableModel {
         queryTask = nil
         submitted = nil
         isUpdating = false
-        draft = displayed.query
+        edit { $0.revert(to: displayed.query) }
         find.stop()
         copying.cancel()
         export.stop()
