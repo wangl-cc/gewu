@@ -16,7 +16,7 @@ How to change the code without breaking its model. It assumes the vocabulary of 
 ## Rust conventions
 
 - **Multi-file modules use `<module>/mod.rs`**, not `<module>.rs` beside a directory.
-- **Unit tests live in a sibling file**: `mod.rs` with `tests.rs`, `foo.rs` with `foo_tests.rs`, declared as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`. They remain child modules with access to private items, and the implementation file stays readable. There is no size threshold, which would bring back inconsistency, and `foo.rs` is not turned into a directory just for tests. Tests that cross modules go in `crates/*/tests/`.
+- **Unit tests live in a sibling file**: `mod.rs` with `tests.rs`, `foo.rs` with `foo_tests.rs`, declared as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`. They remain child modules with access to private items, and the implementation file stays readable. There is no size threshold, which would bring back inconsistency, and `foo.rs` is not turned into a directory just for tests. A test fixture shared across modules follows the same pattern: `foo_fixture.rs`, declared as `mod fixture`. Tests that cross modules go in `crates/*/tests/`.
 - **No binding derives or attributes in Core**, not even behind a feature. Boundary shapes are declared in the FFI crate with `#[uniffi::remote]` or as FFI types. This has been proposed and rejected more than once.
 - **Units chosen for display belong to the FFI**, not Core. For example, scatter temporal coordinates are converted to seconds in the FFI because that is what the App plots; Core keeps the column's native unit.
 
