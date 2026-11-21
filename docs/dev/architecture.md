@@ -25,7 +25,7 @@ Gewu views, filters, sorts, inspects and exports one table at a time. Deeper ana
 - **Larger-than-memory files.** Deferred, not ruled out ([note](design/in-memory-without-cancellation.md)).
 - **Cancelling in-memory scans.** They run to completion ([note](design/in-memory-without-cancellation.md)).
 - **A CLI.** Core is a resident engine holding views, a poor fit for one-shot commands; an early CLI was removed. MCP, RPC or a daemon are possible future directions, not plans.
-- **gpui or polars.** See the [technology stack](design/tech-stack.md).
+- **gpui.** See the [technology stack](design/tech-stack.md).
 - **NSDocument.** Saving, versions and autosave have no use in a viewer.
 - **Localization, for now.** Kept possible by [structured errors](design/structured-errors.md).
 

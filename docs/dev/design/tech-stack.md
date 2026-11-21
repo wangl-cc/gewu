@@ -4,11 +4,9 @@
 
 ## Context
 
-Gewu is meant to be a fast, native macOS viewer for Parquet files of millions of rows and hundreds of columns, with other formats to follow. It is a personal, open-source tool, not a product. Three choices had to be made together: the UI toolkit, the data engine, and how the two talk.
+Gewu is meant to be a fast, native macOS viewer (no web UI) for Parquet files of millions of rows and hundreds of columns, with other formats to follow. It is a personal, open-source tool, not a product. Three choices had to be made together: the UI toolkit, the data engine, and how the two talk.
 
 Typical use shapes the requirements. A user opens a 2-million-row Parquet file, scrolls it at full frame rate, sorts by a string column, checks a few values in a filter, and looks at one column's distribution. The table must never stall or go blank. Value formatting must be identical wherever a value is shown, copied or exported. Adding CSV or XLSX later should not touch the UI.
-
-Where a reason did not come from the original discussion, the note says so.
 
 ## Options considered
 
@@ -16,18 +14,13 @@ Where a reason did not come from the original discussion, the note says so.
 
 - **SwiftUI's `Table`.** It is the simplest to write and native. But it slows badly with very large row counts and offers little control over scrolling and loading. At the outset it was judged fine up to tens of thousands of rows, not millions.
 - **AppKit's `NSTableView`.** It is view-based and virtualized: it creates cells only for visible rows, reuses them, and asks for a row's content only when it is about to show it. Column resizing, header clicks, multiple selection and copying come built in. It needs more imperative code than SwiftUI.
-- **A custom Core Text or Metal grid**, as some commercial table apps do. It is the fastest possible, but it means writing text layout, selection and accessibility from scratch. This was left as a later option and never needed.
 - **gpui**, a Rust UI framework. The whole app would be in one language, with no cross-language boundary. It was rejected as too unstable to build on; that is the only reason on record.
-- **A web UI** (Electron, Tauri or a web view). Ruled out by the requirement to be native, with no web UI.
 
 ### Data engine
 
 - **Rust with arrow-rs and its `parquet` crate.** Fast and mature. Parquet, CSV, JSON and Arrow IPC readers share one in-memory format, so a new format is mostly a new reader. Gives full control over which columns and rows are decoded and formatted. The cost is that sorting, filtering and statistics are written in-house on Arrow arrays.
 - **DuckDB**, through its C API. It reads many formats and comes with SQL, so it would be faster to start with. But it is a black box: it is hard to control things like decoding only what is on screen, and it adds a larger binary.
-- **Polars.** A full DataFrame engine in Rust, with a lazy query planner, expressions and many operations. It was not chosen because it is a poor fit. Gewu needs to read data, then run a narrow set of computations it controls itself: sorting, filtering, statistics and Find, written as columnar kernels on arrow-rs arrays. It has no use for Polars' DataFrame model and query engine. As a further point, not part of the original reason: Polars keeps data in its own Arrow implementation (`polars-arrow`) rather than arrow-rs. Gewu would then have to convert to arrow-rs, or give up arrow-rs's Parquet and CSV readers and its compute kernels.
 - **DataFusion.** Arrow-native SQL with spilling to disk, suited to files larger than memory. Kept as the candidate if Gewu ever needs to handle those, not adopted for in-memory work.
-- **The Arrow C++ library.** Mature, but harder to build and package than a Rust crate.
-- **Pure Swift.** No mature Parquet library exists for Swift.
 
 ### Binding between Swift and Rust
 

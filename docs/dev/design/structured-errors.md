@@ -38,13 +38,6 @@ A refactor proposal once suggested folding `GewuError` into message strings, to 
   - The values involved, such as a row count against a limit or a sheet name, are baked into text and cannot be formatted for the locale.
   - Tests compare strings.
 
-### Rust error enums passed through as they are
-
-- **For:** no projection code.
-- **Against:**
-  - Core's module errors carry sources and implementation detail.
-  - Many variants mean "the UI called this wrongly" (an unknown column ID, a duplicate column, an empty selection). A correct UI never sees them, and they would clutter every Swift switch.
-
 ### Structured kinds with the values involved, worded only at the edge
 
 - **For:** each layer keeps the information it needs; wording lives in one place and can be localized.
