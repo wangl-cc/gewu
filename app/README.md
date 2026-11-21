@@ -1,6 +1,6 @@
 # Gewu macOS app
 
-The two Swift layers: GewuKit (`app/GewuKit`), the domain layer over the generated bindings, and the App (`app/Sources/Gewu`), the SwiftUI and AppKit interface. The [architecture](../docs/dev/architecture.md) describes their responsibilities, the result types `TableSource`, `RowSet` and `DisplayRows`, and the rules between layers. For builds, launch and tests, see the [development setup](../DEVELOPMENT.md#macos-app); for Sparkle signing and publication, see [release](../docs/release.md).
+The two Swift layers: GewuKit (`app/GewuKit`), the domain layer over the generated bindings, and the App (`app/Sources/Gewu`), the SwiftUI and AppKit interface. The [architecture](../docs/dev/architecture.md) describes their responsibilities, the result types `TableSource`, `RowSet` and `DisplayRows`, and the rules between layers. For builds, tests and performance measurement, see [DEVELOPMENT.md](../DEVELOPMENT.md#macos-app); for Sparkle signing and publication, see [release](../docs/release.md).
 
 ## GewuKit
 
@@ -45,28 +45,7 @@ Find highlights are cached per column in the same 64-row blocks; the missing blo
 
 ## Copying and export
 
-Copy is an export of the selection ([architecture](../docs/dev/architecture.md#copy-is-an-export)) capped at 64 MiB in `CopyModel`; `DelimitedText` in GewuKit runs it and reads the result in place. Export writes on a worker of its own, with progress sampled into the status bar. The [interface spec](../docs/spec/interface.md) describes what users see.
-
-## Build phases
-
-The `GewuBindings` target's [Rust build phase](../scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings as the `GewuBindings` module and the `gewuFFI` C module, and links `libgewu.a` into the GewuKit framework. Edit the Rust interface rather than the generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
-
-Every configuration builds Rust with the `release` profile (optimization level 3, fat LTO, one codegen unit, debug information stripped), and Cargo reuses unchanged Rust artifacts. Debug keeps Swift unoptimized; Release and Performance optimize it. The [development setup](../DEVELOPMENT.md#macos-app) shows how to switch to the `dev` profile for debugging.
-
-## Measuring table and chart interactions
-
-Run `GewuPerformance` on an unlocked Mac, leaving the pointer and keyboard to XCTest. The scheme launches an optimized copy of Gewu with a separate bundle identifier, and its UI test bundle includes a generated 8,192-row CSV. Use Xcode's default DerivedData location, so the test runner and app can read their resources, and a fresh result bundle path for each run.
-
-```sh
-xcodebuild -project Gewu.xcodeproj -scheme GewuPerformance \
-  -destination 'platform=macOS' -parallel-testing-enabled NO \
-  -resultBundlePath build/interactions.xcresult test
-xcrun xcresulttool get test-results metrics --path build/interactions.xcresult
-```
-
-The scatter test moves the pointer across a 2,048-point plot, verifies the source rows at both ends and records Gewu's CPU time and elapsed time. Elapsed time includes XCTest event delivery and idle waits. The table test submits the same filter change as the Apply button and records the time to the first captured frame showing the new rows, using the compositor's display timestamp. Its result attachment lists each apply and clear separately. The test fails if it captures a blank or partially updated table, or a return to the old rows after the new rows appear.
-
-Use repeated runs on the same Mac, display and OS to establish a reference. To enable a local threshold, select the measurement in Xcode and choose **Set Baseline**. See [Apple's guide to performance tests](https://developer.apple.com/documentation/xcode/writing-and-running-performance-tests).
+Copy is an export of the selection ([architecture](../docs/dev/architecture.md#concurrency-and-cancellation)) capped at 64 MiB in `CopyModel`; `DelimitedText` in GewuKit runs it and reads the result in place. Export writes on a worker of its own, with progress sampled into the status bar. The [interface spec](../docs/spec/interface.md) describes what users see.
 
 ## App icon
 

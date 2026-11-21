@@ -1,6 +1,6 @@
 # Development
 
-How to build, test and format gewu. Run all commands from the repository root. What the code means and how to change it lives in [docs/dev](docs/dev); see [Where to read next](#where-to-read-next).
+How to build, test, format and measure gewu. Run all commands from the repository root. What the code means and how to change it lives in [docs/dev](docs/dev); see [Where to read next](#where-to-read-next).
 
 ## Rust Core and FFI
 
@@ -17,6 +17,20 @@ Replace `-p gewu-core` with `-p gewu-uniffi` for the FFI crate, or with `--works
 
 Rust tests cover the FFI wrappers but do not compile the generated Swift bindings. When changing the exported interface, also build and test the app below.
 
+### Engine benchmarks
+
+The standalone [data generator](tools/data-gen) writes fixed-seed files with 28 columns across the supported data kinds, without building Core. Prepare a 2-million-row file once and reuse it; regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
+
+```sh
+mkdir -p target/bench
+cargo run --locked --release -p gewu-data-gen -- target/bench/sample.parquet 2000000
+cargo bench --locked -p gewu-core --bench engine
+cargo bench --locked -p gewu-core --bench engine -- --save-baseline before
+cargo bench --locked -p gewu-core --bench engine -- --baseline before
+```
+
+Reports go to `target/criterion/`. These measure the engine, not UI latency.
+
 ## macOS app
 
 Supports macOS 15 and later. Requires stable Rust, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) and the full Xcode toolchain with Icon Composer; the Xcode IDE need not be open.
@@ -31,9 +45,22 @@ xcodebuild -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
 xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests
 ```
 
-Edit [project.yml](project.yml), not the generated `Gewu.xcodeproj`, and regenerate after adding or moving sources or changing configuration (omit `--use-cache` to force it). The build compiles `gewu-uniffi` and generates the bindings itself; no separate Rust step is needed. The `Gewu` scheme tests GewuKit against the real engine and the App's models and table; `-scheme GewuKit` runs only GewuKit's tests. Apply formatting by replacing `lint --strict` with `format --in-place`. Check native dialogs and layout in the running app when relevant.
+Edit [project.yml](project.yml), not the generated `Gewu.xcodeproj`, and regenerate after adding or moving sources or changing configuration (omit `--use-cache` to force it). The `Gewu` scheme tests GewuKit against the real engine and the App's models and table; `-scheme GewuKit` runs only GewuKit's tests. Apply formatting by replacing `lint --strict` with `format --in-place`. Check native dialogs and layout in the running app when relevant.
 
-All configurations build Rust with the optimized `release` profile; append `RUST_PROFILE=dev` to `xcodebuild` for cross-language debugging, or debug Rust directly with Cargo tests. The [App README](app/README.md) covers the build phases, the interaction performance tests and icon assets.
+The `GewuBindings` target's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the Swift bindings and the `gewuFFI` C module, and links `libgewu.a` into GewuKit, so no separate Rust step is needed. Every configuration builds Rust with the `release` profile (fat LTO, one codegen unit, stripped); Debug keeps Swift unoptimized. Append `RUST_PROFILE=dev` to `xcodebuild` for cross-language debugging, or debug Rust directly with Cargo tests. `15.0` is the minimum supported macOS version, not the SDK version.
+
+### Interaction performance
+
+Run `GewuPerformance` on an unlocked Mac, leaving the pointer and keyboard to XCTest. It launches an optimized copy of Gewu under a separate bundle identifier with a generated 8,192-row CSV. Use Xcode's default DerivedData location and a fresh result bundle path each run.
+
+```sh
+xcodebuild -project Gewu.xcodeproj -scheme GewuPerformance \
+  -destination 'platform=macOS' -parallel-testing-enabled NO \
+  -resultBundlePath build/interactions.xcresult test
+xcrun xcresulttool get test-results metrics --path build/interactions.xcresult
+```
+
+The scatter test moves the pointer across a 2,048-point plot and records Gewu's CPU and elapsed time. The table test applies a filter and records the time to the first frame showing the new rows; it fails on a blank, partial or reverted frame. Compare runs on the same Mac, display and OS, and use Xcode's **Set Baseline** for a local threshold.
 
 ### Swift language server in Zed
 
@@ -45,8 +72,9 @@ Lint changed Markdown with `pnx markdownlint-cli2 --config .markdownlint.yaml <c
 
 ## Where to read next
 
-- **Understanding the code:** the [architecture](docs/dev/architecture.md), which ends with a reading path through the code.
-- **Changing the code or reviewing a change:** the [development guide](docs/dev/guide.md): recipes for common changes and the rules each layer keeps.
+- **Understanding the code:** the [architecture](docs/dev/architecture.md).
+- **Changing or reviewing code:** the [development guide](docs/dev/guide.md).
 - **Why a large part looks the way it does:** the [design documents](docs/dev/design/README.md).
-- **Changing what users see:** the [spec](docs/spec) for the behavior, and the [App README](app/README.md) for where it is implemented.
+- **Changing what users see:** the [spec](docs/spec).
+- **A component's API and code layout:** the [Core](crates/gewu-core/README.md), [FFI](crates/gewu-uniffi/README.md) and [app](app/README.md) READMEs.
 - **Publishing a release:** [release](docs/release.md).

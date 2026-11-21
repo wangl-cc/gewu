@@ -1,6 +1,6 @@
 # gewu-core
 
-The Rust data engine for [gewu](../../README.md): decoded Arrow data, typed Find and filters, sorting, statistics and file codecs. The [architecture](../../docs/dev/architecture.md) describes Core's place among the layers and the result model it implements; the [spec](../../docs/spec) defines the product behavior. This document covers Core's APIs and implementation. For builds and tests, see the [development setup](../../DEVELOPMENT.md#rust-core-and-ffi).
+The Rust data engine for [gewu](../../README.md): decoded Arrow data, typed Find and filters, sorting, statistics and file codecs. The [architecture](../../docs/dev/architecture.md) describes Core's place among the layers and the result model it implements; the [spec](../../docs/spec) defines the product behavior. This document covers Core's APIs and implementation. For builds, tests and benchmarks, see [DEVELOPMENT.md](../../DEVELOPMENT.md#rust-core-and-ffi).
 
 ## Dataset and immutable views
 
@@ -131,27 +131,3 @@ Each operation owns its type support and execution rules by matching Arrow `Data
 | [stats/numeric/](src/stats/numeric), [stats/lengths.rs](src/stats/lengths.rs), [stats/values.rs](src/stats/values.rs) | Analysis kernels and their result records. |
 | [file/](src/file) | Codecs, export cancellation/progress and destination commit. |
 | [error.rs](src/error.rs) and module `error.rs` files | Public error aggregation and module-owned failure semantics. |
-
-## Benchmarks
-
-Run the commands below from the repository root.
-
-The standalone [data generator](../../tools/data-gen) creates fixed-seed test files with 28 columns spanning supported data kinds. It depends directly on Arrow and Parquet, so generating samples does not build Core:
-
-```sh
-cargo run --release -p gewu-data-gen -- sample.parquet 5000000
-```
-
-Prepare a fixed-seed 2-million-row file at `target/bench/sample.parquet` once and reuse it for engine benchmarks. Regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
-
-```sh
-mkdir -p target/bench
-cargo run --locked --release -p gewu-data-gen -- target/bench/sample.parquet 2000000
-cargo bench --locked -p gewu-core --bench engine
-
-# Pass Criterion options directly to Cargo.
-cargo bench --locked -p gewu-core --bench engine -- --save-baseline before
-cargo bench --locked -p gewu-core --bench engine -- --baseline before
-```
-
-Engine benchmark reports are written to `target/criterion/`. These measurements do not establish UI interaction latency.
