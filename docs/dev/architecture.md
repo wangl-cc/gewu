@@ -4,7 +4,7 @@ How Gewu is built today. This page describes; the [development guide](guide.md) 
 
 ## Overview
 
-Gewu is a read-only viewer for large tables: a native macOS app over a Rust engine. Opening a file decodes it into memory once. After that a filter produces source row numbers, a sort produces an order over them, and the table formats only the cells it shows. All data computation is in Rust, so there is one set of value semantics and one formatter.
+Gewu is a read-only viewer for large tables: a native macOS app over a Rust engine. Opening a file decodes it into memory once. After that a filter produces source row numbers, a sort produces an order over them, and the table formats only the cells it shows. All data computation is in Rust, so there is one set of value semantics and one formatter. See the [technology stack](design/tech-stack.md) note for why Swift, AppKit, arrow-rs and UniFFI.
 
 ```mermaid
 flowchart TB
@@ -25,8 +25,7 @@ Gewu views, filters, sorts, inspects and exports one table at a time. Deeper ana
 - **Larger-than-memory files.** Deferred, not ruled out ([note](design/in-memory-without-cancellation.md)).
 - **Cancelling in-memory scans.** They run to completion ([note](design/in-memory-without-cancellation.md)).
 - **A CLI.** Core is a resident engine holding views, a poor fit for one-shot commands; an early CLI was removed. MCP, RPC or a daemon are possible future directions, not plans.
-- **gpui.** It would keep one language, but it was too unstable to build on.
-- **Polars.** Core works on arrow-rs directly. DataFusion is the candidate if larger-than-memory support is ever added.
+- **gpui or polars.** See the [technology stack](design/tech-stack.md).
 - **NSDocument.** Saving, versions and autosave have no use in a viewer.
 - **Localization, for now.** Kept possible by [structured errors](design/structured-errors.md).
 

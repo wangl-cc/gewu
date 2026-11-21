@@ -1,6 +1,6 @@
 # Design notes
 
-Short records of the key decisions behind the current design, one decision per note. Each has the same structure: **Context**, **Options considered**, **Choice** and **Consequences**, under a status line with the date.
+Short records of the key decisions behind the current design, one decision per note. Each has the same structure under a status line with the date: **Context**, with a concrete scenario; **Options considered**, each with what speaks for and against it; **Choice**; **Consequences**; and **When to reconsider**, the premises the decision rests on. Where a reason was never recorded, the note marks it as inferred.
 
 Notes are frozen history. Once accepted, a note is not edited to follow the code. When a decision is replaced, the old note's status becomes "superseded by …", with a link, and a new note records the new decision. The [architecture](../architecture.md) describes the system as it is and links here for the reasons.
 
@@ -8,6 +8,7 @@ Write a note when a choice between reasonable options shapes a layer or the boun
 
 | Note | Status |
 | --- | --- |
+| [Technology stack](tech-stack.md) | Accepted, 2026-10-28 |
 | [Three immutable result objects](three-result-objects.md) | Accepted, 2026-11-05 / 2026-11-19 |
 | [Data plane: UniFFI plus two C lending functions](data-plane.md) | Accepted, 2026-11-20 |
 | [Where semantics live](layer-semantics.md) | Accepted, 2026-11-20 |
