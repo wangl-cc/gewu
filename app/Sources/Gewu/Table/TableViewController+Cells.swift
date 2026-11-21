@@ -231,6 +231,7 @@ extension MatchCellView {
         field.clipsToBounds = true
         field.lineBreakMode = .byTruncatingTail
         field.translatesAutoresizingMaskIntoConstraints = false
+        field.cell?.setAccessibilityElement(false)
         cell.addSubview(field)
         cell.textField = field
         NSLayoutConstraint.activate([

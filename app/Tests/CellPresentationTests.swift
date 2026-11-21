@@ -3,6 +3,14 @@ import Testing
 
 @Suite @MainActor
 struct CellPresentationTests {
+    @Test func cellIsOneAccessibilityElementCarryingItsText() throws {
+        let cell = MatchCellView.make(identifier: .init("a"))
+        cell.configure(text: "12.5", font: .systemFont(ofSize: 12), alignment: .right)
+        let field = try #require(cell.textField)
+        #expect(field.cell?.isAccessibilityElement() == false)
+        #expect(cell.accessibilityLabel() == "12.5")
+    }
+
     @Test func unchangedContentAndCurrentMatchDoNotRewriteText() {
         let cell = MatchCellView()
         let field = CountingTextField(labelWithString: "")

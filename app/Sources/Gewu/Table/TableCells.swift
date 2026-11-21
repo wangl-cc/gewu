@@ -97,6 +97,10 @@ final class MatchCellView: NSTableCellView {
             wholeMatch: wholeCellMatch, current: currentMatch, muted: muted)
     }
 
+    /// The cell is one accessibility element carrying its text, rather than
+    /// a cell wrapping a separate text element.
+    override func accessibilityLabel() -> String? { value }
+
     override var backgroundStyle: NSView.BackgroundStyle {
         didSet {
             guard oldValue != backgroundStyle else { return }
