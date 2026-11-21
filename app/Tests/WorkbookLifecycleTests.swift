@@ -1,75 +1,38 @@
-import Combine
 import Foundation
+import GewuKit
+import Synchronization
 import Testing
 
-/// Exercises the real window/sheet models and FFI without creating application
-/// windows or modifying recent documents. The fixture has distinct schemas,
-/// four valid sheets, and one sheet containing an Excel error.
-@Suite(.serialized)
+/// Exercises the real window model and engine without creating windows or
+/// modifying recent documents. The fixture has distinct schemas, four valid
+/// sheets, and one sheet containing an Excel error.
+@Suite(.serialized) @MainActor
 struct WorkbookLifecycleTests {
     private static func fixture(_ name: String = "multi-sheet") throws -> URL {
         try #require(
-            Bundle(for: FixtureBundle.self).url(
-                forResource: name, withExtension: "xlsx", subdirectory: "Fixtures"))
+            Bundle(for: FixtureBundle.self).url(forResource: name, withExtension: "xlsx", subdirectory: "Fixtures"))
     }
 
-    @Test(arguments: [false, true])
-    @MainActor
-    static func initialViewIsBuiltOffMainAndObsoleteResultsAreDiscarded(cancelBeforePublish: Bool) async throws {
-        let created = AsyncStream<GewuOrderedView>.makeStream()
-        let release = DispatchSemaphore(value: 0)
-        defer {
-            release.signal()
-            created.continuation.finish()
-        }
-        let model = WorkbookModel(
-            url: try fixture(),
-            makeView: { dataset in
-                let offMain = !Thread.isMainThread
-                #expect(offMain, "Initial row-array allocation must run off the UI thread")
-                let filtered = dataset.unfiltered()
-                let ordered = filtered.unsorted()
-                created.continuation.yield(ordered)
-                // Avoid deadlocking the test if allocation regresses to the main thread.
-                if offMain { release.wait() }
-                return (filtered, ordered)
-            },
-            didOpen: { _ in })
-        defer { model.stop() }
-        var views = created.stream.makeAsyncIterator()
-        model.open()
-        var expected = try #require(await views.next())
-        #expect(model.isOpening && model.document == nil, "The main actor remains available during View creation")
-        if cancelBeforePublish {
-            model.stop()
-            model.open()
-            release.signal()
-            let replacement = try #require(await views.next())
-            #expect(replacement !== expected)
-            #expect(model.document == nil, "The obsolete View must not be published while its replacement loads")
-            expected = replacement
-        }
-        release.signal()
-        await settled(model)
-        #expect(model.document?.ordered === expected, "DocumentModel must use the worker's View, not allocate another")
+    private static func settled(_ model: WindowModel) async {
+        await eventually { !model.isOpening }
     }
 
-    @Test
-    @MainActor
-    static func unicodeWorksheetNamesRemainDistinct() async throws {
+    private static func firstCell(_ model: WindowModel) async throws -> String? {
+        let table = try #require(model.table)
+        return try await table.displayed.text(of: table.source.columns[0].id, rows: 0..<1).cell(0)
+    }
+
+    @Test static func unicodeWorksheetNamesRemainDistinct() async throws {
         let composed = WorksheetName(rawValue: "Caf\u{E9}")
         let decomposed = WorksheetName(rawValue: "Cafe\u{301}")
         let probe = OpenProbe(slowSheet: composed.rawValue)
-        let model = WorkbookModel(
-            url: try fixture("unicode-sheets"),
-            openDocument: { path, sheet, _ in try probe.open(path: path, sheet: sheet) },
-            didOpen: { _ in })
+        let model = WindowModel(url: try fixture("unicode-sheets"), loader: probe.loader, didOpen: { _ in })
         defer { model.stop() }
         model.open()
         await settled(model)
-        _ = try #require(model.document)
+        _ = try #require(model.table)
         #expect(model.sheets.count == 3)
-        #expect(Set(model.sheets).count == 3, "Worksheet bar identities must distinguish the two encodings")
+        #expect(Set(model.sheets).count == 3, "Worksheet identities must distinguish the two encodings")
 
         model.selectSheet(composed)
         await probe.waitForSlowStart()
@@ -78,185 +41,150 @@ struct WorkbookLifecycleTests {
         probe.releaseSlow()
         await settled(model)
         #expect(model.selectedSheet == decomposed)
-        let decomposedDocument = try #require(model.document)
-        let decomposedRows = try decomposedDocument.ordered.formatColumn(
-            column: ColumnId(raw: 0), start: 0, count: 1)
-        #expect(decomposedRows.texts == ["decomposed"])
+        #expect(try await firstCell(model) == "decomposed")
 
         model.selectSheet(composed)
-        // Always release: the buggy implementation skips this open entirely.
         probe.releaseSlow()
         await settled(model)
         #expect(model.selectedSheet == composed)
-        let composedDocument = try #require(model.document)
-        let composedRows = try composedDocument.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
-        #expect(composedRows.texts == ["composed"])
+        #expect(try await firstCell(model) == "composed")
     }
 
-    @Test
-    @MainActor
-    static func catalogSurvivesBadFirstSheet() async throws {
-        let fixture = try fixture()
-        let model = WorkbookModel(
-            url: fixture,
-            sheetNames: { path in
-                let names = try xlsxSheetNames(path: path)
+    @Test static func catalogSurvivesABadFirstSheet() async throws {
+        let live = TableLoader.live
+        let loader = TableLoader(
+            worksheetNames: { url in
+                let names = try await live.worksheetNames(url)
                 return ["Bad"] + names.filter { $0 != "Bad" }
-            },
-            didOpen: { _ in })
+            }, open: live.open)
+        let model = WindowModel(url: try fixture(), loader: loader, didOpen: { _ in })
+        defer { model.stop() }
         model.open()
         await settled(model)
-        #expect(model.document == nil)
+        #expect(model.table == nil)
         #expect(model.sheets.first?.rawValue == "Bad" && model.sheets.contains(.init(rawValue: "First")))
-        #expect(model.errorMessage?.contains("#DIV/0!") == true)
+        #expect(model.openError?.contains("#DIV/0!") == true)
+        #expect(model.alerts.current?.title == "Could Not Open Table")
         model.selectSheet(.init(rawValue: "First"))
         await settled(model)
         #expect(model.selectedSheet?.rawValue == "First")
-        #expect(model.document?.info.columns.first?.name == "column_0")
-        model.stop()
+        #expect(model.table?.info.columns.first?.name == "column_0")
     }
 
-    @Test
-    @MainActor
-    static func switchingUsesLatestRequest() async throws {
-        let fixture = try fixture()
+    @Test static func switchingUsesTheLatestRequest() async throws {
         let probe = OpenProbe()
-        let model = WorkbookModel(
-            url: fixture, openDocument: { path, sheet, _ in try probe.open(path: path, sheet: sheet) },
-            makeView: { probe.makeView($0) },
-            didOpen: { _ in })
+        let model = WindowModel(url: try fixture(), loader: probe.loader, didOpen: { _ in })
         model.open()
         await settled(model)
-        let original = try #require(model.document)
+        let original = try #require(model.table)
         #expect(model.selectedSheet?.rawValue == "First")
         original.find.query = "keep while loading"
-        original.chartX = ColumnId(raw: 0)
 
         model.selectSheet(.init(rawValue: "Bad"))
         await settled(model)
-        #expect(model.document === original, "A failed switch must preserve the loaded document")
+        #expect(model.table === original, "A failed switch keeps the loaded table")
         #expect(original.find.query == "keep while loading")
 
         model.selectSheet(.init(rawValue: "Slow"))
         await probe.waitForSlowStart()
-        #expect(model.document === original && model.pendingSheet?.rawValue == "Slow")
+        #expect(model.table === original && model.pendingSheet?.rawValue == "Slow")
         model.selectSheet(.init(rawValue: "Queued"))
         await Task.yield()
         model.selectSheet(.init(rawValue: "Last"))
         probe.releaseSlow()
         await settled(model)
         #expect(model.selectedSheet?.rawValue == "Last")
-        #expect(model.document !== original)
-        #expect(model.document?.info.columns.first?.name == "column_3")
-        #expect(
-            model.document?.find.query == "" && model.document?.chartX == nil
-                && model.document?.chartY == ColumnId(raw: 0))
-        #expect(!probe.openedSheets.contains("Queued"), "An obsolete queued open must not decode")
-        #expect(!probe.viewSheets.contains("Slow"), "A decode superseded before completion must not allocate row IDs")
-        #expect(model.document?.ordered !== original.ordered)
+        #expect(model.table !== original && model.table?.info.columns.first?.name == "column_3")
+        #expect(model.table?.find.query == "" && model.table?.chartX == nil)
+        #expect(!probe.openedSheets.contains("Queued"), "A replaced open that has not started never reads")
 
-        let last = model.document
+        // Selecting the shown sheet cancels a pending switch.
+        let last = model.table
         model.selectSheet(.init(rawValue: "Slow"))
         await probe.waitForSlowStart()
         model.selectSheet(.init(rawValue: "Last"))
         #expect(!model.isOpening && model.pendingSheet == nil)
         probe.releaseSlow()
-        // A later real open is a barrier behind the obsolete read on the serial queue.
+        // A later open waits for the read in progress, then runs.
         model.selectSheet(.init(rawValue: "First"))
         await settled(model)
-        #expect(model.selectedSheet?.rawValue == "First" && model.document !== last)
+        #expect(model.selectedSheet?.rawValue == "First" && model.table !== last)
 
-        let other = WorkbookModel(url: fixture, didOpen: { _ in })
-        model.showsInspector = true
-        other.showsInspector = false
-        #expect(model.showsInspector && !other.showsInspector)
-
-        let retained = model.document
+        // Stopping during an open keeps the table and publishes nothing later.
+        let retained = model.table
         model.selectSheet(.init(rawValue: "Slow"))
         await probe.waitForSlowStart()
         model.stop()
         probe.releaseSlow()
-        // Drain MainActor and the synchronous read without a wall-clock sleep.
         await probe.waitForSlowFinish()
-        await Task.yield()
-        #expect(model.document === retained && !model.isOpening)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.table === retained && !model.isOpening)
     }
 
-    @Test
-    @MainActor
-    static func headerOptionReloadsData() async throws {
-        let fixture = try fixture()
+    @Test static func headerOptionReloadsData() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let csv = folder.appendingPathComponent("headerless.csv")
         try "1,Alice\n2,Bob\n".write(to: csv, atomically: true, encoding: .utf8)
-        let model = WorkbookModel(url: csv, hasHeader: false, didOpen: { _ in })
+        let model = WindowModel(url: csv, hasHeader: false, didOpen: { _ in })
+        defer { model.stop() }
         model.open()
         await settled(model)
-        #expect(model.document?.ordered.rowCount() == 2 && !model.hasHeader)
-        let first = try model.document?.ordered.formatColumn(column: ColumnId(raw: 0), start: 0, count: 1)
-        #expect(first?.texts == ["1"])
-        try await presentationContracts(#require(model.document))
+        #expect(model.table?.displayed.count == 2 && !model.hasHeader)
+        #expect(try await firstCell(model) == "1")
         model.reopen(hasHeader: true)
         await settled(model)
-        #expect(model.document?.ordered.rowCount() == 1 && model.hasHeader)
-        #expect(model.document?.info.columns.first?.name == "1")
-        let retained = model.document
+        #expect(model.table?.displayed.count == 1 && model.hasHeader)
+        #expect(model.table?.info.columns.first?.name == "1")
+        let retained = model.table
         try FileManager.default.removeItem(at: csv)
         model.reopen(hasHeader: false)
         await settled(model)
-        #expect(
-            model.document === retained && model.hasHeader, "A failed reload preserves the document and its options")
+        #expect(model.table === retained && model.hasHeader, "A failed reload keeps the table and its options")
 
-        let workbook = WorkbookModel(url: fixture, hasHeader: false, didOpen: { _ in })
+        let workbook = WindowModel(url: try fixture(), hasHeader: false, didOpen: { _ in })
+        defer { workbook.stop() }
         workbook.open()
         await settled(workbook)
-        #expect(!workbook.hasHeader && workbook.document?.info.columns.first?.name == "column_1")
+        #expect(!workbook.hasHeader && workbook.table?.info.columns.first?.name == "column_1")
         workbook.selectSheet(.init(rawValue: "Last"))
         await settled(workbook)
         #expect(!workbook.hasHeader && workbook.selectedSheet?.rawValue == "Last")
-        let rows = try #require(workbook.document).ordered.formatColumn(
-            column: ColumnId(raw: 0), start: 0, count: 1)
-        #expect(rows.texts == ["column_3"], "Worksheet changes must retain the header option")
+        #expect(try await firstCell(workbook) == "column_3", "Worksheet changes keep the header option")
     }
 
-    @MainActor
-    static func presentationContracts(_ document: DocumentModel) async throws {
-        let chart = ScatterModel()
-        for base in [0, 1] {
-            await chart.load(
-                viewer: document.viewer,
-                x: nil, y: ColumnId(raw: 0), rowNumberBase: base)
-            let point = try #require(chart.result).points[0]
-            #expect(point.sourceRow == 0, "Presentation must not change source row identity")
-            let label = formatRowNumber(point.sourceRow, base: base)
-            #expect(label == String(base) && point.xLabel == label && point.x == Double(base))
-            #expect(!document.status.contains("in file"), "Keep source row labels in the gutter, not the status bar")
-        }
-        let message = "Invalid numeric bound"
-        let error: Error = GewuError.Internal(message: message)
-        #expect(error.userMessage == message, "Show the Core message, not the generated enum description")
-        document.reportError(error)
-        #expect(document.errorMessage == message)
-        document.isErrorPresented = false
+    @Test static func inspectorSettingsSurviveWorksheetChanges() async throws {
+        let model = WindowModel(url: try fixture(), didOpen: { _ in })
+        defer { model.stop() }
+        model.open()
+        await settled(model)
+        model.inspectorSettings.histogramBins = 100
+        model.inspectorPage = .chart
+        model.selectSheet(.init(rawValue: "Last"))
+        await settled(model)
+        #expect(model.inspectorSettings.histogramBins == 100 && model.inspectorPage == .chart)
     }
 
-    @MainActor
-    static func settled(_ model: WorkbookModel) async {
-        guard model.isOpening else { return }
-        var observation: AnyCancellable?
-        await withCheckedContinuation { continuation in
-            observation = model.$isOpening.filter { !$0 }.prefix(1).sink { _ in continuation.resume() }
-        }
-        observation?.cancel()
+    @Test static func analyzingAColumnShowsTheInspectorOnItsColumnPage() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "gewu-analyze-\(UUID())"))
+        let model = WindowModel(url: try fixture(), defaults: defaults, didOpen: { _ in })
+        defer { model.stop() }
+        model.open()
+        await settled(model)
+        let table = try #require(model.table)
+        model.showsInspector = false
+        model.inspectorPage = .chart
+        let column = try #require(table.visibleColumns.last)
+        table.inspect(table.visibleColumns[0])
+        model.inspect(column)
+        #expect(model.showsInspector && model.inspectorPage == .column && table.inspectedColumn == column)
     }
 }
 
-private final class OpenProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var opened: [String] = []
-    private var views: [String] = []
+/// Opens worksheets with the real engine, holding one named sheet until released.
+private final class OpenProbe: Sendable {
+    private let opened = Mutex<[String]>([])
     private let slowStarted = DispatchSemaphore(value: 0)
     private let slowReleased = DispatchSemaphore(value: 0)
     private let slowFinished = DispatchSemaphore(value: 0)
@@ -266,60 +194,36 @@ private final class OpenProbe: @unchecked Sendable {
         self.slowSheet = slowSheet
     }
 
-    var openedSheets: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return opened
+    var openedSheets: [String] { opened.withLock { $0 } }
+
+    var loader: TableLoader {
+        TableLoader(
+            worksheetNames: { try await TableSession.worksheetNames($0) },
+            open: { url, options in
+                let sheet = options.sheet
+                self.opened.withLock { $0.append(sheet ?? "First") }
+                if let sheet, sheet.utf8.elementsEqual(self.slowSheet.utf8) {
+                    self.slowStarted.signal()
+                    await Self.wait(self.slowReleased)
+                    defer { self.slowFinished.signal() }
+                    return try await TableSession.open(url, options: options)
+                }
+                return try await TableSession.open(url, options: options)
+            })
     }
 
-    var viewSheets: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return views
-    }
-
-    func makeView(_ dataset: GewuDataset) -> (filtered: GewuFilteredView, ordered: GewuOrderedView) {
-        if case .xlsx(let sheet, _) = dataset.info().metadata {
-            lock.lock()
-            views.append(sheet)
-            lock.unlock()
-        }
-        let filtered = dataset.unfiltered()
-        return (filtered, filtered.unsorted())
-    }
-
-    func open(path: String, sheet: String?) throws -> GewuDataset {
-        lock.lock()
-        opened.append(sheet ?? "First")
-        lock.unlock()
-        if let sheet, sheet.utf8.elementsEqual(slowSheet.utf8) {
-            slowStarted.signal()
-            slowReleased.wait()
-            defer { slowFinished.signal() }
-            return try GewuDataset.openSheet(path: path, sheet: sheet)
-        }
-        if let sheet { return try GewuDataset.openSheet(path: path, sheet: sheet) }
-        return try GewuDataset.open(path: path)
-    }
-
-    func waitForSlowStart() async {
+    private static func wait(_ semaphore: DispatchSemaphore) async {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
-                self.slowStarted.wait()
+                semaphore.wait()
                 continuation.resume()
             }
         }
     }
+
+    func waitForSlowStart() async { await Self.wait(slowStarted) }
     func releaseSlow() { slowReleased.signal() }
-    func waitForSlowFinish() async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global().async {
-                // Earlier Slow requests are also complete; consume their signals.
-                for _ in 0..<3 { self.slowFinished.wait() }
-                continuation.resume()
-            }
-        }
-    }
+    func waitForSlowFinish() async { await Self.wait(slowFinished) }
 }
 
 private final class FixtureBundle {}

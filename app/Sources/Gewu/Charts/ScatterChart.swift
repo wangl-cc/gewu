@@ -1,4 +1,5 @@
 import Charts
+import GewuKit
 import SwiftUI
 
 /// Charts owns scales and layout. Core's original labels remain the
@@ -155,8 +156,7 @@ enum ScatterLogTicks {
     }
 }
 
-/// Convert the bounded sample once on the analysis worker, never on hover.
-/// Unsupported calendar ranges keep numeric coordinates and exact hover labels.
+/// Temporal axes, converted once per sample rather than on hover.
 enum ScatterDates {
     static func context(_ dates: [Date]) -> String {
         guard let first = dates.min(), let last = dates.max() else { return "UTC" }
@@ -171,32 +171,9 @@ enum ScatterDates {
         return (start == end ? "\(start)" : "\(start)–\(end)") + " · UTC"
     }
 
+    /// The points' dates on a temporal axis; `nil` for a numeric axis.
     static func make(points: [ScatterPoint], x: Bool, kind: ScatterAxisKind) -> [Date]? {
-        let isDate: Bool
-        switch kind {
-        case .date:
-            isDate = true
-        case .dateTime:
-            isDate = false
-        case .number:
-            return nil
-        }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let whole = ISO8601DateFormatter()
-        whole.formatOptions = isDate ? [.withFullDate] : [.withInternetDateTime]
-        whole.timeZone = TimeZone(secondsFromGMT: 0)
-        var dates: [Date] = []
-        dates.reserveCapacity(points.count)
-        for point in points {
-            var label = x ? point.xLabel : point.yLabel
-            if !isDate {
-                let offset = label.suffix(6).first
-                if !label.hasSuffix("Z"), offset != "+", offset != "-" { label += "Z" }
-            }
-            guard let date = fractional.date(from: label) ?? whole.date(from: label) else { return nil }
-            dates.append(date)
-        }
-        return dates
+        guard kind != .number else { return nil }
+        return points.map { x ? $0.xDate : $0.yDate }
     }
 }

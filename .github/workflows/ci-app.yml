@@ -9,6 +9,7 @@ on:
       - 'project.yml'
       - '.swift-format'
       - 'scripts/build-rust.sh'
+      - 'scripts/app-info-plist.sh'
       - '.github/workflows/ci-app.yml'
   pull_request:
     branches: [main]
@@ -18,6 +19,7 @@ on:
       - 'project.yml'
       - '.swift-format'
       - 'scripts/build-rust.sh'
+      - 'scripts/app-info-plist.sh'
       - '.github/workflows/ci-app.yml'
   workflow_call:
 
@@ -43,8 +45,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+      - name: Keep the bindings private to GewuKit
+        run: |
+          if grep -rnE 'import +(GewuBindings|gewuFFI)\b' app/Sources app/Tests app/FrameTests app/UITests; then
+            echo "Only GewuKit may import the generated bindings." >&2
+            exit 1
+          fi
       - name: Lint Swift sources
-        run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests
+        run: xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests
 
   test:
     name: Build and test (arm64)

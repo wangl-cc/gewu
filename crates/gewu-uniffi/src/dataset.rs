@@ -1,10 +1,12 @@
 //! Dataset opening and metadata across the language boundary.
 use std::sync::Arc;
 
-use gewu_core as core;
+use gewu_core::{self as core, AnalysisField, ColumnId, ColumnInfo, FileType};
 
-use crate::{ColumnFilter, ColumnId, ColumnInfo, FileMetadata, FileType, GewuError};
+use crate::{FileMetadata, GewuError, GewuOrderedView};
 
+/// What a file contains. Mirrors Core's, with source metadata in its
+/// boundary form.
 #[derive(uniffi::Record)]
 pub struct DatasetInfo {
     pub path: String,
@@ -20,48 +22,45 @@ impl From<core::DatasetInfo> for DatasetInfo {
         Self {
             path: info.path,
             row_count: info.row_count,
-            columns: info.columns.into_iter().map(Into::into).collect(),
-            format: info.format.into(),
+            columns: info.columns,
+            format: info.format,
             file_size: info.file_size,
             metadata: info.metadata.into(),
         }
     }
 }
 
+/// How to read a file.
+#[derive(uniffi::Record)]
+pub struct OpenOptions {
+    pub sheet: Option<String>,
+    pub has_header: bool,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            sheet: None,
+            has_header: true,
+        }
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct GewuDataset {
-    inner: Arc<core::Dataset>,
+    pub(crate) inner: Arc<core::Dataset>,
 }
 
 #[uniffi::export]
 impl GewuDataset {
+    /// Read and decode a file. `options.sheet` selects an XLSX worksheet (the
+    /// first one when absent); `options.has_header` applies to CSV, TSV and
+    /// XLSX. Slow: call off the main thread.
     #[uniffi::constructor]
-    pub fn open(path: String) -> Result<Arc<Self>, GewuError> {
-        Ok(Arc::new(Self {
-            inner: Arc::new(core::Dataset::open(path)?),
-        }))
-    }
-
-    #[uniffi::constructor]
-    pub fn open_with_options(
-        path: String,
-        sheet: Option<String>,
-        has_header: bool,
-    ) -> Result<Arc<Self>, GewuError> {
+    pub fn open(path: String, options: OpenOptions) -> Result<Arc<Self>, GewuError> {
         let options = core::OpenOptions {
-            sheet,
-            has_header,
-            ..core::OpenOptions::default()
-        };
-        Ok(Arc::new(Self {
-            inner: Arc::new(core::Dataset::open_with_options(path, &options)?),
-        }))
-    }
-
-    #[uniffi::constructor]
-    pub fn open_sheet(path: String, sheet: String) -> Result<Arc<Self>, GewuError> {
-        let options = core::OpenOptions {
-            sheet: Some(sheet),
+            sheet: options.sheet,
+            has_header: options.has_header,
             ..core::OpenOptions::default()
         };
         Ok(Arc::new(Self {
@@ -73,35 +72,13 @@ impl GewuDataset {
         self.inner.info().into()
     }
 
-    pub fn column_id(&self, name: String) -> Option<ColumnId> {
-        self.inner.column_id(&name).map(Into::into)
+    /// Nested fields of a column, read from the schema without scanning.
+    pub fn column_structure(&self, column: ColumnId) -> Result<Vec<AnalysisField>, GewuError> {
+        Ok(self.inner.column_structure(column)?)
     }
 
-    pub fn column_structure(
-        &self,
-        column: ColumnId,
-    ) -> Result<Vec<crate::AnalysisField>, GewuError> {
-        Ok(self
-            .inner
-            .column_structure(column.into())?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    pub fn unfiltered(&self) -> Arc<crate::GewuFilteredView> {
-        Arc::new(crate::GewuFilteredView {
-            inner: self.inner.unfiltered(),
-        })
-    }
-
-    pub fn filter(
-        &self,
-        filters: Vec<ColumnFilter>,
-    ) -> Result<Arc<crate::GewuFilteredView>, GewuError> {
-        let filters: Vec<core::ColumnFilter> = filters.into_iter().map(Into::into).collect();
-        Ok(Arc::new(crate::GewuFilteredView {
-            inner: self.inner.filter(&filters)?,
-        }))
+    /// Every row in file order. Derive other rows with [`GewuOrderedView::apply`].
+    pub fn rows(&self) -> Arc<GewuOrderedView> {
+        crate::GewuFilteredView::unfiltered(Arc::clone(&self.inner)).unsorted()
     }
 }

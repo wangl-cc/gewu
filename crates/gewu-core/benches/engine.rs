@@ -126,7 +126,7 @@ fn apply_view(c: &mut Criterion) {
             "is_null_label",
             vec![ColumnFilter {
                 column: label,
-                filter: Filter::exact(vec![], false, true),
+                filter: Filter::OnlyNulls,
             }],
             vec![],
         ),
@@ -275,7 +275,7 @@ fn facets(c: &mut Criterion) {
     });
     let label_filter = vec![ColumnFilter {
         column: label,
-        filter: Filter::exact(vec![], true, false),
+        filter: Filter::NotNull,
     }];
     g.bench_function("histogram_price_filtered", |b| {
         b.iter(|| {

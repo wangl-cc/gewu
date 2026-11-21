@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Xcode build phase: Cargo owns Rust dependencies; Xcode consumes the outputs.
+# GewuBindings build phase: Cargo owns Rust dependencies; Xcode consumes the outputs.
+# The generated Swift bindings form the GewuBindings module, which only GewuKit
+# imports. The C module `gewuFFI` holds UniFFI's header and Gewu's hand-written
+# data views (crates/gewu-uniffi/include).
 set -euo pipefail
 cd "$SRCROOT"
 export PATH="$PATH:${CARGO_HOME:-$HOME/.cargo}/bin:/opt/homebrew/bin:/usr/local/bin"
@@ -15,19 +18,21 @@ generated="$DERIVED_FILE_DIR/uniffi"
 mkdir -p "$generated" "$BUILT_PRODUCTS_DIR"
 cargo run --locked -p gewu-uniffi --features bindgen --bin uniffi-bindgen -- \
   generate --library "$library.dylib" --language swift --out-dir "$generated"
-for file in gewu.swift gewuFFI.h gewuFFI.modulemap; do
-  if ! cmp -s "$generated/$file" "$DERIVED_FILE_DIR/$file"; then
-    cp "$generated/$file" "$DERIVED_FILE_DIR/$file"
+cp "$generated/gewu.swift" "$generated/GewuBindings.swift"
+cp crates/gewu-uniffi/include/gewu_data.h "$generated/gewu_data.h"
+sed 's|^\( *\)header "gewuFFI.h"$|\1header "gewuFFI.h"\
+\1header "gewu_data.h"|' "$generated/gewuFFI.modulemap" > "$generated/module.modulemap"
+grep -q 'header "gewu_data.h"' "$generated/module.modulemap"
+# Every target finds the C module through this include path.
+headers="$BUILT_PRODUCTS_DIR/gewuFFI"
+mkdir -p "$headers"
+for pair in "GewuBindings.swift:$DERIVED_FILE_DIR" "gewuFFI.h:$headers" "gewu_data.h:$headers" \
+  "module.modulemap:$headers"; do
+  file="${pair%%:*}"; destination="${pair#*:}"
+  if ! cmp -s "$generated/$file" "$destination/$file"; then
+    cp "$generated/$file" "$destination/$file"
   fi
 done
 if ! cmp -s "$library.a" "$BUILT_PRODUCTS_DIR/libgewu.a"; then
   cp "$library.a" "$BUILT_PRODUCTS_DIR/libgewu.a"
-fi
-# Keep Cargo's package version as the single source for the app version.
-package_id="$(cargo pkgid --locked -p gewu-uniffi)"
-version="${package_id##*#}"; version="${version##*@}"
-cp app/Info.plist "$generated/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$generated/Info.plist"
-if ! cmp -s "$generated/Info.plist" "$DERIVED_FILE_DIR/Info.plist"; then
-  cp "$generated/Info.plist" "$DERIVED_FILE_DIR/Info.plist"
 fi

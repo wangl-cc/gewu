@@ -18,7 +18,7 @@ fn document(columns: Vec<(&str, ArrayRef)>) -> Arc<gewu_core::Dataset> {
 }
 
 #[test]
-fn capabilities_are_static_and_choices_keep_only_visible_values() {
+fn capabilities_are_static_and_choices_follow_the_other_filters() {
     let doc = document(vec![
         (
             "category",
@@ -68,9 +68,11 @@ fn capabilities_are_static_and_choices_keep_only_visible_values() {
         }])
         .unwrap();
     assert_eq!(chosen.row_count(), 200);
-    assert_eq!(chosen.filter_choices(c0).unwrap().values.unwrap(), vec![
-        original[0].clone()
-    ]);
+    assert_eq!(
+        chosen.filter_choices(c0).unwrap().values.unwrap(),
+        original,
+        "a column's own filter does not narrow its choices"
+    );
 }
 
 #[test]
@@ -243,9 +245,10 @@ fn exact_values_and_captured_facets_keep_byte_and_null_semantics() {
             .iter()
             .map(|v| (v.value.as_str(), v.count))
             .collect::<Vec<_>>(),
-        [("Cat", 1)]
+        [("", 1), ("Cat", 1), ("cat", 1)],
+        "choices respect only the other columns' filters"
     );
-    assert_eq!(filtered.filter_choices(c0).unwrap().null_count, 0);
+    assert_eq!(filtered.filter_choices(c0).unwrap().null_count, 1);
     for (values, exclude, include_nulls, expected) in [
         (vec!["cat".into()], false, true, vec![0, 2, 4]),
         (vec!["cat".into()], true, false, vec![1, 3]),

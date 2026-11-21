@@ -1,90 +1,27 @@
+import GewuKit
 import SwiftUI
 
-enum FilterMode: String, CaseIterable {
-    case exact = "Select Values"
-    case range = "Range"
-    case text = "Text"
-
-    /// Value selection is offered only when the column has a complete list of values,
-    /// so a nil mode means the bounded candidate request is still needed.
-    static func initial(
-        capabilities: ColumnCapabilities, current: Filter?, choices: FilterChoices? = nil
-    ) -> FilterMode? {
-        let selectable: Bool? = capabilities.exact ? choices.map { $0.values != nil } : false
-        if let current {
-            switch current.condition {
-            case .range: if capabilities.range { return .range }
-            case .text: if capabilities.textMatch { return .text }
-            case .exact:
-                guard let selectable else { return nil }
-                if selectable { return .exact }
-            }
+extension FilterMode {
+    var title: String {
+        switch self {
+        case .exact: "Select Values"
+        case .range: "Range"
+        case .text: "Text"
         }
-        guard let selectable else { return nil }
-        if selectable { return .exact }
-        return capabilities.range ? .range : (capabilities.textMatch ? .text : .exact)
     }
 }
 
-/// Editing state is private to the popover; only Apply publishes a filter.
-struct ColumnFilterDraft {
-    var exact: ExactFilterDraft
-    var text: TextMatchDraft
-    var range: RangeDraft
-    var nullMode: NullMode
-
-    init(_ filter: Filter?) {
-        exact = ExactFilterDraft(filter)
-        text = TextMatchDraft(filter)
-        range = RangeDraft(filter)
-        nullMode = NullMode(filter)
-    }
-
-    var includesMissing: Bool {
-        get { nullMode != .exclude }
-        set { nullMode = newValue ? .include : .exclude }
-    }
-
-    mutating func setValue(_ value: LiteralTextValue, selected: Bool) {
-        if nullMode == .only {
-            exact.all(false)
-            nullMode = .include
-        }
-        exact.set(value, selected: selected)
-    }
-
-    mutating func selectAllValues(_ selected: Bool) {
-        exact.all(selected)
-        includesMissing = selected
-    }
-
-    mutating func reset() { self = Self(nil) }
-
-    mutating func enterValues() {
-        if nullMode == .only {
-            exact.all(false)
-            nullMode = .include
-        }
-    }
-
-    func filter(mode: FilterMode, hasContent: Bool = true) -> Filter? {
-        let condition: FilterCondition? =
-            switch mode {
-            case .exact: exact.condition
-            case .text: text.condition
-            case .range: range.condition
-            }
-        return nullMode.applying(to: hasContent ? condition : nil)
-    }
-}
-
+/// Edits one column's filter against the table's current rows. Candidate
+/// values and the range preview describe the rows passing every other filter.
 struct ColumnFilterView: View {
-    let viewer: Viewer
+    let model: TableModel
     let info: ColumnInfo
     let current: Filter?
     let onApply: (Filter?) -> Void
     @State private var mode: FilterMode?
-    @State private var draft: ColumnFilterDraft
+    @State private var draft: FilterDraft
+    /// The rows `choices` and `distribution` describe.
+    @State private var describedRows: RowSet?
     @State private var choices: FilterChoices?
     @State private var distribution: RangeHistogram?
     @State private var error: String?
@@ -95,26 +32,18 @@ struct ColumnFilterView: View {
     @State private var retry = 0
 
     init(
-        viewer: Viewer, info: ColumnInfo, current: Filter?,
+        model: TableModel, info: ColumnInfo, current: Filter?,
         onApply: @escaping (Filter?) -> Void
     ) {
-        self.viewer = viewer
+        self.model = model
         self.info = info
         self.current = current
         self.onApply = onApply
         _mode = State(initialValue: FilterMode.initial(capabilities: info.capabilities, current: current))
-        _draft = State(initialValue: ColumnFilterDraft(current))
+        _draft = State(initialValue: FilterDraft(current))
     }
 
-    private var modes: [FilterMode] {
-        FilterMode.allCases.filter {
-            switch $0 {
-            case .range: info.capabilities.range
-            case .text: info.capabilities.textMatch
-            case .exact: info.capabilities.exact && choices?.values != nil
-            }
-        }
-    }
+    private var modes: [FilterMode] { FilterMode.available(capabilities: info.capabilities, choices: choices) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -127,7 +56,7 @@ struct ColumnFilterView: View {
             if let mode, !modes.isEmpty {
                 if modes.count > 1 {
                     Picker("Filter mode", selection: $mode) {
-                        ForEach(modes, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
+                        ForEach(modes, id: \.self) { Text($0.title).tag(Optional($0)) }
                     }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: .infinity)
                 }
                 Group {
@@ -165,7 +94,10 @@ struct ColumnFilterView: View {
             .onChange(of: mode) { _, mode in
                 if mode == .exact { draft.enterValues() }
             }
-            .task(id: Request(mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)) { await load() }
+            .task(
+                id: Request(
+                    rows: model.displayed.rowSet, mode: mode, bins: histogramBins, scale: histogramScale, retry: retry)
+            ) { await load(model.displayed.rowSet) }
     }
 
     @ViewBuilder private var exactEditor: some View {
@@ -188,20 +120,27 @@ struct ColumnFilterView: View {
     }
 
     private struct Request: Equatable {
+        let rows: RowSet
         let mode: FilterMode?
         let bins: UInt32
         let scale: AxisScale
         let retry: Int
     }
-    @MainActor private func load() async {
+    private func load(_ rows: RowSet) async {
+        if describedRows !== rows {
+            // The table's rows changed while the editor was open; describe the new ones.
+            describedRows = rows
+            choices = nil
+            distribution = nil
+        }
         loading = true
         error = nil
         let mode = mode
         do {
             // Choices decide whether value selection is offered and supply the null count.
             if info.capabilities.exact && choices == nil {
-                let result = try await viewer.filterChoices(info.id)
-                guard !Task.isCancelled else { return }
+                let result = try await rows.filterChoices(for: info.id)
+                try Task.checkCancellation()
                 choices = result
                 if mode == nil {
                     // Choosing a mode restarts this task for that editor.
@@ -209,22 +148,16 @@ struct ColumnFilterView: View {
                 }
             }
             if mode == .range {
-                let result = try await viewer.filterDistribution(info.id, bins: histogramBins, scale: histogramScale)
-                guard !Task.isCancelled else { return }
+                let result = try await rows.filterDistribution(info.id, bins: histogramBins, scale: histogramScale)
+                try Task.checkCancellation()
                 distribution = result
                 draft.range.restoreLabels(from: result)
             }
         } catch {
-            guard !Task.isCancelled else { return }
-            if error.isCancellation {
-                // The applied View changed while this editor was open; describe the new one.
-                choices = nil
-                retry &+= 1
-                return
-            }
-            self.error = error.userMessage
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
+            self.error = ErrorPresentation(error).text
         }
-        if !Task.isCancelled { loading = false }
+        loading = false
     }
 
     private func apply() {

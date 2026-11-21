@@ -1,14 +1,28 @@
 import Foundation
+import GewuKit
 import Observation
 
-/// Owns the current column's analysis request. The Viewer retains completed results;
-/// closing or replacing this presentation cancels its pending computations.
+/// The analysis results shown for one column of one row set. The row set
+/// computes and caches them; this model only presents the current request's
+/// sections, loading expanded ones in order. The owning view runs ``load(_:)``
+/// in `.task(id:)`, so a new request cancels the previous one.
 @MainActor
 @Observable
 final class InspectorModel {
+    struct Request: Equatable {
+        let rows: RowSet
+        let column: ColumnID
+        let expanded: Set<InspectorSection>
+        let bins: UInt32
+        let scale: AxisScale
+        /// Changed by Retry, to run the same request again.
+        let attempt: Int
+    }
+
+    private(set) var rows: RowSet?
+    private(set) var column: ColumnID?
     private(set) var sections: [InspectorSection] = []
     private(set) var nullCount: UInt64?
-    private(set) var rowCount: UInt64 = 0
     private(set) var statistics: NumericStatistics?
     private(set) var distribution: Histogram?
     private(set) var values: ValueSummary?
@@ -16,69 +30,17 @@ final class InspectorModel {
     private(set) var structure: [AnalysisField]?
     private(set) var errors: [InspectorSection: String] = [:]
     private(set) var loading: InspectorSection?
-    private(set) var error: String?
+    @ObservationIgnored private var binning: (bins: UInt32, scale: AxisScale)?
 
-    private struct Context: Equatable {
-        let filtered: GewuFilteredView
-        let column: ColumnId
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.filtered === rhs.filtered && lhs.column == rhs.column
-        }
+    func shows(_ rows: RowSet, column: ColumnID) -> Bool {
+        self.rows === rows && self.column == column
     }
 
-    private var context: Context?
-    @ObservationIgnored private var request: UInt64 = 0
-    @ObservationIgnored private var work: Task<Void, Never>?
-    @ObservationIgnored private var histogramBins: UInt32 = 40
-    @ObservationIgnored private var histogramScale: AxisScale = .linear
-
-    func matches(filtered: GewuFilteredView, column: ColumnId) -> Bool {
-        context == Context(filtered: filtered, column: column)
-    }
-
-    /// Stop this panel's work without affecting other consumers.
-    func cancel() {
-        request &+= 1
-        work?.cancel()
-        work = nil
-        loading = nil
-    }
-
-    func load(
-        column: ColumnInfo, dataset: GewuDataset, viewer: Viewer, expanded: Int,
-        bins: UInt32 = 40, scale: AxisScale = .linear
-    ) async {
-        guard !Task.isCancelled else { return }
-        let filtered = viewer.filtered
-        cancel()
-        let ticket = request
-        let task = Task {
-            await performLoad(
-                column: column, dataset: dataset, viewer: viewer, filtered: filtered,
-                expanded: expanded, bins: bins, scale: scale, ticket: ticket)
-        }
-        work = task
-        await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        if request == ticket { work = nil }
-    }
-
-    private func performLoad(
-        column: ColumnInfo, dataset: GewuDataset, viewer: Viewer, filtered: GewuFilteredView,
-        expanded: Int, bins: UInt32, scale: AxisScale, ticket: UInt64
-    ) async {
-        guard !Task.isCancelled, request == ticket, viewer.filtered === filtered else { return }
-        defer {
-            if request == ticket { loading = nil }
-        }
-        let next = Context(filtered: filtered, column: column.id)
-        if context != next {
-            context = next
-            rowCount = filtered.rowCount()
-            sections = []
+    func load(_ request: Request) async {
+        guard let info = request.rows.source.column(request.column) else { return }
+        if !shows(request.rows, column: request.column) {
+            rows = request.rows
+            column = request.column
             nullCount = nil
             statistics = nil
             distribution = nil
@@ -86,56 +48,56 @@ final class InspectorModel {
             lengths = nil
             structure = nil
             errors = [:]
-            error = nil
+            binning = nil
         }
-        if histogramBins != bins {
-            histogramBins = bins
+        if binning?.bins != request.bins {
             distribution = nil
             lengths = nil
-            errors[.distribution] = nil
-            errors[.lengths] = nil
-        }
-        if histogramScale != scale {
-            histogramScale = scale
+        } else if binning?.scale != request.scale {
             distribution = nil
-            errors[.distribution] = nil
         }
-        sections = InspectorSection.available(for: column.analysis)
-        error = nil
-        for section in sections where expanded & section.mask != 0 && !hasResult(section) {
-            guard !Task.isCancelled, request == ticket, viewer.filtered === filtered else { return }
+        binning = (request.bins, request.scale)
+        errors = [:]
+        sections = InspectorSection.available(for: info.analyses)
+        defer { loading = nil }
+        for section in sections where request.expanded.contains(section) && !hasResult(section) {
+            guard !Task.isCancelled else { return }
             loading = section
-            errors[section] = nil
             do {
-                switch section {
-                case .overview:
-                    try await load(\.nullCount, ticket: ticket, context: next, viewer: viewer) {
-                        try await viewer.countNulls(column.id)
-                    }
-                case .statistics:
-                    try await load(\.statistics, ticket: ticket, context: next, viewer: viewer) {
-                        try await viewer.statistics(column.id)
-                    }
-                case .distribution:
-                    try await load(\.distribution, ticket: ticket, context: next, viewer: viewer) {
-                        try await viewer.distribution(column.id, bins: bins, scale: scale)
-                    }
-                case .values:
-                    try await load(\.values, ticket: ticket, context: next, viewer: viewer) {
-                        try await viewer.values(column.id)
-                    }
-                case .lengths:
-                    try await load(\.lengths, ticket: ticket, context: next, viewer: viewer) {
-                        try await viewer.lengths(column.id, bins: bins)
-                    }
-                case .structure:
-                    structure = try dataset.columnStructure(column: column.id)
-                }
+                try await fetch(section, request)
             } catch {
-                guard !Task.isCancelled, request == ticket else { return }
-                if error is CancellationError { break }
-                errors[section] = error.userMessage
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
+                errors[section] = ErrorPresentation(error).text
             }
+        }
+    }
+
+    private func fetch(_ section: InspectorSection, _ request: Request) async throws {
+        let rows = request.rows
+        let column = request.column
+        switch section {
+        case .overview:
+            let value = try await rows.nullCount(column)
+            try Task.checkCancellation()
+            nullCount = value
+        case .statistics:
+            let value = try await rows.statistics(column)
+            try Task.checkCancellation()
+            statistics = value
+        case .distribution:
+            let value = try await rows.distribution(column, bins: request.bins, scale: request.scale)
+            try Task.checkCancellation()
+            distribution = value
+        case .values:
+            let value = try await rows.values(column)
+            try Task.checkCancellation()
+            values = value
+        case .lengths:
+            let value = try await rows.lengths(column, bins: request.bins)
+            try Task.checkCancellation()
+            lengths = value
+        case .structure:
+            structure = try rows.source.structure(of: column)
         }
     }
 
@@ -148,24 +110,5 @@ final class InspectorModel {
         case .lengths: lengths != nil
         case .structure: structure != nil
         }
-    }
-
-    private func load<T>(
-        _ destination: ReferenceWritableKeyPath<InspectorModel, T?>,
-        ticket: UInt64,
-        context expected: Context,
-        viewer: Viewer,
-        operation: () async throws -> T
-    ) async throws {
-        try Task.checkCancellation()
-        guard request == ticket, context == expected, viewer.filtered === expected.filtered else {
-            throw CancellationError()
-        }
-        let result = try await operation()
-        try Task.checkCancellation()
-        guard request == ticket, context == expected, viewer.filtered === expected.filtered else {
-            throw CancellationError()
-        }
-        self[keyPath: destination] = result
     }
 }

@@ -1,246 +1,147 @@
 import Foundation
+import GewuKit
 import Observation
 import Testing
 import os
 
-@Suite
+@Suite @MainActor
 struct FindModelTests {
-    private static let c0 = ColumnId(raw: 0)
-    private static let c1 = ColumnId(raw: 1)
-
-    @Test @MainActor
-    func emptyInvalidationDoesNotPublishDisplayChanges() {
-        let find = FindModel()
+    @Test func emptyInvalidationDoesNotPublishDisplayChanges() {
+        let find = FindModel(alerts: Alerts())
         let publications = OSAllocatedUnfairLock(initialState: 0)
         withObservationTracking {
-            _ = (find.query, find.currentMatch, find.isFinding, find.hasMatches)
-            _ = (find.revision, find.highlightRevision, find.status)
+            _ = (find.query, find.currentMatch, find.isFinding, find.hasMatches, find.highlights, find.status)
         } onChange: {
             publications.withLock { $0 += 1 }
         }
         find.invalidate()
-        find.stop()
+        find.invalidate()
         #expect(publications.withLock { $0 } == 0)
-        #expect(find.revision == 0 && find.highlightRevision == 0)
     }
 
-    @Test @MainActor
-    func delayedReplacementNavigationAndHighlightsUseOneCapturedFind() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("gewu-find-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let document = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: document)
-        let originalView = model.ordered
+    @Test func replacedQueriesNavigateAndHighlightTheLatestSearch() async throws {
+        let model = try await TestTables.model("value,number\nold,120\nnew,12\nnew,12\n")
+        defer { model.stop() }
+        let value = model.id("value")
+        let number = model.id("number")
+        let rows = model.displayed
 
+        // A debounced query replaced before its first page runs never navigates.
         model.find.query = "old"
-        model.updateFind(debounce: true)
         model.find.query = "12"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches != nil }
+        await eventually { model.find.hasMatches != nil }
+        #expect(model.find.currentMatch == CellMatch(displayRow: 1, column: number))
+        #expect(model.displayed === rows, "Find never changes the rows")
+        #expect(model.reveal?.row == 1, "Navigation asks the table to reveal the match")
 
-        #expect(model.find.currentMatch?.displayRow == 1)
-        #expect(model.find.currentMatch?.column == Self.c1)
-        #expect(model.ordered === originalView)
-        #expect(model.ordered.rowCount() == 3)
+        // Only the requested on-screen column is read and kept.
+        model.find.requestHighlights(rows: 0..<3, columns: [number])
+        await eventually { !model.find.highlights.isEmpty }
+        #expect((0..<3).map { model.find.isMatch(row: $0, column: number) } == [false, true, true])
+        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: value) })
+        let blocks = model.find.highlights
+        model.find.requestHighlights(rows: 1..<3, columns: [number])
+        #expect(model.find.highlights == blocks, "Loaded blocks are not requested again")
 
-        // Only the requested on-screen column is evaluated and cached.
-        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1])
-        try await waitUntil { model.find.hasHighlights }
-        #expect((0..<3).map { model.find.isMatch(row: $0, column: Self.c1) } == [false, true, true])
-        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
-        let revision = model.find.highlightRevision
-        model.find.requestHighlight(rows: 1..<3, columns: [Self.c1])
-        #expect(model.find.highlightRevision == revision, "Cached blocks are not requested again")
-        model.find.requestHighlight(rows: 0..<3, columns: [Self.c1, Self.c0])
-        try await waitUntil { model.find.highlightRevision != revision }
-        #expect(!(0..<3).contains { model.find.isMatch(row: $0, column: Self.c0) })
-
-        model.findNext()
-        try await waitUntil { model.find.currentMatch?.displayRow == 2 }
-        model.findNext()
-        try await waitUntil { model.find.currentMatch?.displayRow == 1 }
-        model.findNext(backwards: true)
-        try await waitUntil { model.find.currentMatch?.displayRow == 2 }
+        model.find.next()
+        await eventually { model.find.currentMatch?.displayRow == 2 }
+        model.find.next()
+        await eventually { model.find.currentMatch?.displayRow == 1 }
+        model.find.next(backwards: true)
+        await eventually { model.find.currentMatch?.displayRow == 2 }
 
         model.find.query = "old"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.column == Self.c0 }
-        #expect(model.ordered === originalView)
+        await eventually { model.find.currentMatch?.column == value }
         model.find.query = ""
-        model.updateFind()
-        #expect(model.find.currentMatch == nil && !model.find.hasHighlights)
-        #expect(model.find.canNavigate == false)
-        model.stop()
+        #expect(model.find.currentMatch == nil && model.find.highlights.isEmpty && !model.find.canNavigate)
     }
 
-    @Test @MainActor
-    func highlightsCoverAllVisibleBlocksIncludingThePartialLastBlock() async throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("gewu-find-blocks-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try ("left,right\n" + String(repeating: "needle,needle\n", count: 263)).write(
-            to: path, atomically: true, encoding: .utf8)
-        let ordered = try GewuDataset.open(path: path.path).unfiltered().unsorted()
-        let find = FindModel()
-        defer { find.stop() }
-        find.query = "needle"
-        find.update(ordered: ordered, columns: [Self.c0, Self.c1])
-        find.requestHighlight(rows: 0..<64, columns: [Self.c0])
-        try await waitUntil { find.hasHighlights }
-        let firstRevision = find.highlightRevision
+    @Test func highlightsCoverTheVisibleBlocksIncludingThePartialLastBlock() async throws {
+        let model = try await TestTables.model("left,right\n" + String(repeating: "needle,needle\n", count: 263))
+        defer { model.stop() }
+        let left = model.id("left")
+        let right = model.id("right")
+        model.find.query = "needle"
+        await eventually { model.find.hasMatches == true }
+        model.find.requestHighlights(rows: 0..<64, columns: [left])
+        await eventually { model.find.isMatch(row: 0, column: left) }
 
         let rows = 63..<263
-        find.requestHighlight(rows: rows, columns: [Self.c0, Self.c1])
-        try await waitUntil { find.highlightRevision != firstRevision }
-        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c0) })
-        #expect(rows.allSatisfy { find.isMatch(row: $0, column: Self.c1) })
-        #expect(!find.isMatch(row: rows.upperBound, column: Self.c1))
+        model.find.requestHighlights(rows: rows, columns: [left, right])
+        await eventually { model.find.isMatch(row: 262, column: right) }
+        #expect(rows.allSatisfy { model.find.isMatch(row: $0, column: left) })
+        #expect(rows.allSatisfy { model.find.isMatch(row: $0, column: right) })
+        #expect(!model.find.isMatch(row: rows.upperBound, column: right))
     }
 
-    @Test @MainActor
-    func viewRefreshDefersPreparationAndRestoresLatestFind() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-refresh-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
-        model.find.query = "12"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true }
-
-        model.setSortDirection(column: Self.c1, descending: true)
-        #expect(model.isBusy)
-        model.find.query = "120"
-        model.updateFind()
-        #expect(!model.find.canNavigate)
-        try await waitUntil { !model.isBusy && model.find.hasMatches == true }
-        #expect(model.errorMessage == nil)
-        #expect(model.find.currentMatch?.displayRow == 0)
-        #expect(model.find.currentMatch?.column == Self.c1)
-        #expect(model.ordered.rowCount() == 3)
-        model.stop()
-    }
-
-    @Test @MainActor
-    func highlightRequestsDoNotPublishSynchronouslyOrClearReplacementQueries() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-highlight-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value\nnew\nold\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
-        model.find.query = "new"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true }
-
-        let beforeRequest = model.find.highlightRevision
-        model.find.requestHighlight(rows: 0..<1, columns: [ColumnId(raw: 0)])
-        #expect(model.find.highlightRevision == beforeRequest)
-        model.find.query = "old"
-        model.updateFind()
-        let replacementRevision = model.find.highlightRevision
-        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 1 }
-        #expect(model.find.highlightRevision == replacementRevision)
-        #expect(!model.find.hasHighlights)
-        model.stop()
-    }
-
-    @Test @MainActor
-    func highlightsFollowScrollingWithoutDroppingReadsAndCoverTallViewports() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-scroll-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        let values = (0..<400).map { $0 % 2 == 0 ? "hit" : "miss" }
-        try ("value\n" + values.joined(separator: "\n")).write(to: path, atomically: true, encoding: .utf8)
-        let model = DocumentModel(url: path, dataset: try GewuDataset.open(path: path.path))
+    @Test func aRunningQueryPausesFindUntilItsRowsShow() async throws {
+        let model = try await TestTables.model("value,number\nold,120\nnew,12\nnew,12\n")
         defer { model.stop() }
+        let number = model.id("number")
+        model.find.query = "12"
+        await eventually { model.find.hasMatches == true }
+
+        model.setSortDirection(column: number, descending: true)
+        #expect(model.isUpdating && !model.find.canNavigate, "Matches of the old rows are dropped")
+        model.find.query = "120"
+        await eventually { !model.isUpdating && model.find.hasMatches == true }
+        #expect(model.find.currentMatch == CellMatch(displayRow: 0, column: number))
+    }
+
+    @Test func highlightsFollowScrollingWithoutDroppingReadsAndCoverTallViewports() async throws {
+        let values = (0..<400).map { $0 % 2 == 0 ? "hit" : "miss" }
+        let model = try await TestTables.model("value\n" + values.joined(separator: "\n"))
+        defer { model.stop() }
+        let value = model.id("value")
         model.find.query = "hit"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true }
+        await eventually { model.find.hasMatches == true }
 
         // Scrolling before the first read completes must not drop that read.
-        model.find.requestHighlight(rows: 0..<10, columns: [Self.c0])
-        model.find.requestHighlight(rows: 64..<74, columns: [Self.c0])
-        try await waitUntil {
-            model.find.isMatch(row: 0, column: Self.c0) && model.find.isMatch(row: 64, column: Self.c0)
-        }
-        // A viewport taller than one Core request is read in several runs.
-        model.find.requestHighlight(rows: 0..<400, columns: [Self.c0])
-        try await waitUntil { model.find.isMatch(row: 398, column: Self.c0) }
-        #expect((0..<400).allSatisfy { model.find.isMatch(row: $0, column: Self.c0) == ($0 % 2 == 0) })
+        model.find.requestHighlights(rows: 0..<10, columns: [value])
+        model.find.requestHighlights(rows: 64..<74, columns: [value])
+        await eventually { model.find.isMatch(row: 0, column: value) && model.find.isMatch(row: 64, column: value) }
+        // A viewport taller than one Core highlight block is read in one request.
+        model.find.requestHighlights(rows: 0..<400, columns: [value])
+        await eventually { model.find.isMatch(row: 398, column: value) }
+        #expect((0..<400).allSatisfy { model.find.isMatch(row: $0, column: value) == ($0 % 2 == 0) })
     }
 
-    @Test @MainActor
-    func burstNavigationConsumesEveryStepWithinOnePage() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-burst-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value\nnew\nnew\nnew\nnew\nnew\nnew\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
+    @Test func burstNavigationTakesEveryStep() async throws {
+        let model = try await TestTables.model("value\n" + (0..<40).map { _ in "new" }.joined(separator: "\n") + "\n")
+        defer { model.stop() }
         model.find.query = "new"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
+        await eventually { model.find.currentMatch?.displayRow == 0 }
 
-        // The first page holds every match, so presses must not be coalesced.
-        model.findNext()
-        model.findNext()
-        model.findNext(backwards: true)
-        #expect(model.find.currentMatch?.displayRow == 1)
-        model.findNext()
-        model.findNext()
-        #expect(model.find.currentMatch?.displayRow == 3)
-        model.stop()
+        // Presses during a step are taken by the next one, never dropped.
+        for _ in 0..<35 { model.find.next() }
+        for _ in 0..<3 { model.find.next(backwards: true) }
+        await eventually { !model.find.isFinding && model.find.currentMatch?.displayRow == 32 }
+        for _ in 0..<10 { model.find.next() }
+        await eventually { !model.find.isFinding && model.find.currentMatch?.displayRow == 2 }
+        #expect(model.find.currentMatch?.displayRow == 2, "Navigation wraps past the last match")
     }
 
-    @Test @MainActor
-    func navigationCrossesAFetchedPageWithoutLosingSteps() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-page-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        let rows = (0..<40).map { _ in "new" }.joined(separator: "\n")
-        try "value\n\(rows)\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
-        model.find.query = "new"
-        model.updateFind()
-        try await waitUntil { model.find.hasMatches == true && model.find.currentMatch?.displayRow == 0 }
-
-        // The first page covers 32 matches; 35 steps need one more fetch.
-        for _ in 0..<35 { model.findNext() }
-        try await waitUntil { !model.find.isFinding && model.find.currentMatch?.displayRow == 35 }
-        model.stop()
-    }
-
-    @Test @MainActor
-    func columnReorderPreservesTheCurrentMatch() async throws {
-        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
-            "gewu-find-reorder-\(UUID()).csv")
-        defer { try? FileManager.default.removeItem(at: path) }
-        try "value,number\nold,120\nnew,12\nnew,12\n".write(to: path, atomically: true, encoding: .utf8)
-        let dataset = try GewuDataset.open(path: path.path)
-        let model = DocumentModel(url: path, dataset: dataset)
+    @Test func columnReorderPreservesTheCurrentMatch() async throws {
+        let alerts = Alerts()
+        let model = try await TestTables.model("value,number\nold,120\nnew,12\nnew,12\n", alerts: alerts)
+        defer { model.stop() }
+        let value = model.id("value")
+        let number = model.id("number")
         model.find.query = "12"
-        model.updateFind()
-        try await waitUntil { model.find.currentMatch?.displayRow == 1 }
-        model.findNext()
-        #expect(model.find.currentMatch?.displayRow == 2)
+        await eventually { model.find.currentMatch?.displayRow == 1 }
+        model.find.next()
+        await eventually { model.find.currentMatch?.displayRow == 2 }
 
-        model.reorderColumns([Self.c1, Self.c0])
-        #expect(model.find.currentMatch?.displayRow == 2)
-        #expect(model.find.currentMatch?.column == Self.c1)
-        #expect(!model.find.isFinding)
-        #expect(model.errorMessage == nil)
-        model.stop()
+        model.reorderColumns([number, value])
+        #expect(model.find.currentMatch == CellMatch(displayRow: 2, column: number))
+        #expect(!model.find.isFinding && alerts.current == nil)
     }
 
-    @MainActor
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<200 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        Issue.record("Timed out waiting for Find state")
+    @Test func invalidQueriesAreReported() async throws {
+        let alerts = Alerts()
+        let model = try await TestTables.model("value\nx\n", alerts: alerts)
+        defer { model.stop() }
+        model.find.query = " "
+        #expect(model.find.cellFind == nil && alerts.current == nil, "Blank queries start no Find")
     }
 }

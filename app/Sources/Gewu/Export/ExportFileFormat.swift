@@ -1,3 +1,4 @@
+import GewuKit
 import UniformTypeIdentifiers
 
 enum ExportFileFormat: String, CaseIterable {
@@ -5,54 +6,41 @@ enum ExportFileFormat: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .parquet: return "Parquet"
-        case .csv: return "CSV (Comma-separated values)"
-        case .tsv: return "TSV (Tab-separated values)"
-        case .xlsx: return "Excel Workbook (.xlsx)"
+        case .parquet: "Parquet"
+        case .csv: "CSV (Comma-separated values)"
+        case .tsv: "TSV (Tab-separated values)"
+        case .xlsx: "Excel Workbook (.xlsx)"
         }
     }
 
     var contentType: UTType {
         switch self {
-        case .csv: return .commaSeparatedText
-        case .tsv: return .tabSeparatedText
-        case .parquet: return UTType(importedAs: "org.apache.parquet", conformingTo: .data)
-        case .xlsx: return UTType("org.openxmlformats.spreadsheetml.sheet")!
+        case .csv: .commaSeparatedText
+        case .tsv: .tabSeparatedText
+        case .parquet: UTType(importedAs: "org.apache.parquet", conformingTo: .data)
+        case .xlsx: UTType("org.openxmlformats.spreadsheetml.sheet")!
         }
     }
 
-    var coreFormat: FileType {
+    var fileType: FileType {
         switch self {
-        case .csv: return .csv
-        case .tsv: return .tsv
-        case .parquet: return .parquet
-        case .xlsx: return .xlsx
+        case .csv: .csv
+        case .tsv: .tsv
+        case .parquet: .parquet
+        case .xlsx: .xlsx
         }
     }
 }
 
-enum ExportCompression: String, CaseIterable {
-    case zstd, snappy, gzip, brotli, lz4, uncompressed
-
+extension ParquetCompression {
     var title: String {
         switch self {
-        case .zstd: return "Zstd"
-        case .snappy: return "Snappy"
-        case .gzip: return "Gzip"
-        case .brotli: return "Brotli"
-        case .lz4: return "LZ4"
-        case .uncompressed: return "Uncompressed"
-        }
-    }
-
-    var coreCompression: ParquetCompression {
-        switch self {
-        case .zstd: return .zstd
-        case .snappy: return .snappy
-        case .gzip: return .gzip
-        case .brotli: return .brotli
-        case .lz4: return .lz4
-        case .uncompressed: return .uncompressed
+        case .zstd: "Zstd"
+        case .snappy: "Snappy"
+        case .gzip: "Gzip"
+        case .brotli: "Brotli"
+        case .lz4: "LZ4"
+        case .uncompressed: "Uncompressed"
         }
     }
 }

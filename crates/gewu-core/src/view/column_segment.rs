@@ -41,6 +41,15 @@ impl FormattedColumnSegment {
     }
 }
 
+/// Source row indices of an [`OrderedView`] in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRows<'a> {
+    /// Rows `0..n` in file order; display row `i` is source row `i`.
+    All(usize),
+    /// The source row of each display row.
+    Selected(&'a [u32]),
+}
+
 impl OrderedView {
     /// Format one column at display rows `start..start + count`, clipped to
     /// the available rows. Fails for an unknown column, and if the segment's
@@ -77,6 +86,15 @@ impl OrderedView {
         })
     }
 
+    /// Every source row index in display order, borrowed from the view
+    /// without copying. A view of all rows in file order holds no indices.
+    pub fn row_ids(&self) -> SourceRows<'_> {
+        match &self.rows {
+            crate::row_ids::RowIds::All(count) => SourceRows::All(*count),
+            crate::row_ids::RowIds::Selected(rows) => SourceRows::Selected(rows),
+        }
+    }
+
     /// Source row indices in display order, without formatting any cells.
     pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
         self.row_window(start, count)
@@ -85,7 +103,7 @@ impl OrderedView {
             .collect()
     }
 
-    fn row_window(&self, start: u64, count: u32) -> crate::row_ids::RowWindow<'_> {
+    pub(super) fn row_window(&self, start: u64, count: u32) -> crate::row_ids::RowWindow<'_> {
         let len = self.rows.len() as u64;
         let start = start.min(len);
         let end = start.saturating_add(u64::from(count)).min(len);

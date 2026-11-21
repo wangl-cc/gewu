@@ -52,7 +52,7 @@ open build/xcode/Build/Products/Debug/Gewu.app
 
 These commands use `build/xcode` for DerivedData so the launch path is predictable. Edit [project.yml](project.yml), not the generated `Gewu.xcodeproj`; regenerate after adding or moving sources or changing project configuration. Omit `--use-cache` to force regeneration. For IDE debugging, optionally run `open Gewu.xcodeproj` and select the `Gewu` scheme.
 
-The App's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings and supplies `libgewu.a` for linking. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
+The `GewuBindings` target's [Rust build phase](scripts/build-rust.sh) builds `gewu-uniffi`, generates the UniFFI bindings as the `GewuBindings` module and the `gewuFFI` C module, and links `libgewu.a` into the GewuKit framework, the only module that imports them. A separate Rust build or binding-generation command is not needed. Edit the Rust interface rather than generated Swift or C files. Xcode supplies the SDK and deployment target; `15.0` is the minimum supported macOS version, not the SDK version.
 
 All App configurations use Rust's `release` profile with optimization level 3, fat LTO, one codegen unit and debug information stripped. Debug keeps Swift unoptimized. Release and Performance optimize Swift. Cargo reuses unchanged Rust artifacts during frontend development. Debug Rust directly with Cargo tests; for cross-language debugging, append `RUST_PROFILE=dev` to the `xcodebuild` command.
 
@@ -71,12 +71,12 @@ After generating the project, run:
 ```sh
 xcodebuild -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
   -destination 'platform=macOS' -derivedDataPath build/xcode test
-xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests
+xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests
 ```
 
-Apply formatting with `xcrun swift-format format --configuration .swift-format --in-place --recursive app/Sources/Gewu app/Tests app/FrameTests app/UITests`.
+Apply formatting with `xcrun swift-format format --configuration .swift-format --in-place --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests`.
 
-The default `Gewu` scheme exercises App logic through the generated Core bindings in a hostless bundle. Check native dialogs and layout in the running app when relevant.
+The default `Gewu` scheme runs two hostless bundles: `GewuKitTests` checks GewuKit against the generated bindings and the real engine, and `GewuTests` exercises App models and the native table. Run only GewuKit's tests with `-scheme GewuKit`. Check native dialogs and layout in the running app when relevant.
 
 ### Measure table and chart interactions
 

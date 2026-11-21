@@ -1,46 +1,5 @@
+import GewuKit
 import SwiftUI
-
-struct RangeDraft {
-    var minimum = ""
-    var maximum = ""
-    var lowerBound: RangeBound?
-    var upperBound: RangeBound?
-    var lowerEdited = false
-    var upperEdited = false
-    init(_ filter: Filter?) {
-        if let filter, case .range(let min, let max) = filter.condition {
-            minimum = min ?? ""
-            maximum = max ?? ""
-            lowerEdited = true
-            upperEdited = true
-        }
-    }
-    mutating func restoreLabels(from histogram: RangeHistogram?) {
-        guard let histogram else { return }
-        if lowerEdited, let bound = histogram.ranges.compactMap(\.min).first(where: { $0.value == minimum }) {
-            lowerBound = bound
-            minimum = bound.label
-            lowerEdited = false
-        }
-        if upperEdited, let bound = histogram.ranges.compactMap(\.max).first(where: { $0.value == maximum }) {
-            upperBound = bound
-            maximum = bound.label
-            upperEdited = false
-        }
-    }
-    var condition: FilterCondition? {
-        let min = lowerEdited ? minimum.nilIfBlank : lowerBound?.value
-        let max = upperEdited ? maximum.nilIfBlank : upperBound?.value
-        return min == nil && max == nil ? nil : .range(min: min, max: max)
-    }
-}
-
-extension String {
-    fileprivate var nilIfBlank: String? {
-        let text = trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
-    }
-}
 
 struct RangeFilterView: View {
     let distribution: RangeHistogram?
@@ -79,8 +38,7 @@ struct RangeFilterView: View {
                         text: Binding(
                             get: { draft.minimum },
                             set: {
-                                draft.minimum = $0
-                                draft.lowerEdited = true
+                                draft.typeMinimum($0)
                                 selectedBins = nil
                                 selection.snapped = false
                             })
@@ -93,8 +51,7 @@ struct RangeFilterView: View {
                         text: Binding(
                             get: { draft.maximum },
                             set: {
-                                draft.maximum = $0
-                                draft.upperEdited = true
+                                draft.typeMaximum($0)
                                 selectedBins = nil
                                 selection.snapped = false
                             })
@@ -153,7 +110,7 @@ struct RangeFilterView: View {
 
     private var rangeSummary: String {
         guard let chart else { return "" }
-        if draft.lowerEdited || draft.upperEdited { return "Distribution" }
+        if draft.isTyped { return "Distribution" }
         return selectionSummary(chart.histogram)
     }
 
@@ -163,7 +120,7 @@ struct RangeFilterView: View {
         selection.snapped = false
         if let chart {
             let count = chart.ranges.count
-            if draft.lowerEdited || draft.upperEdited {
+            if draft.isTyped {
                 selection = HistogramSelection(lower: 0, upper: Double(count), snapped: false)
                 return
             }
@@ -227,12 +184,7 @@ struct RangeFilterView: View {
         let first = Swift.min(count - 1, Swift.max(0, Int(proposed.lower.rounded())))
         let end = Swift.min(count, Swift.max(first + 1, Int(proposed.upper.rounded())))
         // Use the core's exact endpoint objects; chart coordinates are only bin selectors.
-        draft.lowerBound = chart.ranges[first].min
-        draft.upperBound = chart.ranges[end - 1].max
-        draft.minimum = draft.lowerBound?.label ?? ""
-        draft.maximum = draft.upperBound?.label ?? ""
-        draft.lowerEdited = false
-        draft.upperEdited = false
+        draft.select(first..<end, of: chart)
         selectedBins = first..<end
         selection = HistogramSelection(lower: Double(first), upper: Double(end))
     }

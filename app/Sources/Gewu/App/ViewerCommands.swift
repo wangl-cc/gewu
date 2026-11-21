@@ -1,10 +1,11 @@
+import GewuKit
 import SwiftUI
 
 struct ViewerCommands: Commands {
-    @ObservedObject var files: FileCoordinator
-    @FocusedValue(DocumentModel.self) private var model
-    @FocusedObject private var workbook: WorkbookModel?
-    @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
+    let files: FileCoordinator
+    @FocusedValue(WindowModel.self) private var window
+    @FocusedValue(TableModel.self) private var model
+    @AppStorage(Preferences.showsRowNumbers) private var showsRowNumbers: Bool
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -18,87 +19,58 @@ struct ViewerCommands: Commands {
                 Button("Clear Menu") { files.clearRecent() }.disabled(files.recentURLs.isEmpty)
             }
             Divider()
-            Button("Import Options…") { workbook?.showsImportOptions = true }
-                .disabled(workbook?.supportsHeaderOption != true || workbook?.isOpening == true)
+            Button("Import Options…") { window?.showsImportOptions = true }
+                .disabled(window?.supportsHeaderOption != true || window?.isOpening == true)
             Button("Get Info…") {
                 if let info = model?.info { openWindow(id: "file-info", value: FileDetails(info: info)) }
-            }.keyboardShortcut("i").disabled(model?.info == nil)
+            }.keyboardShortcut("i").disabled(model == nil)
         }
         CommandGroup(after: .newItem) {
             Divider()
-            if let model {
-                ExportCommand(model: model, export: model.export)
-            } else {
-                Button("Export…") {}.keyboardShortcut("e", modifiers: [.command, .shift]).disabled(true)
+            Button("Export…") {
+                guard let model, model.canExport, let window = NSApp.keyWindow else { return }
+                model.export.choose(
+                    rows: model.displayed, columns: model.visibleColumns, source: model.url, window: window)
             }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(model?.canExport != true)
         }
         CommandGroup(after: .textEditing) {
             Divider()
-            Button("Find…") { model?.focusSearch() }.keyboardShortcut("f").disabled(model == nil)
-            if let model {
-                FindNavigationCommands(model: model, find: model.find)
-            } else {
-                Button("Find Next") {}.keyboardShortcut("g").disabled(true)
-                Button("Find Previous") {}.keyboardShortcut("g", modifiers: [.command, .shift]).disabled(true)
-            }
+            Button("Find…") { window?.isSearchFocused = true }.keyboardShortcut("f").disabled(model == nil)
+            Button("Find Next") { model?.find.next() }.keyboardShortcut("g")
+                .disabled(model?.find.canNavigate != true)
+            Button("Find Previous") { model?.find.next(backwards: true) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(model?.find.canNavigate != true)
         }
         InspectorCommands()
         CommandGroup(after: .sidebar) {
             Button("Columns…") { model?.showsColumns = true }.disabled(model == nil)
             Button("Sort…") { model?.showsSorting = true }.disabled(model == nil)
             Divider()
-            if let model {
-                Button("Show Chart Inspector") {
-                    model.inspectorPage = .chart
-                    workbook?.showsInspector = true
-                }
-            }
+            Button("Show Chart Inspector") {
+                window?.inspectorPage = .chart
+                window?.showsInspector = true
+            }.disabled(model == nil)
             Divider()
             Button("Analyze Selected Column") {
-                if let column = model?.selectedColumn { model?.inspectColumn(column) }
-                workbook?.showsInspector = true
+                if let column = model?.selectedColumn { window?.inspect(column) }
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
-            .disabled(model == nil || model?.selectedColumn == nil || model?.isBusy == true)
+            .disabled(model?.selectedColumn == nil || model?.isUpdating == true)
             Toggle("Show Row Numbers", isOn: $showsRowNumbers).keyboardShortcut("r", modifiers: [.command, .option])
                 .disabled(model == nil)
         }
         CommandMenu("Filter") {
-            Button("Filter Column…") { model?.table?.showSelectedColumnFilter() }
-                .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(model == nil || model?.selectedColumn == nil)
+            Button("Filter Column…") {
+                if let column = model?.selectedColumn { model?.editFilter(column) }
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(model?.selectedColumn == nil)
             Divider()
             Button("Clear All Filters") { model?.clearFilters() }.keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(model?.canClearFilters != true)
         }
-    }
-}
-
-private struct FindNavigationCommands: View {
-    let model: DocumentModel
-    let find: FindModel
-
-    var body: some View {
-        Button("Find Next") { model.findNext() }.keyboardShortcut("g")
-            .disabled(!find.canNavigate)
-        Button("Find Previous") { model.findNext(backwards: true) }.keyboardShortcut(
-            "g", modifiers: [.command, .shift]
-        )
-        .disabled(!find.canNavigate)
-    }
-}
-
-private struct ExportCommand: View {
-    let model: DocumentModel
-    @ObservedObject var export: ExportModel
-
-    var body: some View {
-        Button("Export…") {
-            guard model.canExport, let window = model.table?.view.window else { return }
-            export.choose(
-                ordered: model.ordered, columns: model.visibleColumns, source: model.url, window: window)
-        }
-        .keyboardShortcut("e", modifiers: [.command, .shift])
-        .disabled(!model.canExport)
     }
 }

@@ -1,23 +1,19 @@
 import Foundation
+import GewuKit
 import Testing
 
 struct HistogramScaleTests {
     @Test
     @MainActor
     static func changingBinningRefreshesTheInspectorWithoutFiltering() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).csv")
-        try "value\n-1\n0\n1\n10\n100\n".write(to: url, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let document = try await Task.detached { try GewuDataset.open(path: url.path) }.value
-        let filtered = document.unfiltered()
-        let viewer = Viewer(dataset: document, filtered: filtered, ordered: filtered.unsorted())
-        let col0 = document.info().columns[0]
+        let session = try await TestTables.session("value\n-1\n0\n1\n10\n100\n")
+        let rows = session.initialRows.rowSet
         let model = InspectorModel()
         for scale in [AxisScale.linear, .log10, .linear] {
             await model.load(
-                column: col0, dataset: document, viewer: viewer,
-                expanded: InspectorSection.distribution.mask,
-                bins: 2, scale: scale)
+                .init(
+                    rows: rows, column: session.source.id("value"), expanded: [.distribution], bins: 2, scale: scale,
+                    attempt: 0))
             guard let histogram = model.distribution else {
                 Issue.record("Missing distribution: \(model.errors)")
                 return
@@ -26,7 +22,7 @@ struct HistogramScaleTests {
             #expect(histogram.nonPositiveCount == (scale == .log10 ? 2 : 0))
             #expect(histogram.counts.reduce(0, +) == (scale == .log10 ? 3 : 5))
         }
-        #expect(filtered.rowCount() == 5)
+        #expect(rows.count == 5)
     }
 
     @Test

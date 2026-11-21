@@ -1,41 +1,43 @@
+import GewuKit
 import SwiftUI
 
-struct DocumentScene: View {
-    @StateObject private var workbook: WorkbookModel
+/// The content of one viewer window.
+struct WindowScene: View {
+    @State private var window: WindowModel
 
     init(url: URL) {
-        _workbook = StateObject(wrappedValue: WorkbookModel(url: url))
+        _window = State(initialValue: WindowModel(url: url))
     }
 
     var body: some View {
         Group {
             VStack(spacing: 0) {
-                if let model = workbook.document {
-                    LoadedDocumentView(model: model, workbook: workbook).id(ObjectIdentifier(model))
-                } else if workbook.isOpening {
-                    ProgressView("Opening \(workbook.url.lastPathComponent)…")
+                if let table = window.table {
+                    LoadedTableView(window: window, model: table).id(ObjectIdentifier(table))
+                } else if window.isOpening {
+                    ProgressView("Opening \(window.url.lastPathComponent)…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView {
                         Label("Could Not Open Table", systemImage: "exclamationmark.triangle")
                     } description: {
-                        Text(workbook.errorMessage ?? workbook.url.lastPathComponent).textSelection(.enabled)
+                        Text(window.openError ?? window.url.lastPathComponent).textSelection(.enabled)
                     } actions: {
-                        Button("Try Again") { workbook.open() }
-                        if workbook.supportsHeaderOption {
-                            Button("Import Options…") { workbook.showsImportOptions = true }
+                        Button("Try Again") { window.open() }
+                        if window.supportsHeaderOption {
+                            Button("Import Options…") { window.showsImportOptions = true }
                         }
                     }
                 }
             }
-            .navigationTitle(workbook.url.lastPathComponent)
-            .navigationDocument(workbook.url)
-            .navigationSubtitle(workbook.document?.subtitle ?? "")
+            .navigationTitle(window.url.lastPathComponent)
+            .navigationDocument(window.url)
+            .navigationSubtitle(window.table.map(subtitle) ?? "")
         }
-        .inspector(isPresented: $workbook.showsInspector) {
+        .inspector(isPresented: $window.showsInspector) {
             Group {
-                if let model = workbook.document {
-                    InspectorSidebar(model: model).id(ObjectIdentifier(model))
+                if let table = window.table {
+                    InspectorSidebar(window: window, model: table).id(ObjectIdentifier(table))
                 } else {
                     ContentUnavailableView(
                         "Column Analysis", systemImage: "chart.bar",
@@ -45,35 +47,49 @@ struct DocumentScene: View {
             .inspectorColumnWidth(min: 260, ideal: 300, max: 460)
         }
         .frame(minWidth: 620, minHeight: 400)
-        .focusedSceneObject(workbook)
-        .task { workbook.open() }
-        .onDisappear { workbook.stop() }
-        .sheet(isPresented: $workbook.showsImportOptions) {
-            ImportOptionsView(workbook: workbook)
+        .focusedSceneValue(window)
+        .task { window.open() }
+        .onDisappear { window.stop() }
+        .sheet(isPresented: $window.showsImportOptions) {
+            ImportOptionsView(window: window)
         }
-        .alert("Could Not Open Table", isPresented: $workbook.isErrorPresented) {
-            Button("OK", role: .cancel) { workbook.isErrorPresented = false }
-        } message: {
-            Text(workbook.errorMessage ?? "")
+        .alert(
+            window.alerts.current?.title ?? "",
+            isPresented: Binding(
+                get: { window.alerts.current != nil },
+                set: { presented in
+                    if !presented, let alert = window.alerts.current { window.alerts.dismiss(alert) }
+                }),
+            presenting: window.alerts.current
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { alert in
+            Text(alert.message)
         }
     }
 
+    private func subtitle(_ table: TableModel) -> String {
+        let info = table.info
+        let source = info.worksheet.map { "\(info.format.displayName) · \($0)" } ?? info.format.displayName
+        return "\(source) · \(formatCount(info.rowCount)) rows · \(info.columns.count) columns · "
+            + formatFileSize(info.fileSize)
+    }
 }
 
 private struct ImportOptionsView: View {
-    @ObservedObject var workbook: WorkbookModel
+    let window: WindowModel
     @Environment(\.dismiss) private var dismiss
     @State private var hasHeader: Bool
 
-    init(workbook: WorkbookModel) {
-        self.workbook = workbook
-        _hasHeader = State(initialValue: workbook.hasHeader)
+    init(window: WindowModel) {
+        self.window = window
+        _hasHeader = State(initialValue: window.hasHeader)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Import Options").font(.headline)
-            Text(workbook.url.lastPathComponent)
+            Text(window.url.lastPathComponent)
                 .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             Form {
                 Toggle("First row contains column names", isOn: $hasHeader)
@@ -85,7 +101,7 @@ private struct ImportOptionsView: View {
             .toggleStyle(.checkbox)
             Text("When unchecked, all rows are data and column names are generated.")
                 .font(.caption).foregroundStyle(.secondary)
-            if workbook.document != nil {
+            if window.table != nil {
                 Text("Reopening clears search, filters and sorting.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -93,7 +109,7 @@ private struct ImportOptionsView: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Reopen") {
-                    workbook.reopen(hasHeader: hasHeader)
+                    window.reopen(hasHeader: hasHeader)
                     dismiss()
                 }.keyboardShortcut(.defaultAction)
             }
@@ -101,47 +117,43 @@ private struct ImportOptionsView: View {
     }
 }
 
-private struct LoadedDocumentView: View {
-    @Bindable var model: DocumentModel
-    @ObservedObject var workbook: WorkbookModel
-    @Bindable private var find: FindModel
-    @AppStorage("ShowRowNumbers") private var showsRowNumbers = true
-
-    init(model: DocumentModel, workbook: WorkbookModel) {
-        self.model = model
-        self.workbook = workbook
-        find = model.find
-    }
+private struct LoadedTableView: View {
+    @Bindable var window: WindowModel
+    @Bindable var model: TableModel
 
     var body: some View {
         VStack(spacing: 0) {
-            DataTable(model: model, showsRowNumbers: showsRowNumbers)
+            DataTable(model: model, inspectorVisible: window.showsInspector, analyze: window.inspect)
             Divider()
-            DocumentStatus(model: model, workbook: workbook)
+            StatusBar(window: window, model: model)
         }
         .toolbar {
-            if !find.query.isEmpty {
+            if !model.find.query.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
-                    findNavigation
+                    FindNavigation(model: model, find: model.find)
                 }
             }
-            searchItem
+            ToolbarItem(placement: .primaryAction) {
+                FindSearchField(
+                    text: Bindable(model.find).query, isFocused: $window.isSearchFocused,
+                    next: { model.find.next(backwards: $0) },
+                    cancel: {
+                        model.find.query = ""
+                        model.focusTable()
+                    }
+                ).frame(width: 200)
+            }
             if #available(macOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    workbook.showsInspector.toggle()
+                    window.showsInspector.toggle()
                 } label: {
                     Label("Inspector", systemImage: "sidebar.right")
                 }.help("Show or hide column Inspector")
             }
         }
-        .onChange(of: model.inspectorRequest) { _, _ in workbook.showsInspector = true }
-        .onChange(of: workbook.showsInspector, initial: true) { _, visible in
-            model.inspectorVisible = visible
-        }
-        .onChange(of: find.query) { _, _ in model.updateFind(debounce: true) }
         .sheet(isPresented: $model.showsColumns) {
             VStack(spacing: 0) {
                 ColumnsView(model: model)
@@ -161,40 +173,27 @@ private struct LoadedDocumentView: View {
             }
         }
         .focusedSceneValue(model)
-        .alert("Gewu", isPresented: $model.isErrorPresented) {
-            Button("OK", role: .cancel) { model.isErrorPresented = false }
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
     }
+}
 
-    private var searchItem: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            FindSearchField(
-                text: $find.query, focusRequest: model.searchFocusRequest,
-                next: { model.findNext(backwards: $0) },
-                cancel: {
-                    find.query = ""
-                    model.table?.focusTable()
-                }
-            ).frame(width: 200)
-        }
-    }
+private struct FindNavigation: View {
+    let model: TableModel
+    let find: FindModel
 
-    private var findNavigation: some View {
+    var body: some View {
         HStack(spacing: 6) {
-            if let status = find.status {
+            if let status = find.status.map(Self.text) {
                 Text(status).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     .lineLimit(1).frame(maxWidth: 90).help(status)
             }
             Button {
-                model.findNext(backwards: true)
+                find.next(backwards: true)
             } label: {
                 Image(systemName: "chevron.up")
             }
             .disabled(!find.canNavigate).accessibilityLabel("Previous match").help("Previous match (⇧⌘G)")
             Button {
-                model.findNext()
+                find.next()
             } label: {
                 Image(systemName: "chevron.down")
             }
@@ -202,28 +201,32 @@ private struct LoadedDocumentView: View {
         }
         .buttonStyle(.borderless).controlSize(.small)
     }
+
+    static func text(_ status: FindModel.Status) -> String {
+        switch status {
+        case .finding: "Finding…"
+        case .noMatches: "0 matches"
+        case .ready: "Press Return"
+        case .match(let row): "Row \(formatCount(row + 1))"
+        }
+    }
 }
 
-private struct DocumentStatus: View {
-    let model: DocumentModel
-    @ObservedObject var workbook: WorkbookModel
+private struct StatusBar: View {
+    let window: WindowModel
+    let model: TableModel
     @State private var showsFilters = false
     @State private var showsSorting = false
 
-    init(model: DocumentModel, workbook: WorkbookModel) {
-        self.model = model
-        self.workbook = workbook
-    }
-
     var body: some View {
         HStack(spacing: 10) {
-            if workbook.sheets.count > 1 {
+            if window.sheets.count > 1 {
                 Menu {
-                    ForEach(workbook.sheets, id: \.self) { sheet in
+                    ForEach(window.sheets, id: \.self) { sheet in
                         Button {
-                            workbook.selectSheet(sheet)
+                            window.selectSheet(sheet)
                         } label: {
-                            if workbook.selectedSheet == sheet {
+                            if window.selectedSheet == sheet {
                                 Label(sheet.rawValue, systemImage: "checkmark")
                             } else {
                                 Text(sheet.rawValue)
@@ -231,73 +234,84 @@ private struct DocumentStatus: View {
                         }
                     }
                 } label: {
-                    Label(workbook.selectedSheet?.rawValue ?? "Worksheets", systemImage: "tablecells")
+                    Label(window.selectedSheet?.rawValue ?? "Worksheets", systemImage: "tablecells")
                         .lineLimit(1)
                 }.frame(maxWidth: 180).help("Switch worksheet")
             }
-            if workbook.isOpening {
+            if window.isOpening {
                 ProgressView().controlSize(.small)
-                    .help(workbook.pendingSheet.map { "Opening \($0.rawValue)…" } ?? "Opening…")
+                    .help(window.pendingSheet.map { "Opening \($0.rawValue)…" } ?? "Opening…")
             }
-            Text(model.status).monospacedDigit().lineLimit(1).textSelection(.enabled)
-            if !model.appliedFilterColumns.isEmpty {
+            Text(rowSummary(model)).monospacedDigit().lineLimit(1).textSelection(.enabled)
+            let filtered = model.filteredColumns.count
+            if filtered > 0 {
                 Text("·")
                 Button {
                     showsFilters.toggle()
                 } label: {
-                    Text("\(model.appliedFilterColumns.count) filtered")
-                        .monospacedDigit().fixedSize()
+                    Text("\(filtered) filtered").monospacedDigit().fixedSize()
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("\(model.appliedFilterColumns.count) filtered columns")
+                .accessibilityLabel("\(filtered) filtered columns")
                 .help("Review active column filters")
                 .popover(isPresented: $showsFilters, arrowEdge: .bottom) {
                     ActiveFiltersView(model: model) { column in
                         showsFilters = false
-                        model.selectedColumn = column
-                        model.table?.scrollToColumn(column, focus: true)
+                        model.select(column)
+                        model.revealColumn(column, focusingTable: true)
                     }
                 }
             }
-            let sortCount = model.viewer.appliedSorts.count
-            if sortCount > 0 {
+            let sorted = model.appliedQuery.sorts.count
+            if sorted > 0 {
                 Text("·")
                 Button {
                     showsSorting.toggle()
                 } label: {
-                    Text("\(sortCount) sorted").monospacedDigit().fixedSize()
+                    Text("\(sorted) sorted").monospacedDigit().fixedSize()
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("\(sortCount) sorted columns")
+                .accessibilityLabel("\(sorted) sorted columns")
                 .help("Review sort order and priority")
                 .popover(isPresented: $showsSorting, arrowEdge: .bottom) { SortingView(model: model) }
             }
             Spacer(minLength: 0)
             CopyStatus(copying: model.copying)
             ExportStatus(export: model.export)
-            if model.isBusy { ProgressView().controlSize(.small).help("Updating view") }
+            if model.isUpdating { ProgressView().controlSize(.small).help("Updating view") }
         }
         .font(.caption).foregroundStyle(.secondary)
         .padding(.horizontal, 12).frame(height: 28)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onChange(of: model.appliedFilterColumns.isEmpty) { _, empty in
+        .onChange(of: model.filteredColumns.isEmpty) { _, empty in
             if empty { showsFilters = false }
         }
     }
 }
 
+/// The status bar's description of the displayed rows. A pending query does
+/// not change it until its rows show.
+@MainActor
+func rowSummary(_ model: TableModel) -> String {
+    let rows = UInt64(model.displayed.count)
+    let total = model.info.rowCount
+    let text =
+        model.filteredColumns.isEmpty && rows == total
+        ? "\(formatCount(rows)) rows" : "\(formatCount(rows)) / \(formatCount(total)) rows"
+    return text + " · \(model.visibleColumns.count) columns"
+}
+
 private struct ActiveFiltersView: View {
-    let model: DocumentModel
-    let locate: (ColumnId) -> Void
+    let model: TableModel
+    let locate: (ColumnID) -> Void
 
     var body: some View {
-        let columns = model.viewer.appliedFilters
         VStack(alignment: .leading, spacing: 12) {
             Text("Active Filters").font(.headline)
             ScrollView {
                 VStack(spacing: 0) {
-                    ForEach(columns, id: \.column) { entry in
-                        let name = model.columnInfo[entry.column]?.name ?? ""
+                    ForEach(model.appliedQuery.filters, id: \.column) { entry in
+                        let name = model.column(entry.column)?.name ?? ""
                         HStack(spacing: 12) {
                             Button {
                                 locate(entry.column)
@@ -320,7 +334,7 @@ private struct ActiveFiltersView: View {
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Clear filter on \(name)")
                             .help("Clear filter on \(name)")
-                            .disabled(model.isBusy)
+                            .disabled(model.isUpdating)
                         }.padding(.vertical, 8)
                     }
                 }
@@ -329,7 +343,7 @@ private struct ActiveFiltersView: View {
             .fixedSize(horizontal: false, vertical: true)
             Divider()
             Button("Clear All Filters") { model.clearFilters() }
-                .buttonStyle(.borderless).disabled(model.isBusy)
+                .buttonStyle(.borderless).disabled(model.isUpdating)
         }
         .controlSize(.small).padding(16).frame(width: 340)
     }
@@ -339,14 +353,16 @@ private struct CopyStatus: View {
     let copying: CopyModel
 
     var body: some View {
-        if let message = copying.message {
-            Text(message).lineLimit(1)
+        switch copying.outcome {
+        case .copied: Text("Copied selection").lineLimit(1)
+        case .tooLarge: Text("Selection is too large to copy; use File > Export…").lineLimit(1)
+        case nil: EmptyView()
         }
     }
 }
 
 private struct ExportStatus: View {
-    @ObservedObject var export: ExportModel
+    let export: ExportModel
 
     var body: some View {
         if let progress = export.progress {
@@ -355,8 +371,12 @@ private struct ExportStatus: View {
             Text("Exporting \(formatCount(progress.rowsWritten)) of \(formatCount(progress.totalRows))")
                 .monospacedDigit()
             Button("Cancel") { export.cancel() }.buttonStyle(.borderless)
-        } else if let message = export.message {
-            Text(message).lineLimit(1).help(message)
+        } else {
+            switch export.outcome {
+            case .exported(let name): Text("Exported \(name)").lineLimit(1).help("Exported \(name)")
+            case .cancelled: Text("Export cancelled").lineLimit(1)
+            case nil: EmptyView()
+            }
         }
     }
 }
