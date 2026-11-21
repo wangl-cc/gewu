@@ -7,7 +7,7 @@ public struct ExactValue: Hashable, Sendable {
         self.text = text
     }
 
-    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.text.utf8.elementsEqual(rhs.text.utf8) }
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.text.sameBytes(as: rhs.text) }
 
     public func hash(into hasher: inout Hasher) { hashBytes(text, into: &hasher) }
 }
@@ -184,12 +184,14 @@ public struct RangeDraft: Sendable {
     /// edge's label, such as when an applied range filter is reopened.
     public mutating func restoreLabels(from histogram: RangeHistogram?) {
         guard let histogram else { return }
-        if lowerTyped, let bound = histogram.ranges.compactMap(\.min).first(where: { $0.value.utf8.elementsEqual(minimum.utf8) }) {
+        let minima = histogram.ranges.compactMap(\.min)
+        let maxima = histogram.ranges.compactMap(\.max)
+        if lowerTyped, let bound = minima.first(where: { $0.value.sameBytes(as: minimum) }) {
             lowerBound = bound
             minimum = bound.label
             lowerTyped = false
         }
-        if upperTyped, let bound = histogram.ranges.compactMap(\.max).first(where: { $0.value.utf8.elementsEqual(maximum.utf8) }) {
+        if upperTyped, let bound = maxima.first(where: { $0.value.sameBytes(as: maximum) }) {
             upperBound = bound
             maximum = bound.label
             upperTyped = false

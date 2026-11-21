@@ -55,7 +55,8 @@ import Testing
         let decomposed = try await session.apply(
             TableQuery(filters: [ColumnFilter(column: name, filter: exact("e\u{301}"))]), after: composed)
         #expect(decomposed.rowSet !== composed.rowSet)
-        #expect(Array(decomposed.rowNumbers(0..<2)) == [1], "The engine keeps the spellings apart, and so does the query")
+        #expect(
+            Array(decomposed.rowNumbers(0..<2)) == [1], "The engine keeps the spellings apart, and so does the query")
     }
 
     @Test func invalidFilterValuesAreUserErrors() async throws {

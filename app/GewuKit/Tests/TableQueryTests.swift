@@ -39,9 +39,8 @@ import Testing
         second.setFilter(.notNull, for: b)
         #expect(first == second)
         #expect(first.filters.map(\.column) == [a, b])
-        #expect(
-            TableQuery(filters: [ColumnFilter(column: b, filter: .notNull), ColumnFilter(column: a, filter: .onlyNulls)])
-                == first)
+        let reversed = [ColumnFilter(column: b, filter: .notNull), ColumnFilter(column: a, filter: .onlyNulls)]
+        #expect(TableQuery(filters: reversed) == first)
 
         first.setFilter(.notNull, for: a)
         #expect(first.filters.map(\.column) == [a, b] && first.filter(for: a) == .notNull)

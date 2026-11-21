@@ -87,7 +87,7 @@ struct ColumnAnalysisView: View {
             scale: histogramScale, attempt: attempt)
     }
 
-    private var rowCount: UInt64 { analysis.rows?.count ?? 0 }
+    private var rowCount: UInt64 { UInt64(analysis.rows?.count ?? 0) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

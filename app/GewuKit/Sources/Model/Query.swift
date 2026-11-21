@@ -24,10 +24,10 @@ public enum FilterCondition: Hashable, Sendable, Codable {
         case (.range(let min, let max), .range(let otherMin, let otherMax)):
             sameBytes(min, otherMin) && sameBytes(max, otherMax)
         case (.text(let text, let mode, let caseSensitive), .text(let otherText, let otherMode, let otherCase)):
-            text.utf8.elementsEqual(otherText.utf8) && mode == otherMode && caseSensitive == otherCase
+            text.sameBytes(as: otherText) && mode == otherMode && caseSensitive == otherCase
         case (.exact(let values, let exclude), .exact(let otherValues, let otherExclude)):
             exclude == otherExclude && values.count == otherValues.count
-                && zip(values, otherValues).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+                && zip(values, otherValues).allSatisfy { $0.sameBytes(as: $1) }
         default: false
         }
     }
@@ -54,12 +54,18 @@ public enum FilterCondition: Hashable, Sendable, Codable {
 private func sameBytes(_ lhs: String?, _ rhs: String?) -> Bool {
     switch (lhs, rhs) {
     case (nil, nil): true
-    case (let lhs?, let rhs?): lhs.utf8.elementsEqual(rhs.utf8)
+    case (let lhs?, let rhs?): lhs.sameBytes(as: rhs)
     default: false
     }
 }
 
-/// Hash `text` by its UTF-8 bytes, consistently with byte comparison.
+extension String {
+    /// Whether the two strings have the same UTF-8 bytes, as Core compares
+    /// literals, unlike `==`, which merges canonically equivalent spellings.
+    func sameBytes(as other: String) -> Bool { utf8.elementsEqual(other.utf8) }
+}
+
+/// Hash `text` by its UTF-8 bytes, consistently with ``Swift/String/sameBytes(as:)``.
 func hashBytes(_ text: String?, into hasher: inout Hasher) {
     guard let text else {
         hasher.combine(-1)
