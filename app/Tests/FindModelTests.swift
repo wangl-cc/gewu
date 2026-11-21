@@ -15,7 +15,7 @@ struct FindModelTests {
             publications.withLock { $0 += 1 }
         }
         find.invalidate()
-        find.stop()
+        find.invalidate()
         #expect(publications.withLock { $0 } == 0)
     }
 
