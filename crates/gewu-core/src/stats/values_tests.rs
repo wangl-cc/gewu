@@ -25,7 +25,7 @@ fn bounded_sketch_preserves_heavy_hitters_and_recounts_candidates() {
     let array: ArrayRef = Arc::new(Int64Array::from_iter_values(
         (0..50_000).map(|_| 0).chain(1..100_001),
     ));
-    let selected = crate::col_view::test::Fixture::all(&array);
+    let selected = crate::col_view::fixture::Fixture::all(&array);
     let summary = analyze(selected.view()).unwrap();
     assert_eq!(
         (summary.values[0].label.as_str(), summary.values[0].count),
@@ -39,7 +39,7 @@ fn bounded_sketch_preserves_heavy_hitters_and_recounts_candidates() {
     assert_eq!(unique.distinct(), DISTINCT_CAPACITY as u64);
     // Complete MG eviction cycles still have representative fallback values.
     let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..257 * 20));
-    let selected = crate::col_view::test::Fixture::all(&array);
+    let selected = crate::col_view::fixture::Fixture::all(&array);
     let summary = analyze(selected.view()).unwrap();
     assert_eq!(summary.values.len(), OUTPUT_LIMIT);
     assert!(summary.values.iter().all(|value| value.count == 1));
@@ -54,7 +54,7 @@ fn native_hashing_respects_float_and_dictionary_value_identity() {
         Some(f64::from_bits(0x7ff8000000000001)),
         None,
     ]));
-    let all = crate::col_view::test::Fixture::all(&array);
+    let all = crate::col_view::fixture::Fixture::all(&array);
     let summary = analyze(all.view()).unwrap();
     assert_eq!(summary.distinct_count, 2);
     assert!(summary.values.iter().all(|value| value.count == 2));
@@ -70,7 +70,7 @@ fn native_hashing_respects_float_and_dictionary_value_identity() {
         )
         .unwrap(),
     );
-    let selected = crate::col_view::test::Fixture::new(&dictionary, vec![4, 2, 0, 1, 3]);
+    let selected = crate::col_view::fixture::Fixture::new(&dictionary, vec![4, 2, 0, 1, 3]);
     let summary = analyze(selected.view()).unwrap();
     assert_eq!(summary.distinct_count, 2);
     assert_eq!(
@@ -164,7 +164,7 @@ fn hashing_path_counts_every_storage_type_like_the_encoded_path() {
             DataType::Dictionary(..) => DISTINCT as u64 - 1,
             _ => DISTINCT as u64,
         };
-        let all = crate::col_view::test::Fixture::all(&array);
+        let all = crate::col_view::fixture::Fixture::all(&array);
         let summary = analyze(all.view()).unwrap();
         assert_eq!(
             summary.distinct_count,
@@ -176,7 +176,7 @@ fn hashing_path_counts_every_storage_type_like_the_encoded_path() {
         assert_eq!(summary.values.len(), OUTPUT_LIMIT);
         // Explicit rows, including the null row, scan only the selection.
         let null_row = ids.len() as u32 - 1;
-        let selected = crate::col_view::test::Fixture::new(&array, vec![null_row, 7, 307, 8]);
+        let selected = crate::col_view::fixture::Fixture::new(&array, vec![null_row, 7, 307, 8]);
         let summary = analyze(selected.view()).unwrap();
         assert_eq!(summary.distinct_count, 2, "{}", array.data_type());
         assert_eq!(summary.values[0].count, 2, "{}", array.data_type());
@@ -191,7 +191,7 @@ fn hashing_path_counts_every_storage_type_like_the_encoded_path() {
         )
         .unwrap(),
     );
-    let summary = analyze(crate::col_view::test::Fixture::all(&array).view()).unwrap();
+    let summary = analyze(crate::col_view::fixture::Fixture::all(&array).view()).unwrap();
     assert_eq!(summary.distinct_count, 2);
     assert_eq!(
         (summary.values[0].label.as_str(), summary.values[0].count),
@@ -205,7 +205,7 @@ fn hashing_path_counts_every_storage_type_like_the_encoded_path() {
         Some(false),
         Some(true),
     ]));
-    let selected = crate::col_view::test::Fixture::new(&array, vec![3, 1, 0]);
+    let selected = crate::col_view::fixture::Fixture::new(&array, vec![3, 1, 0]);
     let summary = analyze(selected.view()).unwrap();
     assert_eq!(summary.distinct_count, 1);
     assert_eq!(
@@ -214,7 +214,7 @@ fn hashing_path_counts_every_storage_type_like_the_encoded_path() {
     );
     let array: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1), None, Some(1)]));
     assert_eq!(
-        analyze(crate::col_view::test::Fixture::all(&array).view())
+        analyze(crate::col_view::fixture::Fixture::all(&array).view())
             .unwrap()
             .values[0]
             .count,

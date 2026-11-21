@@ -6,7 +6,7 @@ use arrow::{
 };
 
 use super::*;
-use crate::col_view::test::Fixture;
+use crate::col_view::fixture::Fixture;
 
 #[test]
 fn tally_uses_selected_rows_and_cached_full_counts() {

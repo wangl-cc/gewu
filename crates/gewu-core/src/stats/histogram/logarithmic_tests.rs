@@ -6,7 +6,7 @@ use arrow::array::{
 };
 
 use super::*;
-use crate::{col_view::test::Fixture, Filter, RangeHistogram};
+use crate::{col_view::fixture::Fixture, Filter, RangeHistogram};
 
 fn verify(fixture: Fixture, bins: u32) -> Histogram {
     let view = fixture.view();

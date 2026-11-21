@@ -30,7 +30,7 @@ fn unicode_lengths_distinguish_empty_and_null() {
         Some(""),
         None,
     ]));
-    let all = crate::col_view::test::Fixture::all(&array);
+    let all = crate::col_view::fixture::Fixture::all(&array);
     let result = analyze(all.view(), 40).unwrap();
     assert_eq!(result.unit, LengthUnit::Characters);
     assert_eq!(
@@ -41,7 +41,7 @@ fn unicode_lengths_distinguish_empty_and_null() {
     assert_eq!(result.histogram.counts, [1, 0, 2]);
     assert_eq!(crate::stats::count_nulls(all.view()), 1);
     for rows in [vec![], vec![3]] {
-        let selected = crate::col_view::test::Fixture::new(&array, rows.clone());
+        let selected = crate::col_view::fixture::Fixture::new(&array, rows.clone());
         let result = analyze(selected.view(), 40).unwrap();
         assert_eq!((result.min, result.max, result.mean), (None, None, None));
         assert!(result.histogram.counts.is_empty());
@@ -50,7 +50,7 @@ fn unicode_lengths_distinguish_empty_and_null() {
             rows.len() as u64
         );
     }
-    let selected = crate::col_view::test::Fixture::new(&array, vec![2]);
+    let selected = crate::col_view::fixture::Fixture::new(&array, vec![2]);
     let result = analyze(selected.view(), 40).unwrap();
     assert_eq!(result.histogram.counts, [1]);
     assert_eq!(
@@ -69,7 +69,7 @@ fn list_lengths_respect_sliced_offsets_and_selected_rows() {
         Some(vec![Some(5)]),
     ]);
     let array: ArrayRef = Arc::new(array.slice(1, 4));
-    let selected = crate::col_view::test::Fixture::new(&array, vec![0, 1, 2]);
+    let selected = crate::col_view::fixture::Fixture::new(&array, vec![0, 1, 2]);
     let result = analyze(selected.view(), 40).unwrap();
     assert_eq!(result.unit, LengthUnit::Elements);
     assert_eq!(

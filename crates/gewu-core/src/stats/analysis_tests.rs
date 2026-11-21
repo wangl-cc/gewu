@@ -245,7 +245,7 @@ fn structural_capabilities_use_type_metadata() {
 /// rows scanned as explicit row IDs.
 #[test]
 fn bitmap_selections_match_row_selections_for_every_analysis() {
-    use crate::col_view::test::Fixture;
+    use crate::col_view::fixture::Fixture;
     let n = 1000_usize;
     let value = |i: usize| (i * 7919 % 613) as f64 - 100.0;
     let arrays: Vec<ArrayRef> = vec![

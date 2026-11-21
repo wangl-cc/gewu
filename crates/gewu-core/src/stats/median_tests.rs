@@ -12,7 +12,7 @@ fn view_label(view: crate::col_view::ColView<'_>) -> Option<String> {
 }
 
 fn median(array: ArrayRef) -> Option<String> {
-    let all = crate::col_view::test::Fixture::all(&array);
+    let all = crate::col_view::fixture::Fixture::all(&array);
     view_label(all.view())
 }
 
@@ -121,9 +121,9 @@ fn temporal_medians_keep_fractional_units_and_timezone() {
 #[test]
 fn filtered_and_reordered_selections_match_sorted_median() {
     let array: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 100, 101]));
-    let selected = crate::col_view::test::Fixture::new(&array, vec![3, 1]);
+    let selected = crate::col_view::fixture::Fixture::new(&array, vec![3, 1]);
     assert_eq!(view_label(selected.view()).as_deref(), Some("51.5"));
 
-    let odd = crate::col_view::test::Fixture::new(&array, vec![3, 0, 2]);
+    let odd = crate::col_view::fixture::Fixture::new(&array, vec![3, 0, 2]);
     assert_eq!(view_label(odd.view()).as_deref(), Some("100"));
 }

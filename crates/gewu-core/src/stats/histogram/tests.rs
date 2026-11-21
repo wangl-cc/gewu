@@ -6,7 +6,7 @@ use arrow::array::{
 };
 
 use super::*;
-use crate::{col_view::test::Fixture, Filter};
+use crate::{col_view::fixture::Fixture, Filter};
 
 fn verify_bins(fixture: Fixture, bins: u32) -> RangeHistogram {
     let view = fixture.view();
@@ -59,7 +59,7 @@ fn statistics_preserve_requested_bins_and_exact_decimal_membership() {
             .with_precision_and_scale(38, 2)
             .unwrap(),
     );
-    let fixture = crate::col_view::test::Fixture::all(&array);
+    let fixture = crate::col_view::fixture::Fixture::all(&array);
     let histogram = counts(fixture.view(), 100).unwrap();
     assert_eq!(histogram.counts, vec![1; 100]);
     let selected = Fixture::new(&array, vec![1, 99]);
