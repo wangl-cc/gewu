@@ -4,7 +4,7 @@
 
 ## Context
 
-Gewu is meant to be a fast, native macOS viewer (no web UI) for Parquet files of millions of rows and hundreds of columns, with other formats to follow. It is a personal, open-source tool, not a product. Three choices had to be made together: the UI toolkit, the data engine, and how the two talk.
+Gewu is meant to be a fast, native macOS viewer (no web UI) for Parquet files of millions of rows and hundreds of columns, with other formats to follow. It is a personal, open-source tool, not a product. Three choices had to be made together: the UI toolkit, the data engine, and how the two talk. Only the UI toolkit and the binding involved weighing alternatives.
 
 Typical use shapes the requirements. A user opens a 2-million-row Parquet file, scrolls it at full frame rate, sorts by a string column, checks a few values in a filter, and looks at one column's distribution. The table must never stall or go blank. Value formatting must be identical wherever a value is shown, copied or exported. Adding CSV or XLSX later should not touch the UI.
 
@@ -18,9 +18,7 @@ Typical use shapes the requirements. A user opens a 2-million-row Parquet file, 
 
 ### Data engine
 
-- **Rust with arrow-rs and its `parquet` crate.** Fast and mature. Parquet, CSV, JSON and Arrow IPC readers share one in-memory format, so a new format is mostly a new reader. Gives full control over which columns and rows are decoded and formatted. The cost is that sorting, filtering and statistics are written in-house on Arrow arrays.
-- **DuckDB**, through its C API. It reads many formats and comes with SQL, so it would be faster to start with. But it is a black box: it is hard to control things like decoding only what is on screen, and it adds a larger binary.
-- **DataFusion.** Arrow-native SQL with spilling to disk, suited to files larger than memory. Kept as the candidate if Gewu ever needs to handle those, not adopted for in-memory work.
+Not a trade-off. The viewer exists first of all to read Parquet, and the most direct way to support Parquet is Apache's own Arrow ecosystem. So Gewu reads data with arrow-rs and its `parquet` crate. Other formats load into the same Arrow arrays, so adding one is mostly writing a reader. Sorting, filtering, statistics and Find are written in-house on Arrow arrays.
 
 ### Binding between Swift and Rust
 
@@ -39,7 +37,7 @@ Typical use shapes the requirements. A user opens a 2-million-row Parquet file, 
 - The table virtualizes millions of rows with stock AppKit. Everything else uses SwiftUI's faster development.
 - One formatter and one set of value semantics in Rust. The table, copy and export show the same text.
 - New formats are Core codecs behind Cargo features; the UI does not change.
-- Gewu implements sorting, filtering, statistics and Find on Arrow arrays itself. This turned out to be where the performance work happened, with columnar kernels and selection bitmaps in #14–#16, which a black-box engine would not have allowed.
+- Gewu implements sorting, filtering, statistics and Find on Arrow arrays itself. This turned out to be where the performance work happened, with columnar kernels and selection bitmaps in #14–#16.
 - Two languages and a generated boundary. The boundary needed its own design: a [Swift layer](layer-semantics.md) over the bindings, plus the data plane.
 - Rust can be debugged with Cargo alone, but Swift changes need the full Xcode toolchain.
 
