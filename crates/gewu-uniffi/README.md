@@ -114,6 +114,4 @@ Core retains concrete module errors and source chains. A filter failure keeps it
 
 Cargo package `gewu-uniffi` builds library `gewu` (`libgewu.a` and `libgewu.dylib` on macOS). The `GewuBindings` target's [Rust build phase](../../scripts/build-rust.sh) generates the Swift bindings and the `gewuFFI` C module, which holds UniFFI's header and [gewu_data.h](include/gewu_data.h). Never edit generated outputs.
 
-Validate interface changes on both sides: `cargo test --locked -p gewu-uniffi` for the Rust boundary, and the `GewuKit` scheme's tests for the Swift consumer through the generated bindings (see [development](../../DEVELOPMENT.md)).
-
 The objects are in [dataset.rs](src/dataset.rs), [filtered_view.rs](src/filtered_view.rs), [ordered_view.rs](src/ordered_view.rs), [find.rs](src/find.rs) and [export.rs](src/export.rs). [cache.rs](src/cache.rs) holds the analysis cache and [data.rs](src/data.rs) the bulk-data types and lending functions. The remaining modules declare remote types or boundary records; [error.rs](src/error.rs) maps errors.
