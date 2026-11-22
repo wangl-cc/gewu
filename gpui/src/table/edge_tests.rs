@@ -8,8 +8,7 @@ fn open() -> TableWindow {
     TableWindow::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv"))
 }
 
-#[test]
-fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
+fn open_many_distinct_values() -> TableWindow {
     use std::io::Write;
 
     let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
@@ -20,6 +19,12 @@ fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
     let mut w = TableWindow::open(file.path());
     w.ui.simulate_resize(size(px(980.), px(860.)));
     w.settle();
+    w
+}
+
+#[test]
+fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
+    let mut w = open_many_distinct_values();
     w.click(w.cell(1, 0), Modifiers::default());
     w.keys("cmd-alt-shift-l");
     assert_eq!(w.source_rows(), [1]);
@@ -32,7 +37,9 @@ fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
     w.ui.update(|window, cx| {
         assert_eq!(window.find("Current selection").selected(), Some(true));
         window.click("Text", cx);
+        window.click("only-missing", cx);
         window.click("Current selection", cx);
+        assert_eq!(window.find("include-missing").checked(), Some(false));
         window.click("include-missing", cx);
         window.click("apply-filter", cx);
     });
@@ -46,6 +53,22 @@ fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
     });
     w.settle();
     assert_eq!(w.source_rows().len(), 301);
+}
+
+#[test]
+fn resetting_a_numeric_exact_filter_loads_its_range_preview() {
+    let mut w = open_many_distinct_values();
+    w.click(w.cell(1, 1), Modifiers::default());
+    w.keys("cmd-alt-shift-l");
+    w.click(w.cell(0, 1), Modifiers::default());
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| {
+        assert_eq!(window.find("Current selection").selected(), Some(true));
+        window.click("reset-filter", cx);
+    });
+    w.settle();
+    w.ui.update(|window, _| assert!(window.try_find(("range-bin", 0usize)).is_some()));
+    assert_eq!(w.source_rows(), [1]);
 }
 
 #[test]

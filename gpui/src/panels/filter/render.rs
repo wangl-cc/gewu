@@ -188,14 +188,7 @@ impl Render for FilterEditor {
                     };
                     tabs = tabs.child(
                         crate::panels::tab(name, self.draft.mode == mode, cx).on_click(
-                            cx.listener(move |editor, _, _, cx| {
-                                editor.draft.set_mode(mode);
-                                editor.sync_checks();
-                                if mode == Mode::Range && editor.preview.is_none() {
-                                    editor.load(cx);
-                                }
-                                cx.notify();
-                            }),
+                            cx.listener(move |editor, _, _, cx| editor.select_mode(mode, cx)),
                         ),
                     );
                 }

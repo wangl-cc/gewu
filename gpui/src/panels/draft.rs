@@ -121,8 +121,12 @@ impl Draft {
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
         if mode == Mode::Values && self.only_missing {
-            self.select_all(false);
-            self.include_missing = true;
+            self.only_missing = false;
+            if !self.has_exact_condition() {
+                // Represent Only missing in the value list as an empty selection plus nulls.
+                self.excluded = false;
+                self.include_missing = true;
+            }
         }
     }
 

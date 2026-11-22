@@ -282,20 +282,27 @@ impl FilterEditor {
         cx.notify();
     }
 
+    fn select_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        self.draft.set_mode(mode);
+        self.sync_checks();
+        if mode == Mode::Range && self.preview.is_none() {
+            self.load(cx);
+        }
+        cx.notify();
+    }
+
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.draft = Draft::default();
         let modes = Draft::modes(
             self.column.capabilities,
             self.facet.as_ref().is_some_and(|f| f.values.is_some()),
         );
-        self.draft.set_mode(modes[0]);
-        self.sync_checks();
         self.drag = None;
         for input in [&self.search, &self.text, &self.low, &self.high] {
             input.update(cx, |field, cx| field.set_value("", window, cx));
         }
         self.search_choices(cx);
-        cx.notify();
+        self.select_mode(modes[0], cx);
     }
 }
 
