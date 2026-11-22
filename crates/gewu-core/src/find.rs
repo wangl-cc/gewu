@@ -3,6 +3,12 @@
 //! Find never changes the view or copies Arrow value payload. Directional pages
 //! retain bounded cursors, while borrowed row selections and predicate scratch
 //! are reused across bounded display-row batches.
+//!
+//! The literal text matcher is compiled when the Find object is created; typed
+//! column predicates are compiled per page or highlight request against the
+//! original arrays. Dictionary columns follow only the keys their rows
+//! reference, and list children are evaluated in bounded groups even within
+//! one enormous cell.
 
 mod error;
 

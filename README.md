@@ -43,9 +43,9 @@ Replace the example folder path with your own. This removes the download quarant
 
 Use **Gewu → Settings…** (`⌘,`) for display and copy preferences. Adjust histogram bins and scatter point limits beside their charts.
 
-For files without column headers, use **File → Import Options…**. Save the current results with **File → Export…** (`⇧⌘E`); the initial default is Parquet with Zstd compression. See [file formats](docs/file-formats.md) for import and export details.
+For files without column headers, use **File → Import Options…**. Save the current results with **File → Export…** (`⇧⌘E`); the initial default is Parquet with Zstd compression. See [file formats](docs/spec/file-formats.md) for import and export details.
 
-To build from source, follow the [App build instructions](DEVELOPMENT.md#swift-macos-ui).
+To build from source, follow the [App build instructions](DEVELOPMENT.md#macos-app).
 
 ## File formats and limits
 
@@ -54,20 +54,28 @@ Gewu decodes the opened table into memory, so the dataset size you can explore d
 | Format | Read and export | Main considerations |
 | --- | --- | --- |
 | Parquet | Typed tables, including lists and structs. | Preferred for preserving types, nested values and nulls. |
-| CSV / TSV | Flat tables with inferred column types. | Types are not preserved; empty strings and nulls read as null. Nested columns cannot be exported. |
-| XLSX | Read individual worksheets; export one worksheet. | Dates/times and high-precision numbers export as text. Nested columns cannot be exported; workbook formatting and formulas are not preserved. |
+| CSV / TSV | Flat tables with inferred column types. | Types are not preserved; empty strings and nulls read as null. Nested columns export as display text. |
+| XLSX | Read individual worksheets; export one worksheet. | Dates/times, high-precision numbers and nested columns export as text; workbook formatting and formulas are not preserved. |
 
-See [format details](docs/file-formats.md) for type inference, date handling and conversion rules.
+See [format details](docs/spec/file-formats.md) for type inference, date handling and conversion rules.
 
 > [!IMPORTANT]
 > XLSX worksheets support up to **1,048,576 rows × 16,384 columns**. Gewu reserves one row for headers, allowing **1,048,575 data rows** per export.
 
 ## Documentation
 
-- [Development](DEVELOPMENT.md) — Rust and macOS UI build, run and test workflows.
-- [Data types](docs/data-types.md) — values, precision and typed input.
-- [Find and filtering](docs/search-and-filter.md) — typed cell navigation and filter conditions.
-- [File formats](docs/file-formats.md) — reading, exporting and format limits.
+Product behavior:
+
+- [Interface](docs/spec/interface.md) — the workspace, Find, filter editors, copying and export.
+- [Data types](docs/spec/data-types.md) — values, precision and typed input.
+- [Find and filtering](docs/spec/search-and-filter.md) — cell navigation and filter conditions.
+- [File formats](docs/spec/file-formats.md) — reading, exporting and format limits.
+
+Development:
+
+- [Development](DEVELOPMENT.md) — build, test and format, and where to read next.
+- [Architecture](docs/dev/architecture.md) and the [development guide](docs/dev/guide.md) — how the code is organized and how to change it.
+- [Release](docs/release.md) — signing and publishing app updates.
 
 ## License
 
