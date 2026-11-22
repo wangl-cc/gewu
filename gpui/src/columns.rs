@@ -81,6 +81,25 @@ impl TableColumns {
         self.order.iter().map(|&slot| &self.schema[slot].info)
     }
 
+    /// Visible columns in display order, then hidden columns in source order.
+    pub fn visible_then_hidden(&self) -> impl Iterator<Item = (Option<VisibleCol>, &ColumnInfo)> {
+        let mut visible = vec![false; self.schema.len()];
+        for &slot in &self.order {
+            visible[slot] = true;
+        }
+        self.iter()
+            .enumerate()
+            .map(|(index, column)| (Some(VisibleCol(index)), column))
+            .chain(
+                self.schema
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(slot, column)| {
+                        (!visible[slot]).then_some((None, &column.info))
+                    }),
+            )
+    }
+
     pub fn position(&self, id: ColumnId) -> Option<VisibleCol> {
         self.iter()
             .position(|column| column.id == id)

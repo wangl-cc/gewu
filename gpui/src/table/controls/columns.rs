@@ -1,4 +1,4 @@
-use gewu_core::{ColumnId, ColumnInfo};
+use gewu_core::ColumnId;
 use gpui_kit::{
     base::input::{Input, InputEvent, InputState},
     *,
@@ -57,12 +57,17 @@ impl TableView {
                 )
                 .into_any_element();
         }
-        let schema = self.data.snapshot().dataset().info().columns;
         let query = search.read(cx).value().to_lowercase();
-        let matched = |c: &&ColumnInfo| c.name.to_lowercase().contains(&query);
-        let matching: Vec<_> = schema.iter().filter(matched).map(|c| c.id).collect();
+        let mut all = Vec::new();
+        let mut matches = Vec::new();
+        for (position, column) in self.data.columns.visible_then_hidden() {
+            all.push(column.id);
+            if query.is_empty() || column.name.to_lowercase().contains(&query) {
+                matches.push((position, column));
+            }
+        }
+        let matching: Vec<_> = matches.iter().map(|(_, column)| column.id).collect();
         let to_show = matching.clone();
-        let all: Vec<_> = schema.iter().map(|c| c.id).collect();
         panel =
             panel
                 .child(
@@ -91,21 +96,9 @@ impl TableView {
                             cx.listener(move |t, _, _, cx| t.set_visible(&all, true, cx)),
                         )),
                 );
-        // Show visible columns in display order, then offer hidden ones in source order.
-        for column in self
-            .data
-            .columns
-            .iter()
-            .chain(
-                schema
-                    .iter()
-                    .filter(|c| self.data.columns.position(c.id).is_none()),
-            )
-            .filter(matched)
-        {
+        for (position, column) in matches {
             let id = column.id;
             let raw = id.into_raw() as usize;
-            let index = self.data.columns.position(id).map(|column| column.index());
             let mut row = div()
                 .id(("column-rule", raw))
                 .flex()
@@ -114,7 +107,7 @@ impl TableView {
                 .child(crate::panels::toggle(
                     ("toggle-column", raw),
                     format!("{} · {}", column.name, column.display_type),
-                    index.is_some(),
+                    position.is_some(),
                     cx,
                     cx.listener(move |t, _, _, cx| {
                         if t.data.columns.position(id).is_some() {
@@ -124,7 +117,8 @@ impl TableView {
                         }
                     }),
                 ));
-            if let Some(index) = index {
+            if let Some(position) = position {
+                let index = position.index();
                 let payload = ColumnDrag {
                     document: cx.entity_id(),
                     order: Order::Columns,
