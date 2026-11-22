@@ -14,7 +14,7 @@ pub(super) enum Mode {
 #[derive(Clone)]
 pub(super) struct Draft {
     pub mode: Mode,
-    pub include_missing: bool,
+    include_missing: bool,
     pub only_missing: bool,
     pub excluded: bool,
     pub values: BTreeSet<String>,
@@ -100,6 +100,15 @@ impl Draft {
             modes.push(Mode::Missing);
         }
         modes
+    }
+
+    pub fn include_missing_checked(&self) -> bool {
+        self.include_missing && !self.only_missing
+    }
+
+    pub fn toggle_include_missing(&mut self) {
+        self.include_missing = !self.include_missing_checked();
+        self.only_missing = false;
     }
 
     pub fn select_all(&mut self, selected: bool) {

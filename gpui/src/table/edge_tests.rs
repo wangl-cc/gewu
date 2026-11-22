@@ -49,6 +49,29 @@ fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
 }
 
 #[test]
+fn clicking_include_missing_after_only_missing_includes_rows_of_both_kinds() {
+    use std::io::Write;
+
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    writeln!(file, "tag,id\nfound,1\n,2").unwrap();
+    let mut w = TableWindow::open(file.path());
+    w.ui.simulate_resize(size(px(980.), px(860.)));
+    w.settle();
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| {
+        window.click("Text", cx);
+        window.click("only-missing", cx);
+        assert_eq!(window.find("include-missing").checked(), Some(false));
+        window.click("include-missing", cx);
+        assert_eq!(window.find("include-missing").checked(), Some(true));
+        assert_eq!(window.find("only-missing").checked(), Some(false));
+        window.click("apply-filter", cx);
+    });
+    w.settle();
+    assert_eq!(w.source_rows(), [0, 1]);
+}
+
+#[test]
 fn invalid_filter_preserves_the_displayed_query_and_recovers_on_edit() {
     use std::sync::Arc;
 

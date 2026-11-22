@@ -238,11 +238,10 @@ impl Render for FilterEditor {
             let mut missing = row().child(crate::panels::toggle(
                 "include-missing",
                 format!("Include missing ({})", facet.null_count),
-                self.draft.include_missing && !self.draft.only_missing,
+                self.draft.include_missing_checked(),
                 cx,
                 cx.listener(|editor, _, _, cx| {
-                    editor.draft.only_missing = false;
-                    editor.draft.include_missing = !editor.draft.include_missing;
+                    editor.draft.toggle_include_missing();
                     cx.notify();
                 }),
             ));
