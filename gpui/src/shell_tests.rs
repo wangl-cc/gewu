@@ -188,6 +188,39 @@ fn sheet_switches_keep_the_shown_table_on_failure_or_cancellation() {
 }
 
 #[test]
+fn worksheet_and_header_edits_compose_before_the_reader_finishes() {
+    let session = Session::new();
+    session.open(vec![fixture("multi-sheet.xlsx")]);
+    let (doc, mut ui) = session.viewer(0);
+    let (first, last) = doc.read_with(&session.app, |doc, _| {
+        let index = |name| doc.sheets.iter().position(|s| s == name).unwrap();
+        (index("First"), index("Last"))
+    });
+
+    ui.update(|w, cx| {
+        w.click(("sheet", last), cx);
+        w.click("header-mode", cx);
+        w.render_frame(cx);
+        assert_eq!(w.find("header-mode").checked(), Some(false));
+    });
+    ui.run_until_parked();
+    doc.read_with(&session.app, |doc, _| {
+        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"));
+        assert!(!doc.displayed.has_header);
+    });
+
+    ui.update(|w, cx| {
+        w.click("header-mode", cx);
+        w.click(("sheet", first), cx);
+    });
+    ui.run_until_parked();
+    doc.read_with(&session.app, |doc, _| {
+        assert_eq!(doc.displayed.sheet.as_deref(), Some("First"));
+        assert!(doc.displayed.has_header);
+    });
+}
+
+#[test]
 fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("a-long-document-name-with-rows.csv");
@@ -312,7 +345,11 @@ fn failed_header_reload_retries_the_requested_options() {
     let original = doc.read_with(&session.app, |doc, _| doc.table.clone().unwrap());
     let moved = dir.path().join("held.csv");
     fs::rename(&file, &moved).unwrap();
-    ui.update(|w, cx| w.click("header-mode", cx));
+    ui.update(|w, cx| {
+        w.click("header-mode", cx);
+        w.render_frame(cx);
+        assert_eq!(w.find("header-mode").checked(), Some(false));
+    });
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
         assert!(matches!(doc.load, Load::Failed(_, _)));
@@ -320,7 +357,11 @@ fn failed_header_reload_retries_the_requested_options() {
         assert_eq!(doc.table.as_ref(), Some(&original));
     });
     fs::rename(moved, file).unwrap();
-    ui.update(|w, cx| w.click("retry-open", cx));
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        assert_eq!(w.find("header-mode").checked(), Some(true));
+        w.click("retry-open", cx);
+    });
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
         assert!(matches!(doc.load, Load::Ready));

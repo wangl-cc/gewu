@@ -66,14 +66,50 @@ impl Document {
         document
     }
 
-    fn request(&mut self, import: Import, window: &mut Window, cx: &mut Context<Self>) {
-        if self.table.is_some() && self.displayed == import {
-            self.load = Load::Ready;
-        } else {
-            self.load = Load::Pending(import);
-            self.start_pending(window, cx);
+    fn import_selection(&self) -> &Import {
+        match &self.load {
+            Load::Pending(import) => import,
+            Load::Failed(import, _) if self.table.is_none() => import,
+            _ => &self.displayed,
+        }
+    }
+
+    fn edit_import(
+        &mut self,
+        edit: impl FnOnce(&mut Import),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut import = self.import_selection().clone();
+        edit(&mut import);
+        self.request(import, window, cx);
+    }
+
+    fn set_load(&mut self, load: Load, cx: &mut Context<Self>) {
+        self.load = load;
+        // CSV and TSV put the editable header checkbox in the table's status bar.
+        let header = self.import_selection().has_header;
+        if let Some(table) = &self.table
+            && table
+                .read(cx)
+                .delimited_header
+                .is_some_and(|old| old != header)
+        {
+            table.update(cx, |table, cx| {
+                table.delimited_header = Some(header);
+                cx.notify();
+            });
         }
         cx.notify();
+    }
+
+    fn request(&mut self, import: Import, window: &mut Window, cx: &mut Context<Self>) {
+        if self.table.is_some() && self.displayed == import {
+            self.set_load(Load::Ready, cx);
+        } else {
+            self.set_load(Load::Pending(import), cx);
+            self.start_pending(window, cx);
+        }
     }
 
     // Disk reads are blocking. Keep one running reader and only the latest requested
@@ -128,12 +164,12 @@ impl Document {
                     if matches!(&this.load, Load::Pending(latest) if *latest == import) {
                         match dataset {
                             Ok(dataset) => this.install(dataset, import, window, cx),
-                            Err(error) => this.load = Load::Failed(import, error),
+                            Err(error) => this.set_load(Load::Failed(import, error), cx),
                         }
                     } else {
                         this.start_pending(window, cx);
+                        cx.notify();
                     }
-                    cx.notify();
                 })
             });
         }));
@@ -171,18 +207,11 @@ impl Document {
             record_recent(&self.path, cx);
         }
         self.table = Some(table);
-        self.load = Load::Ready;
+        self.set_load(Load::Ready, cx);
     }
 
     fn toggle_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.request(
-            Import {
-                has_header: !self.displayed.has_header,
-                ..self.displayed.clone()
-            },
-            window,
-            cx,
-        );
+        self.edit_import(|import| import.has_header = !import.has_header, window, cx);
     }
 
     fn import_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -202,14 +231,7 @@ impl Document {
                 this.update(cx, |this, cx| {
                     this.import_dialog = None;
                     if let Ok(answer @ (0 | 1)) = selected {
-                        this.request(
-                            Import {
-                                has_header: answer == 0,
-                                ..this.displayed.clone()
-                            },
-                            window,
-                            cx,
-                        );
+                        this.edit_import(|import| import.has_header = answer == 0, window, cx);
                     }
                 })
             });
@@ -269,16 +291,13 @@ impl Render for Document {
                 .text_sm();
             for (index, name) in self.sheets.iter().enumerate() {
                 let sheet = name.clone();
-                let active = self.displayed.sheet.as_ref() == Some(name);
+                let active = self.import_selection().sheet.as_ref() == Some(name);
                 bar = bar.child(
                     button(("sheet", index), name.clone(), active, cx)
                         .flex_none()
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.request(
-                                Import {
-                                    sheet: Some(sheet.clone()),
-                                    ..this.displayed.clone()
-                                },
+                            this.edit_import(
+                                |import| import.sheet = Some(sheet.clone()),
                                 window,
                                 cx,
                             )
@@ -288,11 +307,10 @@ impl Render for Document {
             if self.header_available {
                 let document = cx.weak_entity();
                 bar = bar.child(
-                    crate::panels::header_checkbox(self.displayed.has_header, cx).on_change(
-                        move |_, _, w, cx| {
+                    crate::panels::header_checkbox(self.import_selection().has_header, cx)
+                        .on_change(move |_, _, w, cx| {
                             let _ = document.update(cx, |doc, cx| doc.toggle_header(w, cx));
-                        },
-                    ),
+                        }),
                 );
             }
             view = view.child(bar);
