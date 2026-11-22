@@ -5,24 +5,34 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'tools/data-gen/**'
+      - 'tools/**'
+      - 'gpui/**'
+      - 'assets/macos/**'
+      - 'scripts/package-macos.sh'
+      - 'scripts/sign-native-update.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain*'
       - 'rustfmt.toml'
+      - 'clippy.toml'
       - 'deny.toml'
       - '.github/workflows/ci-rust.yml'
   pull_request:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'tools/data-gen/**'
+      - 'tools/**'
+      - 'gpui/**'
+      - 'assets/macos/**'
+      - 'scripts/package-macos.sh'
+      - 'scripts/sign-native-update.sh'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.cargo/**'
       - 'rust-toolchain*'
       - 'rustfmt.toml'
+      - 'clippy.toml'
       - 'deny.toml'
       - '.github/workflows/ci-rust.yml'
   workflow_call:
@@ -57,8 +67,8 @@ jobs:
         run: cargo +nightly fmt --all --check
 
   clippy:
-    name: Lint (clippy)
-    runs-on: ubuntu-latest
+    name: Lint Rust and verify layer boundaries
+    runs-on: xcode-27
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -69,7 +79,20 @@ jobs:
       - name: Configure Rust cache
         uses: Swatinem/rust-cache@v2
       - name: Lint Rust sources
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked -p gewu-gpui --no-default-features --all-targets -- -D warnings
+      - name: Check Rust documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps
+      - name: Check model dependency boundaries
+        run: |
+          cargo tree --locked -p gewu-core -p gewu-app --edges normal,build --prefix none > model-dependencies.txt
+          if grep -Eq '^gpui([-_ ]|$)' model-dependencies.txt; then
+            echo "::error::Core and gewu-app must build without a GPUI dependency"
+            exit 1
+          fi
 
   deny:
     name: Lint (cargo deny)
@@ -92,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-latest]
+        runner: [ubuntu-latest, xcode-27]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -100,8 +123,35 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Configure Rust cache
         uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --locked --workspace
+      - name: Test models and tools on Linux
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --locked --workspace --exclude gewu-gpui
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libasound2-dev libxkbcommon-x11-dev libwayland-dev libxcb-xfixes0-dev libx11-xcb-dev libvulkan-dev
+          cargo check --locked -p gewu-gpui
+      - name: Test native app on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked --workspace
+          cargo check --locked -p gewu-gpui --no-default-features --all-targets
+      - name: Package preview
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '15.0'
+          RUSTFLAGS: -Ctarget-cpu=apple-m1
+        run: |
+          cargo build --locked -p gewu-gpui
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "gewu-gpui") | .version')
+          scripts/package-macos.sh target/debug/gewu-gpui "$version" "$GITHUB_RUN_NUMBER" build/preview
+          ditto -c -k --sequesterRsrc --keepParent build/preview/Gewu.app build/preview/Gewu-macos-arm64.zip
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'macOS'
+        with:
+          name: Gewu-macos-arm64
+          path: build/preview/Gewu-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
 
   coverage:
     name: Coverage
