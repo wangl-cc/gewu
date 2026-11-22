@@ -1,22 +1,8 @@
 # Repository guidance
 
-## Editing entry points
+Use the [development guide](DEVELOPMENT.md) for commands and [architecture](docs/dev/architecture.md) to locate the owner of a change. Consult the relevant [product specification](docs/spec/interface.md) when changing user-visible behavior.
 
-- Edit `project.yml`, not the generated `Gewu.xcodeproj`. Regenerate after adding or moving sources or changing project configuration.
-- Edit Rust interfaces, not generated UniFFI Swift bindings, C headers or module maps. The GewuKit build generates them; only GewuKit may use them.
-
-## Validation
-
-- Follow the [development guide](DEVELOPMENT.md) for Rust and Swift build, test and formatting commands. Choose checks for the affected behavior; documentation-only changes do not require an App build or Rust tests.
-- For FFI interface changes, validate both the Rust boundary and GewuKit, its only Swift consumer, through the generated bindings.
-- Test behavior at its owning stable boundary; avoid repeating the same test matrix across Core, FFI and Swift. Regression tests should expose the original failure.
-- Distinguish build success, automated tests and actual UI verification. Report what was checked.
-
-## Read as needed
-
-- [Core README](crates/gewu-core/README.md): engine architecture, API contracts and benchmarks.
-- [FFI README](crates/gewu-uniffi/README.md): Rust/Swift calling contract.
-- [App README](app/README.md): App and GewuKit layers, UI code navigation and icon assets.
-- [Data types](docs/data-types.md), [search and filtering](docs/search-and-filter.md), and [file formats](docs/file-formats.md): consult the relevant contract when changing data behavior.
-
-Use Conventional Commit titles.
+- Keep data semantics in `gewu-core`, applied snapshots, query coalescing and shared analyses in `gewu-app`, and window state, background task execution and input in `gewu-gpui`.
+- Test behavior at its owning boundary. A regression test must fail without the repair. Report build, automated tests, running-app observations and performance measurements separately.
+- Follow the [engineering guide](docs/dev/guide.md) for code and documentation changes.
+- Use Conventional Commit titles.

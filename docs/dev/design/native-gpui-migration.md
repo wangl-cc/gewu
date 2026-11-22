@@ -1,6 +1,6 @@
 # 全 Rust 迁移计划（gpui-kit）
 
-状态：计划中；2026-11-22 起草。分支 `native-gpui`，基线提交 b2056bb（main 9cc7140 + GPUI 表格原型）。
+2026-11-22 已在 `native-gpui` 实现候选版本，正在进行发布前验收。计划起草时的基线是 b2056bb（main 9cc7140 加上 GPUI 表格原型）。[验收记录](../native-acceptance.md)
 
 这是 docs/dev/design/ 下的设计文档：按 design/README 的规则，它是历史记录，写完后不随代码更新；现行规则写进 architecture.md 和 guide.md。docs/dev/ 和 docs/spec/ 来自尚未合并的 PR #18（及叠在上面的 #19），本分支合入 main 时会一并带来；在那之前以 PR #19 分支（refs/pull/19/head）上的版本为准。
 
