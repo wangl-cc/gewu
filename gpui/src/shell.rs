@@ -1,0 +1,306 @@
+//! Files are opened in separate document windows. Each window owns one replaceable load.
+use std::path::{Path, PathBuf};
+
+use document::Document;
+use gpui_kit::{base::input, *};
+
+use crate::{actions::*, platform};
+
+mod document;
+mod info;
+
+gpui_kit::actions!(gewu, [
+    OpenFiles,
+    ClearRecent,
+    GetInfo,
+    ImportOptions,
+    CloseWindow,
+    MinimizeWindow,
+    ZoomWindow,
+    ToggleFullScreen,
+    HideGewu,
+    HideOthers,
+    ShowAllApps,
+    Preferences,
+    Quit
+]);
+#[derive(Action, Clone, Debug, Default, PartialEq)]
+#[action(namespace = gewu, no_json)]
+struct OpenRecent(PathBuf);
+
+struct Documents {
+    windows: Vec<(PathBuf, AnyWindowHandle)>,
+    recent: platform::RecentDocuments,
+    picker: Option<Task<()>>,
+    _events: Task<()>,
+}
+impl Global for Documents {}
+
+pub(crate) fn run(arguments: impl Iterator<Item = PathBuf>) {
+    let app = gpui_kit::application();
+    let (send, receive) = async_channel::unbounded();
+    app.on_open_urls(move |urls| {
+        let paths: Vec<_> = urls
+            .into_iter()
+            .filter_map(|s| url::Url::parse(&s).ok()?.to_file_path().ok())
+            .collect();
+        if !paths.is_empty() {
+            // The receiver only closes when the application is quitting.
+            let _ = send.try_send(paths);
+        }
+    });
+    app.on_reopen(|cx| {
+        if cx
+            .try_global::<Documents>()
+            .is_some_and(|docs| !docs.has_open_window(cx))
+        {
+            choose_files(cx);
+        }
+    });
+    let mut initial: Vec<_> = arguments
+        .filter(|path| {
+            path != Path::new("--") && !path.as_os_str().to_string_lossy().starts_with("-psn_")
+        })
+        .collect();
+    app.run(move |cx| {
+        gpui_kit::init(cx);
+        crate::actions::init(cx);
+        while let Ok(paths) = receive.try_recv() {
+            initial.extend(paths);
+        }
+        crate::preferences::init(cx);
+        install_file_actions(platform::RecentDocuments::system(), receive, cx);
+        cx.activate(true);
+        if initial.is_empty() {
+            cx.defer(|cx| {
+                if !cx.global::<Documents>().has_open_window(cx) {
+                    choose_files(cx)
+                }
+            });
+        } else {
+            open_paths(initial, cx);
+        }
+    });
+}
+
+impl Documents {
+    fn has_open_window(&self, cx: &App) -> bool {
+        let windows = cx.windows();
+        self.windows
+            .iter()
+            .any(|(_, handle)| windows.contains(handle))
+    }
+}
+
+fn install_file_actions(
+    recent: platform::RecentDocuments,
+    receive: async_channel::Receiver<Vec<PathBuf>>,
+    cx: &mut App,
+) {
+    let events = cx.spawn(async move |cx| {
+        while let Ok(paths) = receive.recv().await {
+            cx.update(|cx| open_paths(paths, cx));
+        }
+    });
+    cx.set_global(Documents {
+        windows: Vec::new(),
+        recent,
+        picker: None,
+        _events: events,
+    });
+    platform::update::init(cx);
+    cx.on_action(|_: &OpenFiles, cx| choose_files(cx));
+    cx.on_action(|_: &ClearRecent, cx| {
+        cx.global_mut::<Documents>().recent.clear();
+        update_menus(cx);
+    });
+    cx.on_action(|_: &Preferences, cx| crate::preferences::open(cx));
+    cx.on_action(|OpenRecent(path), cx| open_paths(vec![path.clone()], cx));
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &HideGewu, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
+    cx.on_action(|_: &MinimizeWindow, cx| with_active_window(cx, Window::minimize_window));
+    cx.on_action(|_: &ZoomWindow, cx| with_active_window(cx, Window::zoom_window));
+    cx.on_action(|_: &ToggleFullScreen, cx| with_active_window(cx, Window::toggle_fullscreen));
+    cx.on_action(|_: &CloseWindow, cx| {
+        if let Some(active) = cx.active_window() {
+            let _ = active.update(cx, |_, w, _| w.remove_window());
+        }
+    });
+    cx.bind_keys([
+        KeyBinding::new("cmd-o", OpenFiles, None),
+        KeyBinding::new("cmd-i", GetInfo, None),
+        KeyBinding::new("cmd-,", Preferences, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", MinimizeWindow, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+        KeyBinding::new("cmd-h", HideGewu, None),
+        KeyBinding::new("cmd-alt-h", HideOthers, None),
+        KeyBinding::new("cmd-q", Quit, None),
+    ]);
+    cx.observe_global::<crate::preferences::Preferences>(|cx| update_menus(cx))
+        .detach();
+    update_menus(cx);
+}
+
+fn with_active_window(cx: &mut App, action: fn(&Window)) {
+    if let Some(active) = cx.active_window() {
+        let _ = active.update(cx, |_, window, _| action(window));
+    }
+}
+
+pub(crate) fn update_menus(cx: &App) {
+    let recent = cx.global::<Documents>().recent.paths();
+    let history = Menu::new("Open Recent").disabled(recent.is_empty()).items(
+        recent
+            .iter()
+            .map(|path| MenuItem::action(path.display().to_string(), OpenRecent(path.clone())))
+            .chain([
+                MenuItem::separator(),
+                MenuItem::action("Clear Menu", ClearRecent),
+            ]),
+    );
+    cx.set_menus([
+        Menu::new("Gewu").items([
+            MenuItem::action("Settings…", Preferences),
+            MenuItem::submenu(platform::update::menu(cx)),
+            MenuItem::separator(),
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Hide Gewu", HideGewu),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Show All", ShowAllApps),
+            MenuItem::separator(),
+            MenuItem::action("Quit Gewu", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("Open…", OpenFiles),
+            MenuItem::submenu(history),
+            MenuItem::action("Import Options…", ImportOptions),
+            MenuItem::action("Get Info…", GetInfo),
+            MenuItem::action("Export…", ExportTable),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", CloseWindow),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Find…", input::Search),
+            MenuItem::action("Find Next", FindNext),
+            MenuItem::action("Find Previous", FindPrevious),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Columns…", ManageColumns),
+            MenuItem::action("Sort…", EditSort),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Inspector", ShowInspector),
+            MenuItem::action("Show Chart Inspector", ShowChartInspector),
+            MenuItem::action("Analyze Selected Column", AnalyzeSelectedColumn),
+            MenuItem::action("Show Row Numbers", ToggleRowNumbers)
+                .checked(crate::preferences::Preferences::get(cx).show_row_numbers),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Full Screen", ToggleFullScreen),
+        ]),
+        Menu::new("Filter").items([
+            MenuItem::action("Filter Column…", EditFilter),
+            MenuItem::action("Filter by Selected Value", FilterSelection),
+            MenuItem::separator(),
+            MenuItem::action("Clear All Filters", ClearFilters),
+        ]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", MinimizeWindow),
+            MenuItem::action("Zoom", ZoomWindow),
+        ]),
+    ]);
+}
+
+fn report_window_error(message: String, cx: &mut App) {
+    if let Some(active) = cx.active_window() {
+        let _ = active.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Critical,
+                "Could Not Open Table",
+                Some(&message),
+                &["OK"],
+                cx,
+            )
+        });
+    } else {
+        cx.show_system_notification(SystemNotification {
+            tag: "gewu-open-error".into(),
+            title: "Could Not Open Table".into(),
+            body: message.into(),
+            actions: Vec::new(),
+        });
+    }
+}
+
+fn choose_files(cx: &mut App) {
+    if cx.global::<Documents>().picker.is_some() {
+        platform::activate_open_panel();
+        return;
+    }
+    let paths = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple: true,
+        prompt: Some("Open".into()),
+    });
+    let picker = cx.spawn(async move |cx| {
+        let result = paths.await;
+        cx.update(|cx| {
+            cx.global_mut::<Documents>().picker = None;
+            match result {
+                Ok(Ok(Some(paths))) => open_paths(paths, cx),
+                Ok(Err(e)) => report_window_error(e.to_string(), cx),
+                Ok(Ok(None)) | Err(_) => {}
+            }
+        });
+    });
+    cx.global_mut::<Documents>().picker = Some(picker);
+}
+
+fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
+    if !paths.is_empty() && cx.global_mut::<Documents>().picker.take().is_some() {
+        platform::dismiss_open_panel();
+    }
+    let windows = cx.windows();
+    cx.global_mut::<Documents>()
+        .windows
+        .retain(|(_, handle)| windows.contains(handle));
+    for path in paths {
+        let path = path
+            .canonicalize()
+            .or_else(|_| std::path::absolute(&path))
+            .unwrap_or(path);
+        if let Some((_, handle)) = cx
+            .global::<Documents>()
+            .windows
+            .iter()
+            .find(|(p, _)| p == &path)
+        {
+            let _ = (*handle).update(cx, |_, w, _| w.activate_window());
+            continue;
+        }
+        let options = platform::window_options(cx);
+        let result = gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| Document::new(path.clone(), window, cx))
+        });
+        match result {
+            Ok((handle, _)) => cx.global_mut::<Documents>().windows.push((path, handle)),
+            Err(err) => report_window_error(err.to_string(), cx),
+        }
+    }
+}
+
+fn record_recent(path: &Path, cx: &mut App) {
+    cx.update_global::<Documents, _>(|docs, cx| docs.recent.record(path, cx));
+    update_menus(cx);
+}

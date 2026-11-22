@@ -1,29 +1,44 @@
 //! The table's data, read straight from gewu-core: no FFI, no packing.
 //!
 //! Display text is formatted by Core per (column, 64-row block) and cached as
-//! native column segment. Only visible cells acquire owned GPUI text; it is reused
+//! a native column segment. Only visible cells acquire owned GPUI text; it is reused
 //! on subsequent frames. Installing a new displayed view invalidates the blocks.
 
-use std::{
-    cell::OnceCell,
-    collections::HashMap,
-    ops::Range,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{cell::OnceCell, collections::HashMap, ops::Range, sync::Arc};
 
+use gewu_app::{QueryCompletion, QueryJob, QueryResult, QuerySession};
 use gewu_core::{
-    ColumnFilter, ColumnId, ColumnInfo, ColumnSort, Dataset, ExportOptions, FileType, FilteredView,
-    FormattedColumnSegment, OrderedView, SourceRows, ValueCategory,
+    ColumnId, Dataset, ExportOptions, FileType, FormattedColumnSegment, OrderedView, SourceRows,
+    ValueCategory,
 };
+use gpui_kit::SharedString;
 
 pub const BLOCK_ROWS: u64 = 64;
-/// Copy limit, the same as the Mac app's `CopyModel.byteLimit`.
+/// Limit the encoded TSV before handing it to the pasteboard.
 pub const COPY_BYTE_LIMIT: usize = 64 * 1024 * 1024;
-/// Cached blocks before the cache is trimmed to the ones last used.
-const CACHE_BLOCKS: usize = 4096;
+pub(crate) const GRID_PREVIEW_BYTES: usize = 1024;
 
-use gpui_kit::SharedString;
+/// The grid shapes a single line. Keep the complete engine text available for details and copy.
+pub(crate) fn preview(text: &str) -> SharedString {
+    preview_with_limit(text, GRID_PREVIEW_BYTES)
+}
+
+pub(crate) fn preview_with_limit(text: &str, max_bytes: usize) -> SharedString {
+    let prefix = single_line_prefix(text, max_bytes);
+    if prefix.len() == text.len() {
+        SharedString::new(text)
+    } else {
+        format!("{prefix}…").into()
+    }
+}
+
+pub(crate) fn single_line_prefix(text: &str, max_bytes: usize) -> &str {
+    let limit = text.floor_char_boundary(text.len().min(max_bytes));
+    let end = text[..limit]
+        .find(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
+        .unwrap_or(limit);
+    &text[..end]
+}
 
 const CACHE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -48,11 +63,7 @@ impl Block {
                 let len = segment.row_count();
                 let visible = (0..len).map(|_| OnceCell::new()).collect();
                 // Reserve both the native segment and a possible rendered copy of its bytes.
-                let bytes: usize = (0..len)
-                    .filter_map(|row| segment.cell(row))
-                    .map(str::len)
-                    .sum();
-                let budget = 2 * bytes
+                let budget = 2 * segment.text_bytes()
                     + len as usize * (size_of::<OnceCell<SharedString>>() + size_of::<u32>() + 1);
                 Self {
                     text: BlockText::Ready { segment, visible },
@@ -61,7 +72,7 @@ impl Block {
                 }
             }
             Err(error) => {
-                let message: SharedString = format!("⚠ {error}").into();
+                let message: SharedString = crate::errors::message(&error).into();
                 Self {
                     budget: message.len(),
                     text: BlockText::Failed(message),
@@ -71,83 +82,66 @@ impl Block {
         }
     }
 
-    fn cell(&self, row: u32) -> Option<Option<SharedString>> {
+    fn preview(&self, row: u32) -> Option<Option<SharedString>> {
         match &self.text {
             BlockText::Ready { segment, visible } => {
                 let rendered = visible.get(row as usize)?;
                 Some(
                     segment
                         .cell(row)
-                        .map(|text| rendered.get_or_init(|| SharedString::new(text)).clone()),
+                        .map(|text| rendered.get_or_init(|| preview(text)).clone()),
                 )
             }
-            BlockText::Failed(message) => Some(Some(message.clone())),
+            BlockText::Failed(_) => None,
         }
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct TableQuery {
-    pub filters: Vec<ColumnFilter>,
-    pub sorts: Vec<ColumnSort>,
-}
-
-/// A query and the immutable views computed from it.
-#[derive(Clone)]
-pub struct AppliedView {
-    dataset: Arc<Dataset>,
-    query: Arc<TableQuery>,
-    filtered: Arc<FilteredView>,
-    view: Arc<OrderedView>,
-}
-
-impl AppliedView {
-    pub fn applying(&self, query: Arc<TableQuery>) -> gewu_core::Result<Self> {
-        let filtered = if query.filters == self.query.filters {
-            self.filtered.clone()
-        } else {
-            self.dataset.filter(&query.filters)?
-        };
-        let view = filtered.sort(&query.sorts)?;
-        Ok(Self {
-            dataset: self.dataset.clone(),
-            query,
-            filtered,
-            view,
-        })
-    }
-}
+pub use gewu_app::{AppliedView, TableQuery};
 
 pub struct TableData {
-    applied: AppliedView,
-    pub columns: Vec<ColumnInfo>,
-    cache: HashMap<(u32, u64), Block>,
+    queries: QuerySession,
+    pub columns: crate::columns::TableColumns,
+    cache: HashMap<(ColumnId, u64), Block>,
     cache_bytes: usize,
     tick: u64,
 }
 
 impl TableData {
+    #[cfg(test)]
     pub fn open(path: &str) -> gewu_core::Result<Self> {
-        let dataset = Arc::new(Dataset::open(path)?);
-        let filtered = dataset.unfiltered();
-        let view = filtered.unsorted();
-        let columns = dataset.info().columns;
-        Ok(Self {
-            applied: AppliedView {
-                dataset,
-                filtered,
-                view,
-                query: Arc::default(),
-            },
+        Ok(Self::from_dataset(Arc::new(Dataset::open(path)?)))
+    }
+
+    pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
+        let columns = crate::columns::TableColumns::new(dataset.info().columns);
+        Self {
+            queries: QuerySession::new(AppliedView::new(dataset)),
             columns,
             cache: HashMap::new(),
             cache_bytes: 0,
             tick: 0,
+        }
+    }
+
+    pub(crate) fn display_cell(
+        &self,
+        row: gewu_core::ViewRow,
+        id: ColumnId,
+    ) -> Option<crate::selection::Cell> {
+        let column = self.columns.position(id)?;
+        (row.0 < self.row_count()).then_some(crate::selection::Cell {
+            row: row.0,
+            column: column.index(),
         })
     }
 
+    pub fn source_row_count(&self) -> usize {
+        self.queries.displayed().dataset().n_rows()
+    }
+
     pub fn row_count(&self) -> u64 {
-        self.applied.view.row_count()
+        self.view().row_count()
     }
 
     pub fn is_number(&self, column: usize) -> bool {
@@ -160,52 +154,65 @@ impl TableData {
     }
 
     pub fn snapshot(&self) -> AppliedView {
-        self.applied.clone()
+        self.queries.displayed().clone()
     }
 
     pub fn query(&self) -> &Arc<TableQuery> {
-        &self.applied.query
+        self.queries.displayed().query()
     }
 
     pub fn view(&self) -> &Arc<OrderedView> {
-        &self.applied.view
+        self.queries.displayed().view()
     }
 
-    pub fn install(&mut self, applied: AppliedView) {
-        self.applied = applied;
-        self.clear_cache();
+    pub(crate) fn queries(&self) -> &QuerySession {
+        &self.queries
     }
 
-    /// Format every missing block of `columns` x `rows`; returns the time spent in Core.
-    pub fn prefetch(&mut self, columns: &[usize], rows: Range<u64>) -> Duration {
-        self.tick += 1;
-        let mut spent = Duration::ZERO;
-        if rows.is_empty() {
-            return spent;
+    pub(crate) fn edit_query(&mut self, edit: impl FnOnce(&mut TableQuery)) -> Option<QueryJob> {
+        self.queries.edit(edit)
+    }
+
+    pub(crate) fn finish_query(&mut self, completed: QueryResult) -> QueryCompletion {
+        let change = self.queries.finish(completed);
+        if matches!(change, QueryCompletion::Installed) {
+            self.clear_cache();
         }
+        change
+    }
+
+    /// Format missing blocks and keep the visible working set resident.
+    pub fn prefetch(&mut self, columns: &[usize], rows: Range<u64>) -> Option<SharedString> {
+        self.tick += 1;
+        if rows.is_empty() {
+            return None;
+        }
+        let mut error = None;
         let blocks = rows.start / BLOCK_ROWS..=(rows.end - 1) / BLOCK_ROWS;
         for &column in columns {
             for block in blocks.clone() {
-                let key = (column as u32, block);
-                if let Some(entry) = self.cache.get_mut(&key) {
-                    entry.tick = self.tick;
-                    continue;
+                let key = (self.columns[column].id, block);
+                let entry = self.cache.entry(key).or_insert_with(|| {
+                    let cells = Block::new(
+                        self.queries.displayed().view().format_column(
+                            key.0,
+                            block * BLOCK_ROWS,
+                            BLOCK_ROWS as u32,
+                        ),
+                        self.tick,
+                    );
+                    self.cache_bytes = self.cache_bytes.saturating_add(cells.budget);
+                    cells
+                });
+                entry.tick = self.tick;
+                if error.is_none()
+                    && let BlockText::Failed(message) = &entry.text
+                {
+                    error = Some(message.clone());
                 }
-                let t = Instant::now();
-                let cells = Block::new(
-                    self.applied.view.format_column(
-                        self.columns[column].id,
-                        block * BLOCK_ROWS,
-                        BLOCK_ROWS as u32,
-                    ),
-                    self.tick,
-                );
-                spent += t.elapsed();
-                self.cache_bytes = self.cache_bytes.saturating_add(cells.budget);
-                self.cache.insert(key, cells);
             }
         }
-        if self.cache.len() > CACHE_BLOCKS || self.cache_bytes > CACHE_BYTES {
+        if self.cache_bytes > CACHE_BYTES {
             let mut old: Vec<_> = self
                 .cache
                 .iter()
@@ -214,7 +221,7 @@ impl TableData {
                 .collect();
             old.sort_unstable();
             for (_, key) in old {
-                if self.cache.len() <= CACHE_BLOCKS / 2 && self.cache_bytes <= CACHE_BYTES / 2 {
+                if self.cache_bytes <= CACHE_BYTES / 2 {
                     break;
                 }
                 if let Some(block) = self.cache.remove(&key) {
@@ -222,26 +229,44 @@ impl TableData {
                 }
             }
         }
-        spent
+        error
     }
 
-    /// Cached text of a cell: `Some(None)` is null, `None` means not fetched.
+    /// Cached text of a cell: `Some(None)` is null; unfetched or failed blocks have no value.
     pub fn cell(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
+        self.cached_cell_text(column, row)
+            .map(|value| value.map(SharedString::new))
+    }
+
+    pub(crate) fn cached_cell_text(&self, column: usize, row: u64) -> Option<Option<&str>> {
+        let block = self
+            .cache
+            .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
+        let relative = (row % BLOCK_ROWS) as u32;
+        match &block.text {
+            BlockText::Ready { segment, .. } if relative < segment.row_count() => {
+                Some(segment.cell(relative))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn cell_preview(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
         self.cache
-            .get(&(column as u32, row / BLOCK_ROWS))?
-            .cell((row % BLOCK_ROWS) as u32)
+            .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?
+            .preview((row % BLOCK_ROWS) as u32)
     }
 
     /// The source (file) row of a display row.
     pub fn source_row(&self, row: u64) -> u64 {
-        match self.applied.view.row_ids() {
+        match self.view().row_ids() {
             SourceRows::All(_) => row,
             SourceRows::Selected(rows) => rows[row as usize] as u64,
         }
     }
 
     pub fn column_ids(&self, columns: Range<usize>) -> Vec<ColumnId> {
-        self.columns[columns].iter().map(|c| c.id).collect()
+        columns.map(|index| self.columns[index].id).collect()
     }
 }
 
@@ -266,48 +291,5 @@ pub fn copy_tsv(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample() -> TableData {
-        TableData::open(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/workflow.csv")).unwrap()
-    }
-
-    #[test]
-    fn cached_blocks_are_replaced_with_the_sorted_view() {
-        let mut data = sample();
-        data.prefetch(&[0], 0..3);
-        assert_eq!(data.cell(0, 1).unwrap().as_deref(), Some("drop"));
-        assert!(data.cell(0, 200).is_none());
-        assert_eq!(data.prefetch(&[0], 1..2), Duration::ZERO);
-        let sort = ColumnSort {
-            column: data.columns[1].id,
-            descending: true,
-        };
-        let sorted = data
-            .applied
-            .applying(Arc::new(TableQuery {
-                sorts: vec![sort],
-                ..TableQuery::default()
-            }))
-            .unwrap();
-        assert!(Arc::ptr_eq(&data.applied.filtered, &sorted.filtered));
-        data.install(sorted);
-        assert_eq!(data.query().sorts, [sort]);
-        assert!(data.cell(0, 1).is_none());
-        data.prefetch(&[0], 1..2);
-        assert_eq!(data.cell(0, 0).unwrap().as_deref(), Some("drop"));
-    }
-
-    #[test]
-    fn copy_uses_core_tsv_export() {
-        let data = sample();
-        let ids = data.column_ids(0..2);
-        let text = copy_tsv(data.view(), 1..3, &ids, true).unwrap();
-        assert_eq!(text.lines().collect::<Vec<_>>(), [
-            "group\tscore",
-            "drop\t99",
-            "keep\t5"
-        ]);
-    }
-}
+#[path = "data_tests.rs"]
+mod tests;

@@ -42,8 +42,8 @@ impl Selection {
     ) -> Self {
         let row = (self.head.row as i128 + rows as i128)
             .clamp(0, row_count.saturating_sub(1) as i128) as u64;
-        let column = (self.head.column as i64 + columns)
-            .clamp(0, column_count.saturating_sub(1) as i64) as usize;
+        let column = (self.head.column as i128 + i128::from(columns))
+            .clamp(0, column_count.saturating_sub(1) as i128) as usize;
         let head = Cell { row, column };
         if extend {
             Self {
@@ -55,30 +55,16 @@ impl Selection {
         }
     }
 
-    pub fn all(row_count: u64, column_count: usize) -> Self {
-        Self {
+    pub fn all(row_count: u64, column_count: usize) -> Option<Self> {
+        let row = row_count.checked_sub(1)?;
+        let column = column_count.checked_sub(1)?;
+        Some(Self {
             anchor: Cell { row: 0, column: 0 },
-            head: Cell {
-                row: row_count.saturating_sub(1),
-                column: column_count.saturating_sub(1),
-            },
-        }
+            head: Cell { row, column },
+        })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extend_and_collapse() {
-        let s = Selection::single(Cell { row: 5, column: 2 });
-        let s = s.moved(3, -1, true, 100, 10);
-        assert_eq!(s.rows(), 5..9);
-        assert_eq!(s.columns(), 1..3);
-        let s = s.moved(-100, 100, false, 100, 10);
-        assert_eq!(s, Selection::single(Cell { row: 0, column: 9 }));
-        let s = s.moved(i64::MAX, 0, true, 50_000_000, 10);
-        assert_eq!(s.head.row, 49_999_999);
-    }
-}
+#[path = "selection_tests.rs"]
+mod tests;

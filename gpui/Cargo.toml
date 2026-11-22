@@ -6,9 +6,16 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "Native GPUI table over gewu-core"
 
-[workspace]
+[lints]
+workspace = true
 
 [dependencies]
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+semver = "1"
+chrono.workspace = true
+url = "2"
+async-channel = "2"
+gewu-app = { path = "../crates/gewu-app" }
 gewu-core = { path = "../crates/gewu-core" }
 gpui-kit = { version = "=0.10.0", default-features = false }
 
@@ -16,5 +23,15 @@ gpui-kit = { version = "=0.10.0", default-features = false }
 default = ["gpui-fast"]
 gpui-fast = ["gpui-kit/gpui-fast"]
 
-[profile.release]
-debug = "line-tables-only"
+[dev-dependencies]
+gpui-kit = { version = "=0.10.0", default-features = false, features = ["test-support"] }
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gewu-macos = { path = "macos" }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSColor", "NSColorSpace", "NSOpenPanel", "NSSavePanel", "NSWindow", "NSDocumentController", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString", "NSUserDefaults", "NSDate"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSEvent", "NSGraphicsContext"] }

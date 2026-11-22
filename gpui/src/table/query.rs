@@ -1,0 +1,107 @@
+use gewu_app::QueryCompletion;
+
+use super::*;
+
+pub(super) enum Notice {
+    SelectCellToFilter,
+    FilterFailed(String),
+    CopyFailed(String),
+}
+
+impl TableView {
+    pub(super) fn requested_query(&self) -> &TableQuery {
+        self.data.queries().requested()
+    }
+
+    /// Advance the requested ordering even while an earlier sort is running.
+    pub(super) fn cycle_sort(&mut self, column: usize, multiple: bool, cx: &mut Context<Self>) {
+        let id = self.data.columns[column].id;
+        self.edit_query(cx, |query| {
+            let sorts = &mut query.sorts;
+            let position = sorts.iter().position(|s| s.column == id);
+            let direction = match position.map(|index| sorts[index].descending) {
+                None => Some(false),
+                Some(false) => Some(true),
+                Some(true) => None,
+            };
+            if !multiple {
+                sorts.clear();
+            }
+            match (position.filter(|_| multiple), direction) {
+                (Some(i), Some(descending)) => sorts[i].descending = descending,
+                (Some(i), None) => {
+                    sorts.remove(i);
+                }
+                (None, Some(descending)) => sorts.push(ColumnSort {
+                    column: id,
+                    descending,
+                }),
+                (None, None) => {}
+            }
+        });
+    }
+
+    pub fn filter_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(cell) = self.selection.map(|s| s.head) else {
+            self.notice = Some(Notice::SelectCellToFilter);
+            cx.notify();
+            return;
+        };
+        if matches!(
+            self.notice,
+            Some(Notice::SelectCellToFilter | Notice::FilterFailed(_))
+        ) {
+            self.notice = None;
+            cx.notify();
+        }
+        let id = self.data.columns[cell.column].id;
+        match self.data.view().exact_filter_for_cell(id, cell.row) {
+            Ok(Some(filter)) => self.set_filter(filter.column, Some(filter.filter), cx),
+            Ok(None) => (),
+            Err(error) => {
+                self.notice = Some(Notice::FilterFailed(crate::errors::message(&error)));
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn clear_filters(&mut self, cx: &mut Context<Self>) {
+        self.edit_query(cx, |q| q.filters.clear());
+    }
+
+    pub(super) fn edit_query(
+        &mut self,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut TableQuery),
+    ) {
+        if let Some(mut job) = self.data.edit_query(edit) {
+            self.visible_columns_changed(false, cx);
+            self.query_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    let result = cx.background_spawn(async move { job.run() }).await;
+                    let next = this.update(cx, |table, cx| {
+                        match table.data.finish_query(result) {
+                            QueryCompletion::Run(next) => return Some(next),
+                            QueryCompletion::Installed => {
+                                table.sync_panels(cx);
+                                table.scroll.set_rows(table.data.row_count());
+                                table.selection = None;
+                                table.drag = Drag::None;
+                            }
+                            QueryCompletion::Unchanged => {}
+                        }
+                        table.query_task = None;
+                        table.visible_columns_changed(false, cx);
+                        cx.notify();
+                        None
+                    });
+                    match next {
+                        Ok(Some(next)) => job = next,
+                        _ => break,
+                    }
+                }
+            }));
+        }
+        cx.notify();
+    }
+}

@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# This fixture generator retains Cargo's default lints. The application crates opt into the workspace policy.
+[lints]
+
 [dependencies]
 arrow.workspace = true
 parquet.workspace = true

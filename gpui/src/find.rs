@@ -1,69 +1,86 @@
 //! Native single-line search input and snapshot-scoped match navigation.
 
-use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc};
+use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 use gewu_core::{
-    CellMatch, ColumnHighlight, ColumnId, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS,
+    CellMatch, ColumnHighlight, ColumnId, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, OrderedView,
 };
 use gpui_kit::{
     base::input::{Input, InputEvent, InputState},
     *,
 };
 
-use crate::{
-    data::BLOCK_ROWS,
-    selection::{Cell, Selection},
-    table::TableView,
-};
+use crate::data::BLOCK_ROWS;
+
+pub(crate) const TYPING_DELAY: Duration = Duration::from_millis(150);
+
+struct Scope {
+    view: Arc<OrderedView>,
+    columns: Vec<(ColumnId, SharedString)>,
+}
 
 #[derive(Default)]
-pub(crate) struct TableFind {
-    input: Option<Entity<InputState>>,
-    subscription: Option<Subscription>,
+struct Highlights(HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>);
+
+pub(crate) struct FindController {
+    input: Entity<InputState>,
+    _subscription: Subscription,
     pub(crate) open: bool,
     pub(crate) message: String,
-    pub(crate) pending: bool,
     session: Option<Arc<Find>>,
     cursor: Option<CellMatch>,
-    generation: u64,
-    queued: Option<bool>,
-    highlights: HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>,
-    reading: bool,
+    scope: Option<Scope>,
+    viewport_rows: Range<u64>,
+    viewport_columns: Vec<ColumnId>,
+    queued: i64,
+    highlights: Highlights,
+    navigation: Option<Task<()>>,
+    reading: Option<Task<()>>,
     highlight_failed: bool,
 }
 
-impl TableFind {
+impl FindController {
     pub(crate) fn text(&self, cx: &App) -> SharedString {
-        self.input
-            .as_ref()
-            .map(|input| input.read(cx).value())
-            .unwrap_or_default()
+        self.input.read(cx).value()
     }
 
+    #[cfg(test)]
     pub(crate) fn input_focused(&self, window: &Window, cx: &App) -> bool {
-        self.input
-            .as_ref()
-            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        self.input.read(cx).focus_handle(cx).is_focused(window)
     }
 
     fn invalidate(&mut self) {
-        self.generation += 1;
-        self.queued = None;
-        self.highlights.clear();
-        self.reading = false;
+        self.queued = 0;
+        self.highlights.0.clear();
+        self.reading = None;
+        self.navigation = None;
         self.highlight_failed = false;
         self.session = None;
         self.cursor = None;
-        self.pending = false;
         self.message.clear();
     }
 
+    pub(crate) fn can_navigate(&self) -> bool {
+        self.navigation.is_some() || self.cursor.is_some()
+    }
+
     pub(crate) fn matched(&self, column: ColumnId, row: u64) -> bool {
-        self.open
-            && self
-                .highlights
-                .get(&(column, row / BLOCK_ROWS))
-                .is_some_and(|(start, column)| column.matches((row - start) as usize))
+        self.open && self.highlights.matched(column, row)
+    }
+
+    pub(crate) fn current_match(&self) -> Option<CellMatch> {
+        self.cursor
+    }
+
+    pub(crate) fn session(&self) -> Option<&Find> {
+        self.session.as_deref()
+    }
+}
+impl Highlights {
+    fn matched(&self, column: ColumnId, row: u64) -> bool {
+        self.0
+            .get(&(column, row / BLOCK_ROWS))
+            .is_some_and(|(start, column)| column.matches((row - start) as usize))
     }
 
     fn store_highlights(&mut self, result: FindHighlight) {
@@ -73,83 +90,153 @@ impl TableFind {
             // A batched read can fill several cache slots with the same bitmap.
             let column = Rc::new(column);
             for block in first..first + count {
-                self.highlights
+                self.0
                     .insert((column.column, block), (result.start, Rc::clone(&column)));
             }
         }
     }
 }
 
-impl TableView {
-    pub(crate) fn reset_find_for_view(&mut self) {
-        self.find.invalidate();
-    }
+impl EventEmitter<CellMatch> for FindController {}
 
-    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = self
-            .find
-            .input
-            .get_or_insert_with(|| {
-                cx.new(|cx| InputState::new(window, cx).placeholder("Find in table"))
-            })
-            .clone();
-        if self.find.subscription.is_none() {
-            self.find.subscription = Some(cx.subscribe_in(
-                &input,
-                window,
-                |table, _, event: &InputEvent, _, cx| match event {
-                    InputEvent::Change => {
-                        table.find.invalidate();
-                        cx.notify();
-                    }
-                    InputEvent::PressEnter { shift, .. } => table.find_match(*shift, cx),
-                    _ => {}
-                },
-            ));
+impl FindController {
+    pub(crate) fn set_scope(
+        &mut self,
+        view: Option<Arc<OrderedView>>,
+        columns: Vec<(ColumnId, SharedString)>,
+        retain_match: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let hit = self
+            .cursor
+            .filter(|c| retain_match && columns.iter().any(|(id, _)| *id == c.column));
+        self.viewport_columns
+            .retain(|id| columns.iter().any(|(column, _)| column == id));
+        self.scope = view.map(|view| Scope { view, columns });
+        self.invalidate();
+        if self.open {
+            if let Some(hit) = hit {
+                self.cursor = Some(hit);
+                self.report(hit, false);
+            } else {
+                self.advance_find(1, Duration::ZERO, cx);
+            }
+            self.load_highlights(cx);
         }
-        self.find.open = true;
-        input.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.select_all(window, cx);
-        });
         cx.notify();
     }
 
-    pub(crate) fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.find.open = false;
-        let cursor = self.find.cursor;
-        self.find.invalidate();
-        self.find.cursor = cursor;
-        window.focus(&self.focus, cx);
+    fn report(&mut self, hit: CellMatch, wrapped: bool) {
+        if let Some(scope) = &self.scope
+            && let Some((_, name)) = scope.columns.iter().find(|(id, _)| *id == hit.column)
+        {
+            self.message = format!(
+                "{}Row {} · {name}",
+                if wrapped { "Wrapped · " } else { "" },
+                hit.display_row + 1
+            );
+        }
+    }
+
+    pub(crate) fn new(
+        view: Arc<OrderedView>,
+        columns: Vec<(ColumnId, SharedString)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in table"));
+        let subscription =
+            cx.subscribe_in(
+                &input,
+                window,
+                |find, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Focus => {
+                        find.open = true;
+                        cx.notify();
+                    }
+                    InputEvent::Change => find.restart_find(cx),
+                    InputEvent::PressEnter { shift, .. } => find.find_match(*shift, cx),
+                    _ => {}
+                },
+            );
+        Self {
+            input,
+            _subscription: subscription,
+            scope: Some(Scope { view, columns }),
+            open: false,
+            message: String::new(),
+            session: None,
+            cursor: None,
+            viewport_rows: 0..0,
+            viewport_columns: vec![],
+            queued: 0,
+            highlights: Highlights::default(),
+            navigation: None,
+            reading: None,
+            highlight_failed: false,
+        }
+    }
+
+    pub(crate) fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
+        self.open = true;
+        cx.notify();
+    }
+
+    pub(crate) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open = false;
+        self.input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.invalidate();
+        cx.notify();
+    }
+
+    fn restart_find(&mut self, cx: &mut Context<Self>) {
+        self.invalidate();
+        if self.open && self.scope.is_some() {
+            self.advance_find(1, TYPING_DELAY, cx);
+            self.load_highlights(cx);
+        }
         cx.notify();
     }
 
     fn find_session(&mut self, cx: &App) -> Option<Arc<Find>> {
-        if let Some(session) = &self.find.session {
+        if let Some(session) = &self.session {
             return Some(session.clone());
         }
-        let text = self.find.text(cx);
-        if text.trim().is_empty() || self.find.highlight_failed {
+        let text = self.text(cx);
+        let Scope { view, columns } = self.scope.as_ref()?;
+        if text.trim().is_empty() || columns.is_empty() || self.highlight_failed {
             return None;
         }
-        let columns = self.data.column_ids(0..self.data.columns.len());
-        match self.data.view().find(&text, &columns) {
-            Ok(find) => Some(self.find.session.insert(Arc::new(find)).clone()),
+        let ids = columns.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        match view.find(&text, &ids) {
+            Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
             Err(err) => {
-                self.find.message = err.to_string();
-                self.find.highlight_failed = true;
+                self.message = crate::errors::message(&err);
+                self.highlight_failed = true;
                 None
             }
         }
     }
 
-    pub(crate) fn request_highlights(
+    pub(crate) fn set_viewport(
         &mut self,
         rows: Range<u64>,
-        visible: &[usize],
+        columns: Vec<ColumnId>,
         cx: &mut Context<Self>,
     ) {
-        if !self.find.open || self.find.reading || self.find.highlight_failed || rows.is_empty() {
+        self.viewport_rows = rows;
+        self.viewport_columns = columns;
+        self.load_highlights(cx);
+    }
+
+    fn load_highlights(&mut self, cx: &mut Context<Self>) {
+        let rows = self.viewport_rows.clone();
+        if !self.open || self.reading.is_some() || self.highlight_failed || rows.is_empty() {
             return;
         }
         let Some(find) = self.find_session(cx) else {
@@ -157,36 +244,34 @@ impl TableView {
         };
         let first = rows.start / BLOCK_ROWS;
         let end = rows.end.div_ceil(BLOCK_ROWS);
-        let cols: Vec<_> = visible.iter().map(|i| self.data.columns[*i].id).collect();
+        let cols = self.viewport_columns.clone();
         // Keep a few screens for backtracking. A jump through a large file should
         // never grow the highlight cache in proportion to the rows traversed.
         let screen_blocks = cols.len() * (end - first) as usize;
-        if self.find.highlights.len() > screen_blocks.saturating_mul(4) {
-            self.find
-                .highlights
+        if self.highlights.0.len() > screen_blocks.saturating_mul(4) {
+            self.highlights
+                .0
                 .retain(|(id, b), _| cols.contains(id) && (first..end).contains(b));
         }
         let Some(block) = (first..end).find(|&b| {
             cols.iter()
-                .any(|id| !self.find.highlights.contains_key(&(*id, b)))
+                .any(|id| !self.highlights.0.contains_key(&(*id, b)))
         }) else {
             return;
         };
         let missing: Vec<_> = cols
             .into_iter()
-            .filter(|id| !self.find.highlights.contains_key(&(*id, block)))
+            .filter(|id| !self.highlights.0.contains_key(&(*id, block)))
             .collect();
         let max = end.min(block + u64::from(MAX_FIND_HIGHLIGHT_ROWS) / BLOCK_ROWS);
         let stop = (block + 1..max)
             .find(|&b| {
                 missing
                     .iter()
-                    .any(|id| self.find.highlights.contains_key(&(*id, b)))
+                    .any(|id| self.highlights.0.contains_key(&(*id, b)))
             })
             .unwrap_or(max);
-        let generation = self.find.generation;
-        self.find.reading = true;
-        cx.spawn(async move |this, cx| {
+        self.reading = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     find.highlight(
@@ -197,170 +282,177 @@ impl TableView {
                 })
                 .await;
             _ = this.update(cx, |table, cx| {
-                if table.find.generation != generation {
-                    return;
-                }
-                table.find.reading = false;
+                table.reading = None;
                 match result {
-                    Ok(batch) => table.find.store_highlights(batch),
+                    Ok(batch) => {
+                        table.highlights.store_highlights(batch);
+                        table.load_highlights(cx);
+                    }
                     Err(error) => {
-                        table.find.highlight_failed = true;
-                        table.find.message = error.to_string();
+                        table.highlight_failed = true;
+                        table.message = crate::errors::message(&error.into());
                     }
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
     }
 
     pub(crate) fn find_match(&mut self, previous: bool, cx: &mut Context<Self>) {
-        if self.find.pending {
-            self.find.queued = Some(previous);
+        self.advance_find(if previous { -1 } else { 1 }, Duration::ZERO, cx);
+    }
+
+    fn advance_find(&mut self, by: i64, delay: Duration, cx: &mut Context<Self>) {
+        if self.navigation.is_some() {
+            self.queued = self.queued.saturating_add(by);
             return;
         }
         let Some(session) = self.find_session(cx) else {
             return;
         };
-        let view = self.data.view().clone();
-        let cursor = self.find.cursor;
-        let generation = self.find.generation;
-        self.find.pending = true;
-        self.find.message = "Searching…".into();
+        let cursor = self.cursor;
+        self.message = "Searching…".into();
         cx.notify();
-        cx.spawn(async move |this, cx| {
+        self.navigation = Some(cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
             let result = cx
                 .background_spawn(async move {
-                    let scan = |after| {
-                        if previous {
-                            session.previous(after, 1)
-                        } else {
-                            session.next(after, 1)
-                        }
-                    };
-                    let mut hit = scan(cursor.as_ref())?.into_iter().next();
-                    let wrapped = cursor.is_some() && hit.is_none();
-                    if wrapped {
-                        hit = scan(None)?.into_iter().next();
-                    }
+                    let (hit, wrapped) = gewu_app::find::step(&session, cursor, by)?;
                     Ok::<_, gewu_core::Error>((session, hit, wrapped))
                 })
                 .await;
             _ = this.update(cx, |table, cx| {
-                if table.find.generation != generation || !Arc::ptr_eq(table.data.view(), &view) {
-                    return;
-                }
-                table.find.pending = false;
+                table.navigation = None;
                 match result {
                     Ok((session, hit, wrapped)) => {
-                        table.find.session = Some(session);
-                        table.find.cursor = hit;
+                        table.session = Some(session);
+                        table.cursor = hit;
                         if let Some(hit) = hit {
-                            if let Some(index) =
-                                table.data.columns.iter().position(|c| c.id == hit.column)
-                            {
-                                let cell = Cell {
-                                    row: hit.display_row,
-                                    column: index,
-                                };
-                                table.selection = Some(Selection::single(cell));
-                                table.reveal(cell);
-                                table.find.message = format!(
-                                    "{}Row {} · {}",
-                                    if wrapped { "Wrapped · " } else { "" },
-                                    hit.display_row + 1,
-                                    table.data.columns[index].name
-                                );
-                            }
+                            table.report(hit, wrapped);
+                            cx.emit(hit);
                         } else {
-                            table.find.message = "No matches".into();
+                            table.message = "No matches".into();
                         }
                     }
-                    Err(error) => table.find.message = error.to_string(),
+                    Err(error) => table.message = crate::errors::message(&error),
                 }
-                if let Some(previous) = table.find.queued.take() {
-                    table.find_match(previous, cx);
+                let queued = std::mem::take(&mut table.queued);
+                if queued != 0 {
+                    table.advance_find(queued, Duration::ZERO, cx);
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
     }
+}
 
-    pub(crate) fn find_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let input = self.find.input.as_ref().filter(|_| self.find.open)?;
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(0xe5e9ed)))
-                .child(label)
-        };
-        Some(
-            div()
-                .h(px(40.))
-                .w_full()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .bg(rgb(0xf0f1f3))
-                .text_color(rgb(0x1f2328))
-                .text_sm()
-                .child("Find")
-                .child(
-                    div()
-                        .w(px(230.))
-                        .h(px(28.))
-                        .px_2()
-                        .bg(rgb(0xffffff))
-                        .border_1()
-                        .border_color(rgb(0x9aa2ad))
-                        .rounded_sm()
-                        .child(Input::new(input)),
-                )
-                .child(
-                    button("previous", "Previous")
-                        .on_click(cx.listener(|table, _, _, cx| table.find_match(true, cx))),
-                )
-                .child(
-                    button("next", "Next")
-                        .on_click(cx.listener(|table, _, _, cx| table.find_match(false, cx))),
-                )
-                .child(
-                    button("close-find", "Done")
-                        .on_click(cx.listener(|table, _, window, cx| table.close_find(window, cx))),
-                )
-                .child(self.find.message.clone()),
+impl Render for FindController {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = &self.input;
+        let colors = base::Theme::global(cx).tokens.colors;
+        let searching = self.open && !self.text(cx).is_empty();
+        let focused = input.read(cx).focus_handle(cx).is_focused(window);
+        let icon = canvas(
+            |_, _, _| (),
+            move |bounds, _, w, _| {
+                let p = |x, y| bounds.origin + point(px(x), px(y));
+                let radius = point(px(4.), px(4.));
+                let mut path = PathBuilder::stroke(px(1.35));
+                path.move_to(p(1.5, 5.5));
+                path.arc_to(radius, px(0.), false, true, p(9.5, 5.5));
+                path.arc_to(radius, px(0.), false, true, p(1.5, 5.5));
+                path.move_to(p(8.5, 8.5));
+                path.line_to(p(12.5, 12.5));
+                if let Ok(path) = path.build() {
+                    w.paint_path(path, colors.muted_foreground);
+                }
+            },
         )
+        .size(px(14.))
+        .flex_none();
+        let field = div()
+            .id("table-search")
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .h(px(27.))
+            .px_2()
+            .bg(colors.background)
+            .border_1()
+            .border_color(if focused { colors.ring } else { colors.border })
+            .rounded_md()
+            .child(icon)
+            .child(div().flex_1().min_w_0().child(Input::new(input)))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, w, cx| {
+                if event.button == MouseButton::Left
+                    && (!this.open || !this.input.read(cx).focus_handle(cx).is_focused(w))
+                {
+                    this.open = true;
+                    this.input.update(cx, |input, cx| input.focus(w, cx));
+                    cx.notify();
+                }
+            }))
+            .test_support();
+        let mut search = div().min_w_0().flex_col().flex().flex_1().child(field);
+        if searching && !self.message.is_empty() {
+            search = search.child(
+                div()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(colors.muted_foreground)
+                    .child(self.message.clone()),
+            );
+        }
+        let mut bar = div()
+            .id("find-toolbar")
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_1()
+            .w(px(if searching { 350. } else { 240. }))
+            .max_w(relative(0.62))
+            .child(search);
+        if searching {
+            let arrow = |id, label: &'static str, symbol: &'static str| {
+                base::Button::new(id)
+                    .accessibility_label(label)
+                    .w(px(24.))
+                    .h(px(24.))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .items_center()
+                    .rounded_md()
+                    .hover(move |style| style.bg(colors.accent))
+                    .cursor_pointer()
+                    .child(symbol)
+            };
+            bar = bar
+                .child(
+                    arrow("previous", "Previous match", "‹")
+                        .disabled(!self.can_navigate())
+                        .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
+                )
+                .child(
+                    arrow("next", "Next match", "›")
+                        .disabled(!self.can_navigate())
+                        .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
+                )
+                .child(
+                    crate::panels::button("close-find", "Done", false, cx)
+                        .flex_none()
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(base::input::Escape), cx)
+                        }),
+                );
+        }
+        bar.into_any_element()
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{ColumnHighlight, ColumnId, FindHighlight, TableFind};
-
-    #[test]
-    fn batched_highlight_uses_relative_rows_across_cache_blocks() {
-        let column = ColumnId::from_raw(3);
-        let mut find = TableFind {
-            open: true,
-            ..TableFind::default()
-        };
-        // A 67-row result starting at display row 64, with matches straddling
-        // the cache boundary and a final match in the partial block.
-        find.store_highlights(FindHighlight {
-            start: 64,
-            n_rows: 67,
-            columns: vec![ColumnHighlight {
-                column,
-                matched: vec![0, 0, 0, 0, 0, 0, 0, 0x80, 0x05],
-            }],
-        });
-        let hits: Vec<_> = (0..192).filter(|&row| find.matched(column, row)).collect();
-        assert_eq!(hits, [127, 128, 130]);
-    }
-}
+#[path = "find_tests.rs"]
+mod tests;

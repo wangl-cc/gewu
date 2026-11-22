@@ -8,19 +8,19 @@ targets = [
 
 [advisories]
 ignore = [
-  # UniFFI 0.32.2 uses Askama 0.16.1; neither has a newer release yet.
-  { id = "RUSTSEC-2026-0374", reason = "basic-toml is an unmaintained build-time dependency of the Swift binding generator; no patched version is available" },
   # Remove these exceptions once Gewu can migrate off the crates after the upstream transition.
   # https://github.com/apache/arrow-rs/issues/9183
   { id = "RUSTSEC-2026-0543", reason = "Arrow and other dependencies still require chrono; RustSec has no patched version for this maintenance advisory" },
-  { id = "RUSTSEC-2026-0555", reason = "Arrow uses chrono-tz for named time zone support; RustSec has no patched version for this maintenance advisory" },
 ]
 
 [licenses]
 allow = [
   "Apache-2.0",
+  "BSD-2-Clause", # arrayref, used by GPUI's rendering stack
   "BSD-3-Clause",
+  "CC0-1.0", # tiny-keccak
   "GPL-3.0-or-later",
+  "ISC", # libloading, used by GPUI's Linux backend
   "MIT",
   "MPL-2.0",
   "Unicode-3.0",
