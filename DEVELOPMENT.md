@@ -37,6 +37,10 @@ cargo test --locked -p gewu-core --no-default-features --features csv
 
 Rust tests cover the FFI wrappers but do not compile generated Swift bindings. When changing the exported interface, also follow the [Swift macOS UI](#swift-macos-ui) path below. The [FFI README](crates/gewu-uniffi/README.md) describes the calling contract.
 
+## GPUI table
+
+See the [GPUI table guide](gpui/README.md) to build the native Rust client, exercise its window workflow and run the scrolling benchmark. Its Cargo manifest and lockfile are in `gpui/`.
+
 ## Swift macOS UI
 
 The app supports macOS 15 and later. Building requires stable Rust, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) and the full Xcode toolchain with Icon Composer. The Xcode IDE does not need to be open.

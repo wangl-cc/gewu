@@ -1,0 +1,6 @@
+group,score,note
+keep,2,plain
+drop,99,marker-hidden
+keep,5,marker-low
+drop,11,other
+keep,9,marker-high

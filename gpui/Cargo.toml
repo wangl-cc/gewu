@@ -1,0 +1,20 @@
+[package]
+name = "gewu-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Native GPUI table over gewu-core"
+
+[workspace]
+
+[dependencies]
+gewu-core = { path = "../crates/gewu-core" }
+gpui-kit = { version = "=0.10.0", default-features = false }
+
+[features]
+default = ["gpui-fast"]
+gpui-fast = ["gpui-kit/gpui-fast"]
+
+[profile.release]
+debug = "line-tables-only"

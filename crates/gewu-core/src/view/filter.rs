@@ -4,12 +4,41 @@ use std::sync::Arc;
 
 use arrow::buffer::BooleanBuffer;
 
-use super::FilteredView;
+use super::{FilteredView, OrderedView};
 use crate::{
     col_view::ColView,
     column::{predicate, value_text, Dictionary, FilterChoices, ValueChoice},
-    stats, ColumnId, RangeHistogram, Result,
+    stats, ColumnFilter, ColumnId, Filter, FilterError, FilterKind, RangeHistogram, Result,
 };
+
+impl OrderedView {
+    /// Match the selected display cell by its exact value in the source column.
+    /// Null selects nulls alone. An out-of-view display row returns `None`.
+    pub fn exact_filter_for_cell(
+        &self,
+        column: ColumnId,
+        display_row: u64,
+    ) -> Result<Option<ColumnFilter>> {
+        let array = self.column_array(column)?;
+        let Some(row) = self.row_window(display_row, 1).iter().next() else {
+            return Ok(None);
+        };
+        // Limit logical-null expansion for dictionary arrays to this cell.
+        let cell = array.slice(row, 1);
+        let filter = if cell.logical_null_count() != 0 {
+            Filter::OnlyNulls
+        } else if predicate::supports_equals(array.data_type()) {
+            Filter::exact(vec![value_text::encode(array, row)?], false, false)
+        } else {
+            return Err(FilterError::UnsupportedType {
+                condition: FilterKind::Exact,
+                data_type: array.data_type().clone(),
+            }
+            .into());
+        };
+        Ok(Some(ColumnFilter { column, filter }))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Tally {
@@ -134,6 +163,51 @@ mod tests {
 
     use super::*;
     use crate::col_view::test::Fixture;
+
+    #[test]
+    fn cell_filter_uses_display_order_and_lossless_temporal_values() {
+        use arrow::array::{RecordBatch, TimestampNanosecondArray};
+
+        use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
+
+        let times: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+            Some(123_456_789),
+            None,
+            Some(123_456_788),
+        ]));
+        let order: ArrayRef = Arc::new(Int64Array::from(vec![2, 1, 3]));
+        let batch = RecordBatch::try_from_iter([("time", times.clone()), ("order", order.clone())])
+            .unwrap();
+        let dataset = Arc::new(Dataset {
+            source_path: Default::default(),
+            schema: batch.schema(),
+            columns: vec![
+                Column::new("time", times).unwrap(),
+                Column::new("order", order).unwrap(),
+            ],
+            n_rows: 3,
+            file_size: 0,
+            format: FileType::Parquet,
+            metadata: FileMetadata::Delimited,
+        });
+        let time = dataset.column_id("time").unwrap();
+        let sorted = dataset
+            .unfiltered()
+            .sort(&[ColumnSort {
+                column: dataset.column_id("order").unwrap(),
+                descending: true,
+            }])
+            .unwrap();
+        for (display_row, source_row) in [(0, 2), (1, 0), (2, 1)] {
+            let filter = sorted
+                .exact_filter_for_cell(time, display_row)
+                .unwrap()
+                .unwrap();
+            let selected = dataset.filter(&[filter]).unwrap().unsorted();
+            assert_eq!(selected.source_rows(0, 10), [source_row]);
+        }
+        assert!(sorted.exact_filter_for_cell(time, 3).unwrap().is_none());
+    }
 
     #[test]
     fn tally_uses_selected_rows_and_cached_full_counts() {

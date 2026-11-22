@@ -50,6 +50,15 @@ pub struct ColumnHighlight {
     pub matched: Vec<u8>,
 }
 
+impl ColumnHighlight {
+    /// Whether the row at this offset from the highlight start matched.
+    pub fn matches(&self, offset: usize) -> bool {
+        self.matched
+            .get(offset / 8)
+            .is_some_and(|byte| byte & (1 << (offset % 8)) != 0)
+    }
+}
+
 /// A literal matcher over a captured view and ordered column scope.
 /// Typed column predicates are compiled and used by each page or highlight request.
 ///
