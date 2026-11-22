@@ -1,7 +1,7 @@
 //! Data engine for gewu, a read-only table viewer.
 //!
 //! The Mac app shares immutable [`Dataset`], [`FilteredView`], and [`OrderedView`]
-//! objects through UniFFI. Callers own query conditions and choose which result
+//! objects with the Rust application layer. Callers own query conditions and choose which result
 //! to display. Sorting and filtering never move data; they only produce a new
 //! list of row numbers.
 
@@ -42,4 +42,4 @@ pub use stats::{
     ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit, ValueFrequency, ValueSummary,
     MAX_SCATTER_POINTS,
 };
-pub use view::{FilteredView, FormattedColumnSegment, OrderedView, SourceRows};
+pub use view::{FilteredView, FormattedColumnSegment, OrderedView, SourceRow, SourceRows, ViewRow};

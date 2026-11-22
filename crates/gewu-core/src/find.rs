@@ -99,6 +99,25 @@ impl Find {
         })
     }
 
+    /// Return the portions of non-overlapping literal matches inside a UTF-8 prefix.
+    /// A byte limit inside a character rounds down. A match that extends beyond
+    /// the prefix still marks its visible part. Non-text cells use typed predicates.
+    pub fn text_match_ranges<'a>(
+        &'a self,
+        text: &'a str,
+        prefix_bytes: usize,
+    ) -> impl Iterator<Item = Range<usize>> + 'a {
+        let visible = text.floor_char_boundary(prefix_bytes.min(text.len()));
+        // Simple case folding preserves the number of Unicode scalars. Looking
+        // ahead by four bytes per query byte covers any matching spelling.
+        let end = visible.saturating_add(self.query.len().saturating_mul(4));
+        let scan = &text[..text.floor_char_boundary(end.min(text.len()))];
+        self.matcher
+            .find_iter(scan)
+            .take_while(move |hit| hit.start() < visible)
+            .map(move |hit| hit.start()..hit.end().min(visible))
+    }
+
     /// Return at most `limit` matches strictly after `after`, in display order.
     /// None starts before the first cell; an empty page marks the end.
     pub fn next(&self, after: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {

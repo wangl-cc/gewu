@@ -1,8 +1,8 @@
 # gewu-core
 
-The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core owns decoded Arrow data, typed Find and explicit filters, sorting, statistics and file export. The UniFFI interface exposes this implementation to the Mac app; Core does not depend on the UI.
+The Rust data engine for [gewu](../../README.md), a read-only table viewer. Core owns decoded Arrow data, typed Find and explicit filters, sorting, statistics and file export. The Rust application consumes immutable Core snapshots directly.
 
-Behavior references: [data types](../../docs/data-types.md), [Find and filtering](../../docs/search-and-filter.md), and [file formats](../../docs/file-formats.md). This document covers engine ownership, APIs and implementation.
+Behavior references: [data types](../../docs/spec/data-types.md), [Find and filtering](../../docs/spec/search-and-filter.md), and [file formats](../../docs/spec/file-formats.md). This document covers engine ownership, APIs and implementation.
 
 For builds, tests and formatting, follow the [Rust development guide](../../DEVELOPMENT.md#rust-core).
 
@@ -16,6 +16,8 @@ Core separates state into a three-layer unidirectional model: `Dataset` → `Fil
 - `filtered.facet(column)` returns the view under every filter except `column`'s own; `filter_choices` and `filter_distribution` describe it. Each filtered view keeps one selection bitmap per filter condition over all source rows, so a facet is the intersection of the other bitmaps; no predicate is re-evaluated. A column without a filter returns the same view.
 - `filtered.sort(sorts)` validates `&[ColumnSort]` (slice order defines sort priority), sorts `filtered`'s row selection independently, and returns an `Arc<OrderedView>` without mutating `filtered` (empty sort lists return `filtered.unsorted()`, sharing the same `RowIds`).
 - `ordered.format_column(column, start, count)` packs one column's display rows into a UTF-8 buffer with 32-bit offsets and a validity bitmap. Read source row indices separately with `ordered.source_rows(start, count)`, or borrow all of them with `ordered.row_ids()`.
+- `ordered.exact_filter_for_cell(column, display_row)` constructs a lossless typed filter for a displayed cell, including null.
+- `ColumnHighlight::matches(relative_row)` reads a bit relative to the start of a highlight result.
 - `ordered.find(query, columns)` captures shared `RowIds` and column arrays for bounded navigation and highlighting over `&[ColumnId]`.
 - `ordered.export(columns, format)` captures shared data and a `&[ColumnId]` projection for a single-use export with progress, cancellation and atomic destination replacement; `ordered.export_rows(ranges, columns, format)` exports only the given display-row ranges. `Export::write_to_memory(options, limit)` writes CSV or TSV into a bounded buffer instead of a file. Formats without nested support reject nested columns at write time unless `ExportOptions::nested_as_text` writes them as display text.
 
@@ -25,7 +27,7 @@ The whole input is decoded into memory. Query execution reads native Arrow array
 
 ## Query execution
 
-Columns are identified by opaque `ColumnId` handles (obtained from `Dataset::info().columns[*].id` or `Dataset::column_id(name)`). `Dataset::filter` accepts `&[ColumnFilter]` with at most one `Filter` per `ColumnId`, while `FilteredView::sort` accepts `&[ColumnSort]` whose slice order defines sort priority. Duplicate or unknown `ColumnId`s are rejected via `ColumnError`. Visible column order and hiding live in the caller, so reordering or toggling unconditioned columns performs no row computation. `Filter` describes filter conditions; see the [operation reference](../../docs/search-and-filter.md#filter-operations) and [type semantics](../../docs/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
+Columns are identified by opaque `ColumnId` handles (obtained from `Dataset::info().columns[*].id` or `Dataset::column_id(name)`). `Dataset::filter` accepts `&[ColumnFilter]` with at most one `Filter` per `ColumnId`, while `FilteredView::sort` accepts `&[ColumnSort]` whose slice order defines sort priority. Duplicate or unknown `ColumnId`s are rejected via `ColumnError`. Visible column order and hiding live in the caller, so reordering or toggling unconditioned columns performs no row computation. `Filter` describes filter conditions; see the [operation reference](../../docs/spec/search-and-filter.md#filter-operations) and [type semantics](../../docs/spec/data-types.md) for their behavior. Cross-column text filtering is not a view operation; cell Find is separate.
 
 `Filter` carries one `FilterCondition` and an orthogonal null policy. Range and exact values arrive as text and are bound once against the column's Arrow type. `Bound` remains internal to execution and histogram construction. Public histogram endpoints are `RangeBound { value, label, coordinate }` projections; submit their lossless `value` text directly to a filter. Display labels and approximate plot coordinates must not be used as filter inputs.
 
@@ -37,7 +39,7 @@ Filters compile each condition to a bitmap-only `Selector` and evaluate it indep
 
 `Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight(columns, start, count)` covers at most 256 display rows and evaluates only the requested columns, which must belong to the captured scope. It returns one bitmap per requested column, so callers can request and cache just the columns on screen. Neither API computes or estimates a total hit count.
 
-Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time (`RowSlice::window`). The literal text matcher is compiled and retained when the Find object is created; typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell.
+Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time (`RowSlice::window`). The literal text matcher is compiled and retained when the Find object is created. `Find::text_match_ranges(text, prefix_bytes)` returns the parts of non-overlapping matches that fall in a UTF-8 prefix of the supplied string. It reuses the same matcher and reads only enough additional bytes to recognize a match crossing the prefix boundary. Typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell.
 
 ### Filter editors and candidate sessions
 
@@ -71,7 +73,7 @@ Scatter analysis accepts `x_scale` and `y_scale` with independent `AxisScale::Li
 
 ## File adapters
 
-`FileType` selects read and write adapters under `file/`. `FileMetadata` is tagged by format, so format-specific metadata does not leak into unrelated formats. [File formats](../../docs/file-formats.md) owns the externally visible inference, precision, conversion and worksheet policies.
+`FileType` selects read and write adapters under `file/`. `FileMetadata` is tagged by format, so format-specific metadata does not leak into unrelated formats. [File formats](../../docs/spec/file-formats.md) owns the externally visible inference, precision, conversion and worksheet policies.
 
 `OpenOptions` supplies an explicit format, header policy (`has_header`) and XLSX worksheet name (`sheet`). The delimited adapter uses `arrow-csv` for decoding and writing, with the `csv` crate for the integer-precision check. XLSX uses Calamine for reading and `rust_xlsxwriter` for writing.
 

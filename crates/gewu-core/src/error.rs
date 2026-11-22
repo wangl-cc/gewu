@@ -69,6 +69,7 @@ impl From<FindError> for Error {
 impl From<AnalysisError> for Error {
     fn from(error: AnalysisError) -> Self {
         match error {
+            AnalysisError::Filter(error) => error.into(),
             AnalysisError::Column(error) => error.into(),
             AnalysisError::Internal(error) => Self::Internal(error),
             other => Self::Analysis(other),

@@ -25,6 +25,19 @@ fn document(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<Ord
 }
 
 #[test]
+fn text_match_ranges_use_the_sessions_literal_unicode_matching() {
+    let text = "K.πk.kX K.";
+    let (_file, doc) = document(vec![("text", Arc::new(StringArray::from(vec![text])))]);
+    let col = ColumnId::from_raw(0);
+    let find = doc.find(" k. ", &[col]).unwrap();
+    assert!(find.highlight(&[col], 0, 1).unwrap().columns[0].matches(0));
+    let ranges = find.text_match_ranges(text, text.len()).collect::<Vec<_>>();
+    assert_eq!(ranges, [0..4, 6..8, 11..13]);
+    assert_eq!(find.text_match_ranges(text, 3).next(), Some(0..3));
+    assert_eq!(find.text_match_ranges(text, 2).next(), None);
+}
+
+#[test]
 fn arbitrary_find_text_is_not_a_typed_input_error() {
     let (_file, doc) = document(vec![
         ("number", Arc::new(Int32Array::from(vec![1, 2]))),

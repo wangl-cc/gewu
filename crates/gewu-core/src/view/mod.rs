@@ -19,7 +19,7 @@ mod filter;
 mod find;
 mod selection;
 
-pub use column_segment::{FormattedColumnSegment, SourceRows};
+pub use column_segment::{FormattedColumnSegment, SourceRow, SourceRows, ViewRow};
 pub(crate) use selection::FilterSelection;
 
 /// Immutable snapshot of filters applied to a [`Dataset`].
@@ -212,6 +212,11 @@ mod tests {
         let unsorted = unfiltered.unsorted();
         assert!(matches!(unsorted.rows, RowIds::All(12_000)));
         assert_eq!(unsorted.row_count(), 12_000);
+        assert_eq!(
+            unsorted.display_row_for_source(SourceRow(11999)),
+            Some(ViewRow(11999))
+        );
+        assert_eq!(unsorted.display_row_for_source(SourceRow(12000)), None);
 
         let empty_sort = unfiltered.sort(&[]).unwrap();
         assert!(matches!(empty_sort.rows, RowIds::All(12_000)));
@@ -295,6 +300,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(desc.source_rows(0, 3), [11999, 11998, 11997]);
+        assert_eq!(
+            desc.display_row_for_source(SourceRow(11999)),
+            Some(ViewRow(0))
+        );
+        assert_eq!(
+            desc.display_row_for_source(SourceRow(11997)),
+            Some(ViewRow(2))
+        );
+        assert_eq!(desc.display_row_for_source(SourceRow(0)), None);
+        assert_eq!(desc.display_row_for_source(SourceRow(u64::MAX)), None);
         assert_eq!(by_label_then_num.source_rows(0, 3), [11998, 11999, 11997]);
         // Original filtered and unsorted views remain unaffected.
         assert_eq!(unsort_1.source_rows(0, 3), [11997, 11998, 11999]);

@@ -21,6 +21,11 @@ impl FormattedColumnSegment {
         self.row_count
     }
 
+    /// Size of the packed UTF-8 text, excluding offsets and validity bits.
+    pub fn text_bytes(&self) -> usize {
+        self.text.len()
+    }
+
     /// Text of a row relative to the segment start; `None` for null or out of range.
     pub fn cell(&self, row: u32) -> Option<&str> {
         if row >= self.row_count {
@@ -49,6 +54,14 @@ pub enum SourceRows<'a> {
     /// The source row of each display row.
     Selected(&'a [u32]),
 }
+
+/// A zero-based row in the original dataset, independent of filtering or sorting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceRow(pub u64);
+
+/// A zero-based row position in one particular ordered view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewRow(pub u64);
 
 impl OrderedView {
     /// Format one column at display rows `start..start + count`, clipped to
@@ -92,6 +105,19 @@ impl OrderedView {
         match &self.rows {
             crate::row_ids::RowIds::All(count) => SourceRows::All(*count),
             crate::row_ids::RowIds::Selected(rows) => SourceRows::Selected(rows),
+        }
+    }
+
+    /// Find a zero-based source row in this display order without building a reverse index.
+    pub fn display_row_for_source(&self, SourceRow(source_row): SourceRow) -> Option<ViewRow> {
+        match self.row_ids() {
+            SourceRows::All(count) => (source_row < count as u64).then_some(ViewRow(source_row)),
+            SourceRows::Selected(rows) => {
+                let source = u32::try_from(source_row).ok()?;
+                rows.iter()
+                    .position(|&row| row == source)
+                    .map(|i| ViewRow(i as u64))
+            }
         }
     }
 

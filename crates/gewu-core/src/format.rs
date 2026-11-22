@@ -1,5 +1,4 @@
-//! Turning cell values into display text. The app and UniFFI share this so
-//! every consumer shows exactly the same strings.
+//! Shared formatting of cell values for display, search and text export.
 
 use arrow::{
     array::Array,
