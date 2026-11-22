@@ -108,6 +108,14 @@ impl OrderedView {
         }
     }
 
+    /// Resolve a displayed position back to the original dataset.
+    pub fn source_row_at(&self, ViewRow(row): ViewRow) -> Option<SourceRow> {
+        self.row_window(row, 1)
+            .iter()
+            .next()
+            .map(|row| SourceRow(row as u64))
+    }
+
     /// Find a zero-based source row in this display order without building a reverse index.
     pub fn display_row_for_source(&self, SourceRow(source_row): SourceRow) -> Option<ViewRow> {
         match self.row_ids() {

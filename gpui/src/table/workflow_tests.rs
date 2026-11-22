@@ -78,6 +78,10 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     w.type_in_find("marker");
     assert_eq!(w.selection(), single(0, 2));
     assert_eq!(
+        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
+        "Row 5 · note"
+    );
+    assert_eq!(
         w.app.read(|cx| {
             let t = w.table.read(cx);
             let id = t.data.columns[2].id;
@@ -93,7 +97,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     assert_eq!(w.selection(), single(0, 2));
     assert!(
         w.app
-            .read(|cx| w.table.read(cx).find.read(cx).message.contains("Wrapped"))
+            .read(|cx| w.table.read(cx).find.read(cx).message(cx) == "Wrapped · Row 5 · note")
     );
     w.keys("cmd-shift-g");
     assert_eq!(w.selection(), single(1, 2));
@@ -113,8 +117,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     w.keys("cmd-f cmd-a");
     w.type_in_find("absent");
     assert_eq!(
-        w.app
-            .read(|cx| w.table.read(cx).find.read(cx).message.clone()),
+        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
         "No matches"
     );
     w.keys("escape");

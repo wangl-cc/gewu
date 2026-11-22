@@ -205,8 +205,7 @@ fn empty_filtered_grid_recovers_only_when_the_reset_draft_is_applied() {
     w.keys("cmd-f");
     w.type_in_find("marker");
     assert_eq!(
-        w.app
-            .read(|cx| w.table.read(cx).find.read(cx).message.clone()),
+        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
         "No matches"
     );
     w.keys("escape");
