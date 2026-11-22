@@ -147,3 +147,29 @@ fn find_keeps_each_navigation_request_and_filters_compose_by_column() {
     w.settle();
     assert_eq!(w.selection(), single(2, 2));
 }
+
+#[test]
+fn find_reveals_the_entire_column_after_measuring_its_neighbors() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("wide.csv");
+    let headers = (0..30).map(|i| format!("col{i}")).collect::<Vec<_>>();
+    let mut values = vec!["W".repeat(80); headers.len()];
+    values[29].push_str("needle");
+    std::fs::write(
+        &file,
+        format!("{}\n{}\n", headers.join(","), values.join(",")),
+    )
+    .unwrap();
+
+    let mut w = TableWindow::open(&file);
+    w.keys("cmd-f");
+    w.type_in_find("needle");
+    assert_eq!(w.selection(), single(0, 29));
+    w.read(|t| {
+        let left = t
+            .column_left(29)
+            .expect("the matching column must be painted");
+        assert!(left >= t.layout.gutter);
+        assert!(left + t.column_width(29) <= t.layout.body_right());
+    });
+}

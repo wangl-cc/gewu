@@ -25,6 +25,8 @@ const PAD: f32 = 8.;
 const RESIZE_SLOP: f32 = 4.;
 const MIN_COLUMN: f32 = 60.;
 
+use layout::HorizontalScroll;
+
 use crate::columns::ColumnWidth;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,7 +59,7 @@ pub struct TableView {
     _style_changes: Subscription,
     _window_activation: Subscription,
     pub(crate) scroll: VerticalScroll,
-    scroll_x: f32,
+    horizontal: HorizontalScroll,
     pub(crate) selection: Option<Selection>,
     drag: Drag,
     edge_pointer: Option<Point<Pixels>>,
@@ -181,7 +183,7 @@ impl TableView {
                 table.refresh_highlights(cx);
             }),
             scroll,
-            scroll_x: 0.,
+            horizontal: HorizontalScroll::Offset(0.),
             selection: None,
             drag: Drag::None,
             edge_pointer: None,
@@ -248,9 +250,9 @@ impl TableView {
         Layout::new(
             bounds,
             gutter,
-            self.data.columns.widths(),
+            &self.data.columns,
             &self.scroll,
-            self.scroll_x,
+            self.horizontal,
         )
     }
 
@@ -282,16 +284,19 @@ impl TableView {
             .set_anchor(crate::scroll::Anchor { row, offset: 0.0 });
     }
 
+    fn scroll_x(&self) -> f32 {
+        self.horizontal.offset(
+            &self.data.columns,
+            (self.layout.body_right() - self.layout.gutter).max(0.),
+        )
+    }
+
     pub(crate) fn reveal(&mut self, cell: Cell) {
         self.scroll.reveal(cell.row);
-        let body = self.layout.body_right() - self.layout.gutter;
-        let x0: f32 = self.data.columns.widths().take(cell.column).sum();
-        let x1 = x0 + self.data.columns.width(cell.column);
-        if x0 < self.scroll_x {
-            self.scroll_x = x0;
-        } else if x1 > self.scroll_x + body {
-            self.scroll_x = x1 - body;
-        }
+        self.horizontal = HorizontalScroll::Reveal {
+            from: self.scroll_x(),
+            column: self.data.columns[cell.column].id,
+        };
     }
 
     fn copy_cell_text(&mut self, text: String, cx: &mut Context<Self>) {

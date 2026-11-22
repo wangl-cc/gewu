@@ -89,8 +89,9 @@ impl TableView {
         let track = (l.body_right() - l.gutter).max(0.);
         let travel = track - l.horizontal_thumb().size.width.as_f32();
         if travel > 0. {
-            self.scroll_x =
-                ((left - l.gutter) / travel).clamp(0., 1.) * (l.content_width - track).max(0.);
+            self.horizontal = HorizontalScroll::Offset(
+                ((left - l.gutter) / travel).clamp(0., 1.) * (l.content_width - track).max(0.),
+            );
         }
     }
 
@@ -185,16 +186,16 @@ impl TableView {
         };
         let dx = edge_delta(x, self.layout.gutter, self.layout.body_right());
         let dy = edge_delta(y, HEADER_HEIGHT, self.layout.body_bottom());
-        let before = (self.scroll.anchor(), self.scroll_x);
+        let before = (self.scroll.anchor(), self.scroll_x());
         self.scroll.scroll_by(f64::from(dy));
-        self.scroll_x = (self.scroll_x + dx).max(0.);
+        self.horizontal = HorizontalScroll::Offset((before.1 + dx).max(0.));
         let layout = self.compute_layout(self.layout.bounds);
-        self.scroll_x = layout.scroll_x;
+        self.horizontal = HorizontalScroll::Offset(layout.scroll_x);
         self.scroll = layout.vertical.clone();
         if let (Some(selection), Some(head)) = (&mut self.selection, layout.drag_cell_at(x, y)) {
             selection.head = head;
         }
-        if before == (self.scroll.anchor(), self.scroll_x) {
+        if before == (self.scroll.anchor(), self.scroll_x()) {
             self.edge_pointer = None;
             return;
         }
@@ -234,7 +235,9 @@ impl TableView {
         }
         self.flash_scrollbars(cx);
         self.scroll.scroll_by(-dy);
-        self.scroll_x = (self.scroll_x - dx as f32).max(0.);
+        if dx != 0. {
+            self.horizontal = HorizontalScroll::Offset((self.scroll_x() - dx as f32).max(0.));
+        }
         cx.notify();
         cx.stop_propagation();
     }
@@ -279,9 +282,9 @@ impl TableView {
         };
         let next = current.moved(dr, dc, action.extend, rows, columns);
         self.selection = Some(next);
-        let before = (self.scroll.anchor(), self.scroll_x);
+        let before = (self.scroll.anchor(), self.scroll_x());
         self.reveal(next.head);
-        if before != (self.scroll.anchor(), self.scroll_x) {
+        if before != (self.scroll.anchor(), self.scroll_x()) {
             self.flash_scrollbars(cx);
         }
         cx.notify();
