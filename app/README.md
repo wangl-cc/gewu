@@ -4,13 +4,7 @@ The two Swift layers: GewuKit (`app/GewuKit`), the domain layer over the generat
 
 ## GewuKit
 
-Two value types hold the rules of what the user edits, so App models only run and present them: `TableState` keeps the query, visible columns and the selected, inspected and charted columns consistent (filters in schema order, hidden columns lose their conditions, choices fall back to visible columns), and `FilterDraft` is one column's filter while its editor is open, with exact values compared by UTF-8 bytes (`ExactValue`).
-
-`TableSession` opens a file and answers `apply(query, after: current)`, keeping whichever of `current` and `current.rowSet` the engine reused. `TableQuery` compares filter literals by UTF-8 bytes, as the engine does, and keeps its filters in column order, so two queries are equal exactly when they select the same rows in the same order.
-
-Each session has four serial workers: `query`, `analysis`, `read` for text, and `find`. Export writes, copies and worksheet listing each run on a worker created for that call. Bulk text arrives as one packed buffer per column block (`ColumnText`); source row numbers are read in place from Rust memory, and copied text is read in place and copied once into `Data`.
-
-`GewuKitError` carries the engine's structured kind and its English diagnostic. The App's [ErrorPresentation](Sources/Gewu/App/ErrorPresentation.swift) words them, so alerts, panels and the open-failure page read alike.
+GewuKit's types, edit state, workers and errors are described in the [architecture](../docs/dev/architecture.md#queries-and-edit-state). Its sources are grouped by role: [Table/](GewuKit/Sources/Table) for the session and result types, [Model/](GewuKit/Sources/Model) for values and edit state, and [Execution/](GewuKit/Sources/Execution) for the workers. The App's [ErrorPresentation](Sources/Gewu/App/ErrorPresentation.swift) words GewuKit's errors.
 
 ## Code map
 

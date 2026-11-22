@@ -36,7 +36,7 @@ Reordering or hiding unconditioned visible columns needs no FFI work and keeps b
 
 ### Bulk data
 
-UniFFI moves values by serializing them into a buffer, and an object only as an opaque handle. Large data therefore crosses in two other ways:
+The two bulk-data routes are described in the [architecture](../../docs/dev/architecture.md#data-plane). Their contract:
 
 - **Computed results move by value in one buffer.** `ColumnText { row_count, bytes }` packs `row_count + 1` native-endian `u32` text offsets, then one validity bit per row (low bit first; unset is null, which stays distinct from empty text), then the UTF-8 text.
 - **Resident data is lent in place.** The hand-written C functions in [include/gewu_data.h](include/gewu_data.h) take a cloned object handle (Swift's `uniffiCloneHandle()`), consume it, and return a typed pointer into memory that object owns. `gewu_ordered_view_source_rows` lends an ordered view's source row of every display row (a null pointer means file order), and `gewu_exported_bytes` lends an in-memory export. The memory stays valid, unchanged, while the caller keeps its own Swift object alive.
@@ -57,7 +57,7 @@ All exported functions are synchronous. UniFFI neither schedules workers nor int
 | Metadata, `rows`, `filtered`, `find` and `export` creation, `column_structure`, lending functions | Metadata access or O(1) shared snapshot capture. |
 | Export cancellation and progress | Control calls while export worker tasks run. |
 
-Calls run to completion in Rust without cooperative cancellation; Swift owns request replacement (see [concurrency](../../docs/dev/architecture.md#concurrency)). A `GewuFind` or `GewuExport` stays valid whatever later queries do.
+Calls run to completion; Swift decides which run and which results are used (see [concurrency](../../docs/dev/architecture.md#concurrency)). A `GewuFind` or `GewuExport` stays valid whatever later queries do.
 
 ## Analyses
 
@@ -76,11 +76,11 @@ Calls run to completion in Rust without cooperative cancellation; Swift owns req
 
 A filtered view keeps one result per analysis and column (one scatter result in all), for the parameters it was computed with; a request with other parameters replaces it. Repeating a request is therefore cheap, results stay bounded by the schema, and every ordering of the same rows shares them. Two concurrent first requests for one result may both compute.
 
-Results contain concrete data, without request context; [Core](../gewu-core/README.md#statistics-and-histograms) defines their semantics. Scatter's `x_column: None` plots against the zero-based source row. Its temporal axis kinds (`Date`, `DateTime`) promise coordinates in seconds since the Unix epoch, whatever the column's unit, so frontends build dates without parsing labels.
+Results contain concrete data, without request context; [Core](../gewu-core/README.md#filter-editors-and-analyses) defines their semantics. Scatter's `x_column: None` plots against the zero-based source row. Its temporal axis kinds (`Date`, `DateTime`) promise coordinates in seconds since the Unix epoch, whatever the column's unit, so frontends build dates without parsing labels.
 
 ### Filter editors
 
-`filter_choices(column)` and `filter_distribution(column, ..)` describe the column's facet: the rows passing every filter except the column's own, so its own condition never hides its alternatives. `FilterChoices.values` is `Some` only for a complete bounded list (`Some([])` is empty); counts omit zero-count values, and nulls are counted separately. Value selection is exact: Swift must compare UTF-8 bytes, because `String` equality merges canonically equivalent spellings. Send `RangeBound.value` back unchanged; labels and coordinates are display only. See [Find and filtering](../../docs/spec/search-and-filter.md#values-and-counts-in-an-editor).
+`filter_choices(column)` and `filter_distribution(column, ..)` describe the column's facet: the rows passing every filter except the column's own, so its own condition never hides its alternatives. `FilterChoices.values` is `Some` only for a complete bounded list (`Some([])` is empty); counts omit zero-count values, and nulls are counted separately. Value selection is exact, compared by UTF-8 bytes (see the [architecture](../../docs/dev/architecture.md#queries-and-edit-state)). Send `RangeBound.value` back unchanged; labels and coordinates are display only. See [Find and filtering](../../docs/spec/search-and-filter.md#values-and-counts-in-an-editor).
 
 `Filter` is `OnlyNulls`, `NotNull`, or `Condition { condition, include_nulls }`.
 

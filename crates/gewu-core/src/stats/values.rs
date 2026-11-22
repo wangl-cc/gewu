@@ -1,5 +1,16 @@
 //! Fixed-capacity inspector estimates. Only representative row IDs, never owned values,
 //! are retained.
+//!
+//! Columns with a compact distinct-value encoding count their codes exactly;
+//! complete views reuse the cached per-value totals. Other columns use
+//! fixed-capacity estimates with rapidhash: the 4,096 smallest hashes estimate
+//! distinct cardinality, and 256 Misra–Gries counters select candidates,
+//! keeping source row IDs rather than owned values. A second scan recounts the
+//! selected candidates exactly, so displayed counts are not scaled samples.
+//! Candidate selection can miss values that rank high across the whole table,
+//! and 64-bit hash collisions can merge groups, so results are always marked
+//! as estimated. Native dictionary arrays hash each dictionary entry once and
+//! then follow keys.
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 

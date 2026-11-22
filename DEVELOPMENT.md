@@ -9,17 +9,17 @@ Requires stable Rust and a native compiler and linker; on macOS, Command Line To
 ```sh
 cargo build --locked -p gewu-core
 cargo test --locked -p gewu-core
-cargo clippy --locked -p gewu-core --all-targets --all-features -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo +nightly fmt --all --check
 ```
 
-Replace `-p gewu-core` with `-p gewu-uniffi` for the FFI crate, or with `--workspace` for both. Apply formatting with `cargo +nightly fmt --all`. For dependency changes, run `cargo deny --locked check`. When changing optional file-format support, also test Core with `--no-default-features`, and with `--no-default-features --features <format>` for the affected format. Generate the API reference with `cargo doc --locked -p gewu-core --no-deps --open`.
+Replace `-p gewu-core` with `-p gewu-uniffi` for the FFI crate, or with `--workspace` for both; clippy runs over the workspace as in CI. Apply formatting with `cargo +nightly fmt --all`. For dependency changes, run `cargo deny --locked check`. Generate the API reference with `cargo doc --locked -p gewu-core --no-deps --open`.
 
 Rust tests cover the FFI wrappers but do not compile the generated Swift bindings. When changing the exported interface, also build and test the app below.
 
 ### Engine benchmarks
 
-The standalone [data generator](tools/data-gen) writes fixed-seed files with 28 columns across the supported data kinds, without building Core. Prepare a 2-million-row file once and reuse it; regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
+The standalone [data generator](tools/data-gen) writes fixed-seed files covering the supported data kinds, without building Core. Prepare a 2-million-row file once and reuse it; regenerate it after changing the generator, or set `GEWU_BENCH_FILE` to use another path.
 
 ```sh
 mkdir -p target/bench
@@ -51,7 +51,7 @@ The `GewuBindings` target's [Rust build phase](scripts/build-rust.sh) builds `ge
 
 ### Interaction performance
 
-Run `GewuPerformance` on an unlocked Mac, leaving the pointer and keyboard to XCTest. It launches an optimized copy of Gewu under a separate bundle identifier with a generated 8,192-row CSV. Use Xcode's default DerivedData location and a fresh result bundle path each run.
+Run `GewuPerformance` on an unlocked Mac, leaving the pointer and keyboard to XCTest. It launches an optimized copy of Gewu under a separate bundle identifier with a generated CSV. Use Xcode's default DerivedData location and a fresh result bundle path each run.
 
 ```sh
 xcodebuild -project Gewu.xcodeproj -scheme GewuPerformance \
@@ -60,7 +60,7 @@ xcodebuild -project Gewu.xcodeproj -scheme GewuPerformance \
 xcrun xcresulttool get test-results metrics --path build/interactions.xcresult
 ```
 
-The scatter test moves the pointer across a 2,048-point plot and records Gewu's CPU and elapsed time. The table test applies a filter and records the time to the first frame showing the new rows; it fails on a blank, partial or reverted frame. Compare runs on the same Mac, display and OS, and use Xcode's **Set Baseline** for a local threshold.
+The scatter test moves the pointer across a scatter plot and records Gewu's CPU and elapsed time. The table test applies a filter and records the time to the first frame showing the new rows; it fails on a blank, partial or reverted frame. Compare runs on the same Mac, display and OS, and use Xcode's **Set Baseline** for a local threshold.
 
 ### Swift language server in Zed
 

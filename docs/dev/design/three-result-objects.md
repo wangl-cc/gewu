@@ -47,15 +47,7 @@ Separate objects for "what the file contains", "which rows pass" and "in what or
 
 ## Choice
 
-Three immutable objects, each replaced only when its own inputs change:
-
-| Object | Replaced when | Core | GewuKit |
-| --- | --- | --- | --- |
-| Dataset | the file or its open options change | `Dataset` | `TableSource` |
-| FilteredView | the filters change | `FilteredView` | `RowSet` |
-| OrderedView | the filters or the sort change | `OrderedView` | `DisplayRows` |
-
-The FFI mirrors them as `GewuDataset`, `GewuFilteredView` and `GewuOrderedView`. Analyses and filter-editor choices are cached on the FilteredView. Text, Find and export read from the OrderedView. Filters always run against the whole Dataset, never against the previous view. The caller holds whichever OrderedView is current.
+Three immutable objects, each replaced only when its own inputs change: `Dataset` → `FilteredView` → `OrderedView` in Core, mirrored in the FFI and in GewuKit. Analyses and filter-editor choices are cached on the FilteredView. Text, Find and export read from the OrderedView. Filters always run against the whole Dataset, never against the previous view. The caller holds whichever OrderedView is current.
 
 In the scenario, `apply` sees that only the sort changed. It builds a new OrderedView over the *same* FilteredView, and the Inspector panel, keyed by the FilteredView's identity, finds its histogram already cached.
 

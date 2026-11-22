@@ -28,11 +28,6 @@ The model before #17.
   - Each rule ends up decided twice, and the two copies drift.
   - Swift carries caches for results that belong next to the data.
 
-### App rules in Core
-
-- **For:** one Rust crate, no in-between.
-- **Against:** Core would learn frontend concepts: a current view, which panel asked, display units for one chart. A general data engine, usable by tests, benchmarks or a future consumer, would carry one UI's policy.
-
 ### UniFFI derives in Core
 
 - **For:** no declarations to repeat and no conversion code.

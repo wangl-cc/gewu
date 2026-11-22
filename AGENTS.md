@@ -2,25 +2,12 @@
 
 ## Commands
 
-Run from the repository root. [DEVELOPMENT.md](DEVELOPMENT.md) has the full setup; this list is the one place it is repeated.
-
-```sh
-cargo test --locked -p gewu-core            # or -p gewu-uniffi, or --workspace
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo +nightly fmt --all --check
-xcodegen generate --use-cache
-xcodebuild -project Gewu.xcodeproj -scheme Gewu -configuration Debug \
-  -destination 'platform=macOS' -derivedDataPath build/xcode test
-xcrun swift-format lint --configuration .swift-format --strict --recursive app/Sources/Gewu app/GewuKit app/Tests app/FrameTests app/UITests
-pnx markdownlint-cli2 --config .markdownlint.yaml <changed-files>
-```
-
-The Xcode commands need macOS. Documentation-only changes need only the Markdown lint.
+Build, test, lint and format commands are in [DEVELOPMENT.md](DEVELOPMENT.md); run them from the repository root. The Xcode commands need macOS. Documentation-only changes need only the Markdown lint.
 
 ## Before acting
 
 - Read the [architecture](docs/dev/architecture.md) and the [development guide](docs/dev/guide.md) before changing code. They are the shared knowledge for humans and agents; this file adds only what applies to agents.
-- Before reversing a design that looks odd, check the architecture's scope and non-goals and the [design notes](docs/dev/design/README.md).
+- Before reversing a design that looks odd, check the architecture's [scope](docs/dev/architecture.md#scope) and the [design notes](docs/dev/design/README.md).
 - Before changing what users see, check the [spec](docs/spec), and update it in the same change.
 - Keep docs in the same change as the code, as the guide's conventions describe.
 

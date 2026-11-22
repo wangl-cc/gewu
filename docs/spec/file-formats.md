@@ -18,9 +18,9 @@ Export defaults to Zstd compression. The export dialog also offers Snappy, Gzip,
 
 Both formats use the first record as column names by default. Import Options also supports headerless input.
 
-Type inference examines the entire input before decoding. Mixed types can become text; mixed integer/fractional columns become text if floating-point promotion would round an integer literal.
+Type inference examines the entire input before decoding. Mixed types can become text. A column mixing integers and fractions becomes fractional, unless one of its integers is too large to keep exactly as a fraction; then the column becomes text.
 
-Empty fields, including quoted empty strings, read as null. Export uses UTF-8, CRLF line endings and CSV quoting; empty strings and nulls both use empty fields. CSV/TSV do not preserve Arrow schemas. Nested columns are written as their display text. Copying a selection produces exactly a TSV export of the selected rows.
+Empty fields, including quoted empty strings, read as null. Export uses UTF-8, CRLF line endings and CSV quoting; empty strings and nulls both use empty fields. CSV/TSV do not preserve column types. Nested columns are written as their display text. Copying a selection produces exactly a TSV export of the selected rows.
 
 Dates such as `2026-10-30` and ISO-style timestamps such as `2026-10-30T14:30:00.123` can be inferred as temporal types. Locale-specific date strings and standalone times are not automatically recognized as temporal types. Unsupported formats remain text; mixing date values with ordinary text can make the whole column text. There is no user-selectable date parsing pattern. A value that looks like a supported date but is invalid can fail decoding rather than falling back to text.
 

@@ -1,5 +1,12 @@
 //! Exact native order statistics. Only the non-null native values are copied
 //! for selection; no widened column or full sort is needed.
+//!
+//! Nulls and NaNs are excluded. An even-sized median averages the two central
+//! values: integers and decimals stay exact, with one extra decimal place when
+//! needed; floating-point midpoints avoid overflow, infinities take part in
+//! ordering, and an opposite-infinity midpoint is undefined. Temporal
+//! midpoints keep fractional source units, so a date midpoint can include a
+//! time. Duration midpoints use decimal seconds with an `s` suffix.
 
 use arrow::{
     array::{

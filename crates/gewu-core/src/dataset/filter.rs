@@ -1,4 +1,13 @@
 //! Filter validation and execution over the full dataset.
+//!
+//! Each condition compiles once to a bitmap-only selector and is evaluated
+//! over the whole source range into a packed selection bitmap. Null policy,
+//! exclusion and alternatives combine bitmaps with bitwise operations. Leaf
+//! predicates (ranges, scalars, text) are shared with Find: native range,
+//! dictionary-code and string leaves compare 64 rows per bitmap word. The
+//! filtered view keeps one bitmap per condition, so a filter editor's facet is
+//! the intersection of the others, and the intersection of all of them is
+//! materialized once as source row IDs.
 
 use std::{collections::HashSet, sync::Arc};
 

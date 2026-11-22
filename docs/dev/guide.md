@@ -12,14 +12,13 @@ How to make common changes. It uses the vocabulary of the [architecture](archite
 
   Link instead of restating.
 - **Docs change with the code**, in the same change: the architecture when the system's shape changes, the spec when behavior changes, and a new [design note](design/README.md) when a key decision is made or replaced.
-- **Discussions are not records.** When an issue or review thread settles something, write it into the docs. The docs never cite a thread.
+- **Discussions are not records.** When an issue or review thread settles something, write it into the docs. A rule never points to a discussion as its source; design notes cite pull requests and commits only to date what happened.
 - **Test once, at the boundary that owns the behavior.** A regression test must fail without the fix.
 - **Rust modules and tests.**
   - Multi-file modules use `<module>/mod.rs`.
   - Unit tests live in a sibling file: `mod.rs` with `tests.rs`, `foo.rs` with `foo_tests.rs`, declared as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`. They stay child modules with access to private items, and the implementation stays readable. There is no size threshold, which would bring back inconsistency, and a file is not turned into a directory just for tests.
   - A test fixture shared across modules follows the same pattern: `foo_fixture.rs`, declared as `mod fixture`.
   - Tests that cross modules go in `crates/*/tests/`.
-- **Screenshots are generated.** README screenshots come from a script, never hand captures. Regenerate them in any change that alters what they show.
 - **Generated files are outputs.** Edit the Rust interface and `project.yml`, never the generated bindings, C header or `Gewu.xcodeproj`.
 - **Report what was verified.** A build, specific test suites, a check in the running app and a measurement are different claims.
 
@@ -58,18 +57,23 @@ The FFI is where Swift meets Core. Most methods expose a Core operation; a few h
 ### Change filter, Find, sort or value semantics
 
 1. Update the [spec](../spec) first. It is the contract the change must meet.
-2. Change Core and its tests. Filter values cross as exact text and compare by UTF-8 bytes. Never send labels, plot coordinates or dictionary codes as filter input.
+2. Change Core and its tests. Filter values cross as exact text, compared as the [edit state](architecture.md#queries-and-edit-state) describes. Never send labels, plot coordinates or dictionary codes as filter input.
 3. If the change affects what the user edits (sort cycling, hiding a column, filter drafts), change `TableState` or `FilterDraft` in GewuKit, not the App models.
 
 ### Add or change a file format
 
 1. Core `file/`, behind its own Cargo feature. A disabled format still compiles and reports itself disabled.
-2. Test Core with no default features and with the feature alone; CI does not cover these combinations.
-3. Update [file formats](../spec/file-formats.md) and the format table in the README.
+2. Test Core with no default features and with the feature alone, which CI does not cover:
+
+   ```sh
+   cargo test --locked -p gewu-core --no-default-features
+   cargo test --locked -p gewu-core --no-default-features --features <format>
+   ```
+
+3. Update [file formats](../spec/file-formats.md), the format table in the [README](../../README.md#file-formats-and-limits) and the feature table in the [Core README](../../crates/gewu-core/README.md#file-formats-and-features).
 
 ### Change the App
 
 1. Give each piece of state one owner whose lifetime matches it. Models are `@Observable` and never refer to views.
 2. Run Rust work through GewuKit, never directly. Check for cancellation before a finished task touches state, whether it succeeded or failed.
 3. Keep Swift 6 language mode clean, without `@unchecked Sendable`.
-4. If the change alters what a README screenshot shows, regenerate it.
