@@ -157,6 +157,8 @@ impl Document {
         let table = cx.new(|cx| {
             let mut table = TableView::new(TableData::from_dataset(Arc::new(dataset)), window, cx);
             table.document_title = Some(self.title.clone());
+            table.delimited_header = matches!(info.format, FileType::Csv | FileType::Tsv)
+                .then_some(self.displayed.has_header);
             if let Some(previous) = &self.table {
                 table.inherit_document_state(previous, cx);
             } else {
@@ -170,6 +172,17 @@ impl Document {
         }
         self.table = Some(table);
         self.load = Load::Ready;
+    }
+
+    fn toggle_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.request(
+            Import {
+                has_header: !self.displayed.has_header,
+                ..self.displayed.clone()
+            },
+            window,
+            cx,
+        );
     }
 
     fn import_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -220,6 +233,11 @@ impl Render for Document {
                 info::open(table.read(cx).data.snapshot().dataset().info(), cx);
             });
         }
+        if self.header_available {
+            view = view.on_action(cx.listener(
+                |doc, _: &crate::actions::ToggleImportHeader, w, cx| doc.toggle_header(w, cx),
+            ));
+        }
         if self.header_available && !matches!(self.load, Load::Pending(_)) {
             view = view.on_action(
                 cx.listener(|this, _: &ImportOptions, w, cx| this.import_options(w, cx)),
@@ -235,7 +253,7 @@ impl Render for Document {
                 cx,
             ));
         }
-        if self.header_available || !self.sheets.is_empty() {
+        if !self.sheets.is_empty() || (self.header_available && self.table.is_none()) {
             let mut bar = div()
                 .id("worksheet-options")
                 .flex_none()
@@ -268,24 +286,13 @@ impl Render for Document {
                 );
             }
             if self.header_available {
+                let document = cx.weak_entity();
                 bar = bar.child(
-                    button(
-                        "header-mode",
-                        "First row is a header",
-                        self.displayed.has_header,
-                        cx,
-                    )
-                    .flex_none()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.request(
-                            Import {
-                                has_header: !this.displayed.has_header,
-                                ..this.displayed.clone()
-                            },
-                            window,
-                            cx,
-                        )
-                    })),
+                    crate::panels::header_checkbox(self.displayed.has_header, cx).on_change(
+                        move |_, _, w, cx| {
+                            let _ = document.update(cx, |doc, cx| doc.toggle_header(w, cx));
+                        },
+                    ),
                 );
             }
             view = view.child(bar);

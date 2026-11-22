@@ -198,6 +198,8 @@ fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
     ui.simulate_resize(gpui_kit::size(px(380.), px(300.)));
     ui.update(|w, cx| {
         w.render_frame(cx);
+        assert!(w.try_find("worksheet-options").is_none());
+        assert_eq!(w.find("header-mode").checked(), Some(true));
         let title = w.find("document-title").bounds();
         let field = w.find("table-search").bounds();
         let inspector = w.find("show-inspector").bounds();

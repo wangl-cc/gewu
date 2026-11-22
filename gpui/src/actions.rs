@@ -9,6 +9,7 @@ gpui_kit::actions!(gewu, [
     AnalyzeSelectedColumn,
     ShowChartInspector,
     ToggleRowNumbers,
+    ToggleImportHeader,
     ShowInspector,
     EditFilter,
     ManageColumns,

@@ -254,7 +254,7 @@ impl Render for ScatterChart {
                             if active {
                                 colors.primary
                             } else {
-                                colors.primary.opacity(0.60)
+                                colors.primary.opacity(0.86)
                             },
                         )
                         .corner_radii(r),

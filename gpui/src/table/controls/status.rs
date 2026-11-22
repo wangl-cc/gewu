@@ -93,6 +93,14 @@ impl TableView {
                 })),
             );
         }
+        if let Some(header) = self.delimited_header {
+            let focus = self.focus.clone();
+            bar = bar.child(crate::panels::header_checkbox(header, cx).on_change(
+                move |_, _, w, cx| {
+                    focus.dispatch_action(&crate::actions::ToggleImportHeader, w, cx);
+                },
+            ));
+        }
         self.export_status(bar, cx)
     }
 

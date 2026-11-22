@@ -19,6 +19,33 @@ pub(crate) fn button(
     style_control(control, label, accented, cx)
 }
 
+pub(crate) fn header_checkbox(checked: bool, cx: &App) -> base::Checkbox {
+    let colors = base::Theme::global(cx).tokens.colors;
+    let label = "First row is a header";
+    base::Checkbox::new("header-mode")
+        .accessibility_label(label)
+        .checked(checked)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .text_size(px(11.))
+        .text_color(colors.muted_foreground)
+        .cursor_pointer()
+        .child(
+            div()
+                .size(px(14.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(colors.muted_foreground)
+                .child(if checked { "✓" } else { "" }),
+        )
+        .child(label)
+}
+
 fn tab(id: &'static str, selected: bool, cx: &App) -> base::Tab {
     style_control(
         base::Tab::new(id)
