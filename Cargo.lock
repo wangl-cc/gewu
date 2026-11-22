@@ -865,6 +865,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gewu-app"
+version = "0.1.0"
+dependencies = [
+ "gewu-core",
+ "tempfile",
+]
+
+[[package]]
 name = "gewu-core"
 version = "0.1.0"
 dependencies = [
