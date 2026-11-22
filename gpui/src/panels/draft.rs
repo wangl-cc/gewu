@@ -81,9 +81,13 @@ impl Draft {
         draft
     }
 
-    pub fn modes(cap: ColumnCapabilities, bounded: bool) -> Vec<Mode> {
+    pub fn has_exact_condition(&self) -> bool {
+        !self.excluded || !self.values.is_empty()
+    }
+
+    pub fn modes(cap: ColumnCapabilities, offer_values: bool) -> Vec<Mode> {
         let mut modes = Vec::new();
-        if cap.exact && bounded {
+        if cap.exact && offer_values {
             modes.push(Mode::Values);
         }
         if cap.range {
@@ -125,12 +129,10 @@ impl Draft {
             return Some(Filter::OnlyNulls);
         }
         let condition = match self.mode {
-            Mode::Values if !self.excluded || !self.values.is_empty() => {
-                Some(FilterCondition::Exact {
-                    values: self.values.iter().cloned().collect(),
-                    exclude: self.excluded,
-                })
-            }
+            Mode::Values if self.has_exact_condition() => Some(FilterCondition::Exact {
+                values: self.values.iter().cloned().collect(),
+                exclude: self.excluded,
+            }),
             Mode::Text if !self.search.is_empty() => Some(FilterCondition::Text {
                 text: self.search.clone(),
                 mode: self.comparison,

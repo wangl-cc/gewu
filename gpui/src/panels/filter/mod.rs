@@ -153,6 +153,7 @@ impl FilterEditor {
         let capabilities = self.column.capabilities;
         let scale = self.scale;
         let mode = self.draft.mode;
+        let keep_exact = self.draft.has_exact_condition();
         self.preview = None;
         self.drag = None;
         self.error = None;
@@ -168,7 +169,7 @@ impl FilterEditor {
                             null_count: snapshot.filtered().facet(id)?.count_nulls(id)?,
                         })
                     };
-                    let modes = Draft::modes(capabilities, facet.values.is_some());
+                    let modes = Draft::modes(capabilities, facet.values.is_some() || keep_exact);
                     let mode = if modes.contains(&mode) {
                         mode
                     } else {
@@ -179,14 +180,12 @@ impl FilterEditor {
                     } else {
                         None
                     };
-                    Ok((facet, preview))
+                    Ok((facet, modes, preview))
                 })
                 .await;
             let _ = this.update(cx, |editor, cx| {
                 match result {
-                    Ok((facet, preview)) => {
-                        let modes =
-                            Draft::modes(editor.column.capabilities, facet.values.is_some());
+                    Ok((facet, modes, preview)) => {
                         if !modes.contains(&editor.draft.mode) {
                             editor.draft.set_mode(modes[0]);
                         }

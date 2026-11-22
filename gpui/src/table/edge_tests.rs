@@ -9,6 +9,46 @@ fn open() -> TableWindow {
 }
 
 #[test]
+fn reapplying_an_exact_filter_without_a_value_list_preserves_its_rows() {
+    use std::io::Write;
+
+    let mut file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    writeln!(file, "tag,id\n,0").unwrap();
+    for i in 1..=300 {
+        writeln!(file, "station{i},{i}").unwrap();
+    }
+    let mut w = TableWindow::open(file.path());
+    w.ui.simulate_resize(size(px(980.), px(860.)));
+    w.settle();
+    w.click(w.cell(1, 0), Modifiers::default());
+    w.keys("cmd-alt-shift-l");
+    assert_eq!(w.source_rows(), [1]);
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| window.click("apply-filter", cx));
+    w.settle();
+    assert_eq!(w.source_rows(), [1]);
+
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| {
+        assert_eq!(window.find("Current selection").selected(), Some(true));
+        window.click("Text", cx);
+        window.click("Current selection", cx);
+        window.click("include-missing", cx);
+        window.click("apply-filter", cx);
+    });
+    w.settle();
+    assert_eq!(w.source_rows(), [0, 1]);
+
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| {
+        window.click("reset-filter", cx);
+        window.click("apply-filter", cx);
+    });
+    w.settle();
+    assert_eq!(w.source_rows().len(), 301);
+}
+
+#[test]
 fn invalid_filter_preserves_the_displayed_query_and_recovers_on_edit() {
     use std::sync::Arc;
 

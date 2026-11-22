@@ -139,7 +139,17 @@ impl Render for FilterEditor {
             .text_color(colors.surface_foreground)
             .text_sm()
             .child(section(format!("Filter · {}", self.column.name)));
-        if let Some(applied) = self
+        if self.draft.mode == Mode::Values
+            && self
+                .facet
+                .as_ref()
+                .is_some_and(|facet| facet.values.is_none())
+        {
+            panel = panel.child(super::super::exact_description(
+                self.draft.values.iter(),
+                self.draft.excluded,
+            ));
+        } else if let Some(applied) = self
             .snapshot
             .query()
             .filters
@@ -156,7 +166,11 @@ impl Render for FilterEditor {
             );
         }
         if let Some(facet) = &self.facet {
-            let modes = Draft::modes(self.column.capabilities, facet.values.is_some());
+            let has_choices = facet.values.is_some();
+            let modes = Draft::modes(
+                self.column.capabilities,
+                has_choices || self.draft.has_exact_condition(),
+            );
             if modes.len() > 1 {
                 let mut tabs = base::Tabs::new("filter-tabs")
                     .aria_label("Filter mode")
@@ -166,7 +180,8 @@ impl Render for FilterEditor {
                     .gap_1();
                 for mode in modes {
                     let name = match mode {
-                        Mode::Values => "Values",
+                        Mode::Values if has_choices => "Values",
+                        Mode::Values => "Current selection",
                         Mode::Range => "Range",
                         Mode::Text => "Text",
                         Mode::Missing => "Missing",
@@ -187,7 +202,8 @@ impl Render for FilterEditor {
                 panel = panel.child(tabs);
             }
             panel = match self.draft.mode {
-                Mode::Values => panel.child(self.choices(facet, cx)),
+                Mode::Values if has_choices => panel.child(self.choices(facet, cx)),
+                Mode::Values => panel,
                 Mode::Range => panel.child(self.range(cx)),
                 Mode::Text => panel
                     .child(Self::field("Match text", &self.text, cx))

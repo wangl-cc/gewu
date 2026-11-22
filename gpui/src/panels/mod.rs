@@ -176,32 +176,33 @@ pub(crate) fn filter_description(filter: &gewu_core::Filter) -> String {
                 ""
             }
         ),
-        FilterCondition::Exact { values, exclude } => {
-            let preview = values
-                .iter()
-                .take(3)
-                .map(|s| value_preview(s).to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            if values.is_empty() {
-                (if *exclude { "All values" } else { "No values" }).to_owned()
-            } else {
-                format!(
-                    "{} {preview}{}",
-                    if *exclude { "Exclude" } else { "Include" },
-                    if values.len() > 3 {
-                        format!(" and {} more", values.len() - 3)
-                    } else {
-                        String::new()
-                    }
-                )
-            }
-        }
+        FilterCondition::Exact { values, exclude } => exact_description(values.iter(), *exclude),
     };
     format!(
         "{summary} · {} missing",
         if missing { "include" } else { "exclude" }
     )
+}
+
+fn exact_description<'a>(
+    values: impl ExactSizeIterator<Item = &'a String>,
+    exclude: bool,
+) -> String {
+    let count = values.len();
+    if count == 0 {
+        return (if exclude { "All values" } else { "No values" }).to_owned();
+    }
+    let preview = values
+        .take(3)
+        .map(|value| value_preview(value).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let action = if exclude { "Exclude" } else { "Include" };
+    if count > 3 {
+        format!("{action} {preview} and {} more", count - 3)
+    } else {
+        format!("{action} {preview}")
+    }
 }
 
 fn row() -> Div {

@@ -39,7 +39,7 @@ Find's period and precision expansion (see [data types](data-types.md)) does not
 
 ## Choosing an editor
 
-Value selection is offered when the column has a complete, bounded list of values, and is then shown first. Otherwise ordered columns open in Range and text columns in Text (Contains). An existing filter reopens in its own mode when that mode is still offered, and users can switch among the offered modes. Each mode keeps its own draft; Apply submits only the current mode, with the shared missing-values option. Columns without content filters offer only the missing-value options.
+Value selection is offered when the column has a complete, bounded list of values, and is then shown first. Otherwise ordered columns open in Range and text columns in Text (Contains). An existing exact filter reopens in Current selection when the complete list is unavailable. Apply preserves its exact values, and users can change whether it includes missing values, switch modes to replace it, or reset it. Other existing filters reopen in their own mode when available. Each mode keeps its own draft; Apply submits only the current mode, with the shared missing-values option. Columns without content filters offer only the missing-value options.
 
 ## Values and counts in an editor
 
