@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Date32Array, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
-    CellMatch, ColumnFilter, ColumnHighlight, ColumnId, ColumnSort, Error, Filter, OrderedView,
-    MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    CellMatch, ColumnFilter, ColumnHighlight, ColumnId, ColumnSort, Error, Filter, FindCounts,
+    OrderedView, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -61,6 +61,27 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let (_file, doc) = document(vec![("value", values)]);
     let c0 = ColumnId::from_raw(0);
     let find = doc.find("hit", &[c0]).unwrap();
+
+    let cell = CellMatch {
+        display_row: 98_300,
+        column: c0,
+    };
+    assert_eq!(
+        find.counts_at(cell, || false).unwrap(),
+        Some(FindCounts {
+            through: 98_301,
+            total: len,
+        })
+    );
+    let mut batches = 0;
+    assert_eq!(
+        find.counts_at(cell, || {
+            batches += 1;
+            batches == 2
+        })
+        .unwrap(),
+        None
+    );
 
     let mut cursor = None;
     let mut expected = 0;
@@ -217,6 +238,20 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     let c0 = ColumnId::from_raw(0);
     let c1 = ColumnId::from_raw(1);
     let find = doc.find("hit", &[c1, c0]).unwrap();
+    assert_eq!(
+        find.counts_at(
+            CellMatch {
+                display_row: 1,
+                column: c1
+            },
+            || false
+        )
+        .unwrap(),
+        Some(FindCounts {
+            through: 3,
+            total: 4
+        })
+    );
     assert_eq!(find.next(None, 3).unwrap(), [
         CellMatch {
             display_row: 0,

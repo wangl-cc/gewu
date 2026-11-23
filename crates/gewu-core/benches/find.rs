@@ -1,6 +1,6 @@
 //! Bounded Find scans over representative dense, sparse and fallback inputs.
 
-use std::{hint::black_box, sync::Arc};
+use std::{hint::black_box, path::PathBuf, sync::Arc};
 
 use arrow::{
     array::{
@@ -10,9 +10,9 @@ use arrow::{
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Int32Type},
 };
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Filter};
-use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
+use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
 
 fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();
@@ -151,5 +151,48 @@ fn find_scans(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, find_scans);
+fn find_full_counts(c: &mut Criterion) {
+    let supplied = std::env::var_os("GEWU_BENCH_FILE");
+    let sample = supplied.as_ref().map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/bench/sample.parquet"),
+        PathBuf::from,
+    );
+    if !sample.is_file() && supplied.is_none() {
+        return;
+    }
+    let dataset = Arc::new(
+        gewu_core::Dataset::open(&sample)
+            .unwrap_or_else(|error| panic!("could not open {}: {error}", sample.display())),
+    );
+    let columns: Vec<_> = dataset
+        .info()
+        .columns
+        .into_iter()
+        .map(|column| column.id)
+        .collect();
+    let view = dataset.unfiltered().unsorted();
+    let mut group = c.benchmark_group("find_full_count");
+    group.sample_size(10);
+    for (name, query) in [
+        ("common", "city"),
+        ("rare", "ffffff"),
+        ("no_match", "zzqqxxjj"),
+        ("numeric_text", "42"),
+    ] {
+        let find = view.find(query, &columns).unwrap();
+        let first = find.next(None, 1).unwrap().into_iter().next();
+        // The UI skips the count for a query with no first hit. Benchmark the API's full scan
+        // against the first cell in that case as well.
+        let through = first.unwrap_or(gewu_core::CellMatch {
+            display_row: 0,
+            column: columns[0],
+        });
+        group.bench_function(name, |b| {
+            b.iter(|| black_box(find.counts_at(through, || false).unwrap()))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, find_scans, find_full_counts);
 criterion_main!(benches);

@@ -33,6 +33,15 @@ pub struct CellMatch {
     pub column: ColumnId,
 }
 
+/// Counts in the captured display order. Each matching cell contributes once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FindCounts {
+    /// Number of matches up to and including the supplied cell.
+    pub through: u64,
+    /// Number of matches across all rows and columns in the Find scope.
+    pub total: u64,
+}
+
 /// Match flags for a bounded block of display rows, one bitmap per requested column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindHighlight {
@@ -128,6 +137,37 @@ impl Find {
     /// None starts after the last cell; use the first match as the next cursor.
     pub fn previous(&self, before: Option<&CellMatch>, limit: u32) -> Result<Vec<CellMatch>> {
         self.scan(before, limit, Direction::Backward)
+    }
+
+    /// Count matches across this snapshot and through a given cell, in one pass with
+    /// bounded scratch space. Returns None if the caller cancels between row batches.
+    pub fn counts_at(
+        &self,
+        cell: CellMatch,
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<Option<FindCounts>> {
+        let through_end = self.cell_position(&cell)? + 1;
+        let mut counts = FindCounts {
+            through: 0,
+            total: 0,
+        };
+        let mut scratch = FindScratch::default();
+        let predicates = self.predicates()?;
+        for start in (0..self.rows.len()).step_by(FIND_BATCH_ROWS) {
+            if cancelled() {
+                return Ok(None);
+            }
+            let end = (start + FIND_BATCH_ROWS).min(self.rows.len());
+            self.evaluate_batch(&predicates, start..end, &mut scratch);
+            let split = through_end
+                .saturating_sub(start * self.columns.len())
+                .min(scratch.matched.len());
+            let (left, right) = scratch.matched.split_at(split);
+            let before = left.iter().filter(|&&hit| hit).count() as u64;
+            counts.through += before;
+            counts.total += before + right.iter().filter(|&&hit| hit).count() as u64;
+        }
+        Ok(Some(counts))
     }
 
     /// Evaluate only the requested columns, such as those on screen, over a
@@ -290,13 +330,20 @@ impl Find {
         cursor: Option<&CellMatch>,
         direction: Direction,
     ) -> Result<Option<usize>> {
-        let n_columns = self.columns.len();
         let Some(cursor) = cursor else {
             return Ok(Some(match direction {
                 Direction::Forward => 0,
-                Direction::Backward => self.rows.len() * n_columns - 1,
+                Direction::Backward => self.rows.len() * self.columns.len() - 1,
             }));
         };
+        let position = self.cell_position(cursor)?;
+        Ok(match direction {
+            Direction::Forward => Some(position + 1),
+            Direction::Backward => position.checked_sub(1),
+        })
+    }
+
+    fn cell_position(&self, cursor: &CellMatch) -> Result<usize> {
         let invalid_row = || crate::FindError::InvalidCursorRow {
             row: cursor.display_row,
             row_count: self.rows.len() as u64,
@@ -312,12 +359,7 @@ impl Find {
         if row >= self.rows.len() {
             return Err(invalid_row());
         }
-        let position = row * n_columns + column;
-        Ok(match direction {
-            Direction::Forward => Some(position + 1),
-            Direction::Backward if position > 0 => Some(position - 1),
-            Direction::Backward => None,
-        })
+        Ok(row * self.columns.len() + column)
     }
 }
 

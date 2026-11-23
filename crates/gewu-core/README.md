@@ -37,7 +37,9 @@ Filters compile each condition to a bitmap-only `Selector` and evaluate it indep
 
 ### Cell Find
 
-`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight(columns, start, count)` covers at most 256 display rows and evaluates only the requested columns, which must belong to the captured scope. It returns one bitmap per requested column, so callers can request and cache just the columns on screen. Neither API computes or estimates a total hit count.
+`Find::next` and `Find::previous` return at most 256 ordered `CellMatch { display_row, column: ColumnId }` cursors per call. A cursor is exclusive, and an empty page marks the corresponding boundary; callers can wrap by starting again with no cursor. `Find::highlight(columns, start, count)` covers at most 256 display rows and evaluates only the requested columns, which must belong to the captured scope. It returns one bitmap per requested column, so callers can request and cache just the columns on screen.
+
+`Find::counts_at(cell, cancelled)` uses the same predicates and order as forward pagination. The display row comes first, followed by columns in the order supplied when creating the Find scope. `FindCounts::total` counts matches across that scope and `FindCounts::through` counts matches up to and including the supplied cell. Multiple occurrences in a cell contribute one match. The cell must belong to the scope and may itself be a nonmatch. Cancellation is cooperative at row-batch boundaries and returns `Ok(None)` without a partial count.
 
 Scans compile typed predicates once per call against the original arrays and process at most 1,024 borrowed display-row IDs at a time (`RowSlice::window`). The literal text matcher is compiled and retained when the Find object is created. `Find::text_match_ranges(text, prefix_bytes)` returns the parts of non-overlapping matches that fall in a UTF-8 prefix of the supplied string. It reuses the same matcher and reads only enough additional bytes to recognize a match crossing the prefix boundary. Typed column predicates are compiled only when executing a page or highlight request. Ordered range/index selections preserve display order without taking or decoding Arrow value payload. Dictionary Find follows only referenced keys recursively, and list children are evaluated in bounded groups even for one enormous cell.
 
@@ -154,10 +156,11 @@ Prepare a fixed-seed 2-million-row file at `target/bench/sample.parquet` once an
 mkdir -p target/bench
 cargo run --locked --release -p gewu-data-gen -- target/bench/sample.parquet 2000000
 cargo bench --locked -p gewu-core --bench engine
+cargo bench --locked -p gewu-core --bench find -- find_full_count
 
 # Pass Criterion options directly to Cargo.
 cargo bench --locked -p gewu-core --bench engine -- --save-baseline before
 cargo bench --locked -p gewu-core --bench engine -- --baseline before
 ```
 
-Engine benchmark reports are written to `target/criterion/`. These measurements do not establish UI interaction latency.
+Benchmark reports are written to `target/criterion/`. The Find full-count group opens the generated sample and uses all its columns. Set `GEWU_BENCH_FILE` to choose a different Parquet input. Core benchmarks measure scan latency.
