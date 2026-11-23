@@ -118,7 +118,7 @@ pub enum CodecError {
     #[error("CSV/TSV error: {0}")]
     Csv(csv::Error),
     #[cfg(feature = "parquet")]
-    #[error("Parquet error: {0}")]
+    #[error(transparent)]
     Parquet(parquet::errors::ParquetError),
     #[cfg(feature = "xlsx")]
     #[error("XLSX read error: {0}")]
