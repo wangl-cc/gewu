@@ -126,6 +126,16 @@ impl Layout {
         )
     }
 
+    /// Absolute layout bounds already account for scrolling. Clip partially visible cells to
+    /// the same gutter and scrollbar boundaries as the painted body.
+    pub(super) fn clipped_columns(&self) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
+        self.columns.iter().filter_map(|&(index, x, width)| {
+            let left = x.max(self.gutter);
+            let right = (x + width).min(self.body_right());
+            (right > left).then_some((index, left, right - left))
+        })
+    }
+
     pub(super) fn column_at(&self, x: f32) -> Option<usize> {
         if !(self.gutter..self.body_right()).contains(&x) {
             return None;

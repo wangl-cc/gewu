@@ -36,7 +36,7 @@ The grid marks matching cells and text substrings in amber. The active selection
 
 ## Filter editors
 
-Filter > Filter Column… (Command-Option-F) opens the selected column’s editor. Clear All Filters (Command-Shift-L) restores the unfiltered rows while retaining the sort. Filter by Selected Value (Command-Option-Shift-L) uses the current cell’s exact value.
+Filter > Filter Column… (Command-Option-F) opens the selected column’s editor. The editor is centered beneath the visible portion of its column header and shifts inward at the window edges. Clear All Filters (Command-Shift-L) restores the unfiltered rows while retaining the sort. Filter by Selected Value (Command-Option-Shift-L) uses the current cell’s exact value.
 
 Filter editors show the available modes in one segmented control when there is more than one choice. The Values editor groups the value checklist, bulk selection actions and Missing checkbox together. Select All and Deselect All also change the Missing checkbox. The Range editor shows the distribution above two side-by-side fields for the inclusive minimum and maximum. Dragging across bins highlights the chosen interval and updates the bound fields. Text and Range show the missing-value controls separately from the content condition. Switching modes preserves the shared missing-value choice and each mode’s own draft. Reset clears the whole draft, including missing-value handling; Apply submits it, and closing discards it. Clear Column Filter in the header menu removes the applied filter at once.
 

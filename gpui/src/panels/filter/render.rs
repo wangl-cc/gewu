@@ -96,13 +96,13 @@ impl FilterEditor {
 }
 
 impl Render for FilterEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = base::Theme::global(cx).tokens.colors;
         let mut panel = div()
             .id("filter-editor")
             .overflow_y_scroll()
             .max_h_full()
-            .w(px(320.))
+            .w(px(320.).min(window.viewport_size().width))
             .flex()
             .flex_col()
             .gap_3()
@@ -225,27 +225,33 @@ impl Render for FilterEditor {
         } else if self.error.is_none() {
             panel = panel.child("Loading filter choices…");
         }
-        panel.child(
-            row()
-                .justify_end()
-                .child(
-                    button("reset-filter", "Reset", false, cx)
-                        .on_click(cx.listener(|editor, _, window, cx| editor.reset(window, cx))),
-                )
-                .child(
-                    button("cancel-filter", "Cancel", false, cx)
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(FilterEvent::Close))),
-                )
-                .child(
-                    button("apply-filter", "Apply", true, cx)
-                        .disabled(self.facet.is_none() || self.error.is_some())
-                        .on_click(cx.listener(|editor, _, _, cx| {
-                            editor.draft.search = editor.text.read(cx).value().to_string();
-                            editor.draft.low = editor.low.read(cx).value().to_string();
-                            editor.draft.high = editor.high.read(cx).value().to_string();
-                            cx.emit(FilterEvent::Apply(editor.column.id, editor.draft.filter()));
-                        })),
-                ),
-        )
+        panel
+            .child(
+                row()
+                    .justify_end()
+                    .child(
+                        button("reset-filter", "Reset", false, cx).on_click(
+                            cx.listener(|editor, _, window, cx| editor.reset(window, cx)),
+                        ),
+                    )
+                    .child(
+                        button("cancel-filter", "Cancel", false, cx)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(FilterEvent::Close))),
+                    )
+                    .child(
+                        button("apply-filter", "Apply", true, cx)
+                            .disabled(self.facet.is_none() || self.error.is_some())
+                            .on_click(cx.listener(|editor, _, _, cx| {
+                                editor.draft.search = editor.text.read(cx).value().to_string();
+                                editor.draft.low = editor.low.read(cx).value().to_string();
+                                editor.draft.high = editor.high.read(cx).value().to_string();
+                                cx.emit(FilterEvent::Apply(
+                                    editor.column.id,
+                                    editor.draft.filter(),
+                                ));
+                            })),
+                    ),
+            )
+            .test_support()
     }
 }

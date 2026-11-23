@@ -129,7 +129,7 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     click(&mut w, "View Cell…");
     assert!(w.read(|table| matches!(
         &table.controls.drawer,
-        Some(super::Drawer::Cell { name, value: Some(value) })
+        Some(super::Drawer::Cell { name, value: Some(value), .. })
             if name == "note" && value.as_ref() == text
     )));
     w.ui.update(|window, cx| {
@@ -171,6 +171,74 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
         w.clipboard().unwrap().lines().next().unwrap(),
         "plain\t2\tkeep"
     );
+}
+
+#[test]
+fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
+    use gpui_kit::{ScrollDelta, ScrollEvent, TouchPhase, point, px, size};
+
+    use crate::table::HEADER_HEIGHT;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("columns.csv");
+    std::fs::write(&path, "a,b,c,d,e,f,g,h\n1,2,3,4,5,6,7,8\n").unwrap();
+    let mut w = TableWindow::open(&path);
+    w.ui.simulate_resize(size(px(640.), px(720.)));
+    w.settle();
+
+    for col in [3, 0, 6] {
+        let (center, right, bottom) = w.read(|t| {
+            let left = t.layout.bounds.left() + px(t.column_left(col).unwrap());
+            let width = px(t.column_width(col));
+            (
+                left + width / 2.,
+                left + width,
+                t.layout.bounds.top() + px(HEADER_HEIGHT),
+            )
+        });
+        w.click(
+            point(right - px(11.), bottom - px(16.)),
+            Modifiers::default(),
+        );
+        w.ui.update(|window, _| {
+            let panel = window.find("filter-editor").bounds();
+            let width = window.viewport_size().width;
+            let expected = (center - panel.size.width / 2.).clamp(px(0.), width - panel.size.width);
+            assert!(
+                (panel.left() - expected).abs() <= px(1.),
+                "column {col}: panel left {}, expected {expected}",
+                panel.left()
+            );
+            assert!((panel.top() - bottom).abs() <= px(1.));
+        });
+        click(&mut w, "cancel-filter");
+    }
+
+    // Keep an open editor attached when the grid scrolls under it.
+    w.click(w.cell(0, 3), Modifiers::default());
+    action(&mut w, EditFilter);
+    let before =
+        w.ui.update(|window, _| window.find("filter-editor").bounds());
+    w.ui.simulate_event(ScrollEvent {
+        position: point(px(90.), px(380.)),
+        delta: ScrollDelta::Pixels(point(px(-80.), px(0.))),
+        touch_phase: TouchPhase::Moved,
+        ..Default::default()
+    });
+    w.settle();
+    let header =
+        w.read(|t| t.layout.bounds.left() + px(t.column_left(3).unwrap() + t.column_width(3) / 2.));
+    let after =
+        w.ui.update(|window, _| window.find("filter-editor").bounds());
+    assert!(after.left() < before.left());
+    assert!((after.center().x - header).abs() <= px(1.));
+
+    w.ui.simulate_resize(size(px(300.), px(720.)));
+    w.settle();
+    w.ui.update(|window, _| {
+        let panel = window.find("filter-editor").bounds();
+        assert!(panel.left() >= px(0.) && panel.right() <= window.viewport_size().width);
+    });
 }
 
 #[test]

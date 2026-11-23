@@ -19,7 +19,6 @@ mod sorting;
 #[derive(Default)]
 pub(super) struct Controls {
     drawer: Option<Drawer>,
-    popup_anchor: Point<Pixels>,
     menu: Option<menus::MenuTarget>,
     replace_sort: Option<ColumnId>,
     sort_menu: Option<(ColumnId, Point<Pixels>)>,
@@ -53,8 +52,14 @@ impl Render for ColumnDrag {
     }
 }
 
+enum PopoverTarget {
+    Point(Point<Pixels>),
+    Header(ColumnId),
+}
+
 enum Drawer {
     Filter {
+        column: ColumnId,
         editor: Entity<FilterEditor>,
         _events: Subscription,
     },
@@ -66,6 +71,7 @@ enum Drawer {
     Sort(Option<Point<Pixels>>),
     Filters(Point<Pixels>),
     Cell {
+        anchor: Point<Pixels>,
         name: String,
         value: Option<SharedString>,
     },
@@ -215,14 +221,6 @@ impl TableView {
         let Some(column) = self.data.columns.iter().find(|c| c.id == id).cloned() else {
             return;
         };
-        let index = self.data.columns.position(id);
-        self.controls.popup_anchor = self.layout.bounds.origin
-            + point(
-                px(index
-                    .and_then(|i| self.column_left(i.index()))
-                    .unwrap_or(self.layout.gutter)),
-                px(super::HEADER_HEIGHT),
-            );
         let snapshot = self.data.snapshot();
         let applied = self
             .requested_query()
@@ -243,10 +241,26 @@ impl TableView {
         );
         self.controls.menu = None;
         self.controls.drawer = Some(Drawer::Filter {
+            column: id,
             editor,
             _events: events,
         });
         cx.notify();
+    }
+
+    fn filter_anchor(&self, column: ColumnId) -> Point<Pixels> {
+        let layout = &self.layout;
+        let center = layout
+            .clipped_columns()
+            .find(|&(index, ..)| self.data.columns.get(index).is_some_and(|c| c.id == column))
+            .map(|(_, left, width)| left + width / 2.)
+            .unwrap_or_else(
+                || match (layout.columns.last(), self.data.columns.position(column)) {
+                    (Some(&(last, ..)), Some(index)) if index.index() > last => layout.body_right(),
+                    _ => layout.gutter,
+                },
+            );
+        layout.bounds.origin + point(px(center), px(super::HEADER_HEIGHT))
     }
 
     pub(super) fn set_filter(
@@ -284,18 +298,19 @@ impl TableView {
             }) => self.columns_panel(search, confirm.as_deref(), cx),
             Some(Drawer::Sort(_)) => self.sort_panel(cx),
             Some(Drawer::Filters(_)) => self.filter_summary(cx),
-            Some(Drawer::Cell { name, value }) => self.cell_panel(name, value.as_ref(), cx),
+            Some(Drawer::Cell { name, value, .. }) => self.cell_panel(name, value.as_ref(), cx),
             Some(Drawer::Export(draft)) => self.export_panel(draft, cx),
             None => return elements,
         };
         let entity = cx.weak_entity();
-        let anchor = match &self.controls.drawer {
-            Some(Drawer::Sort(anchor)) => *anchor,
-            Some(Drawer::Filters(anchor)) => Some(*anchor),
-            Some(Drawer::Cell { .. } | Drawer::Filter { .. }) => Some(self.controls.popup_anchor),
+        let target = match &self.controls.drawer {
+            Some(
+                Drawer::Sort(Some(at)) | Drawer::Filters(at) | Drawer::Cell { anchor: at, .. },
+            ) => Some(PopoverTarget::Point(*at)),
+            Some(Drawer::Filter { column, .. }) => Some(PopoverTarget::Header(*column)),
             _ => None,
         };
-        let overlay = if let Some(anchor) = anchor {
+        let overlay = if let Some(target) = target {
             let popup = div()
                 .id("table-popover")
                 .occlude()
@@ -303,9 +318,39 @@ impl TableView {
                     table.close_panel(window, cx);
                 }))
                 .child(panel);
-            deferred(anchored().position(anchor).snap_to_window().child(popup))
-                .with_priority(8)
-                .into_any_element()
+            let popup = match target {
+                PopoverTarget::Point(at) => anchored()
+                    .position(at)
+                    .snap_to_window()
+                    .child(popup)
+                    .into_any_element(),
+                PopoverTarget::Header(column) => {
+                    let table = cx.entity();
+                    // Resolve against this frame's grid, after measuring and clipping its headers.
+                    canvas(
+                        move |_, window, cx| {
+                            let at = table.read(cx).filter_anchor(column);
+                            let mut popup = anchored()
+                                .anchor(Anchor::TopCenter)
+                                .position(at)
+                                .snap_to_window()
+                                .child(popup)
+                                .into_any_element();
+                            popup.prepaint_as_root(
+                                Point::default(),
+                                window.viewport_size().into(),
+                                window,
+                                cx,
+                            );
+                            popup
+                        },
+                        |_, mut popup, window, cx| popup.paint(window, cx),
+                    )
+                    .absolute()
+                    .into_any_element()
+                }
+            };
+            deferred(popup).with_priority(8).into_any_element()
         } else {
             base::Dialog::new(cx)
                 .accessibility_label("Table options")

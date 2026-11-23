@@ -174,12 +174,13 @@ impl TableView {
         let Some(value) = self.data.cell(cell.column, cell.row) else {
             return;
         };
-        self.controls.popup_anchor = self.layout.bounds.origin
+        let anchor = self.layout.bounds.origin
             + point(
                 px(self.column_left(cell.column).unwrap_or(self.layout.gutter)),
                 px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32),
             );
         self.controls.drawer = Some(Drawer::Cell {
+            anchor,
             name: self.data.columns[cell.column].name.clone(),
             value,
         });

@@ -42,7 +42,7 @@ pub(super) fn rows(table: &TableView, layout: &Layout, cx: &Context<TableView>) 
         .top_0()
         .w_full()
         .h(px(HEADER_HEIGHT.min(layout.body_bottom()).max(0.)));
-    for (index, left, width) in columns(layout) {
+    for (index, left, width) in layout.clipped_columns() {
         let column = &table.data.columns[index];
         let id = column.id;
         let entity = cx.weak_entity();
@@ -93,7 +93,7 @@ pub(super) fn rows(table: &TableView, layout: &Layout, cx: &Context<TableView>) 
         if let Some(index) = usize::try_from(row).ok().and_then(|n| n.checked_add(1)) {
             row_node = row_node.aria_row_index(index);
         }
-        for (column, left, width) in columns(layout) {
+        for (column, left, width) in layout.clipped_columns() {
             let cell = Cell { row, column };
             let Some(value) = table.data.cell(column, row) else {
                 continue;
@@ -152,16 +152,6 @@ pub(super) fn rows(table: &TableView, layout: &Layout, cx: &Context<TableView>) 
         overlay = overlay.child(row_node);
     }
     overlay.into_any_element()
-}
-
-/// Absolute layout bounds already account for scrolling. Clip partially visible cells to
-/// the same gutter and scrollbar boundaries as the painted body.
-fn columns(layout: &Layout) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
-    layout.columns.iter().filter_map(|&(index, x, width)| {
-        let left = x.max(layout.gutter);
-        let right = (x + width).min(layout.body_right());
-        (right > left).then_some((index, left, right - left))
-    })
 }
 
 fn selection_description(selection: Selection) -> SharedString {
