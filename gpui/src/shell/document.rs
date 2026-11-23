@@ -4,7 +4,6 @@ use std::{path::PathBuf, sync::Arc};
 use gewu_core::{Dataset, FileMetadata, FileType, OpenOptions};
 use gpui_kit::{
     base::{Tab, Theme},
-    component::button::{Button as StyledButton, ButtonVariants},
     *,
 };
 
@@ -301,6 +300,13 @@ impl Document {
                 .into_any_element();
         }
         let reason = crate::errors::open_reason(error);
+        let recovery_button = |id, label, primary| {
+            button(id, label, primary, cx)
+                .h(px(32.))
+                .px_3()
+                .flex()
+                .items_center()
+        };
         let mut content = div()
             .flex()
             .flex_col()
@@ -329,21 +335,12 @@ impl Document {
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        StyledButton::new("open-another-file")
-                            .label("Open Another File…")
-                            .primary()
+                        recovery_button("open-another-file", "Open Another File…", true)
                             .on_click(|_, _, cx| super::choose_files(cx)),
                     )
+                    .child(recovery_button("retry-open", "Retry", false).on_click(retry))
                     .child(
-                        StyledButton::new("retry-open")
-                            .label("Retry")
-                            .secondary()
-                            .on_click(retry),
-                    )
-                    .child(
-                        StyledButton::new("reveal-failed-file")
-                            .label("Show in Finder")
-                            .secondary()
+                        recovery_button("reveal-failed-file", "Show in Finder", false)
                             .on_click(cx.listener(|doc, _, _, cx| cx.reveal_path(&doc.path))),
                     ),
             )

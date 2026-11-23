@@ -28,7 +28,7 @@ Headers show the column name and type. Active filters use a highlighted funnel, 
 
 The header menu offers sorting, filtering and clearing for its column. View > Sort… opens the sort editor as a sheet, including when no sort is active; the status bar opens it as a popover. The editor supports ordered rules, drag reordering and contextual and accessibility move actions; replacing a rule's column keeps its priority and direction. Clear All Sorting is in the sort editor and header menu; Clear All Filters is in the Filter menu.
 
-View > Columns… and the header menu open column management as a sheet. It can show or hide all search matches in one change, and confirms when hiding clears filters or sorting. Restore order returns visible columns to their source order and keeps their widths, visibility, selection, filters and sorting. Columns and Sort have no permanent toolbar buttons.
+View > Columns… and the header menu open column management as a sheet. It can show or hide all search matches in one change, and confirms when hiding clears filters or sorting. Restore default order returns visible columns to their source order and keeps their widths, visibility, selection, filters and sorting. Columns and Sort have no permanent toolbar buttons.
 
 ## Find
 
