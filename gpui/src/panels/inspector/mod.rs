@@ -14,7 +14,7 @@ use gpui_kit::{
 use super::{
     button,
     charts::{self, ScatterChart},
-    row,
+    row, segment, segmented_tabs,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -306,21 +306,14 @@ impl Inspector {
             .p_3()
             .text_color(colors.surface_foreground)
             .text_size(px(13.));
-        let mut tabs = base::Tabs::new("inspector-tabs")
-            .aria_label("Inspector")
-            .flex()
-            .items_center()
-            .flex_none()
-            .p(px(2.))
-            .rounded_md()
-            .bg(colors.muted);
+        let mut tabs = segmented_tabs("inspector-tabs", "Inspector", cx);
         for (page, label) in [(Page::Column, "Column"), (Page::Chart, "Chart")] {
             let selected = self.settings.page == page;
             let tab = base::Tab::new(label)
                 .selected(selected)
                 .accessibility_label(label)
                 .on_click(cx.listener(move |panel, _, _, cx| panel.set_page(page, cx)));
-            tabs = tabs.child(controls::segment(tab, label, selected, cx));
+            tabs = tabs.child(segment(tab, label, selected, cx));
         }
         pane = pane.child(tabs);
         if self.columns.is_empty() {

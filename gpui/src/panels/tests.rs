@@ -58,6 +58,15 @@ fn selecting_one_exact_value_submits_a_filter_and_retains_alternatives_when_reop
         assert_eq!(w.find("Text").selected(), Some(false));
         assert_eq!(w.find("include-missing").checked(), Some(true));
         assert_eq!(w.find("apply-filter").checked(), None);
+        let group = w.find("value-selection").bounds();
+        for member in [
+            w.find("all-values").bounds(),
+            w.find(("facet", 0usize)).bounds(),
+            w.find("include-missing").bounds(),
+        ] {
+            assert!(group.contains(&member.center()));
+        }
+        assert!(group.bottom() < w.find("apply-filter").bounds().top());
         w.click("no-values", cx);
         assert_eq!(w.find("include-missing").checked(), Some(false));
         w.click(("facet", 0usize), cx);
@@ -247,7 +256,18 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
     settle(&mut ui);
     ui.update(|w, cx| w.click("Range", cx));
     settle(&mut ui);
-    ui.update(|w, cx| w.drag_to(("range-bin", 1usize), ("range-bin", 3usize), cx));
+    ui.update(|w, cx| {
+        let plot = w.find(("range-bin", 1usize)).bounds();
+        let low = w.find("Minimum").bounds();
+        let high = w.find("Maximum").bounds();
+        assert!(
+            plot.bottom() < low.top(),
+            "bounds belong below the histogram"
+        );
+        assert_eq!(low.top(), high.top());
+        assert!(low.right() < high.left());
+        w.drag_to(("range-bin", 1usize), ("range-bin", 3usize), cx);
+    });
     settle(&mut ui);
     ui.update(|w, cx| w.click("apply-filter", cx));
     settle(&mut ui);

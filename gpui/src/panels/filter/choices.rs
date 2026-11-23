@@ -1,4 +1,6 @@
 //! Bounded display labels are independent of the full values used for searching and selection.
+use base::TestSupportExt;
+
 use super::*;
 
 pub(super) struct ChoiceRow {
@@ -86,17 +88,16 @@ impl FilterEditor {
     }
 
     pub(super) fn choices(&self, facet: &Arc<FilterChoices>, cx: &mut Context<Self>) -> Div {
+        let colors = base::Theme::global(cx).tokens.colors;
         let mut list = div()
             .id("facet-list")
             .max_h(px(210.))
             .overflow_y_scroll()
             .flex()
-            .flex_col()
-            .gap_1();
+            .flex_col();
         for &index in &self.matches {
             let choice = &self.rows[index];
             let checked = choice.checked;
-            let colors = base::Theme::global(cx).tokens.colors;
             let source = facet.clone();
             let toggle = cx.listener(move |editor, _: &ClickEvent, _, cx| {
                 if let Some(value) = editor
@@ -112,78 +113,74 @@ impl FilterEditor {
                 }
             });
             list = list.child(
-                base::Checkbox::new(("facet", index))
-                    .checked(checked)
+                Self::checkbox(("facet", index), choice.label.clone(), checked, cx, toggle)
                     .accessibility_label(choice.accessible.clone())
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_md()
-                    .cursor_pointer()
+                    .flex_none()
                     .px_2()
-                    .py_1()
+                    .h(px(27.))
                     .hover(move |s| s.bg(colors.accent))
                     .child(
                         div()
-                            .w(px(16.))
-                            .h(px(16.))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(colors.border)
-                            .bg(if checked {
-                                colors.primary
-                            } else {
-                                colors.background
-                            })
-                            .text_color(colors.primary_foreground)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if checked { "✓" } else { "" }),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .child(choice.label.clone()),
-                    )
-                    .child(
-                        div()
+                            .ml_auto()
                             .flex_none()
                             .text_xs()
+                            .font_features(crate::theme::tabular_digits())
                             .text_color(colors.muted_foreground)
                             .child(choice.count.clone()),
-                    )
-                    .on_change(move |_, event, window, cx| toggle(event, window, cx)),
+                    ),
+            );
+        }
+        let mut actions = row().gap_3().px_2();
+        for (id, label, all) in [
+            ("all-values", "Select all", true),
+            ("no-values", "Deselect all", false),
+        ] {
+            actions = actions.child(
+                base::Button::new(id)
+                    .accessibility_label(label)
+                    .flex()
+                    .items_center()
+                    .h(px(24.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .hover(move |s| s.underline().text_color(colors.foreground))
+                    .child(label)
+                    .on_click(cx.listener(move |editor, _, _, cx| {
+                        editor.draft.select_all(all);
+                        editor.sync_checks();
+                        cx.notify();
+                    })),
             );
         }
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(Self::field("Search values", &self.search, cx))
+            .child(Self::input("Search values", &self.search, cx))
             .child(
-                row()
+                div()
+                    .id("value-selection")
+                    .role(Role::Group)
+                    .aria_label("Value selection")
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.background)
+                    .child(actions.border_b_1().border_color(colors.border))
+                    .child(list)
                     .child(
-                        button("all-values", "Select all", false, cx).on_click(cx.listener(
-                            |editor, _, _, cx| {
-                                editor.draft.select_all(true);
-                                editor.sync_checks();
-                                cx.notify();
-                            },
-                        )),
+                        div()
+                            .border_t_1()
+                            .border_color(colors.border)
+                            .px_2()
+                            .py_1()
+                            .child(self.include_missing(facet.null_count, cx)),
                     )
-                    .child(
-                        button("no-values", "Deselect all", false, cx).on_click(cx.listener(
-                            |editor, _, _, cx| {
-                                editor.draft.select_all(false);
-                                editor.sync_checks();
-                                cx.notify();
-                            },
-                        )),
-                    ),
+                    .test_support(),
             )
-            .child(list)
     }
 }

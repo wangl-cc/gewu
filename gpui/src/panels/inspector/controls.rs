@@ -2,33 +2,6 @@ use gpui_kit::prelude::FluentBuilder;
 
 use super::*;
 
-pub(super) fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilder>(
-    control: T,
-    label: impl Into<SharedString>,
-    selected: bool,
-    cx: &App,
-) -> T {
-    let colors = base::Theme::global(cx).tokens.colors;
-    control
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .justify_center()
-        .items_center()
-        .h(px(23.))
-        .rounded(px(4.))
-        .cursor_pointer()
-        .text_size(px(12.))
-        .text_color(if selected {
-            colors.primary_foreground
-        } else {
-            colors.foreground
-        })
-        .when(selected, |c| c.bg(colors.primary))
-        .when(!selected, |c| c.hover(move |s| s.bg(colors.accent)))
-        .child(label.into())
-}
-
 pub(super) fn chevron(down: bool, color: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| (),

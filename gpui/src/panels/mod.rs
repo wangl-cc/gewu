@@ -5,7 +5,7 @@ mod filter;
 mod inspector;
 
 pub(crate) use filter::{FilterEditor, FilterEvent};
-use gpui_kit::{base, *};
+use gpui_kit::{base, prelude::FluentBuilder, *};
 pub(crate) use inspector::{Inspector, Page as InspectorPage};
 
 pub(crate) fn button(
@@ -46,15 +46,43 @@ pub(crate) fn header_checkbox(checked: bool, cx: &App) -> base::Checkbox {
         .child(label)
 }
 
-fn tab(id: &'static str, selected: bool, cx: &App) -> base::Tab {
-    style_control(
-        base::Tab::new(id)
-            .selected(selected)
-            .accessibility_label(id),
-        id.into(),
-        selected,
-        cx,
-    )
+fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs {
+    let colors = base::Theme::global(cx).tokens.colors;
+    base::Tabs::new(id)
+        .aria_label(label)
+        .flex()
+        .items_center()
+        .flex_none()
+        .p(px(2.))
+        .rounded_md()
+        .bg(colors.muted)
+}
+
+fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilder>(
+    control: T,
+    label: impl Into<SharedString>,
+    selected: bool,
+    cx: &App,
+) -> T {
+    let colors = base::Theme::global(cx).tokens.colors;
+    control
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .justify_center()
+        .items_center()
+        .h(px(23.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_size(px(12.))
+        .text_color(if selected {
+            colors.primary_foreground
+        } else {
+            colors.foreground
+        })
+        .when(selected, |c| c.bg(colors.primary))
+        .when(!selected, |c| c.hover(move |s| s.bg(colors.accent)))
+        .child(label.into())
 }
 
 pub(crate) fn radio_group(id: &'static str, label: &'static str) -> base::RadioGroup {

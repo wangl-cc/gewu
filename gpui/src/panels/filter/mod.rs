@@ -16,7 +16,7 @@ use gpui_kit::{
 use super::{
     button, charts,
     draft::{Draft, Mode},
-    row, section,
+    row, section, segment, segmented_tabs,
 };
 
 const PREVIEW_BINS: u32 = 40;
@@ -102,8 +102,8 @@ impl FilterEditor {
         };
         let search = field("Search values", "");
         let text = field("Text to match", &draft.search);
-        let low = field("Minimum, inclusive", &draft.low);
-        let high = field("Maximum, inclusive", &draft.high);
+        let low = field("No minimum", &draft.low);
+        let high = field("No maximum", &draft.high);
         let subscription = cx.subscribe(&search, |editor: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 editor.search_choices(cx);
@@ -306,4 +306,5 @@ impl FilterEditor {
     }
 }
 
+mod range;
 mod render;
