@@ -2,7 +2,7 @@
 
 use arrow::datatypes::DataType;
 
-use super::{predicate, Column, ColumnCapabilities, ColumnId};
+use super::{Column, ColumnCapabilities, ColumnId, predicate};
 use crate::{
     stats,
     types::{display_type, value_type},
@@ -50,6 +50,9 @@ pub struct ColumnInfo {
     pub id: ColumnId,
     pub name: String,
     pub value_category: ValueCategory,
+    /// Floating statistics may follow the user's display precision; integer and decimal labels are
+    /// exact.
+    pub floating_point: bool,
     pub display_type: String,
     pub technical_type: String,
     pub nullable: bool,
@@ -67,6 +70,7 @@ impl ColumnInfo {
             id,
             name: column.name.clone(),
             value_category: ValueCategory::from_arrow(data_type),
+            floating_point: value_type(data_type).is_floating(),
             display_type: display_type(data_type),
             technical_type: data_type.to_string(),
             nullable: column.nullable,

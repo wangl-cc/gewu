@@ -2,8 +2,8 @@
 
 use super::FilteredView;
 use crate::{
-    col_view::ColView, stats, AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics,
-    Result, ValueSummary,
+    AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics, Result, ValueSummary,
+    col_view::ColView, stats,
 };
 
 impl FilteredView {
@@ -42,6 +42,26 @@ impl FilteredView {
 
     /// Numeric distribution; bins must be positive and the scale supported by the column.
     pub fn distribution(&self, column: ColumnId, bins: u32, scale: AxisScale) -> Result<Histogram> {
+        self.compute_distribution(column, bins, scale)
+    }
+
+    /// Distribution over the same filtered rows, with native inclusive bin boundaries
+    /// for an inspector. The requested bin count is independent of the filter editor.
+    pub fn distribution_with_ranges(
+        &self,
+        column: ColumnId,
+        bins: u32,
+        scale: AxisScale,
+    ) -> Result<crate::RangeHistogram> {
+        self.compute_distribution(column, bins, scale)
+    }
+
+    fn compute_distribution<H: stats::HistogramOutput>(
+        &self,
+        column: ColumnId,
+        bins: u32,
+        scale: AxisScale,
+    ) -> Result<H> {
         Ok(self.with_analysis_view(column, |view| {
             validate_bins(bins)?;
             if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {

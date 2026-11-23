@@ -47,7 +47,7 @@ A column's filter editor describes the rows that pass the filters on **other** c
 
 Only values present in those rows are listed, as in a spreadsheet AutoFilter. A selected value that no longer appears stays in the filter without being listed. Missing values are counted separately. Searching within the list only narrows what is shown; it is case-insensitive and does not change the table. Selecting a value uses its exact, case-sensitive text.
 
-Range charts take their domain and counts from the same rows, on linear and logarithmic scales. Filters on other columns can change the axis; the column's own range does not narrow it, and an empty result does not fall back to the whole table. Selecting bins applies their exact inclusive bounds.
+Range charts take their domain and counts from the same rows, on linear and logarithmic scales. Filters on other columns can change the axis; the column's own range does not narrow it, and an empty result does not fall back to the whole table. Selecting bins applies their exact inclusive bounds. Linear floating-point charts prefer decimal cuts where they fit without merging bins. Each cut belongs to the bin on its right. The bin on its left uses the exact representable value immediately below the cut as its inclusive maximum.
 
 ## Inspector statistics
 

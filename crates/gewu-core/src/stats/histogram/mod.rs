@@ -5,7 +5,7 @@ mod logarithmic;
 
 use arrow::{
     array::{
-        downcast_integer_array, downcast_temporal_array, Array, ArrayRef, AsArray, PrimitiveArray,
+        Array, ArrayRef, AsArray, PrimitiveArray, downcast_integer_array, downcast_temporal_array,
     },
     datatypes::*,
 };
@@ -14,7 +14,7 @@ use super::AxisScale;
 use crate::{
     col_view::{ColView, Selection},
     scalar::Bound,
-    stats::{scan::for_each_valid, Result},
+    stats::{Result, scan::for_each_valid},
 };
 
 /// Distribution of a numeric column for statistics and filter charts.
@@ -37,9 +37,10 @@ pub struct Histogram {
     /// `min..max + 1`, and small spans have exactly one integer per bin.
     pub integer: bool,
     pub counts: Vec<u64>,
-    /// Log10 display edges for the retained native bins, with `counts.len() + 1`
-    /// strictly increasing values. Empty for linear or empty histograms. Native
-    /// cuts that collapse at f64 log precision are nudged apart for display only.
+    /// Display edges for logarithmic or decimal-aligned floating-point bins, with
+    /// `counts.len() + 1` strictly increasing values. Empty for charts with
+    /// evenly spaced display bins or no domain. Native cuts that collapse at f64
+    /// log precision are nudged apart for display only.
     pub bin_edges: Vec<f64>,
     /// Finite non-positive values omitted by logarithmic binning; zero for linear bins.
     pub non_positive_count: u64,
@@ -89,9 +90,9 @@ enum Domain<H> {
     Unsupported,
 }
 
-/// Counting and native cuts are shared; only callers needing selectable bins
-/// materialize typed bounds. The closure is never evaluated for statistics.
-trait Output: Sized {
+/// Counts and native cuts share one pass. Only consumers that show or submit
+/// individual intervals materialize their native bounds.
+pub(crate) trait Output: Sized {
     fn finish(
         histogram: Histogram,
         ranges: impl FnOnce() -> Result<Vec<RangeBounds>>,
@@ -132,13 +133,18 @@ pub(crate) fn build_scaled(
     }
 }
 
-pub(crate) fn counts(view: ColView<'_>, bins: u32) -> Result<Histogram> {
+#[cfg(test)]
+fn counts(view: ColView<'_>, bins: u32) -> Result<Histogram> {
     statistics(view.array(), &view.selection(), bins)
 }
 
-pub(crate) fn counts_scaled(view: ColView<'_>, bins: u32, scale: AxisScale) -> Result<Histogram> {
+pub(crate) fn counts_scaled<H: Output>(
+    view: ColView<'_>,
+    bins: u32,
+    scale: AxisScale,
+) -> Result<H> {
     match scale {
-        AxisScale::Linear => counts(view, bins),
+        AxisScale::Linear => statistics(view.array(), &view.selection(), bins),
         AxisScale::Log10 => logarithmic::build(view, bins),
     }
 }
@@ -171,7 +177,7 @@ pub(crate) fn supports_histogram(data_type: &DataType) -> bool {
     )
 }
 
-fn statistics(array: &ArrayRef, selection: &Selection<'_>, bins: u32) -> Result<Histogram> {
+fn statistics<H: Output>(array: &ArrayRef, selection: &Selection<'_>, bins: u32) -> Result<H> {
     let histogram = supports_histogram(array.data_type());
     if !histogram {
         return Err(crate::AnalysisError::UnsupportedOperation {
@@ -191,18 +197,21 @@ fn statistics(array: &ArrayRef, selection: &Selection<'_>, bins: u32) -> Result<
             });
         }
     }
-    Ok(Histogram {
-        scale: AxisScale::Linear,
-        lo: None,
-        hi: None,
-        min_label: None,
-        max_label: None,
-        integer: array.data_type().is_integer() || array.data_type().is_temporal(),
-        counts: Vec::new(),
-        bin_edges: Vec::new(),
-        non_positive_count: 0,
-        infinite_count: 0,
-    })
+    H::finish(
+        Histogram {
+            scale: AxisScale::Linear,
+            lo: None,
+            hi: None,
+            min_label: None,
+            max_label: None,
+            integer: array.data_type().is_integer() || array.data_type().is_temporal(),
+            counts: Vec::new(),
+            bin_edges: Vec::new(),
+            non_positive_count: 0,
+            infinite_count: 0,
+        },
+        || Ok(Vec::new()),
+    )
 }
 
 fn build_bins<H: Output>(
@@ -306,6 +315,11 @@ where
     extrema
 }
 
+/// Start offset of a bin on a discrete, inclusive domain of `span` values.
+pub(super) fn integer_cut_offset(span: u128, bins: usize, cut: usize) -> u128 {
+    (span * cut as u128).div_ceil(bins as u128)
+}
+
 fn integer<T: ArrowPrimitiveType, H: Output>(
     array: &PrimitiveArray<T>,
     selection: &Selection<'_>,
@@ -323,7 +337,7 @@ where
     let span = max - min + 1;
     let n = span.min(bins as i128) as usize;
     let cuts: Vec<_> = (1..n)
-        .map(|i| min + (span * i as i128 + n as i128 - 1) / n as i128)
+        .map(|i| min + integer_cut_offset(span as u128, n, i) as i128)
         .collect();
     let bound = |value: i128| {
         if array.data_type().is_unsigned_integer() {
@@ -430,23 +444,14 @@ where
             Domain::Empty
         });
     }
-    let mut cuts = Vec::with_capacity(bins - 1);
-    if min < max {
-        let span = max - min;
-        for i in 1..bins {
-            let fraction = i as f64 / bins as f64;
-            let cut = if span.is_finite() {
-                min + span * fraction
-            } else {
-                min * (1.0 - fraction) + max * fraction
-            };
-            // Nearby representable values can collapse several interpolated
-            // cuts. Drop those cuts instead of creating reversed/empty ranges.
-            if cut > min && cut <= max && cuts.last().is_none_or(|previous| *previous < cut) {
-                cuts.push(cut);
-            }
-        }
-    }
+    let edges = decimal_float_edges(min, max, bins);
+    let fallback;
+    let cuts = if let Some(edges) = &edges {
+        &edges[1..edges.len() - 1]
+    } else {
+        fallback = interpolated_float_cuts(min, max, bins);
+        &fallback
+    };
     let bound = |value| Ok(Bound::from_f64(array.data_type(), value)?);
     let n = cuts.len() + 1;
     let mut histogram = count(array, selection, n, false, axis(min, max, n), |value| {
@@ -455,10 +460,78 @@ where
     });
     histogram.min_label = Some(bound(min)?.display().to_owned());
     histogram.max_label = Some(bound(max)?.display().to_owned());
+    histogram.bin_edges = edges.clone().unwrap_or_default();
     H::finish(histogram, || {
-        bin_ranges(&cuts, bound, |value: f64| bound(value.next_down()))
+        bin_ranges(cuts, bound, |value: f64| bound(value.next_down()))
     })
     .map(Domain::Bins)
+}
+
+/// Snap the internal cuts to a decimal grid while keeping the requested number
+/// of bins. Draw with those same edges, since adjacent bins can differ in width.
+fn decimal_float_edges(min: f64, max: f64, bins: usize) -> Option<Vec<f64>> {
+    if bins == 1 {
+        return None;
+    }
+    let span = max - min;
+    // A grid unit no wider than half a nominal bin keeps snapped cuts separated
+    // and avoids overwhelming the narrow first and last bins.
+    let power = (0.5 * (span / bins as f64)).log10().floor();
+    if !(-22.0..=22.0).contains(&power) {
+        return None;
+    }
+    // These powers of ten and the rounded grid indices fit exactly in f64.
+    let factor = 10.0_f64.powi(power.abs() as i32);
+    let grid_index = |value: f64| {
+        if power < 0.0 {
+            value * factor
+        } else {
+            value / factor
+        }
+    };
+    if grid_index(min.abs().max(max.abs())) > (1_u64 << 52) as f64 {
+        return None;
+    }
+
+    let mut edges = Vec::with_capacity(bins + 1);
+    edges.push(min);
+    let mut previous = min;
+    for i in 1..bins {
+        let index = grid_index(min + span * (i as f64 / bins as f64)).round();
+        let cut = if power < 0.0 {
+            index / factor
+        } else {
+            index * factor
+        };
+        if !(cut > previous && cut < max) {
+            return None;
+        }
+        edges.push(cut);
+        previous = cut;
+    }
+    edges.push(max);
+    Some(edges)
+}
+
+fn interpolated_float_cuts(min: f64, max: f64, bins: usize) -> Vec<f64> {
+    if min == max {
+        return Vec::new();
+    }
+    let span = max - min;
+    let mut cuts = Vec::with_capacity(bins - 1);
+    for i in 1..bins {
+        let fraction = i as f64 / bins as f64;
+        let cut = if span.is_finite() {
+            min + span * fraction
+        } else {
+            min * (1.0 - fraction) + max * fraction
+        };
+        // Nearby representable values can collapse several interpolated cuts.
+        if cut > min && cut <= max && cuts.last().is_none_or(|previous| *previous < cut) {
+            cuts.push(cut);
+        }
+    }
+    cuts
 }
 
 fn bin_ranges<C: Copy>(
@@ -537,11 +610,11 @@ mod tests {
 
     use arrow::array::{
         Date32Array, Decimal128Array, Decimal256Array, DictionaryArray, Float32Array, Float64Array,
-        Int64Array, Int8Array, Time32MillisecondArray, TimestampNanosecondArray, UInt64Array,
+        Int8Array, Int64Array, Time32MillisecondArray, TimestampNanosecondArray, UInt64Array,
     };
 
     use super::*;
-    use crate::{col_view::test::Fixture, Filter};
+    use crate::{Filter, col_view::test::Fixture};
 
     fn verify_bins(fixture: Fixture, bins: u32) -> RangeHistogram {
         let view = fixture.view();
@@ -550,6 +623,9 @@ mod tests {
             .unwrap();
         let statistics = counts(view, bins.min(MAX_BINS)).unwrap();
         assert_eq!(statistics, result.histogram);
+        let inspector: RangeHistogram =
+            counts_scaled(view, bins.min(MAX_BINS), AxisScale::Linear).unwrap();
+        assert_eq!(inspector, result);
         assert_eq!(result.ranges.len(), result.histogram.counts.len());
         assert!(result.ranges.first().unwrap().min.is_none());
         assert!(result.ranges.last().unwrap().max.is_none());
@@ -597,6 +673,17 @@ mod tests {
         let fixture = crate::col_view::test::Fixture::all(&array);
         let histogram = counts(fixture.view(), 100).unwrap();
         assert_eq!(histogram.counts, vec![1; 100]);
+        let rich: RangeHistogram = counts_scaled(fixture.view(), 100, AxisScale::Linear).unwrap();
+        assert_eq!(rich.histogram, histogram);
+        assert_eq!(rich.ranges.len(), 100);
+        assert_eq!(
+            rich.ranges[50].min.as_ref().unwrap().label,
+            "90071992547410.42"
+        );
+        assert_eq!(
+            rich.ranges[50].max.as_ref().unwrap().label,
+            "90071992547410.42"
+        );
         let selected = Fixture::new(&array, vec![1, 99]);
         let histogram = counts(selected.view(), 100).unwrap();
         assert_eq!(histogram.counts.len(), 99);
@@ -642,9 +729,11 @@ mod tests {
                         .nan_count,
                 all.view().len() as u64
             );
-            assert!(build_scaled(all.view(), 3, AxisScale::Linear)
-                .unwrap()
-                .is_none());
+            assert!(
+                build_scaled(all.view(), 3, AxisScale::Linear)
+                    .unwrap()
+                    .is_none()
+            );
         }
         let array: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(f64::NAN),
@@ -679,9 +768,11 @@ mod tests {
                 Err(crate::AnalysisError::NoFiniteValues)
             ));
 
-            assert!(build_scaled(all.view(), 40, AxisScale::Linear)
-                .unwrap()
-                .is_none());
+            assert!(
+                build_scaled(all.view(), 40, AxisScale::Linear)
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
@@ -847,6 +938,31 @@ mod tests {
     }
 
     #[test]
+    fn linear_float_bins_use_the_decimal_grid_for_counts_and_filters() {
+        let cut = 12.7_f64;
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            10.2,
+            cut.next_down(),
+            cut,
+            cut.next_up(),
+            19.2,
+        ]));
+        let result = verify_bins(Fixture::all(&array), 40);
+        assert_eq!(result.histogram.counts.len(), 40);
+        let edges = &result.histogram.bin_edges;
+        assert_eq!(edges.len(), 41);
+        assert_eq!((edges[0], edges[40]), (10.2, 19.2));
+        assert!(edges.windows(2).all(|edges| edges[0] < edges[1]));
+        let index = edges.iter().position(|&edge| edge == cut).unwrap();
+        assert_eq!(result.histogram.counts[index - 1..=index], [1, 2]);
+        assert_eq!(result.ranges[index].min.as_ref().unwrap().value, "12.7");
+        assert_eq!(
+            result.ranges[index - 1].max.as_ref().unwrap().coordinate,
+            cut.next_down()
+        );
+    }
+
+    #[test]
     fn omitted_charts_and_empty_facets_are_explicit() {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from(vec![None])),
@@ -860,17 +976,21 @@ mod tests {
         ];
         for array in arrays {
             let all = Fixture::all(&array);
-            assert!(build_scaled(all.view(), 60, AxisScale::Linear)
-                .unwrap()
-                .is_none());
+            assert!(
+                build_scaled(all.view(), 60, AxisScale::Linear)
+                    .unwrap()
+                    .is_none()
+            );
         }
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..100));
         let all = Fixture::all(&array);
         assert!(build_scaled(all.view(), 0, AxisScale::Linear).is_err());
         let empty = Fixture::new(&array, vec![]);
-        assert!(build_scaled(empty.view(), 1000, AxisScale::Linear)
-            .unwrap()
-            .is_none());
+        assert!(
+            build_scaled(empty.view(), 1000, AxisScale::Linear)
+                .unwrap()
+                .is_none()
+        );
         let histogram = counts(empty.view(), 60).unwrap();
         assert!(histogram.counts.is_empty());
     }

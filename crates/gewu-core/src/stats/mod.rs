@@ -11,18 +11,20 @@ mod scan;
 pub(crate) mod scatter;
 mod values;
 
-pub(crate) use analysis::{capabilities, count_nulls};
 pub use analysis::{AnalysisCapabilities, AnalysisField};
+pub(crate) use analysis::{capabilities, count_nulls};
 pub(crate) use error::Result;
 pub use error::{AnalysisError, AnalysisOperation};
-pub(crate) use histogram::{build_scaled, counts_scaled, supports_histogram};
 pub use histogram::{Histogram, RangeBound, RangeBounds, RangeHistogram};
+pub(crate) use histogram::{
+    Output as HistogramOutput, build_scaled, counts_scaled, supports_histogram,
+};
 pub(crate) use lengths::analyze as analyze_lengths;
 pub use lengths::{LengthSummary, LengthUnit};
-pub(crate) use numeric::analyze as analyze_statistics;
 pub use numeric::NumericStatistics;
-pub(crate) use scale::supports_logarithmic;
+pub(crate) use numeric::analyze as analyze_statistics;
 pub use scale::AxisScale;
-pub use scatter::{ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit, MAX_SCATTER_POINTS};
+pub(crate) use scale::supports_logarithmic;
+pub use scatter::{MAX_SCATTER_POINTS, ScatterAxisKind, ScatterPoint, ScatterResult, TimeUnit};
 pub(crate) use values::analyze as analyze_values;
 pub use values::{ValueFrequency, ValueSummary};

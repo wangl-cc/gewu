@@ -6,9 +6,9 @@ use arrow::{
 };
 
 use crate::{
-    col_view::{ColView, Selection},
-    stats::{scan::for_each_valid_index, Result},
     Histogram,
+    col_view::{ColView, Selection},
+    stats::{Result, scan::for_each_valid_index},
 };
 
 #[derive(Debug, Clone)]
@@ -19,6 +19,20 @@ pub struct LengthSummary {
     pub max: Option<u64>,
     pub mean: Option<f64>,
     pub histogram: Histogram,
+}
+
+impl LengthSummary {
+    /// Inclusive native lengths assigned to a bar in this summary's histogram.
+    pub fn bin_range(&self, index: usize) -> Option<std::ops::RangeInclusive<u64>> {
+        let min = u128::from(self.min?);
+        let span = u128::from(self.max?) - min + 1;
+        let bins = self.histogram.counts.len();
+        if index >= bins {
+            return None;
+        }
+        let cut = |i| min + super::histogram::integer_cut_offset(span, bins, i);
+        Some(cut(index) as u64..=(cut(index + 1) - 1) as u64)
+    }
 }
 
 /// What a length measurement counts.
@@ -209,6 +223,11 @@ mod tests {
         );
         assert_eq!(result.mean, Some(4.0 / 3.0));
         assert_eq!(result.histogram.counts, [1, 0, 2]);
+        let grouped = analyze(all.view(), 2).unwrap();
+        assert_eq!(grouped.histogram.counts, [1, 2]);
+        assert_eq!(grouped.bin_range(0), Some(0..=1));
+        assert_eq!(grouped.bin_range(1), Some(2..=2));
+        assert_eq!(grouped.bin_range(2), None);
         assert_eq!(crate::stats::count_nulls(all.view()), 1);
         for rows in [vec![], vec![3]] {
             let selected = crate::col_view::test::Fixture::new(&array, rows.clone());

@@ -97,7 +97,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{new_null_array, ArrayRef, DictionaryArray, Float64Array, Int8Array, StringArray},
+        array::{ArrayRef, DictionaryArray, Float64Array, Int8Array, StringArray, new_null_array},
         datatypes::{Field, Int8Type},
         record_batch::RecordBatch,
     };
@@ -368,8 +368,9 @@ mod tests {
                     crate::stats::analyze_statistics(view)
                         .map(|s| format!("{s:?}"))
                         .ok(),
-                    crate::stats::counts_scaled(view, 7, AxisScale::Linear).ok(),
-                    crate::stats::counts_scaled(view, 7, AxisScale::Log10).ok(),
+                    crate::stats::counts_scaled::<crate::Histogram>(view, 7, AxisScale::Linear)
+                        .ok(),
+                    crate::stats::counts_scaled::<crate::Histogram>(view, 7, AxisScale::Log10).ok(),
                     crate::stats::build_scaled(view, 7, AxisScale::Linear).ok(),
                     crate::stats::analyze_values(view).ok(),
                     crate::stats::analyze_lengths(view, 7).ok(),

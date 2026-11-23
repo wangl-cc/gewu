@@ -67,6 +67,7 @@ pub struct Analyses {
     count_nulls: Slots<ColumnId, (), u64>,
     statistics: Slots<ColumnId, (), NumericStatistics>,
     distribution: Slots<ColumnId, (u32, AxisScale), Histogram>,
+    distribution_with_ranges: Slots<ColumnId, (u32, AxisScale), RangeHistogram>,
     values: Slots<ColumnId, (), ValueSummary>,
     lengths: Slots<ColumnId, u32, LengthSummary>,
     filter_choices: Slots<ColumnId, (), FilterChoices>,
@@ -80,6 +81,7 @@ impl Analyses {
             count_nulls: Slots::default(),
             statistics: Slots::default(),
             distribution: Slots::default(),
+            distribution_with_ranges: Slots::default(),
             values: Slots::default(),
             lengths: Slots::default(),
             filter_choices: Slots::default(),
@@ -112,6 +114,19 @@ impl Analyses {
 
     pub fn values(&self, column: ColumnId) -> Result<Arc<ValueSummary>> {
         self.values.read(column, (), || self.rows.values(column))
+    }
+
+    /// Cached inspector distribution for the applied filters, including this column's own.
+    pub fn distribution_with_ranges(
+        &self,
+        column: ColumnId,
+        bins: u32,
+        scale: AxisScale,
+    ) -> Result<Arc<RangeHistogram>> {
+        self.distribution_with_ranges
+            .read(column, (bins, scale), || {
+                self.rows.distribution_with_ranges(column, bins, scale)
+            })
     }
 
     pub fn lengths(&self, column: ColumnId, bins: u32) -> Result<Arc<LengthSummary>> {
