@@ -106,7 +106,7 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                     hairline,
                     h - HEADER_HEIGHT,
                 ),
-                grid,
+                grid.opacity(0.6),
             ));
             let mask = rect(
                 x + PAD,
@@ -227,29 +227,29 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                     rect(right - hairline, 0., hairline, HEADER_HEIGHT),
                     grid,
                 ));
-                let available = px((width - 2. * PAD - 16.).max(0.));
+                let available = px((width - header::HEADER_INSET).max(0.));
                 let indicator = header.sort.as_ref().map(|label| {
                     window.text_system().shape_line(
                         label.clone(),
-                        px(10.),
+                        px(header::SORT_SIZE),
                         &[run(label.len(), text_color)],
                         None,
                     )
                 });
                 let name_width = indicator.as_ref().map_or(available, |line| {
-                    (available - line.width - px(3.)).max(px(0.))
+                    (available - line.width - px(header::SORT_GAP)).max(px(0.))
                 });
                 let (label, _) = fit_line(
                     &header.name,
                     name_width,
-                    px(12.),
+                    px(header::NAME_SIZE),
                     &run(header.name.len(), text_color),
                     window,
                 );
                 let (kind, _) = fit_line(
                     &header.kind,
                     available,
-                    px(10.),
+                    px(header::TYPE_SIZE),
                     &run(header.kind.len(), muted),
                     window,
                 );

@@ -4,6 +4,11 @@ use super::*;
 const SAMPLE_ROWS: u64 = 128;
 const INITIAL_MAX: f32 = 320.;
 const FIT_MAX: f32 = 800.;
+pub(super) const NAME_SIZE: f32 = 12.;
+pub(super) const TYPE_SIZE: f32 = 10.;
+pub(super) const SORT_SIZE: f32 = 10.;
+pub(super) const SORT_GAP: f32 = 3.;
+pub(super) const HEADER_INSET: f32 = 2. * PAD + 16.;
 
 struct HeaderTip(SharedString);
 impl Render for HeaderTip {
@@ -85,25 +90,19 @@ impl TableView {
         Some(div().relative().size_full().child(area).into_any_element())
     }
 
-    pub(super) fn size_new_columns(&mut self, l: &Layout, window: &Window) -> bool {
-        let mut changed = false;
-        for &(index, ..) in &l.columns {
-            if self.data.columns.entry(index).width == ColumnWidth::Unmeasured {
-                self.fit_width(index, 0, INITIAL_MAX, window);
-                changed = true;
-            }
-        }
-        changed
+    pub(super) fn initial_width(&mut self, column: usize, window: &Window) -> f32 {
+        self.measure_width(column, 0, INITIAL_MAX, window)
     }
 
     pub(super) fn autofit(&mut self, column: usize, window: &Window) {
-        self.fit_width(column, self.layout.vertical.anchor().row, FIT_MAX, window);
+        let width = self.measure_width(column, self.layout.vertical.anchor().row, FIT_MAX, window);
+        self.data.columns.entry_mut(column).width = ColumnWidth::Measured(width);
     }
 
-    fn fit_width(&mut self, column: usize, start: u64, max: f32, window: &Window) {
+    fn measure_width(&mut self, column: usize, start: u64, max: f32, window: &Window) -> f32 {
         let mut font = window.text_style().font();
         font.features = crate::theme::tabular_digits();
-        let measure = |text: &str| {
+        let measure = |text: &str, font_size: f32| {
             // A very long first value can determine the cap without shaping the entire cell.
             let limit = text.floor_char_boundary(1024.min(text.len()));
             let preview = &text[..limit];
@@ -118,29 +117,34 @@ impl TableView {
             };
             window
                 .text_system()
-                .shape_line(
-                    SharedString::new(preview),
-                    px(self.prefs.font_size),
-                    &[run],
-                    None,
-                )
+                .shape_line(SharedString::new(preview), px(font_size), &[run], None)
                 .width
                 .as_f32()
         };
         let rows = start..start.saturating_add(SAMPLE_ROWS).min(self.data.row_count());
         self.data.prefetch(&[column], rows.clone());
-        let mut width = measure(&self.data.columns.entry(column).label)
-            .max(measure(&self.data.columns[column].display_type))
-            + 28.;
+        // Size for a future sort of any priority so sorting does not reflow measured columns.
+        let last = self.data.snapshot().dataset().schema().fields().len();
+        let sort = ["▲", "▼"].into_iter().fold(0.0f32, |width, arrow| {
+            let marker = if last > 1 {
+                format!("{arrow}{last}")
+            } else {
+                arrow.into()
+            };
+            width.max(measure(&marker, SORT_SIZE))
+        });
+        let mut width =
+            (measure(&self.data.columns.entry(column).label, NAME_SIZE) + sort + SORT_GAP)
+                .max(measure(&self.data.columns[column].display_type, TYPE_SIZE))
+                + HEADER_INSET;
         for row in rows {
             if let Some(Some(text)) = self.data.cell_preview(column, row) {
-                width = width.max(measure(&text));
+                width = width.max(measure(&text, self.prefs.font_size) + 2. * PAD);
             }
             if width >= max {
                 break;
             }
         }
-        self.data.columns.entry_mut(column).width =
-            ColumnWidth::Measured((width + 2. * PAD).ceil().clamp(MIN_COLUMN, max));
+        width.ceil().clamp(MIN_COLUMN, max)
     }
 }

@@ -1,8 +1,8 @@
 use std::{fmt::Write, fs};
 
 use gpui_kit::{
-    Modifiers, MouseButton, MouseDownEvent, Pixels, Point, ScrollDelta, ScrollEvent, TouchPhase,
-    point, px,
+    Modifiers, MouseButton, MouseDownEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollEvent,
+    TouchPhase, point, px, test::TestWindowExt,
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, ui_fixture::TableWindow};
@@ -10,6 +10,12 @@ use crate::selection::{Cell, Selection};
 
 const ROWS: u64 = 256;
 const COLUMNS: usize = 16;
+
+fn sample_cell(row: u64, column: usize) -> u64 {
+    // Give one column enough digits for a font-size change to affect its width.
+    let scale = if column == 2 { 10_000_000 } else { 1 };
+    row * column as u64 * scale
+}
 
 fn drag(window: &mut TableWindow, from: Point<Pixels>, to: Point<Pixels>) {
     let modifiers = Modifiers::default();
@@ -50,7 +56,7 @@ fn open() -> (tempfile::TempDir, TableWindow) {
             if c > 1 {
                 text.push(',');
             }
-            write!(text, "{}", r * c as u64).unwrap();
+            write!(text, "{}", sample_cell(r, c)).unwrap();
         }
     }
     fs::write(&path, text).unwrap();
@@ -94,6 +100,59 @@ fn jumped_frames_show_the_ordered_values_and_source_row_numbers_immediately() {
             })
         });
     }
+}
+
+#[test]
+fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
+    use std::rc::Rc;
+
+    use crate::columns::ColumnWidth;
+
+    let (_files, mut w) = open();
+    let previous = w.read(|table| Rc::clone(&table.layout));
+    w.ui.update(|window, cx| {
+        w.table.update(cx, |table, cx| {
+            table.data.columns.entry_mut(0).width = ColumnWidth::Unmeasured;
+            table.scroll_to_row(128);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        {
+            let table = w.table.read(cx);
+            assert!(Rc::ptr_eq(&previous, &table.layout));
+            assert!(table.data.columns.entry(0).width == ColumnWidth::Unmeasured);
+        }
+        let click = previous.bounds.origin
+            + point(
+                px(previous.gutter + 10.),
+                px(HEADER_HEIGHT + ROW_HEIGHT / 2.),
+            );
+        // Dispatch within the same app update, before GPUI can flush the deferred commit.
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position: click,
+                click_count: 1,
+                ..Default::default()
+            }),
+            cx,
+        );
+    });
+    w.read(|table| {
+        assert_eq!(table.layout.vertical.anchor().row, 128);
+        assert!(matches!(
+            table.data.columns.entry(0).width,
+            ColumnWidth::Measured(_)
+        ));
+        assert_eq!(table.layout.columns[0].2, table.column_width(0));
+    });
+    assert_eq!(
+        w.selection(),
+        Some(Selection::single(Cell {
+            row: 128,
+            column: 0
+        }))
+    );
 }
 
 #[test]
@@ -168,7 +227,7 @@ fn select_copy_and_reveal_through_the_window() {
     let expected = (2..=7)
         .map(|r| {
             (1..=COLUMNS)
-                .map(|c| (r * c).to_string())
+                .map(|c| sample_cell(r, c).to_string())
                 .collect::<Vec<_>>()
                 .join("\t")
         })

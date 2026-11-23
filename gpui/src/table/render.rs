@@ -96,6 +96,13 @@ fn formatting_alert(message: SharedString, cx: &App) -> AnyElement {
 impl Render for TableView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
+        let publish = entity.downgrade();
+        let pending_layout = Rc::clone(&self.pending_layout);
+        let filter_anchor = self.filter_panel_column().map(|column| {
+            let current = self.filter_anchor(column, &self.layout);
+            (column, Rc::new(std::cell::Cell::new(current)))
+        });
+        let grid_anchor = filter_anchor.clone();
         let table = accessibility::grid(self, window)
             .flex_1()
             .min_h_0()
@@ -133,9 +140,12 @@ impl Render for TableView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let (frame, mut overlays) = entity.update(cx, |table, cx| {
-                            let layout = table.layout_grid(bounds, window, cx);
-                            let frame = table.build_frame(layout, cx);
+                        let (frame, mut overlays, pending) = entity.update(cx, |table, cx| {
+                            let geometry = table.prepare_grid_layout(bounds, window);
+                            if let Some((column, anchor)) = &grid_anchor {
+                                anchor.set(table.filter_anchor(*column, &geometry.layout));
+                            }
+                            let frame = table.build_frame(Rc::clone(&geometry.layout), cx);
                             let semantics = window
                                 .is_a11y_active()
                                 .then(|| accessibility::rows(table, &frame.layout, cx));
@@ -144,17 +154,28 @@ impl Render for TableView {
                                 .formatting_error
                                 .clone()
                                 .map(|m| formatting_alert(m, cx));
-                            (frame, [semantics, header, error])
+                            let pending = table.grid_layout_changed(&geometry).then_some(geometry);
+                            (frame, [semantics, header, error], pending)
                         });
                         for overlay in overlays.iter_mut().flatten() {
                             overlay.prepaint_as_root(bounds.origin, bounds.size.into(), window, cx);
                         }
-                        (frame, overlays)
+                        (frame, overlays, pending)
                     },
-                    move |_, (frame, overlays), window, cx| {
+                    move |_, (frame, overlays, pending), window, cx| {
                         paint::paint(frame, window, cx);
                         for mut overlay in overlays.into_iter().flatten() {
                             overlay.paint(window, cx);
+                        }
+                        let changed = pending.is_some();
+                        let queued = pending_layout.replace(pending).is_some();
+                        if changed && !queued {
+                            // Publish only the frame that actually painted, outside the draw cycle.
+                            cx.defer(move |cx| {
+                                let _ = publish.update(cx, |table, cx| {
+                                    table.commit_grid_layout(cx);
+                                });
+                            });
                         }
                     },
                 )
@@ -337,7 +358,7 @@ impl Render for TableView {
                     .flex_1()
                     .min_h_0()
                     .child(table)
-                    .children(self.panel(window, cx)),
+                    .children(self.panel(window, cx, filter_anchor.map(|(_, anchor)| anchor))),
             )
             .child(self.status_bar(window, cx))
     }

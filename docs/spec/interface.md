@@ -48,7 +48,7 @@ Chart display options are separate from the range being edited. The Text and Ran
 
 ## Cells, copying and export
 
-Row height defaults to 28 points, with 24- and 32-point choices in Settings. Previously saved custom heights are retained until another size is chosen. Initial column widths sample up to 128 rows and range from 60 to 320 points. Double-click a header divider to fit values around the current scroll position. Manually resized columns keep their width when reordered or hidden.
+Row height defaults to 28 points, with 24- and 32-point choices in Settings. Previously saved custom heights are retained until another size is chosen. Initial column widths sample up to 128 rows and range from 76 to 320 points. The initial width also accounts for column names and header indicators. Double-click a header divider to fit values around the current scroll position. Manually resized columns keep their width when reordered or hidden.
 
 Missing values appear as italic `null`; an empty string leaves the cell blank. Double-clicking a loaded cell opens its complete formatted text. Long values scroll inside the detail panel while Copy Cell and Close stay in view. The context menu can copy the clicked cell or the selected rows.
 

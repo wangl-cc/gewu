@@ -3,7 +3,7 @@
 //! builds a [`Frame`]; the canvas paints it. Nothing is drawn as a
 //! placeholder: a cell is either text from Core or `null`.
 
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
 use gewu_core::ColumnSort;
 use gpui_kit::*;
@@ -23,7 +23,7 @@ const SCROLLBAR: f32 = 12.;
 const MIN_THUMB: f32 = 24.;
 const PAD: f32 = 8.;
 const RESIZE_SLOP: f32 = 4.;
-const MIN_COLUMN: f32 = 60.;
+const MIN_COLUMN: f32 = 76.;
 
 use layout::HorizontalScroll;
 
@@ -78,6 +78,7 @@ pub struct TableView {
     copy_task: Option<Task<()>>,
     /// The same committed geometry used to draw and hit-test the grid.
     layout: Rc<Layout>,
+    pending_layout: Rc<RefCell<Option<layout::GridFrameLayout>>>,
     _find_viewport: Subscription,
 }
 
@@ -161,6 +162,7 @@ impl TableView {
         let find =
             cx.new(|cx| crate::find::FindController::new(data.view().clone(), scope, window, cx));
         let reveal = cx.subscribe(&find, |table, _, hit: &gewu_core::CellMatch, cx| {
+            table.commit_grid_layout(cx);
             if let Some(cell) = table
                 .data
                 .display_cell(gewu_core::ViewRow(hit.display_row), hit.column)
@@ -185,6 +187,7 @@ impl TableView {
                 content_width: 0.,
                 vertical: scroll.clone(),
             }),
+            pending_layout: Rc::default(),
             _find_viewport: cx.subscribe_self(|table, _: &layout::FindViewportChanged, cx| {
                 table.refresh_highlights(cx);
             }),
@@ -241,6 +244,7 @@ impl TableView {
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_grid_layout(cx);
         self.find
             .update(cx, |find, cx| find.focus_input(window, cx));
         self.refresh_highlights(cx);

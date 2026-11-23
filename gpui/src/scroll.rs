@@ -11,7 +11,7 @@ pub struct Anchor {
     pub offset: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VerticalScroll {
     rows: u64,
     row_height: f64,

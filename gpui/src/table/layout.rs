@@ -1,8 +1,10 @@
+use std::collections::{BTreeMap, btree_map::Entry};
+
 use super::*;
 use crate::columns::TableColumns;
 
 /// Keep a reveal anchored to its column while layout measures the surrounding widths.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) enum HorizontalScroll {
     Offset(f32),
     Reveal {
@@ -13,6 +15,15 @@ pub(super) enum HorizontalScroll {
 
 impl HorizontalScroll {
     pub(super) fn offset(self, columns: &TableColumns, viewport: f32) -> f32 {
+        self.offset_with_widths(columns, columns.widths(), viewport)
+    }
+
+    fn offset_with_widths(
+        self,
+        columns: &TableColumns,
+        mut widths: impl Iterator<Item = f32>,
+        viewport: f32,
+    ) -> f32 {
         match self {
             Self::Offset(offset) => offset,
             Self::Reveal { column, from } => {
@@ -20,8 +31,8 @@ impl HorizontalScroll {
                     return from;
                 };
                 let index = index.index();
-                let left: f32 = columns.widths().take(index).sum();
-                let right_aligned = left + columns.width(index) - viewport;
+                let left: f32 = widths.by_ref().take(index).sum();
+                let right_aligned = left + widths.next().unwrap_or_default() - viewport;
                 // Show the entire column when it fits, otherwise keep as much of it in view as
                 // possible.
                 from.clamp(left.min(right_aligned), left.max(right_aligned))
@@ -30,6 +41,7 @@ impl HorizontalScroll {
     }
 }
 
+#[derive(PartialEq)]
 pub(super) struct Layout {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) gutter: f32,
@@ -48,9 +60,26 @@ impl Layout {
         scroll: &VerticalScroll,
         horizontal: HorizontalScroll,
     ) -> Self {
+        Self::with_widths(
+            bounds,
+            gutter,
+            grid_columns,
+            grid_columns.widths(),
+            scroll,
+            horizontal,
+        )
+    }
+
+    fn with_widths(
+        bounds: Bounds<Pixels>,
+        gutter: f32,
+        grid_columns: &TableColumns,
+        widths: impl Iterator<Item = f32> + Clone,
+        scroll: &VerticalScroll,
+        horizontal: HorizontalScroll,
+    ) -> Self {
         let size = bounds.size;
         let body_width = (size.width.as_f32() - SCROLLBAR - gutter).max(0.);
-        let widths = grid_columns.widths();
         let content_width = widths.clone().sum::<f32>();
         let scrollbar_height = if content_width > body_width {
             SCROLLBAR
@@ -62,7 +91,7 @@ impl Layout {
             (size.height.as_f32() - HEADER_HEIGHT - scrollbar_height).max(0.),
         ));
         let scroll_x = horizontal
-            .offset(grid_columns, body_width)
+            .offset_with_widths(grid_columns, widths.clone(), body_width)
             .clamp(0., (content_width - body_width).max(0.));
         let mut columns = Vec::new();
         let mut x = 0.;
@@ -174,32 +203,107 @@ impl Layout {
     }
 }
 
+struct MeasuredColumn {
+    id: gewu_core::ColumnId,
+    width: f32,
+}
+
+/// A layout for this frame and the measurements it discovered. Prepaint can fill the
+/// text cache, but changes to width, scroll and Find are committed after drawing.
+pub(super) struct GridFrameLayout {
+    pub(super) layout: Rc<Layout>,
+    measured: BTreeMap<usize, MeasuredColumn>,
+    font_size: f32,
+    horizontal: HorizontalScroll,
+}
+
 pub(super) struct FindViewportChanged;
 
 impl EventEmitter<FindViewportChanged> for TableView {}
 
 impl TableView {
-    /// GPUI supplies the resolved grid bounds after flex layout. Resolve measured widths and
-    /// clamp the scroll request here before publishing one snapshot for paint, input and AX.
-    pub(super) fn layout_grid(
+    pub(super) fn prepare_grid_layout(
         &mut self,
         bounds: Bounds<Pixels>,
         window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Rc<Layout> {
+    ) -> GridFrameLayout {
         let mut layout = self.compute_layout(bounds);
-        while self.size_new_columns(&layout, window) {
-            layout = self.compute_layout(bounds);
+        let mut measured = BTreeMap::<usize, MeasuredColumn>::new();
+        loop {
+            let mut changed = false;
+            for &(index, ..) in &layout.columns {
+                let col = self.data.columns.entry(index);
+                if col.width == ColumnWidth::Unmeasured
+                    && let Entry::Vacant(entry) = measured.entry(index)
+                {
+                    let id = col.info.id;
+                    let width = self.initial_width(index, window);
+                    entry.insert(MeasuredColumn { id, width });
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+            let widths = self.data.columns.widths().enumerate().map(|(index, base)| {
+                measured
+                    .get(&index)
+                    .map_or(base, |measurement| measurement.width)
+            });
+            layout = Layout::with_widths(
+                bounds,
+                layout.gutter,
+                &self.data.columns,
+                widths,
+                &self.scroll,
+                self.horizontal,
+            );
         }
-        self.scroll.set_viewport(layout.vertical.viewport());
-        self.horizontal = HorizontalScroll::Offset(layout.scroll_x);
-        if layout.highlight_blocks() != self.layout.highlight_blocks()
-            || layout.visible_columns() != self.layout.visible_columns()
-        {
+        GridFrameLayout {
+            layout: Rc::new(layout),
+            measured,
+            font_size: self.prefs.font_size,
+            horizontal: self.horizontal,
+        }
+    }
+
+    pub(super) fn grid_layout_changed(&self, frame: &GridFrameLayout) -> bool {
+        self.layout != frame.layout
+            || !frame.measured.is_empty()
+            || self.horizontal != HorizontalScroll::Offset(frame.layout.scroll_x)
+    }
+
+    pub(super) fn commit_grid_layout(&mut self, cx: &mut Context<Self>) {
+        // GPUI may draw synchronously before dispatching input. The effect normally
+        // drains this slot first, but input must use that fresh frame if it hasn't.
+        let Some(frame) = self.pending_layout.take() else {
+            return;
+        };
+        if frame.font_size == self.prefs.font_size {
+            for (index, measurement) in frame.measured {
+                if self
+                    .data
+                    .columns
+                    .get(index)
+                    .is_some_and(|c| c.id == measurement.id)
+                    && self.data.columns.entry(index).width == ColumnWidth::Unmeasured
+                {
+                    self.data.columns.entry_mut(index).width =
+                        ColumnWidth::Measured(measurement.width);
+                }
+            }
+        }
+        self.scroll.set_viewport(frame.layout.vertical.viewport());
+        if self.horizontal == frame.horizontal {
+            self.horizontal = HorizontalScroll::Offset(frame.layout.scroll_x);
+        }
+        let find_viewport_changed = frame.layout.highlight_blocks()
+            != self.layout.highlight_blocks()
+            || frame.layout.visible_columns() != self.layout.visible_columns();
+        self.layout = frame.layout;
+        if find_viewport_changed {
             cx.emit(FindViewportChanged);
         }
-        self.layout = Rc::new(layout);
-        Rc::clone(&self.layout)
     }
 }
 

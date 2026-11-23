@@ -1,4 +1,6 @@
 //! Document controls operate on stable column identities and the displayed view snapshot.
+use std::{cell::Cell as ValueCell, rc::Rc};
+
 use gewu_core::{ColumnFilter, ColumnId, Filter};
 use gpui_kit::{
     base::{self, input::InputState},
@@ -6,7 +8,7 @@ use gpui_kit::{
     *,
 };
 
-use super::{Cell, Selection, TableView};
+use super::{Cell, Layout, Selection, TableView};
 use crate::{
     panels::{FilterEditor, FilterEvent, Inspector, button},
     preferences::Preferences,
@@ -110,6 +112,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         let Some(panel) = &self.controls.inspector else {
             return;
         };
@@ -296,8 +299,14 @@ impl TableView {
         cx.notify();
     }
 
-    fn filter_anchor(&self, column: ColumnId) -> Point<Pixels> {
-        let layout = &self.layout;
+    pub(super) fn filter_panel_column(&self) -> Option<ColumnId> {
+        match &self.controls.drawer {
+            Some(Drawer::Filter { column, .. }) => Some(*column),
+            _ => None,
+        }
+    }
+
+    pub(super) fn filter_anchor(&self, column: ColumnId, layout: &Layout) -> Point<Pixels> {
         let center = layout
             .clipped_columns()
             .find(|&(index, ..)| self.data.columns.get(index).is_some_and(|c| c.id == column))
@@ -326,7 +335,12 @@ impl TableView {
         });
     }
 
-    pub(super) fn panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(super) fn panel(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        filter_anchor: Option<Rc<ValueCell<Point<Pixels>>>>,
+    ) -> Vec<AnyElement> {
         let mut elements = Vec::new();
         if let Some(menu) = &self.controls.menu {
             elements.push(menu.element());
@@ -385,7 +399,13 @@ impl TableView {
                     // Resolve against this frame's grid, after measuring and clipping its headers.
                     canvas(
                         move |_, window, cx| {
-                            let at = table.read(cx).filter_anchor(column);
+                            let at = filter_anchor.as_ref().map_or_else(
+                                || {
+                                    let table = table.read(cx);
+                                    table.filter_anchor(column, &table.layout)
+                                },
+                                |anchor| anchor.get(),
+                            );
                             let mut popup = anchored()
                                 .anchor(Anchor::TopCenter)
                                 .position(at)

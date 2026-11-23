@@ -15,6 +15,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         window.focus(&self.focus, cx);
         let local = ev.position - self.layout.bounds.origin;
         let (x, y) = (local.x.as_f32(), local.y.as_f32());
@@ -109,6 +110,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         let local = ev.position - self.layout.bounds.origin;
         if ev.pressed_button != Some(MouseButton::Left) {
             let hover = (0.0..HEADER_HEIGHT)
@@ -226,6 +228,7 @@ impl TableView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         // Trackpads send exact pixels, including the platform's momentum events
         // after the fingers lift (phase `Moved`); wheels send lines.
         let delta = ev.delta.pixel_delta(px(self.prefs.row_height));
@@ -258,6 +261,7 @@ impl TableView {
     }
 
     pub(super) fn navigate(&mut self, action: &Navigate, _: &mut Window, cx: &mut Context<Self>) {
+        self.commit_grid_layout(cx);
         let rows = self.data.row_count();
         let columns = self.data.columns.len();
         if rows == 0 || columns == 0 {

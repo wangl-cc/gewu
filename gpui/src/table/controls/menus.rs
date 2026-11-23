@@ -56,6 +56,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         let local = event.position - self.layout.bounds.origin;
         let x = local.x.as_f32();
         let y = local.y.as_f32();
@@ -195,6 +196,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_grid_layout(cx);
         let Some(value) = self.data.cell(cell.column, cell.row) else {
             return;
         };
