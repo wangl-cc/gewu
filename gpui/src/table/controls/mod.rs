@@ -130,12 +130,16 @@ impl TableView {
         let chart = hit.chart;
         let source_row = hit.source_row.0;
         let panel = panel.downgrade();
-        let mut pending_mark = true;
+        let observed_panel = panel.clone();
         self.scatter_selection = Some(cx.observe_self(move |table, cx| {
             if table.selection != Some(selected) {
-                let _ = panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
+                let _ = observed_panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
                 table.scatter_selection = None;
-            } else if std::mem::take(&mut pending_mark) {
+            }
+        }));
+        // The chart can still be borrowed by the pointer handler that dispatched this action.
+        cx.defer_in(window, move |table, _, cx| {
+            if table.selection == Some(selected) {
                 let _ = panel.update(cx, |panel, cx| {
                     panel.mark_scatter(chart, Some(source_row), cx)
                 });

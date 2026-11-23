@@ -70,7 +70,7 @@ fn logarithmic_ticks(lo: f64, hi: f64, count: usize) -> Vec<f64> {
 
 /// Choose readable decimal intervals within the data domain. Use exact endpoints when
 /// the interval cannot be represented, for example across both extremes of f64.
-fn numeric_ticks(lo: f64, hi: f64, count: usize, rows: bool) -> Vec<f64> {
+pub(super) fn numeric_ticks(lo: f64, hi: f64, count: usize, rows: bool) -> Vec<f64> {
     if lo == hi || count < 2 {
         return vec![lo];
     }

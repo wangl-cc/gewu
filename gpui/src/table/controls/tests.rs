@@ -72,8 +72,20 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
     let head = w.selection().unwrap().head;
     assert_eq!((head.row, head.column), (59, 1));
     assert!(w.read(|table| table.layout.vertical.visible_rows().contains(&59)));
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find("scatter-plot").label(),
+            Some("Scatter plot, 60 points, row 25 selected")
+        );
+    });
     w.keys("up");
     assert_eq!(w.selection().unwrap().head.row, 58);
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find("scatter-plot").label(),
+            Some("Scatter plot, 60 points")
+        );
+    });
 }
 
 #[test]

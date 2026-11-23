@@ -43,18 +43,16 @@ pub(super) fn histogram(
 ) -> Div {
     let colors = base::Theme::global(cx).tokens.colors;
     if histogram.lo.is_none() || histogram.hi.is_none() {
-        let mut empty = div().child(if histogram.scale == AxisScale::Log10 {
-            "No positive finite values to plot"
-        } else {
-            "No values to plot"
-        });
-        if histogram.non_positive_count + histogram.infinite_count > 0 {
-            empty = empty.child(format!(
-                "{} nonpositive, {} infinite omitted",
-                histogram.non_positive_count, histogram.infinite_count
+        return div()
+            .child(if histogram.scale == AxisScale::Log10 {
+                "No positive finite values to plot"
+            } else {
+                "No values to plot"
+            })
+            .children(crate::messages::omitted_values(
+                histogram.non_positive_count,
+                histogram.infinite_count,
             ));
-        }
-        return empty;
     }
     let mut plot = div()
         .relative()
@@ -88,7 +86,7 @@ pub(super) fn histogram(
                 .h_full()
                 .flex()
                 .items_end()
-                .pr(px(0.5))
+                .pr(px(1.))
                 .role(Role::Image)
                 .aria_label(hint.clone())
                 .tooltip(move |window, cx| {
@@ -104,7 +102,7 @@ pub(super) fn histogram(
                 .test_support(),
         );
     }
-    let mut chart = div()
+    div()
         .flex()
         .flex_col()
         .gap_1()
@@ -112,14 +110,11 @@ pub(super) fn histogram(
         .text_color(colors.muted_foreground)
         .text_size(px(11.))
         .child(plot)
-        .child(histogram_axis(histogram));
-    if histogram.non_positive_count > 0 || histogram.infinite_count > 0 {
-        chart = chart.child(format!(
-            "{} nonpositive, {} infinite omitted",
-            histogram.non_positive_count, histogram.infinite_count
-        ));
-    }
-    chart
+        .child(histogram_axis(histogram))
+        .children(crate::messages::omitted_values(
+            histogram.non_positive_count,
+            histogram.infinite_count,
+        ))
 }
 
 pub(super) fn bin_fraction(h: &Histogram, i: usize) -> (f32, f32) {
@@ -142,14 +137,57 @@ pub(super) fn histogram_axis(h: &Histogram) -> Div {
         let endpoints = labels::endpoints(a, b);
         axis = axis.child(
             div()
+                .relative()
                 .flex()
                 .justify_between()
                 .child(endpoints.lower)
-                .child(endpoints.upper),
+                .child(endpoints.upper)
+                .children(middle_tick(h, a, b).map(|(at, text)| {
+                    div()
+                        .absolute()
+                        .left(relative(at))
+                        .ml(px(-44.))
+                        .w(px(88.))
+                        .text_center()
+                        .truncate()
+                        .child(text)
+                })),
         );
         if let Some(context) = endpoints.context {
             axis = axis.child(context);
         }
     }
     axis
+}
+
+fn middle_tick(h: &Histogram, minimum: &str, maximum: &str) -> Option<(f32, String)> {
+    let (low, high) = (h.lo?, h.hi?);
+    // Histogram coordinates for dates and times use native units. Keep those labels in
+    // their original format until the chart can format positions in that same unit.
+    let (min_value, max_value) = (minimum.parse::<f64>().ok()?, maximum.parse::<f64>().ok()?);
+    let span = high - low;
+    if min_value >= max_value || !span.is_finite() || span <= 0. {
+        return None;
+    }
+    let tick = if h.scale == AxisScale::Log10 {
+        (low + span / 2.).round()
+    } else {
+        axis::numeric_ticks(low, high, 4, h.integer)
+            .into_iter()
+            .min_by(|a, b| {
+                (a - low - span / 2.)
+                    .abs()
+                    .total_cmp(&(b - low - span / 2.).abs())
+            })?
+    };
+    let fraction = ((tick - low) / span) as f32;
+    if !(0.3..=0.7).contains(&fraction) {
+        return None;
+    }
+    let value = if h.scale == AxisScale::Log10 {
+        10f64.powf(tick)
+    } else {
+        tick
+    };
+    (min_value < value && value < max_value).then(|| (fraction, significant_digits(value, 4)))
 }

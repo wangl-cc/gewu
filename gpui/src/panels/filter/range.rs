@@ -207,12 +207,9 @@ impl FilterEditor {
                 "No values to plot"
             });
         }
-        if h.histogram.non_positive_count + h.histogram.infinite_count > 0 {
-            chart = chart.child(format!(
-                "{} nonpositive and {} infinite omitted",
-                h.histogram.non_positive_count, h.histogram.infinite_count
-            ));
-        }
-        chart
+        chart.children(crate::messages::omitted_values(
+            h.histogram.non_positive_count,
+            h.histogram.infinite_count,
+        ))
     }
 }

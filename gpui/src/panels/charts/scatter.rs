@@ -71,7 +71,7 @@ impl ScatterChart {
             sample.x_axis_kind,
             x_scale,
             source_x,
-            3,
+            4,
         );
         let y = Axis::for_points(
             &ys,
@@ -169,8 +169,13 @@ impl Plot {
 }
 
 impl Render for ScatterChart {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = base::Theme::global(cx).tokens.colors;
+        let ring_color = if window.is_window_active() {
+            colors.ring
+        } else {
+            colors.muted_foreground
+        };
         let base = Preferences::get(cx).row_number_base;
         let mut content = div()
             .w_full()
@@ -188,9 +193,8 @@ impl Render for ScatterChart {
                 } else {
                     "No finite pairs in the selected log domain"
                 })
-                .child(format!(
-                    "{} nonpositive pairs omitted",
-                    self.sample.non_positive_rows
+                .children(crate::messages::omitted_pairs(
+                    self.sample.non_positive_rows,
                 ));
         };
         let handle = cx.weak_entity();
@@ -202,12 +206,13 @@ impl Render for ScatterChart {
                 let drawing = plot_bounds(bounds);
                 let font = window.text_style().font();
                 let rule = px(1. / window.scale_factor());
-                let draw_tick = |label: String,
-                                 x: Pixels,
-                                 y: Pixels,
-                                 vertical: bool,
-                                 window: &mut Window,
-                                 cx: &mut App| {
+                let mut previous_x_label = None;
+                let mut draw_tick = |label: String,
+                                     x: Pixels,
+                                     y: Pixels,
+                                     vertical: bool,
+                                     window: &mut Window,
+                                     cx: &mut App| {
                     let run = TextRun {
                         len: label.len(),
                         font: font.clone(),
@@ -227,6 +232,12 @@ impl Render for ScatterChart {
                     let tx = left
                         .max(bounds.left())
                         .min((bounds.right() - line.width).max(bounds.left()));
+                    if !vertical {
+                        if previous_x_label.is_some_and(|previous| tx < previous + px(4.)) {
+                            return;
+                        }
+                        previous_x_label = Some(tx + line.width);
+                    }
                     let ty = if vertical { y - px(7.) } else { y + px(2.) };
                     let _ = line.paint(point(tx, ty), px(14.), TextAlign::Left, None, window, cx);
                 };
@@ -273,7 +284,12 @@ impl Render for ScatterChart {
                     let center = Plot::point(drawing, plot.points[i]);
                     let ring = Bounds::new(center - point(px(5.), px(5.)), size(px(10.), px(10.)));
                     window.paint_quad(
-                        outline(ring, colors.ring, BorderStyle::Solid)
+                        outline(ring, colors.background, BorderStyle::Solid)
+                            .border_widths(px(3.))
+                            .corner_radii(px(5.)),
+                    );
+                    window.paint_quad(
+                        outline(ring, ring_color, BorderStyle::Solid)
                             .border_widths(px(1.5))
                             .corner_radii(px(5.)),
                     );
@@ -283,13 +299,20 @@ impl Render for ScatterChart {
         )
         .w_full()
         .aspect_ratio(4. / 3.);
+        let count = crate::counted(self.sample.points.len() as u64, "point");
+        let label = if let Some(i) = selected {
+            let row = self.sample.points[i].source_row.saturating_add(base);
+            format!("Scatter plot, {count}, row {row} selected")
+        } else {
+            format!("Scatter plot, {count}")
+        };
         let mut figure = div()
                 .id("scatter-plot")
                 .w_full().flex_none()
                 .track_focus(&self.focus)
                 .focus_visible(move |style| style.border_1().border_color(colors.ring))
                 .role(Role::Image)
-                .aria_label(format!("Scatter plot, {}", crate::counted(self.sample.points.len() as u64, "point")))
+                .aria_label(label)
                 .aria_description("Use Left and Right to inspect points. Press Return to reveal the point in the table.")
                 .on_key_down(cx.listener(|chart, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.modifiers.modified() { return; }
@@ -345,12 +368,9 @@ impl Render for ScatterChart {
             self.sample.points.len(),
             self.sample.eligible_rows
         ));
-        if self.sample.non_positive_rows > 0 {
-            content = content.child(format!(
-                "{} nonpositive pairs omitted",
-                self.sample.non_positive_rows
-            ));
-        }
+        content = content.children(crate::messages::omitted_pairs(
+            self.sample.non_positive_rows,
+        ));
         if let Some(readout) = readout {
             content = content.child(
                 div()
