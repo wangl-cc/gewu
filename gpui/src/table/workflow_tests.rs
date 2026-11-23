@@ -141,6 +141,8 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         let field = window.find("table-search").bounds();
         assert_eq!(notice.label(), Some("No matches"));
         assert!(window.try_find("find-count").is_none());
+        assert_eq!(window.find("previous").disabled(), Some(true));
+        assert_eq!(window.find("next").disabled(), Some(true));
         assert!(field.contains(&notice.bounds().center()));
     });
     w.keys("escape");

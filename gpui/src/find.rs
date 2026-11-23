@@ -17,6 +17,7 @@ use gewu_core::{
 };
 use gpui_kit::{
     base::input::{Input, InputEvent, InputState},
+    prelude::FluentBuilder,
     *,
 };
 
@@ -393,6 +394,7 @@ impl FindController {
                     }
                     Ok(None) => return,
                     Err(error) => {
+                        find.counter = None;
                         find.message = FindMessage::Notice(crate::errors::message(&error.into()));
                     }
                 }
@@ -488,7 +490,18 @@ impl Render for FindController {
             FindMessage::Location { wrapped: true, .. } => Some("Wrapped"),
             _ => None,
         };
-        let position = self.counter.as_ref().and_then(MatchCounter::position);
+        let count = self.counter.as_ref().and_then(|counter| {
+            if let Some((current, total)) = counter.position() {
+                Some((
+                    format!("{current}/{total}"),
+                    format!("Match {current} of {total}"),
+                ))
+            } else if counter.starting_counts.is_none() {
+                Some(("…".into(), "Counting matches".into()))
+            } else {
+                None
+            }
+        });
         let field = div()
             .id("table-search")
             .flex_1()
@@ -516,16 +529,16 @@ impl Render for FindController {
                     .child(text.to_owned())
                     .test_support()
             }))
-            .children(position.map(|(current, total)| {
+            .children(count.map(|(text, label)| {
                 div()
                     .id("find-count")
                     .role(Role::Status)
-                    .aria_label(format!("Match {current} of {total}"))
+                    .aria_label(label)
                     .flex_none()
                     .font_features(crate::theme::tabular_digits())
                     .text_size(px(11.))
                     .text_color(colors.muted_foreground)
-                    .child(format!("{current}/{total}"))
+                    .child(text)
                     .test_support()
             }))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, w, cx| {
@@ -551,6 +564,7 @@ impl Render for FindController {
             .max_w(relative(0.62))
             .child(field);
         if searching {
+            let enabled = self.can_navigate();
             let arrow = |id, label: &'static str, symbol: &'static str| {
                 base::Button::new(id)
                     .accessibility_label(label)
@@ -561,19 +575,24 @@ impl Render for FindController {
                     .justify_center()
                     .items_center()
                     .rounded_md()
-                    .hover(move |style| style.bg(colors.accent))
-                    .cursor_pointer()
+                    .when(enabled, |button| {
+                        button
+                            .hover(move |style| style.bg(colors.accent))
+                            .cursor_pointer()
+                    })
+                    .when(!enabled, |button| {
+                        button.text_color(colors.muted_foreground.opacity(0.55))
+                    })
+                    .disabled(!enabled)
                     .child(symbol)
             };
             bar = bar
                 .child(
                     arrow("previous", "Previous match", "‹")
-                        .disabled(!self.can_navigate())
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
                 )
                 .child(
                     arrow("next", "Next match", "›")
-                        .disabled(!self.can_navigate())
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
                 )
                 .child(
