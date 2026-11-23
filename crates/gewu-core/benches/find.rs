@@ -10,9 +10,9 @@ use arrow::{
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Int32Type},
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Filter};
-use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
 fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
     let batch = RecordBatch::try_from_iter(columns).unwrap();

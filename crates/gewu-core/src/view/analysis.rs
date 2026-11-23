@@ -2,8 +2,8 @@
 
 use super::FilteredView;
 use crate::{
-    AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics, Result, ValueSummary,
-    col_view::ColView, stats,
+    col_view::ColView, stats, AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics,
+    Result, ValueSummary,
 };
 
 impl FilteredView {

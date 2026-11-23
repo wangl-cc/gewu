@@ -5,7 +5,7 @@ mod logarithmic;
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, PrimitiveArray, downcast_integer_array, downcast_temporal_array,
+        downcast_integer_array, downcast_temporal_array, Array, ArrayRef, AsArray, PrimitiveArray,
     },
     datatypes::*,
 };
@@ -14,7 +14,7 @@ use super::AxisScale;
 use crate::{
     col_view::{ColView, Selection},
     scalar::Bound,
-    stats::{Result, scan::for_each_valid},
+    stats::{scan::for_each_valid, Result},
 };
 
 /// Distribution of a numeric column for statistics and filter charts.
@@ -610,11 +610,11 @@ mod tests {
 
     use arrow::array::{
         Date32Array, Decimal128Array, Decimal256Array, DictionaryArray, Float32Array, Float64Array,
-        Int8Array, Int64Array, Time32MillisecondArray, TimestampNanosecondArray, UInt64Array,
+        Int64Array, Int8Array, Time32MillisecondArray, TimestampNanosecondArray, UInt64Array,
     };
 
     use super::*;
-    use crate::{Filter, col_view::test::Fixture};
+    use crate::{col_view::test::Fixture, Filter};
 
     fn verify_bins(fixture: Fixture, bins: u32) -> RangeHistogram {
         let view = fixture.view();
@@ -729,11 +729,9 @@ mod tests {
                         .nan_count,
                 all.view().len() as u64
             );
-            assert!(
-                build_scaled(all.view(), 3, AxisScale::Linear)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(build_scaled(all.view(), 3, AxisScale::Linear)
+                .unwrap()
+                .is_none());
         }
         let array: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(f64::NAN),
@@ -768,11 +766,9 @@ mod tests {
                 Err(crate::AnalysisError::NoFiniteValues)
             ));
 
-            assert!(
-                build_scaled(all.view(), 40, AxisScale::Linear)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(build_scaled(all.view(), 40, AxisScale::Linear)
+                .unwrap()
+                .is_none());
         }
     }
 
@@ -976,21 +972,17 @@ mod tests {
         ];
         for array in arrays {
             let all = Fixture::all(&array);
-            assert!(
-                build_scaled(all.view(), 60, AxisScale::Linear)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(build_scaled(all.view(), 60, AxisScale::Linear)
+                .unwrap()
+                .is_none());
         }
         let array: ArrayRef = Arc::new(Int64Array::from_iter_values(0..100));
         let all = Fixture::all(&array);
         assert!(build_scaled(all.view(), 0, AxisScale::Linear).is_err());
         let empty = Fixture::new(&array, vec![]);
-        assert!(
-            build_scaled(empty.view(), 1000, AxisScale::Linear)
-                .unwrap()
-                .is_none()
-        );
+        assert!(build_scaled(empty.view(), 1000, AxisScale::Linear)
+            .unwrap()
+            .is_none());
         let histogram = counts(empty.view(), 60).unwrap();
         assert!(histogram.counts.is_empty());
     }

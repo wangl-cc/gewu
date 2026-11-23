@@ -2,7 +2,7 @@
 
 use arrow::datatypes::DataType;
 
-use super::{Column, ColumnCapabilities, ColumnId, predicate};
+use super::{predicate, Column, ColumnCapabilities, ColumnId};
 use crate::{
     stats,
     types::{display_type, value_type},

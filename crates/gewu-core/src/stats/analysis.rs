@@ -97,7 +97,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{ArrayRef, DictionaryArray, Float64Array, Int8Array, StringArray, new_null_array},
+        array::{new_null_array, ArrayRef, DictionaryArray, Float64Array, Int8Array, StringArray},
         datatypes::{Field, Int8Type},
         record_batch::RecordBatch,
     };

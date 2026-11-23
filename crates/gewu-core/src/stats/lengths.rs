@@ -6,9 +6,9 @@ use arrow::{
 };
 
 use crate::{
-    Histogram,
     col_view::{ColView, Selection},
-    stats::{Result, scan::for_each_valid_index},
+    stats::{scan::for_each_valid_index, Result},
+    Histogram,
 };
 
 #[derive(Debug, Clone)]
