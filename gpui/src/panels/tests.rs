@@ -125,12 +125,10 @@ fn inspector_keeps_axes_within_visible_columns_after_a_chart_switch() {
     settle(&mut ui);
     let numeric = columns.iter().find(|c| c.capabilities.scatter).unwrap();
     ui.update(|w, cx| {
+        assert_eq!(w.find("Y axis").value(), Some(numeric.name.as_str()));
         w.click("Y axis", cx);
-        assert!(
-            w.try_find(("axis-option", numeric.id.into_raw() as usize))
-                .is_some()
-        );
-        w.click(("axis-option", numeric.id.into_raw() as usize), cx);
+        assert_eq!(w.find("Y axis").expanded(), Some(true));
+        w.press("escape", cx);
     });
     settle(&mut ui);
     ui.update(|_, cx| {
@@ -147,12 +145,35 @@ fn inspector_keeps_axes_within_visible_columns_after_a_chart_switch() {
         });
     });
     settle(&mut ui);
-    ui.update(|w, cx| {
-        w.click("Y axis", cx);
-        assert!(
-            w.try_find(("axis-option", numeric.id.into_raw() as usize))
-                .is_none()
-        );
+    ui.update(|w, _| {
+        assert_eq!(w.find("Y axis").disabled(), Some(true));
+        assert_ne!(w.find("Y axis").value(), Some(numeric.name.as_str()));
+    });
+}
+
+#[test]
+fn inspector_bins_expose_the_same_interval_and_count_as_their_hover_labels() {
+    let cx = TestAppContext::single();
+    let snapshot = dataset();
+    let columns = snapshot.dataset().info().columns;
+    let (handle, _) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(options(), cx, |_, cx| {
+            cx.new(|cx| {
+                let mut panel = Inspector::new(snapshot, columns.clone(), cx);
+                panel.inspect(columns[1].id, cx);
+                panel
+            })
+        })
+        .unwrap()
+    });
+    let mut ui = VisualTestContext::from_window(handle, &cx);
+    settle(&mut ui);
+    ui.update(|w, _| {
+        let bin = w.find(("inspector-histogram-bin", 0usize));
+        assert_eq!(bin.role(), Some(gpui_kit::Role::Image));
+        assert_eq!(bin.label(), Some("≤ 4 · 1 row"));
+        assert!(bin.bounds().size.width > px(0.));
     });
 }
 
@@ -164,8 +185,6 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
     write!(file, "Source row,Source row\n11,22\n33,44\n").unwrap();
     let snapshot = AppliedView::new(Arc::new(gewu_core::Dataset::open(file.path()).unwrap()));
     let columns = snapshot.dataset().info().columns;
-    let first = ("axis-option", columns[0].id.into_raw() as usize);
-    let second = ("axis-option", columns[1].id.into_raw() as usize);
     let app = TestAppContext::single();
     let (handle, _inspector) = app.update(|cx| {
         gpui_kit::init(cx);
@@ -191,26 +210,23 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
         assert_eq!(w.find(("points", 512usize)).checked(), Some(false));
         assert_eq!(w.find("log-y").checked(), Some(false));
         assert_eq!(w.find("X axis").expanded(), Some(true));
-        assert_eq!(
-            w.find("axis-source").role(),
-            Some(gpui_kit::Role::RadioButton)
-        );
-        assert_eq!(w.find("axis-source").checked(), Some(true));
-        assert_eq!(w.find(first).checked(), Some(false));
-        assert_eq!(w.find(second).checked(), Some(false));
-        assert_eq!(w.find("axis-source").label(), Some("Source row"));
-        assert_eq!(w.find(first).label(), Some("Source row"));
-        assert_eq!(w.find(second).label(), Some("Source row"));
-        w.click(second, cx);
+        assert_eq!(w.find("X axis").role(), Some(gpui_kit::Role::ComboBox));
+        assert_eq!(w.find("X axis").value(), Some("Source row"));
+        w.press("down", cx);
+        w.press("down", cx);
+        w.press("enter", cx);
     });
     settle(&mut ui);
     ui.update(|w, cx| {
+        assert_eq!(w.find("X axis").value(), Some("Source row · column 2"));
         w.click("X axis", cx);
-        assert_eq!(w.find(second).checked(), Some(true));
-        assert_eq!(w.find(first).selected(), Some(false));
-        assert_eq!(w.find("axis-source").checked(), Some(false));
-        w.click(second, cx);
-        assert!(w.try_find("axis-source").is_none());
+        w.press("up", cx);
+        w.press("enter", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, _| {
+        assert_eq!(w.find("X axis").value(), Some("Source row · column 1"));
+        assert_eq!(w.find("X axis").expanded(), Some(false));
     });
 }
 
@@ -277,6 +293,80 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
     );
 }
 
+#[test]
+fn brushed_float_preview_preserves_exact_bounds_and_yields_to_manual_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("float.csv");
+    std::fs::write(&path, "temperature\n10.2\n12.7\n19.2\n").unwrap();
+    let snapshot = AppliedView::new(Arc::new(Dataset::open(path).unwrap()));
+    let column = snapshot.dataset().info().columns[0].clone();
+    let distribution = snapshot
+        .analyses()
+        .filter_distribution(column.id, 40, gewu_core::AxisScale::Linear)
+        .unwrap();
+    let ranges = &distribution.as_ref().as_ref().unwrap().ranges;
+    let index = ranges
+        .iter()
+        .position(|bin| {
+            bin.min.is_some() && bin.max.as_ref().is_some_and(|bound| bound.value.len() > 14)
+        })
+        .expect("a bin with a long inclusive maximum");
+    let lower = ranges[index].min.as_ref().unwrap().value.clone();
+    let upper = ranges[index].max.as_ref().unwrap().value.clone();
+
+    let submitted = Rc::new(RefCell::new(None));
+    let events = submitted.clone();
+    let app = TestAppContext::single();
+    let (handle, _editor, _subscription) = app.update(|cx| {
+        gpui_kit::init(cx);
+        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(snapshot, column, None, w, cx))
+        })
+        .unwrap();
+        let subscription = cx.subscribe(&editor, move |_, event, _| {
+            if let FilterEvent::Apply(_, filter) = event {
+                *events.borrow_mut() = filter.clone();
+            }
+        });
+        (handle, editor, subscription)
+    });
+    let mut ui = VisualTestContext::from_window(handle, &app);
+    settle(&mut ui);
+    ui.update(|w, cx| w.click("Range", cx));
+    settle(&mut ui);
+    ui.update(|w, cx| w.click(("range-bin", index), cx));
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert!(w.try_find(("brush-preview", 1usize)).is_some());
+        w.click("apply-filter", cx);
+    });
+    assert_eq!(
+        *submitted.borrow(),
+        Some(Filter::range(Some(lower.clone()), Some(upper), true))
+    );
+    ui.update(|w, cx| w.click(("brush-preview", 1usize), cx));
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert!(w.try_find(("brush-preview", 1usize)).is_none());
+        w.press("cmd-a", cx);
+        w.input("19.212345678901234", cx);
+        w.click("Minimum", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert!(w.try_find(("brush-preview", 1usize)).is_none());
+        w.click("apply-filter", cx);
+    });
+    assert_eq!(
+        *submitted.borrow(),
+        Some(Filter::range(
+            Some(lower),
+            Some("19.212345678901234".into()),
+            true
+        ))
+    );
+}
+
 /// The two long values have identical previews. Only their trailing, multiline text differs.
 pub(super) fn long_values() -> (AppliedView, String) {
     use std::io::Write;
@@ -335,7 +425,7 @@ fn long_equal_previews_search_the_complete_label_and_submit_only_the_exact_selec
             let label = control.label().unwrap();
             assert_eq!(
                 label,
-                format!("{}, 1 rows", super::value_preview(&choice.label))
+                format!("{}, 1 row", super::value_preview(&choice.label))
             );
             assert!(label.len() < 120 && !label.contains(['\r', '\n']));
             assert!(control.bounds().size.height < px(60.));

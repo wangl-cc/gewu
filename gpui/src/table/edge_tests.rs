@@ -224,9 +224,18 @@ fn export_panel_writes_each_format_and_selected_parquet_codec() {
         ("parquet", Some(("Uncompressed", "UNCOMPRESSED"))),
     ] {
         w.keys("cmd-shift-e");
-        w.ui.update(|window, cx| window.click(format, cx));
+        w.ui.update(|window, cx| window.click("export-format", cx));
+        w.settle();
+        let label = if format == "parquet" {
+            "Parquet".to_owned()
+        } else {
+            format.to_uppercase()
+        };
+        w.ui.update(|window, cx| window.click(label, cx));
         w.settle();
         if let Some((label, _)) = option {
+            w.ui.update(|window, cx| window.click("export-compression", cx));
+            w.settle();
             w.ui.update(|window, cx| window.click(label, cx));
             w.settle();
         }
@@ -295,13 +304,18 @@ fn empty_filtered_grid_recovers_only_when_the_reset_draft_is_applied() {
         "No matches"
     );
     w.keys("escape");
-    edit(&mut w);
+    click(&mut w, "empty-edit-filter");
     click(&mut w, "reset-filter");
     click(&mut w, "cancel-filter");
     assert!(w.source_rows().is_empty());
     edit(&mut w);
     click(&mut w, "reset-filter");
     click(&mut w, "apply-filter");
+    assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
+    edit(&mut w);
+    click(&mut w, "no-values");
+    click(&mut w, "apply-filter");
+    click(&mut w, "empty-clear-filters");
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
 }
 
@@ -384,15 +398,23 @@ fn find_outline_tracks_the_current_result_independently_of_the_grid_selection() 
 
 #[test]
 fn typing_replaces_a_pending_search_and_reordering_keeps_the_current_match() {
-    let mut w = open();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("matches.csv");
+    std::fs::write(
+        &path,
+        "a,b,note\n1,x,plain\n2,x,marker\n3,marker,marker marker\n",
+    )
+    .unwrap();
+    let mut w = TableWindow::open(&path);
     w.keys("cmd-f");
     w.ui.update(|window, cx| window.input("mar", cx));
     w.ui.run_until_parked();
     assert_eq!(w.selection(), None);
     w.type_in_find("ker");
     assert_eq!(w.selection().unwrap().head.row, 1);
-    w.keys("cmd-g");
+    w.keys("cmd-g cmd-g");
     assert_eq!(w.selection().unwrap().head.row, 2);
+    w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 3 of 3")));
     let note = w.read(|t| t.data.columns[2].id.into_raw() as usize);
     w.ui.update(|window, cx| window.dispatch_action(Box::new(crate::actions::ManageColumns), cx));
     w.settle();
@@ -400,10 +422,11 @@ fn typing_replaces_a_pending_search_and_reordering_keeps_the_current_match() {
     w.settle();
     let head = w.selection().unwrap().head;
     assert_eq!((head.row, head.column), (2, 1));
+    w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 2 of 3")));
     w.ui.update(|window, cx| window.click("close-table-drawer", cx));
     w.keys("cmd-g");
     let head = w.selection().unwrap().head;
-    assert_eq!((head.row, head.column), (4, 1));
+    assert_eq!((head.row, head.column), (2, 2));
 }
 
 #[test]

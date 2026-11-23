@@ -73,10 +73,13 @@ pub(crate) struct FilterEditor {
     drag: Option<Brush>,
     scale: AxisScale,
     log_counts: bool,
+    display_options: bool,
     search: Entity<InputState>,
     text: Entity<InputState>,
     low: Entity<InputState>,
     high: Entity<InputState>,
+    brushed_bounds: [Option<String>; 2],
+    _bound_changes: [Subscription; 2],
     _input: Subscription,
     load: Option<Task<()>>,
     error: Option<gewu_core::Error>,
@@ -104,6 +107,25 @@ impl FilterEditor {
         let text = field("Text to match", &draft.search);
         let low = field("No minimum", &draft.low);
         let high = field("No maximum", &draft.high);
+        let bound_changes = [(0, &low), (1, &high)].map(|(index, input)| {
+            cx.subscribe(
+                input,
+                move |editor: &mut Self, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change)
+                        && editor.brushed_bounds[index].as_deref()
+                            != Some(input.read(cx).value().as_ref())
+                    {
+                        editor.brushed_bounds[index] = None;
+                    }
+                    if matches!(
+                        event,
+                        InputEvent::Change | InputEvent::Focus | InputEvent::Blur
+                    ) {
+                        cx.notify();
+                    }
+                },
+            )
+        });
         let subscription = cx.subscribe(&search, |editor: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 editor.search_choices(cx);
@@ -122,10 +144,13 @@ impl FilterEditor {
             scale: AxisScale::Linear,
             drag: None,
             log_counts: false,
+            display_options: false,
             search,
             text,
             low,
             high,
+            brushed_bounds: [None, None],
+            _bound_changes: bound_changes,
             _input: subscription,
             load: None,
             error: None,
@@ -275,6 +300,7 @@ impl FilterEditor {
         {
             return;
         }
+        self.brushed_bounds = [Some(low.clone()), Some(high.clone())];
         self.low
             .update(cx, |input, cx| input.set_value(low, window, cx));
         self.high

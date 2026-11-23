@@ -6,6 +6,23 @@ use gewu_core::{
 
 pub(crate) const SELECT_CELL_TO_FILTER: &str = "Select a cell to filter by its value";
 
+pub(crate) fn open_reason(error: &Error) -> String {
+    match error {
+        Error::File(FileError::Decode { format, .. }) => {
+            format!(
+                "The file could not be read as {format}. It may be damaged or use a different format."
+            )
+        }
+        Error::Io(e) if e.source.kind() == std::io::ErrorKind::NotFound => {
+            "The file could not be found. It may have been moved or renamed.".into()
+        }
+        Error::Io(e) if e.source.kind() == std::io::ErrorKind::PermissionDenied => {
+            "Gewu does not have permission to read this file.".into()
+        }
+        _ => message(error),
+    }
+}
+
 /// Clipboard export has a stricter size cap and a different recovery action from file export.
 pub(crate) fn clipboard_message(error: &Error) -> String {
     match error {

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use gewu_app::AppliedView;
 use gewu_core::{
-    AnalysisField, AxisScale, ColumnId, ColumnInfo, Histogram, LengthSummary, NumericStatistics,
-    ScatterResult,
+    AnalysisField, AxisScale, ColumnId, ColumnInfo, LengthSummary, NumericStatistics,
+    RangeHistogram, ScatterResult,
 };
 use gpui_kit::{
     base::{self, TestSupportExt},
@@ -14,7 +14,7 @@ use gpui_kit::{
 use super::{
     button,
     charts::{self, ScatterChart},
-    row, segment, segmented_tabs,
+    segment, segmented_tabs,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,6 @@ pub(crate) struct Inspector {
     x: Option<ColumnId>,
     y: Option<ColumnId>,
     settings: InspectorSettings,
-    picker: Option<Picker>,
     chart_options_open: bool,
     showing: Showing,
     task: Option<Task<()>>,
@@ -107,6 +106,14 @@ impl Inspector {
         }
     }
 
+    pub(crate) fn mark_scatter(&self, chart_id: EntityId, row: Option<u64>, cx: &mut App) {
+        if let Showing::Chart(chart) = &self.showing
+            && chart.entity_id() == chart_id
+        {
+            chart.update(cx, |chart, cx| chart.mark(row, cx));
+        }
+    }
+
     pub(crate) fn with_settings(
         snapshot: AppliedView,
         visible_columns: Vec<ColumnInfo>,
@@ -120,7 +127,6 @@ impl Inspector {
             x: None,
             y: None,
             settings,
-            picker: None,
             chart_options_open: false,
             showing: Showing::Empty,
             task: None,
@@ -166,7 +172,6 @@ impl Inspector {
     pub(crate) fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
         if self.settings.page != page {
             self.settings.page = page;
-            self.picker = None;
             self.load(cx);
             cx.notify();
         }
@@ -176,7 +181,6 @@ impl Inspector {
         if self.info(Some(column)).is_some() {
             self.settings.page = Page::Column;
             self.selected = Some(column);
-            self.picker = None;
             self.load(cx);
             cx.notify();
         }
@@ -254,19 +258,18 @@ impl Inspector {
             Picker::X => self.x = column,
             Picker::Y => self.y = column,
         }
-        self.picker = None;
         self.load(cx);
         cx.notify();
     }
 }
 
 mod column;
-mod controls;
+pub(super) mod controls;
 
 struct ResizeInspector;
 
 impl Render for Inspector {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = base::Theme::global(cx).tokens.colors;
         let resize = base::resize_handle("inspector-resize", Axis::Horizontal)
             .inside(base::HandleEdge::Leading)
@@ -287,14 +290,14 @@ impl Render for Inspector {
                     cx.notify();
                 },
             ))
-            .child(self.contents(cx))
+            .child(self.contents(window, cx))
             .child(resize)
             .test_support()
     }
 }
 
 impl Inspector {
-    fn contents(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn contents(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let colors = base::Theme::global(cx).tokens.colors;
         let mut pane = div()
             .id("inspector-scroll")
@@ -321,12 +324,18 @@ impl Inspector {
         }
         match self.settings.page {
             Page::Column => {
-                pane = pane.child(self.picker(Picker::Column, "Inspect column", self.selected, cx))
+                pane = pane.child(self.picker(
+                    Picker::Column,
+                    "Inspect column",
+                    self.selected,
+                    window,
+                    cx,
+                ))
             }
             Page::Chart => {
                 pane = pane
-                    .child(self.picker(Picker::X, "X axis", self.x, cx))
-                    .child(self.picker(Picker::Y, "Y axis", self.y, cx))
+                    .child(self.picker(Picker::X, "X axis", self.x, window, cx))
+                    .child(self.picker(Picker::Y, "Y axis", self.y, window, cx))
                     .child(self.chart_options(cx))
             }
         }

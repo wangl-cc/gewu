@@ -26,7 +26,7 @@ impl FilterEditor {
             .map(|choice| {
                 let label = crate::panels::value_preview(&choice.label);
                 ChoiceRow {
-                    accessible: format!("{label}, {} rows", choice.count).into(),
+                    accessible: format!("{label}, {}", crate::counted(choice.count, "row")).into(),
                     label,
                     count: choice.count.to_string().into(),
                     checked: false,
@@ -113,21 +113,27 @@ impl FilterEditor {
                 }
             });
             list = list.child(
-                Self::checkbox(("facet", index), choice.label.clone(), checked, cx, toggle)
-                    .accessibility_label(choice.accessible.clone())
-                    .flex_none()
-                    .px_2()
-                    .h(px(27.))
-                    .hover(move |s| s.bg(colors.accent))
-                    .child(
-                        div()
-                            .ml_auto()
-                            .flex_none()
-                            .text_xs()
-                            .font_features(crate::theme::tabular_digits())
-                            .text_color(colors.muted_foreground)
-                            .child(choice.count.clone()),
-                    ),
+                crate::panels::checkbox(
+                    ("facet", index),
+                    choice.label.clone(),
+                    checked,
+                    cx,
+                    toggle,
+                )
+                .accessibility_label(choice.accessible.clone())
+                .flex_none()
+                .px_2()
+                .h(px(27.))
+                .hover(move |s| s.bg(colors.accent))
+                .child(
+                    div()
+                        .ml_auto()
+                        .flex_none()
+                        .text_xs()
+                        .font_features(crate::theme::tabular_digits())
+                        .text_color(colors.muted_foreground)
+                        .child(choice.count.clone()),
+                ),
             );
         }
         let mut actions = row().gap_3().px_2();

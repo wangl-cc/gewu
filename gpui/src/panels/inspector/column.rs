@@ -38,7 +38,9 @@ impl Inspector {
             let mut group = div().flex().flex_col().gap_2().child(
                 base::Button::new(("inspect-section", section as usize))
                     .accessibility_label(section.title())
+                    .w_full()
                     .flex()
+                    .justify_start()
                     .items_center()
                     .gap_1()
                     .cursor_pointer()
@@ -106,7 +108,19 @@ impl Inspector {
                     ("Maximum", &s.max_label),
                 ] {
                     if let Some(value) = value {
-                        body = body.child(metric(name, value.clone(), cx));
+                        let displayed = col
+                            .floating_point
+                            .then(|| value.parse::<f64>().ok())
+                            .flatten()
+                            .map(|v| charts::significant_digits(v, digits))
+                            .unwrap_or_else(|| value.clone());
+                        let exact = value.clone();
+                        body = body.child(metric(name, displayed, cx).id(name).tooltip(
+                            move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(exact.clone())
+                                    .build(window, cx)
+                            },
+                        ));
                     }
                 }
                 if s.min_label.is_none() && s.max_label.is_none() {
@@ -138,7 +152,12 @@ impl Inspector {
             }
             SectionData::Distribution(h) => body
                 .child(self.histogram_options(col.capabilities.logarithmic, cx))
-                .child(charts::histogram(h, self.settings.log_counts, cx)),
+                .child(charts::histogram(
+                    &h.histogram,
+                    self.settings.log_counts,
+                    |i| charts::bin_interval(&h.ranges[i]),
+                    cx,
+                )),
             SectionData::Lengths(s) => {
                 let units = match s.unit {
                     gewu_core::LengthUnit::Characters => "Unicode scalars",
@@ -163,6 +182,15 @@ impl Inspector {
                     .child(charts::histogram(
                         &s.histogram,
                         self.settings.log_counts,
+                        |i| match s.bin_range(i) {
+                            Some(range) if range.start() == range.end() => {
+                                format!("Length {} ({units})", range.start())
+                            }
+                            Some(range) => {
+                                format!("Length {} – {} ({units})", range.start(), range.end())
+                            }
+                            None => "No lengths".into(),
+                        },
                         cx,
                     ))
             }
@@ -191,7 +219,7 @@ impl Inspector {
                             div()
                                 .h(px(3.))
                                 .w(relative(part.clamp(0., 1.) as f32))
-                                .bg(base::Theme::global(cx).tokens.colors.primary),
+                                .bg(base::Theme::global(cx).tokens.colors.primary.opacity(0.55)),
                         );
                 }
                 body
@@ -200,18 +228,12 @@ impl Inspector {
     }
 
     fn histogram_options(&self, supports_log: bool, cx: &mut Context<Self>) -> Div {
-        let mut controls = row().child(
-            button(
-                "histogram-options",
-                "Chart display options",
-                self.chart_options_open,
-                cx,
-            )
-            .aria_expanded(self.chart_options_open)
-            .on_click(cx.listener(|p, _, _, cx| {
-                p.chart_options_open = !p.chart_options_open;
-                cx.notify();
-            })),
+        let mut controls = div().flex().flex_col().gap_2().child(
+            crate::panels::display_options("histogram-options", self.chart_options_open, cx)
+                .on_click(cx.listener(|p, _, _, cx| {
+                    p.chart_options_open = !p.chart_options_open;
+                    cx.notify();
+                })),
         );
         if !self.chart_options_open {
             return controls;

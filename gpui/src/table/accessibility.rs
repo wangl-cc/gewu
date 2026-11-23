@@ -19,8 +19,9 @@ pub(super) fn grid(table: &TableView, window: &Window) -> Stateful<Div> {
     let mut grid = grid
         .aria_column_count(table.data.columns.len())
         .aria_description(format!(
-            "{row_count} rows, {} columns",
-            table.data.columns.len()
+            "{}, {}",
+            crate::counted(row_count, "row"),
+            crate::counted(table.data.columns.len() as u64, "column")
         ));
     // AccessKit indices are zero-based. The column-header row occupies index zero.
     if let Some(count) = usize::try_from(row_count)

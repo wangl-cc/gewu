@@ -118,10 +118,10 @@ fn changing_rows_column_and_bin_count_only_displays_the_final_analysis() {
                 }
             })
             .unwrap();
-        assert_eq!(histogram.counts.iter().sum::<u64>(), 3);
+        assert_eq!(histogram.histogram.counts.iter().sum::<u64>(), 3);
         let expected = filtered
             .analyses()
-            .distribution(score, 4, AxisScale::Linear)
+            .distribution_with_ranges(score, 4, AxisScale::Linear)
             .unwrap();
         assert!(Arc::ptr_eq(histogram, &expected));
     });

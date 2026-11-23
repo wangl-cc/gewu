@@ -6,19 +6,21 @@ How the window behaves. [Find and filtering](search-and-filter.md) covers what F
 
 View > Show Chart Inspector opens the chart directly. View > Analyze Selected Column (Command-Option-I) opens the Column page for the current table column. Command-Option-R toggles source row numbers across document windows.
 
-On macOS the document name, Find field and Inspector toggle are vertically centered in a single title-bar row. The status bar shows the row and column counts. The native window controls stay reachable at narrow widths. Workbooks show their sheet choices below the table. CSV and TSV documents keep the first-row header checkbox in the status bar.
+On macOS the document name, Find field and Inspector toggle are vertically centered in a single title-bar row. The status bar shows the row and column counts. The native window controls stay reachable at narrow widths. Workbooks show their sheet choices below the table. For CSV, TSV and XLSX, File > Import Options… lets you change whether the first row supplies the column names, including after opening a file from Finder.
 
 The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. The Inspector column chooser and the scatter X and Y pickers list only visible columns.
 
 When columns are hidden, selection and inspection fall back to the first visible column, the scatter X axis to the source row, and the Y axis to the first visible column that can be plotted. If no columns remain visible, the Inspector shows a No Columns state. Chart axes and display settings survive page changes. The Inspector opens at 300 points wide. Drag its divider to resize it between 240 and 420 points when space permits. Narrow windows keep room for the table.
 
-Hover over a scatter point to read its values. Click the point to select its Y-column cell and scroll the table to the same source record in the current filtered and sorted result. Focus returns to the grid, so arrow keys continue from that cell.
+Hover over a scatter point to read its values. Click the point to select its Y-column cell in the current filtered and sorted result. If the record is outside the viewport, the table brings it near the center when space permits. The plotted point stays marked until the selection changes. Focus returns to the grid, so arrow keys continue from that cell.
 
 File > Open Recent lists successfully opened documents in most-recent-first order. On macOS, Clear Menu removes the application’s system recent documents, including entries available to the Dock. After clearing the list, it stays empty across restarts until another document opens.
 
 ## Status bar
 
 When filters are active, the status bar shows the result and source row counts, plus clickable counts of filtered and sorted columns. The filter summary can locate a column in the table or clear one or all filters; the sort summary opens the sort editor. The summaries describe the applied result while a new query is pending.
+
+When filters match no rows, the table keeps its headers visible and offers actions to edit a condition or clear the filters.
 
 ## Column headers and sorting
 
@@ -30,7 +32,7 @@ View > Columns… and the header menu open column management as a sheet. It can 
 
 ## Find
 
-Find uses a native search field in the toolbar. Command-F focuses it; Return and Shift-Return move to the next and previous match. The search field shows a short inline notice when navigation wraps, no matches are found, or Find encounters an error. The Find group’s accessibility description includes the source row and column of a match. Previous and next buttons appear beside the field while a query is present. Escape clears the query and returns focus to the table. Find does not filter rows or change the Inspector page.
+Find uses a native search field in the toolbar. Command-F focuses it; Return and Shift-Return move to the next and previous match. Once the total is known, the right side of the field shows the current match and total, such as `3/12`. Matches are counted by cell. Navigation is available while the count is running. The field reports no matches or errors inline. The Find group’s accessibility description includes the source row and column of a match. Previous and next buttons appear beside the field while a query is present. Escape clears the query and returns focus to the table. Find does not filter rows or change the Inspector page.
 
 The grid marks matching cells and text substrings in amber. The active selection and its row and column headers use the accent color, changing to neutral when the window loses focus. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
 
@@ -40,7 +42,9 @@ Filter > Filter Column… (Command-Option-F) opens the selected column’s edito
 
 Filter editors show the available modes in one segmented control when there is more than one choice. The Values editor groups the value checklist, bulk selection actions and Missing checkbox together. Select All and Deselect All also change the Missing checkbox. The Range editor shows the distribution above two side-by-side fields for the inclusive minimum and maximum. Dragging across bins highlights the chosen interval and updates the bound fields. Text and Range show the missing-value controls separately from the content condition. Switching modes preserves the shared missing-value choice and each mode’s own draft. Reset clears the whole draft, including missing-value handling; Apply submits it, and closing discards it. Clear Column Filter in the header menu removes the applied filter at once.
 
-Inspector distributions keep configurable bin counts in their display menu. Frequency rows show counts and proportions.
+Inspector distributions keep configurable bin counts in their display menu. Hovering a bar shows its inclusive interval and the number of rows in it. Length distributions report intervals in the column’s length unit. Frequency rows show counts and proportions.
+
+Chart display options are separate from the range being edited. The Text and Range editors offer three missing-value policies: exclude, include, or only missing. A long floating-point bound set by brushing can show a shorter approximation marked with ≈. Focus the field to see and edit the exact bound. Applying the draft uses the exact text. Integer, decimal and temporal bounds retain their native precision.
 
 ## Cells, copying and export
 

@@ -21,6 +21,7 @@ enum Load {
 
 pub(super) struct Document {
     path: PathBuf,
+    focus: FocusHandle,
     title: SharedString,
     table: Option<Entity<TableView>>,
     sheets: Vec<String>,
@@ -29,10 +30,16 @@ pub(super) struct Document {
     load: Load,
     reader: Option<Task<()>>,
     import_dialog: Option<Task<()>>,
+    show_error_details: bool,
 }
 
 impl Document {
-    pub(super) fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        path: PathBuf,
+        has_header: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let title: SharedString = path
             .file_name()
             .unwrap_or(path.as_os_str())
@@ -42,17 +49,16 @@ impl Document {
         window.set_window_title(&title);
         window.set_document_path(Some(&path));
         platform::follow_appearance(window, cx);
-        let header_available = path.extension().is_some_and(|ext| {
-            ["csv", "tsv", "xlsx"]
-                .iter()
-                .any(|kind| ext.eq_ignore_ascii_case(kind))
-        });
+        let header_available = super::supports_header(&path);
         let initial = Import {
             sheet: None,
-            has_header: true,
+            has_header,
         };
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         let mut document = Self {
             path,
+            focus,
             title,
             table: None,
             sheets: Vec::new(),
@@ -61,6 +67,7 @@ impl Document {
             load: Load::Ready,
             reader: None,
             import_dialog: None,
+            show_error_details: false,
         };
         document.request(initial, window, cx);
         document
@@ -87,19 +94,7 @@ impl Document {
 
     fn set_load(&mut self, load: Load, cx: &mut Context<Self>) {
         self.load = load;
-        // CSV and TSV put the editable header checkbox in the table's status bar.
-        let header = self.import_selection().has_header;
-        if let Some(table) = &self.table
-            && table
-                .read(cx)
-                .delimited_header
-                .is_some_and(|old| old != header)
-        {
-            table.update(cx, |table, cx| {
-                table.delimited_header = Some(header);
-                cx.notify();
-            });
-        }
+        self.show_error_details = false;
         cx.notify();
     }
 
@@ -193,8 +188,6 @@ impl Document {
         let table = cx.new(|cx| {
             let mut table = TableView::new(TableData::from_dataset(Arc::new(dataset)), window, cx);
             table.document_title = Some(self.title.clone());
-            table.delimited_header = matches!(info.format, FileType::Csv | FileType::Tsv)
-                .then_some(self.displayed.has_header);
             if let Some(previous) = &self.table {
                 table.inherit_document_state(previous, cx);
             } else {
@@ -210,18 +203,34 @@ impl Document {
         self.set_load(Load::Ready, cx);
     }
 
-    fn toggle_header(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit_import(|import| import.has_header = !import.has_header, window, cx);
-    }
-
     fn import_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.import_dialog.is_some() {
             return;
         }
+        let has_conditions = self.table.as_ref().is_some_and(|table| {
+            let data = &table.read(cx).data;
+            [data.query().as_ref(), data.queries().requested()]
+                .iter()
+                .any(|query| !query.filters.is_empty() || !query.sorts.is_empty())
+        });
+        let row = if self.sheets.is_empty() {
+            "first row"
+        } else {
+            "first occupied row"
+        };
+        let current = if self.import_selection().has_header {
+            "column names"
+        } else {
+            "data"
+        };
+        let mut detail = format!("The {row} is currently read as {current}.");
+        if has_conditions {
+            detail.push_str(" Changing this option will clear Find, filters and sorting.");
+        }
         let answer = window.prompt(
             PromptLevel::Info,
             "Import Options",
-            Some("Choose how to read the first row of this file."),
+            Some(&detail),
             &["Use as Column Names", "Read as Data", "Cancel"],
             cx,
         );
@@ -236,6 +245,110 @@ impl Document {
                 })
             });
         }));
+    }
+
+    fn failed_open(
+        &self,
+        import: &Import,
+        error: &gewu_core::Error,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = Theme::global(cx).tokens.colors;
+        let import = import.clone();
+        let retry = button("retry-open", "Retry", false, cx).on_click(
+            cx.listener(move |this, _, window, cx| this.request(import.clone(), window, cx)),
+        );
+        // A failed replacement preserves the table and worksheet controls.
+        if self.table.is_some() {
+            return div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .child(retry)
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .child(crate::errors::message(error)),
+                )
+                .into_any_element();
+        }
+        let reason = crate::errors::open_reason(error);
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap_3()
+            .px_4()
+            .w_full()
+            .max_w(px(475.))
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Could not open this file"),
+            )
+            .child(
+                div()
+                    .id("open-error-reason")
+                    .role(Role::Alert)
+                    .aria_label(reason.clone())
+                    .text_color(colors.muted_foreground)
+                    .child(reason),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        button("open-another-file", "Open Another File…", true, cx)
+                            .on_click(|_, _, cx| super::choose_files(cx)),
+                    )
+                    .child(retry)
+                    .child(
+                        button("reveal-failed-file", "Show in Finder", false, cx)
+                            .on_click(cx.listener(|doc, _, _, cx| cx.reveal_path(&doc.path))),
+                    ),
+            )
+            .child(
+                button("open-error-details", "Technical details", false, cx)
+                    .aria_expanded(self.show_error_details)
+                    .on_click(cx.listener(|doc, _, _, cx| {
+                        doc.show_error_details = !doc.show_error_details;
+                        cx.notify();
+                    })),
+            );
+        if self.show_error_details {
+            let details = error.to_string();
+            content = content.child(
+                div()
+                    .id("open-error-text")
+                    .aria_label(details.clone())
+                    .max_h(px(135.))
+                    .w_full()
+                    .overflow_y_scroll()
+                    .text_sm()
+                    .test_support()
+                    .child(details),
+            );
+        }
+        div()
+            .id("open-error")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .py_4()
+            .child(content)
+            .into_any_element()
     }
 }
 
@@ -254,13 +367,10 @@ impl Render for Document {
             view = view.on_action(move |_: &GetInfo, _, cx| {
                 info::open(table.read(cx).data.snapshot().dataset().info(), cx);
             });
+        } else {
+            view = view.track_focus(&self.focus);
         }
         if self.header_available {
-            view = view.on_action(cx.listener(
-                |doc, _: &crate::actions::ToggleImportHeader, w, cx| doc.toggle_header(w, cx),
-            ));
-        }
-        if self.header_available && !matches!(self.load, Load::Pending(_)) {
             view = view.on_action(
                 cx.listener(|this, _: &ImportOptions, w, cx| this.import_options(w, cx)),
             );
@@ -270,7 +380,7 @@ impl Render for Document {
         } else {
             view = view.child(TableView::document_titlebar(self.title.clone(), window, cx));
         }
-        if !self.sheets.is_empty() || (self.header_available && self.table.is_none()) {
+        if !self.sheets.is_empty() {
             let mut bar = div()
                 .id("worksheet-options")
                 .flex_none()
@@ -299,15 +409,6 @@ impl Render for Document {
                         })),
                 );
             }
-            if self.header_available {
-                let document = cx.weak_entity();
-                bar = bar.child(
-                    crate::panels::header_checkbox(self.import_selection().has_header, cx)
-                        .on_change(move |_, _, w, cx| {
-                            let _ = document.update(cx, |doc, cx| doc.toggle_header(w, cx));
-                        }),
-                );
-            }
             view = view.child(bar);
         }
         match &self.load {
@@ -316,27 +417,7 @@ impl Render for Document {
                 view = view.child(div().flex_none().px_3().py_1().text_sm().child("Opening…"));
             }
             Load::Failed(import, error) => {
-                let import = import.clone();
-                view = view.child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .gap_2()
-                        .px_3()
-                        .py_1()
-                        .text_sm()
-                        .child(
-                            button("retry-open", "Retry", false, cx)
-                                .flex_none()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.request(import.clone(), window, cx)
-                                })),
-                        )
-                        .child(div().flex_1().min_w_0().child(format!(
-                            "Could not open table: {}",
-                            crate::errors::message(error)
-                        ))),
-                );
+                view = view.child(self.failed_open(import, error, cx));
             }
         }
         view

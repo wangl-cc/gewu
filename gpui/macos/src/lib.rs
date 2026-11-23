@@ -6,6 +6,9 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSDocumentController;
 use objc2_foundation::{NSString, NSUserDefaults};
 
+mod picker;
+pub use picker::open_files;
+
 /// Clear this application's system recent documents, as in AppKit's Clear Menu action.
 #[expect(unsafe_code, reason = "AppKit declares the sender nullable")]
 pub fn clear_recent_documents(main: MainThreadMarker) {

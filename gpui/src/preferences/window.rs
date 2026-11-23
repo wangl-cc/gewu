@@ -13,7 +13,7 @@ pub(crate) fn open(cx: &mut App) {
     {
         return;
     }
-    let options = crate::platform::sized_window(470., 410., cx);
+    let options = crate::platform::sized_window(430., 350., cx);
     match gpui_kit::open_window(options, cx, |w, cx| {
         crate::platform::follow_appearance(w, cx);
         w.set_window_title("Gewu Settings");
@@ -33,16 +33,24 @@ impl Render for Settings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Preferences::get(cx);
         let colors = base::Theme::global(cx).tokens.colors;
+        let section = |title: &'static str| {
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors.muted_foreground)
+                .child(title)
+        };
         let mut view = div()
             .id("settings-scroll")
             .size_full()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .p_4()
             .bg(colors.background)
-            .text_color(colors.foreground);
+            .text_color(colors.foreground)
+            .child(section("Display"));
         type SetNumber = fn(&mut Preferences, f32);
         let numbers: [(&str, f32, f32, f32, SetNumber); 2] = [
             ("Text size", p.font_size, 10., 20., |p, n| p.font_size = n),
@@ -102,60 +110,39 @@ impl Render for Settings {
                 .child(div().flex_1().child(label))
                 .child(density),
         );
-        type Toggle = fn(&mut Preferences);
-        let choices: [(&str, bool, Toggle); 5] = [
-            ("Show row numbers", p.show_row_numbers, |p| {
-                p.show_row_numbers = !p.show_row_numbers
-            }),
-            ("Start row numbering at 1", p.row_number_base == 1, |p| {
-                p.row_number_base = 1 - p.row_number_base
-            }),
-            (
-                "Include column names when copying",
-                p.copy_includes_headers,
-                |p| p.copy_includes_headers = !p.copy_includes_headers,
-            ),
-            (
-                "Remember last export format",
-                p.remember_export_format,
-                |p| p.remember_export_format = !p.remember_export_format,
-            ),
-            (
-                "Confirm hiding sorted or filtered columns",
-                !p.skip_hide_warning,
-                |p| p.skip_hide_warning = !p.skip_hide_warning,
-            ),
-        ];
-        for (index, (label, value, toggle)) in choices.into_iter().enumerate() {
-            view = view.child(
-                base::Checkbox::new(("pref", index))
-                    .checked(value)
-                    .accessibility_label(label)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(18.))
-                            .h(px(18.))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(colors.border)
-                            .bg(if value {
-                                colors.primary
-                            } else {
-                                colors.background
-                            })
-                            .text_center()
-                            .text_color(colors.primary_foreground)
-                            .child(if value { "✓" } else { "" }),
-                    )
-                    .child(label)
-                    .on_change(move |_, _, _, cx| Preferences::update(cx, toggle)),
-            );
-        }
-        view
+        let choice = |index: usize, label, checked, toggle: fn(&mut Preferences)| {
+            crate::panels::checkbox(("pref", index), label, checked, cx, move |_, _, cx| {
+                Preferences::update(cx, toggle);
+            })
+        };
+        view.child(choice(0, "Show row numbers", p.show_row_numbers, |p| {
+            p.show_row_numbers = !p.show_row_numbers
+        }))
+        .child(choice(
+            1,
+            "Start row numbering at 1",
+            p.row_number_base == 1,
+            |p| p.row_number_base = 1 - p.row_number_base,
+        ))
+        .child(section("Copy and export").mt_1())
+        .child(choice(
+            2,
+            "Include column names when copying",
+            p.copy_includes_headers,
+            |p| p.copy_includes_headers = !p.copy_includes_headers,
+        ))
+        .child(choice(
+            3,
+            "Remember last export format",
+            p.remember_export_format,
+            |p| p.remember_export_format = !p.remember_export_format,
+        ))
+        .child(section("Confirmation").mt_1())
+        .child(choice(
+            4,
+            "Confirm hiding sorted or filtered columns",
+            !p.skip_hide_warning,
+            |p| p.skip_hide_warning = !p.skip_hide_warning,
+        ))
     }
 }

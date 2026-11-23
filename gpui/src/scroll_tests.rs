@@ -3,6 +3,17 @@ use super::*;
 const H: f64 = 32.0;
 const VIEW: f64 = 768.0;
 
+#[test]
+fn a_chart_jump_centers_a_distant_row_and_keeps_visible_rows_still() {
+    let mut scroll = VerticalScroll::new(100, H, VIEW);
+    scroll.center_if_outside(62);
+    assert_eq!(scroll.anchor().row, 50);
+    scroll.center_if_outside(51);
+    assert_eq!(scroll.anchor().row, 50);
+    scroll.center_if_outside(0);
+    assert_eq!(scroll.anchor().row, 0);
+}
+
 fn accumulate(rows: u64, start: Anchor, step: f64, n: usize) {
     let mut s = VerticalScroll::new(rows, H, VIEW);
     s.set_anchor(start);

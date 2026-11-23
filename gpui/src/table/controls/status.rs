@@ -2,8 +2,18 @@ use super::*;
 use crate::table::Notice;
 
 impl TableView {
-    pub(in crate::table) fn status_bar(&self, cx: &mut Context<Self>) -> Div {
+    pub(in crate::table) fn status_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let colors = base::Theme::global(cx).tokens.colors;
+        let rows = self.data.row_count();
+        let columns = crate::counted(self.data.columns.len() as u64, "column");
+        let row_count = if self.data.query().filters.is_empty() {
+            crate::counted(rows, "row")
+        } else {
+            format!(
+                "{rows} / {}",
+                crate::counted(self.data.snapshot().dataset().n_rows() as u64, "row")
+            )
+        };
         let mut bar = div()
             .flex_none()
             .flex()
@@ -16,20 +26,7 @@ impl TableView {
             .bg(colors.surface)
             .text_color(colors.muted_foreground)
             .text_size(px(11.))
-            .child(if self.data.query().filters.is_empty() {
-                format!(
-                    "{} rows · {} columns",
-                    self.data.row_count(),
-                    self.data.columns.len()
-                )
-            } else {
-                format!(
-                    "{} / {} rows · {} columns",
-                    self.data.row_count(),
-                    self.data.snapshot().dataset().n_rows(),
-                    self.data.columns.len()
-                )
-            });
+            .child(format!("{row_count} · {columns}"));
         if let Some(selection) = self.selection {
             bar = bar.child(format!(
                 "{} selected",
@@ -65,47 +62,57 @@ impl TableView {
         }
         bar = bar.child(div().flex_1());
         let applied = self.data.query();
-        if !applied.filters.is_empty() {
-            bar = bar.child(
-                button(
-                    "filtered-count",
-                    format!("{} filtered", applied.filters.len()),
-                    false,
-                    cx,
-                )
-                .on_click(cx.listener(|t, ev: &ClickEvent, _, cx| {
-                    t.controls.drawer = Some(Drawer::Filters(ev.position()));
-                    cx.notify();
-                })),
+        for (filters, count, id, noun) in [
+            (true, applied.filters.len(), "filtered-count", "filtered"),
+            (false, applied.sorts.len(), "sorted-count", "sorted"),
+        ] {
+            if count == 0 {
+                continue;
+            }
+            let open = matches!(
+                (&self.controls.drawer, filters),
+                (Some(Drawer::Filters), true) | (Some(Drawer::Sort { summary: true }), false)
             );
-        }
-        if !applied.sorts.is_empty() {
+            let content = if open {
+                Some(if filters {
+                    self.filter_summary(window, cx)
+                } else {
+                    self.sort_panel(window, cx)
+                })
+            } else {
+                None
+            };
             bar = bar.child(
-                button(
-                    "sorted-count",
-                    format!("{} sorted", applied.sorts.len()),
-                    false,
-                    cx,
-                )
-                .on_click(cx.listener(|t, ev: &ClickEvent, _, cx| {
-                    t.controls.drawer = Some(Drawer::Sort(Some(ev.position())));
-                    cx.notify();
-                })),
+                base::Popover::new(("status-summary", filters as usize))
+                    .anchor(Anchor::BottomRight)
+                    .offset(px(4.))
+                    .open(open)
+                    .overlay_closable(self.controls.menu.is_none())
+                    .trigger(button(id, format!("{count} {noun}"), false, cx).aria_expanded(open))
+                    .on_open_change(cx.listener(move |t, open: &bool, w, cx| {
+                        if *open {
+                            t.controls.drawer = Some(if filters {
+                                Drawer::Filters
+                            } else {
+                                Drawer::Sort { summary: true }
+                            });
+                        } else if matches!(
+                            (&t.controls.drawer, filters),
+                            (Some(Drawer::Filters), true)
+                                | (Some(Drawer::Sort { summary: true }), false)
+                        ) {
+                            t.close_panel(w, cx);
+                        }
+                        cx.notify();
+                    }))
+                    .content(move |_, _, _| div().children(content)),
             );
-        }
-        if let Some(header) = self.delimited_header {
-            let focus = self.focus.clone();
-            bar = bar.child(crate::panels::header_checkbox(header, cx).on_change(
-                move |_, _, w, cx| {
-                    focus.dispatch_action(&crate::actions::ToggleImportHeader, w, cx);
-                },
-            ));
         }
         self.export_status(bar, cx)
     }
 
-    pub(super) fn filter_summary(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut panel = self.drawer("Active filters", cx);
+    pub(super) fn filter_summary(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let mut panel = self.drawer("Active filters", window, cx);
         for entry in &self.data.query().filters {
             let id = entry.column;
             let Some(column) = self.data.columns.iter().find(|c| c.id == id) else {
@@ -146,12 +153,16 @@ impl TableView {
         }
         panel
             .child(
-                button("clear-all-filters", "Clear all filters", false, cx).on_click(cx.listener(
-                    |t, _, w, cx| {
-                        t.close_panel(w, cx);
-                        t.clear_filters(cx);
-                    },
-                )),
+                super::footer()
+                    .child(
+                        button("clear-all-filters", "Clear all filters", false, cx).on_click(
+                            cx.listener(|t, _, w, cx| {
+                                t.close_panel(w, cx);
+                                t.clear_filters(cx);
+                            }),
+                        ),
+                    )
+                    .child(self.close_button("Done", cx)),
             )
             .into_any_element()
     }

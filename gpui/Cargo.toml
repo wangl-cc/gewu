@@ -17,7 +17,7 @@ url = "2"
 async-channel = "2"
 gewu-app = { path = "../crates/gewu-app" }
 gewu-core = { path = "../crates/gewu-core" }
-gpui-kit = { version = "=0.10.0", default-features = false }
+gpui-kit = { version = "=0.10.0", default-features = false, features = ["component", "assets"] }
 
 [features]
 default = ["gpui-fast"]

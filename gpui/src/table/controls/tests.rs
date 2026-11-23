@@ -122,11 +122,18 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
         w.settle();
     };
     open_menu(&mut w);
-    click(&mut w, "Copy Cell");
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.within("popup-menu").find(0usize).label(),
+            Some("Copy Cell")
+        )
+    });
+    w.keys("down enter");
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
 
     open_menu(&mut w);
-    click(&mut w, "View Cell…");
+    w.ui.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+    w.settle();
     assert!(w.read(|table| matches!(
         &table.controls.drawer,
         Some(super::Drawer::Cell { name, value: Some(value), .. })
@@ -152,10 +159,16 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
     assert_eq!(w.source_rows(), [0, 2, 4]);
     action(&mut w, ManageColumns);
     click(&mut w, ("toggle-column", group));
-    click(&mut w, "cancel-hide");
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find("hide-explanation").label(),
+            Some("Hide “group”? This removes filtering on this column.")
+        )
+    });
+    w.keys("escape");
     assert_eq!(w.source_rows(), [0, 2, 4]);
     click(&mut w, ("toggle-column", group));
-    click(&mut w, "confirm-hide");
+    w.keys("enter");
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
     let view = w.read(|t| t.data.view().clone());
     click(&mut w, ("column-later", score));
@@ -171,6 +184,87 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
         w.clipboard().unwrap().lines().next().unwrap(),
         "plain\t2\tkeep"
     );
+}
+
+#[test]
+fn dragging_the_last_of_28_columns_to_the_top_scrolls_and_reorders_it() {
+    use gpui_kit::{
+        MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollDelta, point, px, size,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wide.csv");
+    let names = (0..28)
+        .map(|i| format!("measurement_column_{i:02}"))
+        .collect::<Vec<_>>();
+    std::fs::write(
+        &path,
+        format!("{}\n{}\n", names.join(","), vec!["12"; 28].join(",")),
+    )
+    .unwrap();
+    let mut w = TableWindow::open(&path);
+    w.ui.simulate_resize(size(px(320.), px(300.)));
+    action(&mut w, ManageColumns);
+    let ids = w.read(|table| table.data.column_ids(0..28));
+    w.ui.update(|window, cx| {
+        window.scroll(
+            "column-list",
+            ScrollDelta::Pixels(point(px(0.), px(-1000.))),
+            cx,
+        )
+    });
+    w.settle();
+    let (from, to) = w.ui.update(|window, _| {
+        let list = window.find("column-list").bounds();
+        let panel = window.find("table-drawer").bounds();
+        assert!(panel.left() >= px(0.) && panel.right() <= window.viewport_size().width);
+        assert!(panel.top() >= px(0.) && panel.bottom() <= window.viewport_size().height);
+        let from = window
+            .find(("column-grip", ids[27].into_raw() as usize))
+            .bounds()
+            .center();
+        assert!(list.contains(&from), "grip {from:?} outside {list:?}");
+        (from, point(from.x, list.top() + px(3.)))
+    });
+    let modifiers = Modifiers::default();
+    w.ui.simulate_event(MouseDownEvent {
+        button: MouseButton::Left,
+        position: from,
+        modifiers,
+        click_count: 1,
+        first_mouse: false,
+    });
+    for at in [point(from.x, from.y - px(8.)), to] {
+        w.ui.simulate_event(MouseMoveEvent {
+            position: at,
+            pressed_button: Some(MouseButton::Left),
+            modifiers,
+        });
+        w.settle();
+    }
+    for _ in 0..60 {
+        w.app
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        w.settle();
+    }
+    w.ui.update(|window, _| {
+        assert!(
+            window
+                .find(("column-grip", ids[0].into_raw() as usize))
+                .visible()
+        )
+    });
+    w.ui.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: to,
+        modifiers,
+        click_count: 1,
+    });
+    w.settle();
+    assert_eq!(w.read(|table| table.data.column_ids(0..2)), [
+        ids[27], ids[0]
+    ]);
 }
 
 #[test]
@@ -251,18 +345,46 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
     click(&mut w, "apply-filter");
     assert!(w.read(|t| t.data.row_count() < 5));
     click(&mut w, "filtered-count");
+    w.ui.update(|window, _| {
+        assert!(
+            window.find("table-drawer").bounds().bottom()
+                <= window.find("filtered-count").bounds().top()
+        );
+    });
     click(&mut w, "clear-all-filters");
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
     action(&mut w, EditSort);
-    for id in [ids[0], ids[1]] {
-        click(&mut w, ("add-sort", id.into_raw() as usize));
+    for name in ["group", "score"] {
+        click(&mut w, "add-sort");
+        w.ui.update(|window, cx| window.input(name, cx));
+        w.settle();
+        w.ui.update(|window, _| assert_eq!(window.find(name).label(), Some(name)));
+        w.keys("enter");
     }
-    w.ui.update(|window, cx| window.right_click(("sort-column", ids[1].into_raw() as usize), cx));
+    w.ui.update(|window, cx| window.right_click(("sort-column", 1usize), cx));
     w.settle();
-    click(&mut w, "Move Up");
-    click(&mut w, ("direction", ids[1].into_raw() as usize));
-    click(&mut w, ("sort-column", ids[1].into_raw() as usize));
-    click(&mut w, ("replace-sort", ids[2].into_raw() as usize));
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.within("popup-menu").find(0usize).label(),
+            Some("Move Up")
+        )
+    });
+    w.keys("escape");
+    let focus = w.read(|table| table.controls.panel_focus.clone().unwrap());
+    w.ui.update(|window, cx| assert!(focus.contains_focused(window, cx)));
+    w.ui.update(|window, cx| window.right_click(("sort-column", 1usize), cx));
+    w.settle();
+    w.keys("down enter");
+    w.ui.update(|window, cx| assert!(focus.contains_focused(window, cx)));
+    click(&mut w, ("descending", ids[1].into_raw() as usize));
+    click(&mut w, ("sort-column", 0usize));
+    click(&mut w, "note");
+    w.ui.update(|window, cx| {
+        assert!(
+            focus.contains_focused(window, cx),
+            "sort column replacement lost focus"
+        )
+    });
     let actual = w.read(|t| {
         t.data
             .query()
@@ -274,6 +396,12 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
     assert_eq!(actual, [(ids[2], true), (ids[0], false)]);
     click(&mut w, "close-table-drawer");
     click(&mut w, "sorted-count");
+    w.ui.update(|window, _| {
+        assert!(
+            window.find("table-drawer").bounds().bottom()
+                <= window.find("sorted-count").bounds().top()
+        );
+    });
     click(&mut w, "clear-sorts");
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
 }
@@ -284,7 +412,8 @@ fn export_uses_the_displayed_snapshot_from_before_the_save_panel() {
     w.click(w.cell(0, 0), Modifiers::default());
     w.keys("cmd-alt-shift-l");
     action(&mut w, ExportTable);
-    click(&mut w, "csv");
+    click(&mut w, "export-format");
+    click(&mut w, "CSV");
     click(&mut w, "choose-export-path");
     assert!(w.app.did_prompt_for_new_path());
     w.ui.update(|window, cx| assert!(!window.is_action_available(&ExportTable, cx)));
@@ -310,21 +439,33 @@ fn export_uses_the_displayed_snapshot_from_before_the_save_panel() {
 }
 
 #[test]
+fn return_starts_export_from_the_dialog_and_commits_a_focused_choice_locally() {
+    let mut w = window();
+    action(&mut w, ExportTable);
+    click(&mut w, "export-format");
+    w.keys("down enter");
+    assert!(!w.app.did_prompt_for_new_path());
+    assert!(w.read(|table| matches!(table.controls.drawer, Some(super::Drawer::Export(_)))));
+    w.keys("escape");
+    action(&mut w, ExportTable);
+    w.keys("enter");
+    assert!(w.app.did_prompt_for_new_path());
+}
+
+#[test]
 fn export_announces_the_selected_format_and_compression() {
     let mut w = window();
     action(&mut w, ExportTable);
-    click(&mut w, "parquet");
+    click(&mut w, "export-compression");
     click(&mut w, "Brotli");
     w.ui.update(|window, _| {
-        for (id, checked) in [
-            ("parquet", true),
-            ("csv", false),
-            ("Brotli", true),
-            ("Zstd", false),
+        for (id, value) in [
+            ("export-format", "Parquet"),
+            ("export-compression", "Brotli"),
         ] {
             let control = window.find(id);
-            assert_eq!(control.role(), Some(gpui_kit::Role::RadioButton));
-            assert_eq!(control.checked(), Some(checked));
+            assert_eq!(control.role(), Some(gpui_kit::Role::ComboBox));
+            assert_eq!(control.value(), Some(value));
         }
         let save = window.find("choose-export-path");
         assert_eq!(save.role(), Some(gpui_kit::Role::Button));

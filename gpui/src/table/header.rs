@@ -47,8 +47,24 @@ impl TableView {
                 )
             })
             .unwrap_or_else(|| column.technical_type.clone());
-        let tip: SharedString =
-            format!("{} · {details}", crate::data::preview(&column.name)).into();
+        let mut tip = format!("{} · {details}", crate::data::preview(&column.name));
+        let sorts = &self.data.query().sorts;
+        if let Some((i, sort)) = sorts
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.column == column.id)
+        {
+            let direction = if sort.descending {
+                "Descending"
+            } else {
+                "Ascending"
+            };
+            tip.push_str(&format!(" · {direction}"));
+            if sorts.len() > 1 {
+                tip.push_str(&format!(" ({} of {})", i + 1, sorts.len()));
+            }
+        }
+        let tip: SharedString = tip.into();
         let mut area = div()
             .id(("header-tip", index))
             .absolute()

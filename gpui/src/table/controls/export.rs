@@ -4,6 +4,7 @@ use gewu_core::{ColumnId, Export, ExportOptions, FileType, OrderedView, ParquetC
 use gpui_kit::*;
 
 use super::{Drawer, Preferences, TableView, button};
+use crate::panels::choice::{Choice, ChoiceField};
 
 pub(super) struct ExportDraft {
     view: Arc<OrderedView>,
@@ -38,11 +39,11 @@ impl Drop for WorkingExport {
     }
 }
 
-const FORMATS: [(FileType, &str); 4] = [
-    (FileType::Parquet, "parquet"),
-    (FileType::Csv, "csv"),
-    (FileType::Tsv, "tsv"),
-    (FileType::Xlsx, "xlsx"),
+const FORMATS: [FileType; 4] = [
+    FileType::Parquet,
+    FileType::Csv,
+    FileType::Tsv,
+    FileType::Xlsx,
 ];
 const COMPRESSIONS: [(ParquetCompression, &str); 6] = [
     (ParquetCompression::Zstd, "Zstd"),
@@ -65,10 +66,11 @@ impl TableView {
             })
     }
 
-    pub(in crate::table) fn open_export(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::table) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_export(cx) {
             return;
         }
+        self.focus_panel(window, cx);
         let prefs = Preferences::get(cx);
         self.controls.menu = None;
         self.controls.drawer = Some(Drawer::Export(ExportDraft {
@@ -85,60 +87,96 @@ impl TableView {
         cx.notify();
     }
 
-    pub(super) fn export_panel(&self, draft: &ExportDraft, cx: &mut Context<Self>) -> AnyElement {
-        let mut panel = self.drawer("Export", cx).child(format!(
-            "{} rows · {} visible columns",
-            draft.view.row_count(),
-            draft.columns.len()
-        ));
-        let mut choices = crate::panels::radio_group("export-formats", "File format");
-        for (format, id) in FORMATS {
-            choices = choices.child(crate::panels::radio(
-                id,
-                format.to_string(),
-                draft.format == format,
-                cx,
-                cx.listener(move |t, _, _, cx| {
-                    if let Some(Drawer::Export(d)) = &mut t.controls.drawer {
-                        d.format = format;
-                    }
-                    cx.notify();
-                }),
-            ));
-        }
-        panel = panel.child(choices);
-        if draft.format == FileType::Parquet {
-            let mut choices =
-                crate::panels::radio_group("export-compressions", "Parquet compression");
-            for (compression, label) in COMPRESSIONS {
-                choices = choices.child(crate::panels::radio(
-                    label,
-                    label,
-                    draft.compression == compression,
-                    cx,
-                    cx.listener(move |t, _, _, cx| {
-                        if let Some(Drawer::Export(d)) = &mut t.controls.drawer {
-                            d.compression = compression;
-                        }
-                        cx.notify();
-                    }),
-                ));
+    pub(super) fn export_panel(
+        &self,
+        draft: &ExportDraft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let form_row = |label: &'static str, field: AnyElement| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().w(px(92.)).flex_none().child(label))
+                .child(div().flex_1().min_w_0().child(field))
+        };
+        let format = ChoiceField {
+            id: "export-format".into(),
+            label: "File format",
+            searchable: false,
+            options: FORMATS
+                .iter()
+                .map(|format| Choice {
+                    value: *format,
+                    label: format.to_string().into(),
+                })
+                .collect(),
+            selected: Some(draft.format),
+        };
+        let pick = cx.listener(|t, chosen: &FileType, _, cx| {
+            if let Some(Drawer::Export(d)) = &mut t.controls.drawer {
+                d.format = *chosen;
+                cx.notify();
             }
-            panel = panel.child("Compression").child(choices);
+        });
+        let mut panel = self
+            .drawer("Export", window, cx)
+            .child(
+                div()
+                    .text_color(
+                        gpui_kit::base::Theme::global(cx)
+                            .tokens
+                            .colors
+                            .muted_foreground,
+                    )
+                    .child(format!(
+                        "{} · {}",
+                        crate::counted(draft.view.row_count(), "row"),
+                        crate::counted(draft.columns.len() as u64, "visible column")
+                    )),
+            )
+            .child(form_row("Format", format.element(window, cx, pick)));
+        if draft.format == FileType::Parquet {
+            let compression = ChoiceField {
+                id: "export-compression".into(),
+                label: "Parquet compression",
+                searchable: false,
+                options: COMPRESSIONS
+                    .iter()
+                    .map(|(value, label)| Choice {
+                        value: *value,
+                        label: (*label).into(),
+                    })
+                    .collect(),
+                selected: Some(draft.compression),
+            };
+            let pick = cx.listener(|t, chosen: &ParquetCompression, _, cx| {
+                if let Some(Drawer::Export(d)) = &mut t.controls.drawer {
+                    d.compression = *chosen;
+                    cx.notify();
+                }
+            });
+            panel = panel.child(form_row(
+                "Compression",
+                compression.element(window, cx, pick),
+            ));
         }
         panel
             .child(
-                button("choose-export-path", "Save as…", false, cx).on_click(cx.listener(
-                    |t, _, window, cx| {
-                        window.focus(&t.focus, cx);
-                        t.choose_export_path(cx);
-                    },
-                )),
+                super::footer()
+                    .child(self.close_button("Cancel", cx))
+                    .child(button("choose-export-path", "Export…", true, cx).on_click(
+                        cx.listener(|t, _, w, cx| {
+                            w.focus(&t.focus, cx);
+                            t.choose_export_path(cx);
+                        }),
+                    )),
             )
             .into_any_element()
     }
 
-    fn choose_export_path(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn choose_export_path(&mut self, cx: &mut Context<Self>) {
         let Some(Drawer::Export(draft)) = self.controls.drawer.take() else {
             return;
         };
@@ -266,8 +304,9 @@ impl Render for ExportController {
             ExportController::Writing(active) => {
                 let progress = active.job.progress();
                 bar.child(format!(
-                    "Exporting {} / {} rows",
-                    progress.rows_written, progress.total_rows
+                    "Exporting {} / {}",
+                    progress.rows_written,
+                    crate::counted(progress.total_rows, "row")
                 ))
                 .child(
                     button("cancel-export", "Cancel export", false, cx).on_click(cx.listener(

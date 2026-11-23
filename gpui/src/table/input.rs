@@ -76,7 +76,7 @@ impl TableView {
                 _ => Selection::single(cell),
             });
             if ev.click_count == 2 {
-                self.show_cell(cell, cx);
+                self.show_cell(cell, window, cx);
             } else {
                 self.drag = Drag::Select;
             }

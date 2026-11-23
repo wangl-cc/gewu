@@ -81,7 +81,17 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
         "Row 5 · note"
     );
-    w.ui.update(|window, _| assert!(window.try_find("find-notice").is_none()));
+    w.ui.update(|window, _| {
+        let count = window.find("find-count");
+        assert_eq!(count.label(), Some("Match 1 of 2"));
+        assert!(
+            window
+                .find("table-search")
+                .bounds()
+                .contains(&count.bounds().center())
+        );
+        assert!(window.try_find("find-notice").is_none());
+    });
     assert_eq!(
         w.app.read(|cx| {
             let t = w.table.read(cx);
@@ -94,13 +104,17 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     );
     w.keys("cmd-g");
     assert_eq!(w.selection(), single(1, 2));
+    w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 2 of 2")));
     w.keys("cmd-g");
     assert_eq!(w.selection(), single(0, 2));
     assert!(
         w.app
             .read(|cx| w.table.read(cx).find.read(cx).message(cx) == "Wrapped · Row 5 · note")
     );
-    w.ui.update(|window, _| assert_eq!(window.find("find-notice").label(), Some("Wrapped")));
+    w.ui.update(|window, _| {
+        assert_eq!(window.find("find-notice").label(), Some("Wrapped"));
+        assert_eq!(window.find("find-count").label(), Some("Match 1 of 2"));
+    });
     w.keys("cmd-shift-g");
     assert_eq!(w.selection(), single(1, 2));
     w.keys("escape");
@@ -126,6 +140,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         let notice = window.find("find-notice");
         let field = window.find("table-search").bounds();
         assert_eq!(notice.label(), Some("No matches"));
+        assert!(window.try_find("find-count").is_none());
         assert!(field.contains(&notice.bounds().center()));
     });
     w.keys("escape");
@@ -154,6 +169,7 @@ fn find_keeps_each_navigation_request_and_filters_compose_by_column() {
     });
     w.settle();
     assert_eq!(w.selection(), single(2, 2));
+    w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 2 of 2")));
 }
 
 #[test]

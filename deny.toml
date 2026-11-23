@@ -15,6 +15,7 @@ ignore = [
 
 [licenses]
 allow = [
+  "0BSD",
   "Apache-2.0",
   "BSD-2-Clause", # arrayref, used by GPUI's rendering stack
   "BSD-3-Clause",

@@ -112,6 +112,111 @@ fn picker_finder_and_file_drop_share_window_identity() {
 }
 
 #[test]
+fn picker_header_choice_applies_to_eligible_files_and_parquet_offers_recovery() {
+    let folder = tempfile::tempdir().unwrap();
+    let csv = folder.path().join("sample.CSV");
+    let tsv = folder.path().join("sample.tsv");
+    let parquet = folder.path().join("damaged.parquet");
+    fs::write(&csv, "first,second\n1,2\n").unwrap();
+    fs::write(&tsv, "first\tsecond\n1\t2\n").unwrap();
+    fs::write(&parquet, b"PAR1broken footer").unwrap();
+    let session = Session::new();
+    session.app.update(|cx| {
+        crate::shell::open_with_header(
+            vec![csv, tsv, fixture("multi-sheet.xlsx"), parquet],
+            false,
+            cx,
+        );
+    });
+    session.app.run_until_parked();
+    for index in 0..3 {
+        let (doc, _) = session.viewer(index);
+        doc.read_with(&session.app, |doc, cx| {
+            assert!(doc.header_available && !doc.displayed.has_header);
+            if index < 2 {
+                assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
+            }
+        });
+    }
+    let (doc, mut ui) = session.viewer(3);
+    doc.read_with(&session.app, |doc, _| assert!(!doc.header_available));
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        assert!(!w.is_action_available(&ImportOptions, cx));
+        assert!(w.try_find("header-mode").is_none());
+        assert!(w.try_find("open-error-text").is_none());
+        w.click("open-error-details", cx);
+        w.render_frame(cx);
+        let details = w.find("open-error-text");
+        assert_eq!(
+            details.label().unwrap().matches("Parquet error:").count(),
+            1
+        );
+        w.click("open-another-file", cx);
+    });
+    session.app.run_until_parked();
+    assert!(session.app.did_prompt_for_paths());
+}
+
+#[test]
+fn finder_import_options_warn_before_removing_conditions_and_allow_cancel() {
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("samples.csv");
+    fs::write(&file, "group\nx\ny\nx\n").unwrap();
+    let session = Session::new();
+    session.open(vec![file]);
+    let (doc, mut ui) = session.viewer(0);
+    ui.update(|w, cx| {
+        w.press("home", cx);
+        w.press("cmd-alt-shift-l", cx);
+    });
+    ui.run_until_parked();
+    ui.dispatch_action(ImportOptions);
+    ui.run_until_parked();
+    let (_, detail) = session.app.pending_prompt().unwrap();
+    assert!(detail.contains("clear Find, filters and sorting"));
+    session.app.simulate_prompt_answer("Cancel");
+    ui.run_until_parked();
+    doc.read_with(&session.app, |doc, cx| {
+        assert!(doc.displayed.has_header);
+        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
+    });
+    ui.dispatch_action(ImportOptions);
+    ui.run_until_parked();
+    session.app.simulate_prompt_answer("Read as Data");
+    ui.run_until_parked();
+    doc.read_with(&session.app, |doc, cx| {
+        assert!(!doc.displayed.has_header);
+        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 4);
+    });
+}
+
+#[test]
+fn import_menu_follows_the_active_file_format() {
+    use gewu_core::{ColumnId, Dataset, FileType};
+
+    let folder = tempfile::tempdir().unwrap();
+    let csv = folder.path().join("source.csv");
+    let parquet = folder.path().join("typed.parquet");
+    fs::write(&csv, "score\n1\n2\n").unwrap();
+    std::sync::Arc::new(Dataset::open(&csv).unwrap())
+        .unfiltered()
+        .unsorted()
+        .export(&[ColumnId::from_raw(0)], FileType::Parquet)
+        .unwrap()
+        .write(&parquet)
+        .unwrap();
+    let session = Session::new();
+    session.open(vec![csv.clone(), parquet.clone()]);
+    for (path, available) in [(csv.clone(), true), (parquet, false), (csv, true)] {
+        session.open(vec![path]);
+        session
+            .app
+            .update(|cx| assert_eq!(cx.is_action_available(&ImportOptions), available));
+    }
+}
+
+#[test]
 fn reopening_a_document_preserves_its_query_and_other_windows_queries() {
     let folder = tempfile::tempdir().unwrap();
     let first = folder.path().join("first.csv");
@@ -199,20 +304,22 @@ fn worksheet_and_header_edits_compose_before_the_reader_finishes() {
 
     ui.update(|w, cx| {
         w.click(("sheet", last), cx);
-        w.click("header-mode", cx);
         w.render_frame(cx);
-        assert_eq!(w.find("header-mode").checked(), Some(false));
+        assert!(w.try_find("header-mode").is_none());
+        w.dispatch_action(Box::new(ImportOptions), cx);
     });
+    ui.run_until_parked();
+    session.app.simulate_prompt_answer("Read as Data");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
         assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"));
         assert!(!doc.displayed.has_header);
     });
 
-    ui.update(|w, cx| {
-        w.click("header-mode", cx);
-        w.click(("sheet", first), cx);
-    });
+    ui.dispatch_action(ImportOptions);
+    ui.run_until_parked();
+    session.app.simulate_prompt_answer("Use as Column Names");
+    ui.update(|w, cx| w.click(("sheet", first), cx));
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
         assert_eq!(doc.displayed.sheet.as_deref(), Some("First"));
@@ -232,7 +339,7 @@ fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
     ui.update(|w, cx| {
         w.render_frame(cx);
         assert!(w.try_find("worksheet-options").is_none());
-        assert_eq!(w.find("header-mode").checked(), Some(true));
+        assert!(w.try_find("header-mode").is_none());
         let title = w.find("document-title").bounds();
         let field = w.find("table-search").bounds();
         let inspector = w.find("show-inspector").bounds();
@@ -287,6 +394,7 @@ fn unreadable_first_sheet_leaves_the_workbook_catalog_available() {
         w.render_frame(cx);
         assert!(w.find("document-title").bounds().size.width > px(84.));
         assert!(w.try_find("table-search").is_none());
+        assert!(w.is_action_available(&ImportOptions, cx));
     });
     let first = doc.read_with(&session.app, |doc, cx| {
         assert!(doc.table.is_none());
@@ -352,11 +460,9 @@ fn failed_header_reload_retries_the_requested_options() {
     let original = doc.read_with(&session.app, |doc, _| doc.table.clone().unwrap());
     let moved = dir.path().join("held.csv");
     fs::rename(&file, &moved).unwrap();
-    ui.update(|w, cx| {
-        w.click("header-mode", cx);
-        w.render_frame(cx);
-        assert_eq!(w.find("header-mode").checked(), Some(false));
-    });
+    ui.dispatch_action(ImportOptions);
+    ui.run_until_parked();
+    session.app.simulate_prompt_answer("Read as Data");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
         assert!(matches!(doc.load, Load::Failed(_, _)));
@@ -366,7 +472,8 @@ fn failed_header_reload_retries_the_requested_options() {
     fs::rename(moved, file).unwrap();
     ui.update(|w, cx| {
         w.render_frame(cx);
-        assert_eq!(w.find("header-mode").checked(), Some(true));
+        assert!(w.try_find("open-another-file").is_none());
+        assert!(w.find("table-search").visible());
         w.click("retry-open", cx);
     });
     ui.run_until_parked();
@@ -426,10 +533,10 @@ fn export_keeps_the_original_worksheet_when_the_save_panel_outlives_a_switch() {
     session.open(vec![fixture("multi-sheet.xlsx")]);
     let (doc, mut ui) = session.viewer(0);
     ui.dispatch_action(crate::actions::ExportTable);
-    ui.update(|w, cx| {
-        w.click("csv", cx);
-        w.click("choose-export-path", cx);
-    });
+    for id in ["export-format", "CSV", "choose-export-path"] {
+        ui.run_until_parked();
+        ui.update(|w, cx| w.click(id, cx));
+    }
     ui.run_until_parked();
     assert!(session.app.did_prompt_for_new_path());
     let last = doc.read_with(&session.app, |doc, _| {
@@ -508,10 +615,7 @@ fn view_and_filter_menus_operate_on_the_focused_document() {
     ui.update(|w, cx| {
         w.render_frame(cx);
         assert_eq!(w.find("Column").selected(), Some(true));
-        assert_eq!(
-            w.find("Inspect column").label(),
-            Some("Inspect column, score")
-        );
+        assert_eq!(w.find("Inspect column").value(), Some("score"));
         assert!(item(cx, "View", "Show Row Numbers").1);
         w.press("cmd-alt-r", cx);
     });
@@ -557,6 +661,10 @@ fn settings_menu_updates_the_open_documents_display_preferences() {
     });
     let mut settings = VisualTestContext::from_window(handle, &session.app);
     settings.update(|w, cx| {
+        w.render_frame(cx);
+        let bottom = w.find(("pref", 4usize)).bounds().bottom();
+        assert!(bottom <= w.viewport_size().height);
+        assert!(w.viewport_size().height - bottom < px(60.));
         w.click(("row-height", 32usize), cx);
         w.click(("pref", 0usize), cx);
     });

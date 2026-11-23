@@ -54,7 +54,6 @@ enum Drag {
 pub struct TableView {
     pub(crate) data: TableData,
     pub(crate) document_title: Option<SharedString>,
-    pub(crate) delimited_header: Option<bool>,
     prefs: Preferences,
     _style_changes: Subscription,
     _window_activation: Subscription,
@@ -72,6 +71,7 @@ pub struct TableView {
     pub(crate) find: Entity<crate::find::FindController>,
     _find_reveal: Subscription,
     _find_changed: Subscription,
+    scatter_selection: Option<Subscription>,
     notice: Option<Notice>,
     controls: controls::Controls,
     query_task: Option<Task<()>>,
@@ -96,11 +96,18 @@ struct PaintCell {
     spans: Range<usize>,
 }
 
+struct PaintHeader {
+    name: SharedString,
+    kind: SharedString,
+    sort: Option<SharedString>,
+    funnel: Option<bool>,
+}
+
 /// Everything one paint needs, moved into the canvas.
 struct Frame {
     formatting_error: Option<SharedString>,
     layout: Rc<Layout>,
-    header: Vec<(f32, f32, SharedString, SharedString, Option<bool>)>,
+    header: Vec<PaintHeader>,
     style: Preferences,
     gutter: Vec<(f32, SharedString)>,
     columns: Vec<PaintColumn>,
@@ -167,7 +174,6 @@ impl TableView {
         Self {
             prefs,
             document_title: None,
-            delimited_header: None,
             _style_changes: style_changes,
             _window_activation: cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             data,
@@ -195,6 +201,7 @@ impl TableView {
             focus: cx.focus_handle(),
             find,
             _find_changed: changed,
+            scatter_selection: None,
             _find_reveal: reveal,
             notice: None,
             controls: Default::default(),

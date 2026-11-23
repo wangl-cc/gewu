@@ -161,6 +161,68 @@ impl Render for TableView {
                 .size_full(),
             );
         let colors = base::Theme::global(cx).tokens.colors;
+        let table = if self.data.row_count() == 0
+            && let Some(filter) = self.data.query().filters.first()
+        {
+            let column = filter.column;
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .child(table)
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(HEADER_HEIGHT))
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(colors.muted_foreground)
+                                .child("No rows match the current filters"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    crate::panels::button(
+                                        "empty-edit-filter",
+                                        "Edit filter…",
+                                        false,
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |table, _, window, cx| {
+                                            table.filter_column(column, window, cx)
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    crate::panels::button(
+                                        "empty-clear-filters",
+                                        "Clear filters",
+                                        false,
+                                        cx,
+                                    )
+                                    .on_click(
+                                        cx.listener(|table, _, _, cx| table.clear_filters(cx)),
+                                    ),
+                                ),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            table.into_any_element()
+        };
         let toolbar = if let Some(name) = &self.document_title {
             Self::document_titlebar(name.clone(), window, cx)
         } else {
@@ -262,9 +324,11 @@ impl Render for TableView {
                 )
             })
             .on_action(cx.listener(|t, _: &actions::ManageColumns, w, cx| t.open_columns(w, cx)))
-            .on_action(cx.listener(|t, _: &actions::EditSort, _, cx| t.open_sort(cx)))
+            .on_action(cx.listener(|t, _: &actions::EditSort, w, cx| t.open_sort(w, cx)))
             .when(self.can_export(cx), |view| {
-                view.on_action(cx.listener(|t, _: &actions::ExportTable, _, cx| t.open_export(cx)))
+                view.on_action(
+                    cx.listener(|t, _: &actions::ExportTable, w, cx| t.open_export(w, cx)),
+                )
             })
             .child(toolbar)
             .child(
@@ -273,8 +337,8 @@ impl Render for TableView {
                     .flex_1()
                     .min_h_0()
                     .child(table)
-                    .children(self.panel(cx)),
+                    .children(self.panel(window, cx)),
             )
-            .child(self.status_bar(cx))
+            .child(self.status_bar(window, cx))
     }
 }

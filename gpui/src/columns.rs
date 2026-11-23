@@ -77,7 +77,7 @@ impl TableColumns {
         self.order.get(index).map(|&slot| &self.schema[slot].info)
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &ColumnInfo> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &ColumnInfo> + Clone {
         self.order.iter().map(|&slot| &self.schema[slot].info)
     }
 

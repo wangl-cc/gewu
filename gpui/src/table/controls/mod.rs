@@ -2,6 +2,7 @@
 use gewu_core::{ColumnFilter, ColumnId, Filter};
 use gpui_kit::{
     base::{self, input::InputState},
+    prelude::FluentBuilder,
     *,
 };
 
@@ -19,9 +20,8 @@ mod sorting;
 #[derive(Default)]
 pub(super) struct Controls {
     drawer: Option<Drawer>,
-    menu: Option<menus::MenuTarget>,
-    replace_sort: Option<ColumnId>,
-    sort_menu: Option<(ColumnId, Point<Pixels>)>,
+    menu: Option<menus::OpenMenu>,
+    panel_focus: Option<FocusHandle>,
     inspector: Option<Entity<Inspector>>,
     pub(super) inspector_visible: bool,
     export: Option<Entity<export::ExportController>>,
@@ -37,9 +37,31 @@ enum Order {
 struct ColumnDrag {
     document: EntityId,
     order: Order,
+    index: usize,
     id: ColumnId,
     name: SharedString,
 }
+impl ColumnDrag {
+    fn insertion_indicator(
+        &self,
+        style: StyleRefinement,
+        dragged: &Self,
+        color: Hsla,
+    ) -> StyleRefinement {
+        if dragged.document != self.document
+            || dragged.order != self.order
+            || dragged.index == self.index
+        {
+            return style;
+        }
+        if dragged.index < self.index {
+            style.border_b_2().border_color(color)
+        } else {
+            style.border_t_2().border_color(color)
+        }
+    }
+}
+
 impl Render for ColumnDrag {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = base::Theme::global(cx).tokens.colors;
@@ -66,10 +88,13 @@ enum Drawer {
     Columns {
         search: Entity<InputState>,
         _events: Subscription,
-        confirm: Option<Vec<ColumnId>>,
+        confirm: Option<columns::HideConfirmation>,
+        list: columns::ColumnListScroll,
     },
-    Sort(Option<Point<Pixels>>),
-    Filters(Point<Pixels>),
+    Sort {
+        summary: bool,
+    },
+    Filters,
     Cell {
         anchor: Point<Pixels>,
         name: String,
@@ -97,7 +122,23 @@ impl TableView {
         let Some(cell) = self.data.display_cell(row, id) else {
             return;
         };
-        self.selection = Some(Selection::single(cell));
+        let selected = Selection::single(cell);
+        self.selection = Some(selected);
+        let chart = hit.chart;
+        let source_row = hit.source_row.0;
+        let panel = panel.downgrade();
+        let mut pending_mark = true;
+        self.scatter_selection = Some(cx.observe_self(move |table, cx| {
+            if table.selection != Some(selected) {
+                let _ = panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
+                table.scatter_selection = None;
+            } else if std::mem::take(&mut pending_mark) {
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.mark_scatter(chart, Some(source_row), cx)
+                });
+            }
+        }));
+        self.scroll.center_if_outside(cell.row);
         self.reveal(cell);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -187,18 +228,25 @@ impl TableView {
                 editor.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx))
             }
             Some(Drawer::Cell { .. }) => self.controls.drawer = None,
-            Some(Drawer::Filters(_)) if self.data.query().filters.is_empty() => {
+            Some(Drawer::Sort { summary: true }) if self.data.query().sorts.is_empty() => {
+                self.controls.drawer = None
+            }
+            Some(Drawer::Filters) if self.data.query().filters.is_empty() => {
                 self.controls.drawer = None
             }
             _ => {}
         }
     }
 
+    fn focus_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self
+            .controls
+            .panel_focus
+            .get_or_insert_with(|| cx.focus_handle());
+        window.focus(handle, cx);
+    }
+
     pub(super) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.controls.sort_menu.take().is_some() {
-            cx.notify();
-            return true;
-        }
         if self.controls.menu.take().is_none() && self.controls.drawer.take().is_none() {
             return false;
         }
@@ -278,10 +326,10 @@ impl TableView {
         });
     }
 
-    pub(super) fn panel(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(super) fn panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut elements = Vec::new();
-        if let Some(menu) = self.controls.menu {
-            elements.push(self.menu_view(menu, cx));
+        if let Some(menu) = &self.controls.menu {
+            elements.push(menu.element());
         }
         if self.controls.inspector_visible {
             elements.extend(
@@ -294,25 +342,33 @@ impl TableView {
         let panel = match &self.controls.drawer {
             Some(Drawer::Filter { editor, .. }) => editor.clone().into_any_element(),
             Some(Drawer::Columns {
-                search, confirm, ..
-            }) => self.columns_panel(search, confirm.as_deref(), cx),
-            Some(Drawer::Sort(_)) => self.sort_panel(cx),
-            Some(Drawer::Filters(_)) => self.filter_summary(cx),
-            Some(Drawer::Cell { name, value, .. }) => self.cell_panel(name, value.as_ref(), cx),
-            Some(Drawer::Export(draft)) => self.export_panel(draft, cx),
-            None => return elements,
+                search,
+                confirm,
+                list,
+                ..
+            }) => self.columns_panel(search, confirm.as_ref(), list, window, cx),
+            Some(Drawer::Sort { summary: false }) => self.sort_panel(window, cx),
+            Some(Drawer::Cell { name, value, .. }) => {
+                self.cell_panel(name, value.as_ref(), window, cx)
+            }
+            Some(Drawer::Export(draft)) => self.export_panel(draft, window, cx),
+            // The status-bar triggers own the geometry of their popups.
+            Some(Drawer::Filters | Drawer::Sort { summary: true }) | None => return elements,
         };
         let entity = cx.weak_entity();
         let target = match &self.controls.drawer {
-            Some(
-                Drawer::Sort(Some(at)) | Drawer::Filters(at) | Drawer::Cell { anchor: at, .. },
-            ) => Some(PopoverTarget::Point(*at)),
+            Some(Drawer::Cell { anchor, .. }) => Some(PopoverTarget::Point(*anchor)),
             Some(Drawer::Filter { column, .. }) => Some(PopoverTarget::Header(*column)),
             _ => None,
         };
         let overlay = if let Some(target) = target {
             let popup = div()
                 .id("table-popover")
+                .when(matches!(target, PopoverTarget::Point(_)), |popup| {
+                    popup.when_some(self.controls.panel_focus.as_ref(), |popup, handle| {
+                        popup.track_focus(handle)
+                    })
+                })
                 .occlude()
                 .on_mouse_down_out(cx.listener(|table, _, window, cx| {
                     table.close_panel(window, cx);
@@ -354,8 +410,55 @@ impl TableView {
         } else {
             base::Dialog::new(cx)
                 .accessibility_label("Table options")
+                .when_some(self.controls.panel_focus.clone(), |dialog, handle| {
+                    dialog.focus_handle(handle)
+                })
                 .backdrop(div().size_full().bg(crate::theme::modal_backdrop()))
                 .popup(div().occlude().child(panel))
+                .on_ok({
+                    let table = entity.clone();
+                    move |_, window, cx| {
+                        table
+                            .update(cx, |table, cx| match &table.controls.drawer {
+                                Some(Drawer::Columns {
+                                    confirm: Some(_), ..
+                                }) => {
+                                    table.confirm_hide(window, cx);
+                                    false
+                                }
+                                Some(Drawer::Columns { search, .. })
+                                    if search.focus_handle(cx).is_focused(window) =>
+                                {
+                                    false
+                                }
+                                Some(Drawer::Export(_)) => {
+                                    table.choose_export_path(cx);
+                                    window.focus(&table.focus, cx);
+                                    false
+                                }
+                                _ => true,
+                            })
+                            .unwrap_or(true)
+                    }
+                })
+                .on_cancel({
+                    let table = entity.clone();
+                    move |_, window, cx| {
+                        table
+                            .update(cx, |table, cx| {
+                                if let Some(Drawer::Columns {
+                                    confirm: Some(_), ..
+                                }) = &table.controls.drawer
+                                {
+                                    table.cancel_hide(window, cx);
+                                    false
+                                } else {
+                                    true
+                                }
+                            })
+                            .unwrap_or(true)
+                    }
+                })
                 .on_open_change(move |open, _, window, cx| {
                     if !open {
                         let _ = entity.update(cx, |t, cx| t.close_panel(window, cx));
@@ -367,39 +470,74 @@ impl TableView {
         elements
     }
 
-    fn drawer(&self, title: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn drawer(
+        &self,
+        title: &'static str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> base::ObservedElement<Stateful<Div>> {
         let colors = base::Theme::global(cx).tokens.colors;
         div()
             .id("table-drawer")
+            .test_support()
             .flex_none()
-            .w(px(318.))
-            .max_w_full()
-            .max_h(px(400.))
+            .w(px(368.).min((window.viewport_size().width - px(12.)).max(px(0.))))
+            .max_h(px(400.).min((window.viewport_size().height - px(40.)).max(px(0.))))
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .p_3()
-            .border_l_1()
+            .rounded(px(10.))
+            .border_1()
             .border_color(colors.border)
+            .shadow_md()
             .bg(colors.surface)
             .text_color(colors.surface_foreground)
             .text_sm()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(
-                        button("close-table-drawer", "Close", false, cx).on_click(cx.listener(
-                            |t, _, w, cx| {
-                                t.close_panel(w, cx);
-                            },
-                        )),
-                    ),
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
             )
     }
+
+    fn close_button(&self, label: &'static str, cx: &mut Context<Self>) -> base::Button {
+        button("close-table-drawer", label, false, cx).on_click(cx.listener(|t, _, w, cx| {
+            t.close_panel(w, cx);
+        }))
+    }
+}
+
+fn icon_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    glyph: &'static str,
+    cx: &App,
+) -> base::Button {
+    let colors = base::Theme::global(cx).tokens.colors;
+    base::Button::new(id)
+        .accessibility_label(label)
+        .size(px(22.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .text_color(colors.muted_foreground)
+        .hover(move |s| s.bg(colors.accent))
+        .child(glyph)
+}
+
+fn footer() -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap_2()
 }
 
 mod status;

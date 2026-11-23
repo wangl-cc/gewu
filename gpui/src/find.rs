@@ -1,9 +1,19 @@
 //! Native single-line search input and snapshot-scoped match navigation.
 
-use std::{collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    ops::Range,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use gewu_core::{
-    CellMatch, ColumnHighlight, ColumnId, Find, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS, OrderedView,
+    CellMatch, ColumnHighlight, ColumnId, Find, FindCounts, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS,
+    OrderedView,
 };
 use gpui_kit::{
     base::input::{Input, InputEvent, InputState},
@@ -21,6 +31,31 @@ struct Scope {
 
 #[derive(Default)]
 struct Highlights(HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>);
+
+struct MatchCounter {
+    // Navigation can move and wrap while the tally for its starting cell is still running.
+    starting_counts: Option<FindCounts>,
+    movement: i128,
+    cancelled: Arc<AtomicBool>,
+    _task: Task<()>,
+}
+
+impl MatchCounter {
+    fn position(&self) -> Option<(u64, u64)> {
+        let FindCounts { through, total } = self.starting_counts?;
+        if through == 0 || total == 0 {
+            return None;
+        }
+        let zero_based = (i128::from(through - 1) + self.movement).rem_euclid(i128::from(total));
+        Some((zero_based as u64 + 1, total))
+    }
+}
+
+impl Drop for MatchCounter {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
 
 enum FindMessage {
     Idle,
@@ -46,6 +81,7 @@ pub(crate) struct FindController {
     queued: i64,
     highlights: Highlights,
     navigation: Option<Task<()>>,
+    counter: Option<MatchCounter>,
     reading: Option<Task<()>>,
     highlight_failed: bool,
 }
@@ -65,6 +101,7 @@ impl FindController {
         self.highlights.0.clear();
         self.reading = None;
         self.navigation = None;
+        self.counter = None;
         self.highlight_failed = false;
         self.session = None;
         self.cursor = None;
@@ -129,6 +166,9 @@ impl FindController {
             if let Some(hit) = hit {
                 self.cursor = Some(hit);
                 self.report(hit, false);
+                if let Some(session) = self.find_session(cx) {
+                    self.start_count(session, hit, cx);
+                }
             } else {
                 self.advance_find(1, Duration::ZERO, cx);
             }
@@ -203,6 +243,7 @@ impl FindController {
             queued: 0,
             highlights: Highlights::default(),
             navigation: None,
+            counter: None,
             reading: None,
             highlight_failed: false,
         }
@@ -333,6 +374,39 @@ impl FindController {
         self.advance_find(if previous { -1 } else { 1 }, Duration::ZERO, cx);
     }
 
+    fn start_count(&mut self, session: Arc<Find>, hit: CellMatch, cx: &mut Context<Self>) {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancelled);
+        let worker = cx
+            .background_executor()
+            .spawn_with_priority(Priority::Low, async move {
+                session.counts_at(hit, || stop.load(Ordering::Relaxed))
+            });
+        let task = cx.spawn(async move |this, cx| {
+            let result = worker.await;
+            _ = this.update(cx, |find, cx| {
+                match result {
+                    Ok(Some(counts)) => {
+                        if let Some(counter) = &mut find.counter {
+                            counter.starting_counts = Some(counts);
+                        }
+                    }
+                    Ok(None) => return,
+                    Err(error) => {
+                        find.message = FindMessage::Notice(crate::errors::message(&error.into()));
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.counter = Some(MatchCounter {
+            starting_counts: None,
+            movement: 0,
+            cancelled,
+            _task: task,
+        });
+    }
+
     fn advance_find(&mut self, by: i64, delay: Duration, cx: &mut Context<Self>) {
         if self.navigation.is_some() {
             self.queued = self.queued.saturating_add(by);
@@ -358,9 +432,13 @@ impl FindController {
                 table.navigation = None;
                 match result {
                     Ok((session, hit, wrapped)) => {
-                        table.session = Some(session);
                         table.cursor = hit;
                         if let Some(hit) = hit {
+                            if let Some(counter) = &mut table.counter {
+                                counter.movement += i128::from(by);
+                            } else {
+                                table.start_count(session, hit, cx);
+                            }
                             table.report(hit, wrapped);
                             cx.emit(hit);
                         } else {
@@ -410,6 +488,7 @@ impl Render for FindController {
             FindMessage::Location { wrapped: true, .. } => Some("Wrapped"),
             _ => None,
         };
+        let position = self.counter.as_ref().and_then(MatchCounter::position);
         let field = div()
             .id("table-search")
             .flex_1()
@@ -435,6 +514,18 @@ impl Render for FindController {
                     .text_size(px(11.))
                     .text_color(colors.muted_foreground)
                     .child(text.to_owned())
+                    .test_support()
+            }))
+            .children(position.map(|(current, total)| {
+                div()
+                    .id("find-count")
+                    .role(Role::Status)
+                    .aria_label(format!("Match {current} of {total}"))
+                    .flex_none()
+                    .font_features(crate::theme::tabular_digits())
+                    .text_size(px(11.))
+                    .text_color(colors.muted_foreground)
+                    .child(format!("{current}/{total}"))
                     .test_support()
             }))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, w, cx| {

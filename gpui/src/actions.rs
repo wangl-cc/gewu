@@ -9,7 +9,6 @@ gpui_kit::actions!(gewu, [
     AnalyzeSelectedColumn,
     ShowChartInspector,
     ToggleRowNumbers,
-    ToggleImportHeader,
     ShowInspector,
     EditFilter,
     ManageColumns,
@@ -49,6 +48,13 @@ pub(crate) struct RevealScatterPoint {
 pub(crate) fn init(cx: &mut App) {
     let table = Some("GewuGrid");
     let document = Some("GewuDocument");
+    // The component library's debug inspector claims this chord globally, including inside a grid.
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    cx.bind_keys([KeyBinding::new(
+        "cmd-alt-i",
+        gpui_kit::Unbind(gpui_kit::component::ToggleInspector.name().into()),
+        None,
+    )]);
     cx.bind_keys([
         KeyBinding::new("cmd-a", input::SelectAll, table),
         KeyBinding::new("cmd-c", input::Copy, table),

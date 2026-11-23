@@ -4,7 +4,7 @@ Column filters narrow the displayed rows. Toolbar Find is separate: it highlight
 
 ## Find
 
-Find searches every visible column of the displayed rows, including rows and columns outside the viewport. Matches follow display-row order, then visible-column order. Next and Previous wrap at either end, and navigation reveals the matching cell. Highlights cover the cells on screen. Navigation searches the whole result with no hit-count ceiling, and presses made while a search is running are all applied. Find does not report a total number of matches.
+Find searches every visible column of the displayed rows, including rows and columns outside the viewport. Matches follow display-row order, then visible-column order. Next and Previous wrap at either end, and navigation reveals the matching cell. Highlights cover the cells on screen. Navigation searches the whole result with no hit-count ceiling, and presses made while a search is running are all applied. After the first hit, a background count supplies the current position and total inside the Find field (for example, `3/12`). Each matching cell counts once, even if its text contains the query several times. Navigation remains available while counting.
 
 Find never changes filters, sorting, rows, exports or Inspector statistics. Sorting, filtering, showing or hiding columns, or closing the file restarts Find; reordering visible columns keeps the current match when possible.
 

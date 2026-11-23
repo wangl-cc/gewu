@@ -210,9 +210,7 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
             bounds: header_mask,
         }),
         |window| {
-            for ((column, ..), (x, width, name, kind, filtered)) in
-                l.columns.iter().zip(&frame.header)
-            {
+            for ((column, x, width), header) in l.columns.iter().zip(&frame.header) {
                 let right = x + width;
                 if frame
                     .selection
@@ -230,14 +228,31 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                     grid,
                 ));
                 let available = px((width - 2. * PAD - 16.).max(0.));
+                let indicator = header.sort.as_ref().map(|label| {
+                    window.text_system().shape_line(
+                        label.clone(),
+                        px(10.),
+                        &[run(label.len(), text_color)],
+                        None,
+                    )
+                });
+                let name_width = indicator.as_ref().map_or(available, |line| {
+                    (available - line.width - px(3.)).max(px(0.))
+                });
                 let (label, _) = fit_line(
-                    name,
-                    available,
+                    &header.name,
+                    name_width,
                     px(12.),
-                    &run(name.len(), text_color),
+                    &run(header.name.len(), text_color),
                     window,
                 );
-                let (kind, _) = fit_line(kind, available, px(10.), &run(kind.len(), muted), window);
+                let (kind, _) = fit_line(
+                    &header.kind,
+                    available,
+                    px(10.),
+                    &run(header.kind.len(), muted),
+                    window,
+                );
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: rect(x + PAD, 0., width - 2. * PAD, HEADER_HEIGHT),
@@ -259,8 +274,19 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                             window,
                             cx,
                         );
-                        if let Some(active) = filtered {
-                            let color = if *active { colors.primary } else { muted };
+                        if let Some(line) = indicator {
+                            let at = px(x + PAD) + available - line.width;
+                            let _ = line.paint(
+                                origin + point(at, px(1.)),
+                                px(17.),
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                        if let Some(active) = header.funnel {
+                            let color = if active { colors.primary } else { muted };
                             let left = right - PAD - 9.;
                             for (dy, line_width) in [(0., 10.), (2., 7.), (4., 4.), (6., 2.)] {
                                 window.paint_quad(fill(

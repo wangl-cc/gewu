@@ -22,6 +22,7 @@ pub(in crate::panels) struct ScatterChart {
     y_title: SharedString,
     plot: Option<Arc<Plot>>,
     hover: Option<usize>,
+    selected: Option<usize>,
     press: Option<(usize, Point<Pixels>)>,
     focus: FocusHandle,
 }
@@ -105,6 +106,7 @@ impl ScatterChart {
             y_title,
             plot,
             hover: None,
+            selected: None,
             press: None,
             focus: cx.focus_handle().tab_stop(true),
         }
@@ -119,6 +121,12 @@ impl ScatterChart {
             window,
             cx,
         );
+    }
+
+    pub(in crate::panels) fn mark(&mut self, row: Option<u64>, cx: &mut Context<Self>) {
+        self.selected =
+            row.and_then(|row| self.sample.points.iter().position(|p| p.source_row == row));
+        cx.notify();
     }
 
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -187,6 +195,7 @@ impl Render for ScatterChart {
         };
         let handle = cx.weak_entity();
         let hovered = self.hover;
+        let selected = self.selected;
         let chart = canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal).id,
             move |bounds, hitbox, window, cx| {
@@ -260,6 +269,15 @@ impl Render for ScatterChart {
                         .corner_radii(r),
                     );
                 }
+                if let Some(i) = selected {
+                    let center = Plot::point(drawing, plot.points[i]);
+                    let ring = Bounds::new(center - point(px(5.), px(5.)), size(px(10.), px(10.)));
+                    window.paint_quad(
+                        outline(ring, colors.ring, BorderStyle::Solid)
+                            .border_widths(px(1.5))
+                            .corner_radii(px(5.)),
+                    );
+                }
                 Self::bind_pointer(handle, plot, drawing, hitbox, window);
             },
         )
@@ -271,7 +289,7 @@ impl Render for ScatterChart {
                 .track_focus(&self.focus)
                 .focus_visible(move |style| style.border_1().border_color(colors.ring))
                 .role(Role::Image)
-                .aria_label(format!("Scatter plot, {} points", self.sample.points.len()))
+                .aria_label(format!("Scatter plot, {}", crate::counted(self.sample.points.len() as u64, "point")))
                 .aria_description("Use Left and Right to inspect points. Press Return to reveal the point in the table.")
                 .on_key_down(cx.listener(|chart, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.modifiers.modified() { return; }

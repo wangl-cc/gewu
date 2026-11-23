@@ -8,6 +8,7 @@ use crate::{actions::*, platform};
 
 mod document;
 mod info;
+mod picker;
 
 gpui_kit::actions!(gewu, [
     OpenFiles,
@@ -31,13 +32,13 @@ struct OpenRecent(PathBuf);
 struct Documents {
     windows: Vec<(PathBuf, AnyWindowHandle)>,
     recent: platform::RecentDocuments,
-    picker: Option<Task<()>>,
+    picker: Option<picker::FilePicker>,
     _events: Task<()>,
 }
 impl Global for Documents {}
 
 pub(crate) fn run(arguments: impl Iterator<Item = PathBuf>) {
-    let app = gpui_kit::application();
+    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     let (send, receive) = async_channel::unbounded();
     app.on_open_urls(move |urls| {
         let paths: Vec<_> = urls
@@ -243,33 +244,33 @@ fn report_window_error(message: String, cx: &mut App) {
 }
 
 fn choose_files(cx: &mut App) {
-    if cx.global::<Documents>().picker.is_some() {
-        platform::activate_open_panel();
+    if let Some(picker) = &cx.global::<Documents>().picker {
+        picker.activate();
         return;
     }
-    let paths = cx.prompt_for_paths(PathPromptOptions {
-        files: true,
-        directories: false,
-        multiple: true,
-        prompt: Some("Open".into()),
-    });
-    let picker = cx.spawn(async move |cx| {
-        let result = paths.await;
-        cx.update(|cx| {
-            cx.global_mut::<Documents>().picker = None;
-            match result {
-                Ok(Ok(Some(paths))) => open_paths(paths, cx),
-                Ok(Err(e)) => report_window_error(e.to_string(), cx),
-                Ok(Ok(None)) | Err(_) => {}
-            }
-        });
-    });
-    cx.global_mut::<Documents>().picker = Some(picker);
+    match picker::FilePicker::show(cx) {
+        Ok(picker) => cx.global_mut::<Documents>().picker = Some(picker),
+        Err(error) => report_window_error(error, cx),
+    }
 }
 
 fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
-    if !paths.is_empty() && cx.global_mut::<Documents>().picker.take().is_some() {
-        platform::dismiss_open_panel();
+    open_with_header(paths, true, cx)
+}
+
+fn supports_header(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| {
+        ["csv", "tsv", "xlsx"]
+            .iter()
+            .any(|kind| ext.eq_ignore_ascii_case(kind))
+    })
+}
+
+fn open_with_header(paths: Vec<PathBuf>, has_header: bool, cx: &mut App) {
+    if !paths.is_empty()
+        && let Some(picker) = cx.global_mut::<Documents>().picker.take()
+    {
+        picker.dismiss();
     }
     let windows = cx.windows();
     cx.global_mut::<Documents>()
@@ -291,7 +292,15 @@ fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
         }
         let options = platform::window_options(cx);
         let result = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| Document::new(path.clone(), window, cx))
+            // A mixed selection applies the header policy only to eligible files.
+            cx.new(|cx| {
+                Document::new(
+                    path.clone(),
+                    has_header || !supports_header(&path),
+                    window,
+                    cx,
+                )
+            })
         });
         match result {
             Ok((handle, _)) => cx.global_mut::<Documents>().windows.push((path, handle)),

@@ -65,38 +65,31 @@ fn apply_appearance(window: &Window, cx: &mut App) {
     };
     #[cfg(not(target_os = "macos"))]
     let accent = None;
+    let component_mode = match appearance {
+        ThemeAppearance::Light => gpui_kit::component::ThemeMode::Light,
+        ThemeAppearance::Dark => gpui_kit::component::ThemeMode::Dark,
+    };
+    if gpui_kit::component::Theme::global(cx).mode != component_mode {
+        gpui_kit::component::Theme::change(component_mode, None, cx);
+    }
     let colors = crate::theme::document_colors(appearance, accent);
+    let components = gpui_kit::component::Theme::global(cx);
+    if (
+        components.primary,
+        components.primary_foreground,
+        components.ring,
+    ) != (colors.primary, colors.primary_foreground, colors.ring)
+    {
+        gpui_kit::component::Theme::update(cx, |theme| {
+            theme.primary = colors.primary;
+            theme.primary_foreground = colors.primary_foreground;
+            theme.ring = colors.ring;
+        });
+    }
     let theme = Theme::global_mut(cx);
     if theme.appearance != appearance || theme.tokens.colors != colors {
         theme.appearance = appearance;
         theme.tokens.colors = colors;
         cx.refresh_windows();
     }
-}
-
-// GPUI owns the native picker, but exposes only its result receiver. The shell
-// calls these while it holds that receiver, so other dialogs remain independent.
-#[cfg(target_os = "macos")]
-fn with_open_panel(action: impl FnOnce(&objc2_app_kit::NSOpenPanel)) {
-    let Some(main) = objc2::MainThreadMarker::new() else {
-        return;
-    };
-    for window in objc2_app_kit::NSApplication::sharedApplication(main).windows() {
-        if let Some(panel) = window.downcast_ref::<objc2_app_kit::NSOpenPanel>()
-            && panel.isVisible()
-        {
-            action(panel);
-            return;
-        }
-    }
-}
-
-pub(crate) fn activate_open_panel() {
-    #[cfg(target_os = "macos")]
-    with_open_panel(|panel| panel.makeKeyAndOrderFront(None));
-}
-
-pub(crate) fn dismiss_open_panel() {
-    #[cfg(target_os = "macos")]
-    with_open_panel(|panel| panel.performClose(None));
 }

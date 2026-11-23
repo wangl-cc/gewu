@@ -1,5 +1,6 @@
 //! Inspector and filter controls over the table's applied snapshot.
 mod charts;
+pub(crate) mod choice;
 mod draft;
 mod filter;
 mod inspector;
@@ -19,31 +20,23 @@ pub(crate) fn button(
     style_control(control, label, accented, cx)
 }
 
-pub(crate) fn header_checkbox(checked: bool, cx: &App) -> base::Checkbox {
+fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
     let colors = base::Theme::global(cx).tokens.colors;
-    let label = "First row is a header";
-    base::Checkbox::new("header-mode")
-        .accessibility_label(label)
-        .checked(checked)
+    base::Button::new(id)
+        .accessibility_label("Chart display options")
+        .aria_expanded(expanded)
         .flex()
-        .flex_none()
         .items_center()
+        .justify_start()
         .gap_1()
-        .text_size(px(11.))
+        .text_xs()
         .text_color(colors.muted_foreground)
         .cursor_pointer()
-        .child(
-            div()
-                .size(px(14.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(3.))
-                .border_1()
-                .border_color(colors.muted_foreground)
-                .child(if checked { "✓" } else { "" }),
-        )
-        .child(label)
+        .child(inspector::controls::chevron(
+            expanded,
+            colors.muted_foreground,
+        ))
+        .child("Chart display options")
 }
 
 fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs {
@@ -58,7 +51,7 @@ fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs
         .bg(colors.muted)
 }
 
-fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilder>(
+pub(crate) fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilder>(
     control: T,
     label: impl Into<SharedString>,
     selected: bool,
@@ -75,14 +68,74 @@ fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilde
         .rounded(px(4.))
         .cursor_pointer()
         .text_size(px(12.))
-        .text_color(if selected {
-            colors.primary_foreground
-        } else {
-            colors.foreground
+        .text_color(colors.foreground)
+        .when(selected, |c| {
+            c.bg(colors.background)
+                .shadow_xs()
+                .font_weight(FontWeight::SEMIBOLD)
         })
-        .when(selected, |c| c.bg(colors.primary))
         .when(!selected, |c| c.hover(move |s| s.bg(colors.accent)))
         .child(label.into())
+}
+
+pub(crate) fn checkbox(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    checked: bool,
+    cx: &App,
+    activate: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> base::Checkbox {
+    let colors = base::Theme::global(cx).tokens.colors;
+    let label = label.into();
+    base::Checkbox::new(id)
+        .accessibility_label(label.clone())
+        .checked(checked)
+        .on_change(move |_, ev, w, cx| activate(ev, w, cx))
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor_pointer()
+        .text_size(px(12.))
+        .child(
+            div()
+                .flex_none()
+                .size(px(14.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(if checked {
+                    colors.primary
+                } else {
+                    colors.muted_foreground
+                })
+                .bg(if checked {
+                    colors.primary
+                } else {
+                    colors.background
+                })
+                .when(checked, |box_| {
+                    box_.child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, _, window, _| {
+                                let p = |x, y| bounds.origin + point(px(x), px(y));
+                                let mut mark = PathBuilder::stroke(px(1.6));
+                                mark.move_to(p(1., 5.));
+                                mark.line_to(p(4., 8.));
+                                mark.line_to(p(10., 1.5));
+                                if let Ok(path) = mark.build() {
+                                    window.paint_path(path, colors.primary_foreground);
+                                }
+                            },
+                        )
+                        .w(px(11.))
+                        .h(px(10.)),
+                    )
+                }),
+        )
+        .child(div().min_w_0().truncate().child(label))
 }
 
 pub(crate) fn radio_group(id: &'static str, label: &'static str) -> base::RadioGroup {

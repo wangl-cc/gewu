@@ -23,6 +23,10 @@ impl FilterEditor {
     }
 
     pub(super) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
+        Self::labeled(label, Self::input(label, input, cx), cx)
+    }
+
+    pub(super) fn labeled(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
         let colors = base::Theme::global(cx).tokens.colors;
         div()
             .flex()
@@ -35,54 +39,11 @@ impl FilterEditor {
                     .text_color(colors.muted_foreground)
                     .child(label),
             )
-            .child(Self::input(label, input, cx))
-    }
-
-    pub(super) fn checkbox(
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        checked: bool,
-        cx: &App,
-        activate: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> base::Checkbox {
-        let colors = base::Theme::global(cx).tokens.colors;
-        let label = label.into();
-        base::Checkbox::new(id)
-            .accessibility_label(label.clone())
-            .checked(checked)
-            .on_change(move |_, ev, w, cx| activate(ev, w, cx))
-            .flex()
-            .items_center()
-            .gap_2()
-            .cursor_pointer()
-            .text_size(px(12.))
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(14.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(if checked {
-                        colors.primary
-                    } else {
-                        colors.muted_foreground
-                    })
-                    .bg(if checked {
-                        colors.primary
-                    } else {
-                        colors.background
-                    })
-                    .text_color(colors.primary_foreground)
-                    .child(if checked { "✓" } else { "" }),
-            )
-            .child(div().min_w_0().truncate().child(label))
+            .child(control)
     }
 
     pub(super) fn include_missing(&self, count: u64, cx: &mut Context<Self>) -> base::Checkbox {
-        Self::checkbox(
+        crate::panels::checkbox(
             "include-missing",
             format!("Include missing ({count})"),
             self.draft.include_missing_checked(),
@@ -102,12 +63,13 @@ impl Render for FilterEditor {
             .id("filter-editor")
             .overflow_y_scroll()
             .max_h_full()
-            .w(px(320.).min(window.viewport_size().width))
+            .w(px(368.).min(window.viewport_size().width))
             .flex()
             .flex_col()
             .gap_3()
             .p_3()
             .rounded_lg()
+            .shadow_lg()
             .border_1()
             .border_color(colors.border)
             .bg(colors.surface)
@@ -172,13 +134,13 @@ impl Render for FilterEditor {
             panel = match self.draft.mode {
                 Mode::Values if has_choices => panel.child(self.choices(facet, cx)),
                 Mode::Values => panel,
-                Mode::Range => panel.child(self.range(cx)),
+                Mode::Range => panel.child(self.range(window, cx)),
                 Mode::Text => panel
                     .child(Self::field("Match text", &self.text, cx))
                     .child(
                         row()
                             .gap_3()
-                            .child(Self::checkbox(
+                            .child(crate::panels::checkbox(
                                 "whole",
                                 "Whole value",
                                 self.draft.comparison == TextMatch::Equals,
@@ -191,7 +153,7 @@ impl Render for FilterEditor {
                                     cx.notify();
                                 }),
                             ))
-                            .child(Self::checkbox(
+                            .child(crate::panels::checkbox(
                                 "case",
                                 "Match case",
                                 self.draft.case_sensitive,
@@ -204,23 +166,46 @@ impl Render for FilterEditor {
                     ),
                 Mode::Missing => panel,
             };
-            if self.draft.mode != Mode::Values || !has_choices {
-                let mut missing = row()
-                    .gap_3()
-                    .child(self.include_missing(facet.null_count, cx));
-                if self.draft.mode != Mode::Values {
-                    missing = missing.child(Self::checkbox(
-                        "only-missing",
-                        "Only missing",
-                        self.draft.only_missing,
-                        cx,
-                        cx.listener(|editor, _, _, cx| {
-                            editor.draft.only_missing = !editor.draft.only_missing;
-                            cx.notify();
-                        }),
-                    ));
+            if self.draft.mode != Mode::Values {
+                let mut choices = base::RadioGroup::new("missing-policy")
+                    .aria_label("Missing values")
+                    .axis(Axis::Horizontal)
+                    .flex()
+                    .p(px(2.))
+                    .rounded_md()
+                    .bg(colors.muted);
+                use crate::panels::draft::MissingPolicy;
+                for (id, label, policy) in [
+                    ("exclude-missing", "Exclude", MissingPolicy::Exclude),
+                    ("include-missing", "Include", MissingPolicy::Include),
+                    ("only-missing", "Only missing", MissingPolicy::Only),
+                ] {
+                    let selected = self.draft.missing_policy() == policy;
+                    let select = cx.listener(move |editor, _: &ClickEvent, _, cx| {
+                        editor.draft.set_missing_policy(policy);
+                        cx.notify();
+                    });
+                    let radio = base::Radio::new(id)
+                        .accessibility_label(label)
+                        .checked(selected)
+                        .on_change(move |_, ev, w, cx| select(ev, w, cx));
+                    choices = choices.child(segment(radio, label, selected, cx));
                 }
-                panel = panel.child(missing);
+                panel = panel.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(colors.muted_foreground)
+                                .child(format!("Missing values ({})", facet.null_count)),
+                        )
+                        .child(choices),
+                );
+            } else if !has_choices {
+                panel = panel.child(self.include_missing(facet.null_count, cx));
             }
         } else if self.error.is_none() {
             panel = panel.child("Loading filter choices…");
@@ -228,12 +213,16 @@ impl Render for FilterEditor {
         panel
             .child(
                 row()
-                    .justify_end()
+                    .w_full()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(colors.border)
                     .child(
                         button("reset-filter", "Reset", false, cx).on_click(
                             cx.listener(|editor, _, window, cx| editor.reset(window, cx)),
                         ),
                     )
+                    .child(div().flex_1())
                     .child(
                         button("cancel-filter", "Cancel", false, cx)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(FilterEvent::Close))),

@@ -197,6 +197,18 @@ impl VerticalScroll {
             });
         }
     }
+
+    /// Give a distant record context when navigating from its chart.
+    pub(crate) fn center_if_outside(&mut self, row: u64) {
+        let top = self.row_top(row);
+        if top < 0. || top + self.row_height > self.viewport {
+            let before = self.page_rows() / 2;
+            self.set_anchor(Anchor {
+                row: row.saturating_sub(before),
+                offset: 0.,
+            });
+        }
+    }
 }
 
 #[cfg(test)]

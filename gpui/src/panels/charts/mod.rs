@@ -1,7 +1,7 @@
 mod axis;
 mod labels;
 mod scatter;
-use gewu_core::{AxisScale, Histogram};
+use gewu_core::{AxisScale, Histogram, RangeBounds};
 use gpui_kit::{base, *};
 pub(super) use labels::significant_digits;
 pub(super) use scatter::ScatterChart;
@@ -25,15 +25,23 @@ pub(super) fn bar_height(count: u64, peak: u64, logarithmic: bool) -> f32 {
     }
 }
 
-pub(super) fn histogram(histogram: &Histogram, log_counts: bool, cx: &App) -> Div {
-    let colors = base::Theme::global(cx).tokens.colors;
-    let peak = histogram.counts.iter().copied().max().unwrap_or(0);
-    let n = histogram.counts.len();
-    let mut bars = Vec::with_capacity(n);
-    for (i, &count) in histogram.counts.iter().enumerate() {
-        let (start, end) = bin_fraction(histogram, i);
-        bars.push((start, end, bar_height(count, peak, log_counts)));
+pub(super) fn bin_interval(bounds: &RangeBounds) -> String {
+    match (&bounds.min, &bounds.max) {
+        (Some(a), Some(b)) if a.label == b.label => a.label.clone(),
+        (Some(a), Some(b)) => format!("{} – {}", a.label, b.label),
+        (Some(a), None) => format!("≥ {}", a.label),
+        (None, Some(b)) => format!("≤ {}", b.label),
+        (None, None) => "All plotted values".into(),
     }
+}
+
+pub(super) fn histogram(
+    histogram: &Histogram,
+    log_counts: bool,
+    interval: impl Fn(usize) -> String,
+    cx: &App,
+) -> Div {
+    let colors = base::Theme::global(cx).tokens.colors;
     if histogram.lo.is_none() || histogram.hi.is_none() {
         let mut empty = div().child(if histogram.scale == AxisScale::Log10 {
             "No positive finite values to plot"
@@ -48,6 +56,54 @@ pub(super) fn histogram(histogram: &Histogram, log_counts: bool, cx: &App) -> Di
         }
         return empty;
     }
+    let mut plot = div()
+        .relative()
+        .w_full()
+        .aspect_ratio(4. / 3.)
+        .border_b_1()
+        .border_color(colors.border);
+    for fraction in [0.25, 0.5, 0.75] {
+        plot = plot.child(
+            div()
+                .absolute()
+                .top(relative(fraction))
+                .w_full()
+                .h(px(1.))
+                .bg(colors.border.opacity(0.5)),
+        );
+    }
+    let peak = histogram.counts.iter().copied().max().unwrap_or(0);
+    for (index, &count) in histogram.counts.iter().enumerate() {
+        let (start, end) = bin_fraction(histogram, index);
+        let hint = format!("{} · {}", interval(index), crate::counted(count, "row"));
+        let height = bar_height(count, peak, log_counts);
+        let group = "inspector-histogram-bin";
+        plot = plot.child(
+            div()
+                .id((group, index))
+                .group(group)
+                .absolute()
+                .left(relative(start))
+                .w(relative(end - start))
+                .h_full()
+                .flex()
+                .items_end()
+                .pr(px(0.5))
+                .role(Role::Image)
+                .aria_label(hint.clone())
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)
+                })
+                .child(
+                    div()
+                        .w_full()
+                        .h(relative(height))
+                        .bg(colors.primary.opacity(0.5))
+                        .group_hover(group, move |style| style.bg(colors.primary)),
+                )
+                .test_support(),
+        );
+    }
     let mut chart = div()
         .flex()
         .flex_col()
@@ -55,33 +111,7 @@ pub(super) fn histogram(histogram: &Histogram, log_counts: bool, cx: &App) -> Di
         .font_features(crate::theme::tabular_digits())
         .text_color(colors.muted_foreground)
         .text_size(px(11.))
-        .child(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let rule = px(1. / window.scale_factor());
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(bounds.left(), bounds.bottom() - rule),
-                            size(bounds.size.width, rule),
-                        ),
-                        colors.border,
-                    ));
-                    for (start, end, height) in bars {
-                        let width = bounds.size.width * (end - start);
-                        let h = bounds.size.height * height;
-                        let origin = point(
-                            bounds.left() + bounds.size.width * start,
-                            bounds.bottom() - h,
-                        );
-                        let bar = Bounds::new(origin, size((width - rule).max(width * 0.5), h));
-                        window.paint_quad(fill(bar, colors.primary));
-                    }
-                },
-            )
-            .w_full()
-            .aspect_ratio(4. / 3.),
-        )
+        .child(plot)
         .child(histogram_axis(histogram));
     if histogram.non_positive_count > 0 || histogram.infinite_count > 0 {
         chart = chart.child(format!(

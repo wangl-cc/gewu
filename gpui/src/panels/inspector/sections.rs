@@ -51,7 +51,7 @@ impl InspectorSettings {
 pub(super) enum SectionData {
     Overview(u64),
     Statistics(Arc<NumericStatistics>),
-    Distribution(Arc<Histogram>),
+    Distribution(Arc<RangeHistogram>),
     Values {
         distinct: u64,
         rows: Vec<(SharedString, u64)>,
@@ -79,7 +79,7 @@ impl ColumnResults {
                     Section::Overview => cache.count_nulls(id).map(SectionData::Overview),
                     Section::Statistics => cache.statistics(id).map(SectionData::Statistics),
                     Section::Distribution => cache
-                        .distribution(id, settings.bins, scale)
+                        .distribution_with_ranges(id, settings.bins, scale)
                         .map(SectionData::Distribution),
                     Section::Values => cache.values(id).map(|s| SectionData::Values {
                         distinct: s.distinct_count,

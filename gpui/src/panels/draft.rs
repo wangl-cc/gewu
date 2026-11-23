@@ -10,6 +10,13 @@ pub(super) enum Mode {
     Missing,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MissingPolicy {
+    Exclude,
+    Include,
+    Only,
+}
+
 /// Exact selections may contain values currently absent from the facet.
 #[derive(Clone)]
 pub(super) struct Draft {
@@ -104,6 +111,21 @@ impl Draft {
 
     pub fn include_missing_checked(&self) -> bool {
         self.include_missing && !self.only_missing
+    }
+
+    pub fn missing_policy(&self) -> MissingPolicy {
+        match (self.only_missing, self.include_missing) {
+            (true, _) => MissingPolicy::Only,
+            (false, true) => MissingPolicy::Include,
+            (false, false) => MissingPolicy::Exclude,
+        }
+    }
+
+    pub fn set_missing_policy(&mut self, policy: MissingPolicy) {
+        self.only_missing = policy == MissingPolicy::Only;
+        if !self.only_missing {
+            self.include_missing = policy == MissingPolicy::Include;
+        }
     }
 
     pub fn toggle_include_missing(&mut self) {
