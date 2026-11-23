@@ -268,12 +268,7 @@ impl Render for Document {
         if let Some(table) = &self.table {
             view = view.child(div().flex_1().min_h_0().child(table.clone()));
         } else {
-            view = view.child(TableView::document_titlebar(
-                self.title.clone(),
-                None,
-                window,
-                cx,
-            ));
+            view = view.child(TableView::document_titlebar(self.title.clone(), window, cx));
         }
         if !self.sheets.is_empty() || (self.header_available && self.table.is_none()) {
             let mut bar = div()

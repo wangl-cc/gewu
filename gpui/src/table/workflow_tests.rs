@@ -81,6 +81,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
         "Row 5 · note"
     );
+    w.ui.update(|window, _| assert!(window.try_find("find-notice").is_none()));
     assert_eq!(
         w.app.read(|cx| {
             let t = w.table.read(cx);
@@ -99,6 +100,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         w.app
             .read(|cx| w.table.read(cx).find.read(cx).message(cx) == "Wrapped · Row 5 · note")
     );
+    w.ui.update(|window, _| assert_eq!(window.find("find-notice").label(), Some("Wrapped")));
     w.keys("cmd-shift-g");
     assert_eq!(w.selection(), single(1, 2));
     w.keys("escape");
@@ -120,6 +122,12 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
         "No matches"
     );
+    w.ui.update(|window, _| {
+        let notice = window.find("find-notice");
+        let field = window.find("table-search").bounds();
+        assert_eq!(notice.label(), Some("No matches"));
+        assert!(field.contains(&notice.bounds().center()));
+    });
     w.keys("escape");
     w.click(w.header(1), Modifiers::default());
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);

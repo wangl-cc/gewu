@@ -6,7 +6,7 @@ How the window behaves. [Find and filtering](search-and-filter.md) covers what F
 
 View > Show Chart Inspector opens the chart directly. View > Analyze Selected Column (Command-Option-I) opens the Column page for the current table column. Command-Option-R toggles source row numbers across document windows.
 
-On macOS the document title, row and column counts, Find field and Inspector toggle share the title bar. The native window controls stay reachable at narrow widths. Workbooks show their sheet choices below the table. CSV and TSV documents keep the first-row header checkbox in the status bar.
+On macOS the document name, Find field and Inspector toggle are vertically centered in a single title-bar row. The status bar shows the row and column counts. The native window controls stay reachable at narrow widths. Workbooks show their sheet choices below the table. CSV and TSV documents keep the first-row header checkbox in the status bar.
 
 The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. The Inspector column chooser and the scatter X and Y pickers list only visible columns.
 
@@ -30,7 +30,7 @@ View > Columns… and the header menu open column management as a sheet. It can 
 
 ## Find
 
-Find uses a native search field in the toolbar. Command-F focuses it; Return and Shift-Return move to the next and previous match. Match status reports the same source row number as the grid gutter, including after filtering or sorting. Previous and next buttons appear beside the field while a query is present. Escape clears the query and returns focus to the table. Find does not filter rows or change the Inspector page.
+Find uses a native search field in the toolbar. Command-F focuses it; Return and Shift-Return move to the next and previous match. The search field shows a short inline notice when navigation wraps, no matches are found, or Find encounters an error. The Find group’s accessibility description includes the source row and column of a match. Previous and next buttons appear beside the field while a query is present. Escape clears the query and returns focus to the table. Find does not filter rows or change the Inspector page.
 
 The grid marks matching cells and text substrings in amber. The active selection and its row and column headers use the accent color, changing to neutral when the window loses focus. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
 

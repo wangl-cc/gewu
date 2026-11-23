@@ -3,12 +3,7 @@ use gpui_kit::prelude::FluentBuilder;
 use super::*;
 
 impl TableView {
-    pub(crate) fn document_titlebar(
-        name: SharedString,
-        dimensions: Option<String>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Div {
+    pub(crate) fn document_titlebar(name: SharedString, window: &mut Window, cx: &mut App) -> Div {
         let colors = base::Theme::global(cx).tokens.colors;
         let title = div()
             .id("document-title")
@@ -24,16 +19,7 @@ impl TableView {
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(name),
-            )
-            .when_some(dimensions, |title, dimensions| {
-                title.child(
-                    div()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(colors.muted_foreground)
-                        .child(dimensions),
-                )
-            });
+            );
         #[cfg(target_os = "macos")]
         let title = {
             let pressed = window.use_state(cx, |_, _| false);
@@ -176,13 +162,7 @@ impl Render for TableView {
             );
         let colors = base::Theme::global(cx).tokens.colors;
         let toolbar = if let Some(name) = &self.document_title {
-            let data = self.data.snapshot();
-            let dimensions = format!(
-                "{} rows · {} columns",
-                data.dataset().n_rows(),
-                data.dataset().schema().fields().len()
-            );
-            Self::document_titlebar(name.clone(), Some(dimensions), window, cx)
+            Self::document_titlebar(name.clone(), window, cx)
         } else {
             div()
                 .flex_none()

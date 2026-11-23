@@ -23,7 +23,9 @@ struct Scope {
 struct Highlights(HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>);
 
 enum FindMessage {
-    Text(String),
+    Idle,
+    Searching,
+    Notice(String),
     Location {
         source: gewu_core::SourceRow,
         name: SharedString,
@@ -66,7 +68,7 @@ impl FindController {
         self.highlight_failed = false;
         self.session = None;
         self.cursor = None;
-        self.message = FindMessage::Text(String::new());
+        self.message = FindMessage::Idle;
     }
 
     pub(crate) fn can_navigate(&self) -> bool {
@@ -152,7 +154,9 @@ impl FindController {
 
     pub(crate) fn message(&self, cx: &App) -> String {
         match &self.message {
-            FindMessage::Text(text) => text.clone(),
+            FindMessage::Idle => String::new(),
+            FindMessage::Searching => "Searching…".into(),
+            FindMessage::Notice(text) => text.clone(),
             FindMessage::Location {
                 source,
                 name,
@@ -191,7 +195,7 @@ impl FindController {
             _subscription: subscription,
             scope: Some(Scope { view, columns }),
             open: false,
-            message: FindMessage::Text(String::new()),
+            message: FindMessage::Idle,
             session: None,
             cursor: None,
             viewport_rows: 0..0,
@@ -243,7 +247,7 @@ impl FindController {
         match view.find(&text, &ids) {
             Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
             Err(err) => {
-                self.message = FindMessage::Text(crate::errors::message(&err));
+                self.message = FindMessage::Notice(crate::errors::message(&err));
                 self.highlight_failed = true;
                 None
             }
@@ -317,7 +321,7 @@ impl FindController {
                     }
                     Err(error) => {
                         table.highlight_failed = true;
-                        table.message = FindMessage::Text(crate::errors::message(&error.into()));
+                        table.message = FindMessage::Notice(crate::errors::message(&error.into()));
                     }
                 }
                 cx.notify();
@@ -338,7 +342,7 @@ impl FindController {
             return;
         };
         let cursor = self.cursor;
-        self.message = FindMessage::Text("Searching…".into());
+        self.message = FindMessage::Searching;
         cx.notify();
         self.navigation = Some(cx.spawn(async move |this, cx| {
             if !delay.is_zero() {
@@ -360,10 +364,12 @@ impl FindController {
                             table.report(hit, wrapped);
                             cx.emit(hit);
                         } else {
-                            table.message = FindMessage::Text("No matches".into());
+                            table.message = FindMessage::Notice("No matches".into());
                         }
                     }
-                    Err(error) => table.message = FindMessage::Text(crate::errors::message(&error)),
+                    Err(error) => {
+                        table.message = FindMessage::Notice(crate::errors::message(&error))
+                    }
                 }
                 let queued = std::mem::take(&mut table.queued);
                 if queued != 0 {
@@ -399,8 +405,14 @@ impl Render for FindController {
         )
         .size(px(14.))
         .flex_none();
+        let notice = match &self.message {
+            FindMessage::Notice(text) => Some(text.as_str()),
+            FindMessage::Location { wrapped: true, .. } => Some("Wrapped"),
+            _ => None,
+        };
         let field = div()
             .id("table-search")
+            .flex_1()
             .flex()
             .items_center()
             .gap_1()
@@ -413,6 +425,18 @@ impl Render for FindController {
             .rounded_md()
             .child(icon)
             .child(div().flex_1().min_w_0().child(Input::new(input)))
+            .children(notice.filter(|_| searching).map(|text| {
+                div()
+                    .id("find-notice")
+                    .role(Role::Status)
+                    .aria_label(text.to_owned())
+                    .max_w(relative(0.55))
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(colors.muted_foreground)
+                    .child(text.to_owned())
+                    .test_support()
+            }))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, w, cx| {
                 if event.button == MouseButton::Left
                     && (!this.open || !this.input.read(cx).focus_handle(cx).is_focused(w))
@@ -423,26 +447,18 @@ impl Render for FindController {
                 }
             }))
             .test_support();
-        let mut search = div().min_w_0().flex_col().flex().flex_1().child(field);
-        let message = self.message(cx);
-        if searching && !message.is_empty() {
-            search = search.child(
-                div()
-                    .truncate()
-                    .text_size(px(11.))
-                    .text_color(colors.muted_foreground)
-                    .child(message),
-            );
-        }
         let mut bar = div()
             .id("find-toolbar")
+            .role(Role::Group)
+            .aria_label("Find in table")
+            .aria_description(self.message(cx))
             .min_w_0()
             .flex()
             .items_center()
             .gap_1()
             .w(px(if searching { 350. } else { 240. }))
             .max_w(relative(0.62))
-            .child(search);
+            .child(field);
         if searching {
             let arrow = |id, label: &'static str, symbol: &'static str| {
                 base::Button::new(id)
