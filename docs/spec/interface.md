@@ -6,7 +6,7 @@ How the window behaves. [Find and filtering](search-and-filter.md) covers what F
 
 View > Show Chart Inspector opens the chart directly. View > Analyze Selected Column (Command-Option-I) opens the Column page for the current table column. Command-Option-R toggles source row numbers across document windows.
 
-On macOS the document name, Find field and Inspector toggle are vertically centered in a single title-bar row. The status bar shows the row and column counts. The native window controls stay reachable at narrow widths. Workbooks show their sheet choices below the table. For CSV, TSV and XLSX, File > Import Options… lets you change whether the first row supplies the column names, including after opening a file from Finder.
+On macOS the document name, Find field and Inspector toggle are vertically centered in a single title-bar row. The status bar shows the row and column counts. The native window controls stay reachable at narrow widths. Workbooks show scrollable worksheet tabs on the left of the status bar and document status on the right. For CSV, TSV and XLSX, File > Import Options… lets you change whether the first row supplies the column names, including after opening a file from Finder.
 
 The table is always the main workspace. The right Inspector has Column and Chart pages, so a scatter plot and its source table remain visible together. Column analysis follows an explicitly chosen visible column, independent of table selection; use Analyze Column in the header menu or the Inspector's column chooser to change it. The Inspector column chooser and the scatter X and Y pickers list only visible columns.
 
@@ -28,7 +28,7 @@ Headers show the column name and type. Active filters use a highlighted funnel, 
 
 The header menu offers sorting, filtering and clearing for its column. View > Sort… opens the sort editor as a sheet, including when no sort is active; the status bar opens it as a popover. The editor supports ordered rules, drag reordering and contextual and accessibility move actions; replacing a rule's column keeps its priority and direction. Clear All Sorting is in the sort editor and header menu; Clear All Filters is in the Filter menu.
 
-View > Columns… and the header menu open column management as a sheet. It can show or hide all search matches in one change, and confirms when hiding clears filters or sorting. Columns and Sort have no permanent toolbar buttons.
+View > Columns… and the header menu open column management as a sheet. It can show or hide all search matches in one change, and confirms when hiding clears filters or sorting. Restore order returns visible columns to their source order and keeps their widths, visibility, selection, filters and sorting. Columns and Sort have no permanent toolbar buttons.
 
 ## Find
 

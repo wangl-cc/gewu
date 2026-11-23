@@ -2,10 +2,19 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gewu_core::{Dataset, FileMetadata, FileType, OpenOptions};
-use gpui_kit::{base::Theme, *};
+use gpui_kit::{
+    base::{Tab, Theme},
+    component::button::{Button as StyledButton, ButtonVariants},
+    *,
+};
 
 use super::{GetInfo, ImportOptions, info, open_paths, record_recent};
-use crate::{data::TableData, panels::button, platform, table::TableView};
+use crate::{
+    data::TableData,
+    panels::{button, disclosure, segment, segmented_tabs},
+    platform,
+    table::TableView,
+};
 
 #[derive(Clone, PartialEq, Eq)]
 struct Import {
@@ -25,6 +34,7 @@ pub(super) struct Document {
     title: SharedString,
     table: Option<Entity<TableView>>,
     sheets: Vec<String>,
+    worksheet_tabs: Option<Entity<WorksheetTabs>>,
     displayed: Import,
     header_available: bool,
     load: Load,
@@ -62,6 +72,7 @@ impl Document {
             title,
             table: None,
             sheets: Vec::new(),
+            worksheet_tabs: None,
             displayed: initial.clone(),
             header_available,
             load: Load::Ready,
@@ -96,6 +107,18 @@ impl Document {
         self.load = load;
         self.show_error_details = false;
         cx.notify();
+    }
+
+    fn set_sheets(&mut self, sheets: Vec<String>, cx: &mut Context<Self>) {
+        self.sheets = sheets;
+        if !self.sheets.is_empty() && self.worksheet_tabs.is_none() {
+            let document = cx.entity();
+            self.worksheet_tabs = Some(cx.new(|cx: &mut Context<WorksheetTabs>| WorksheetTabs {
+                document: document.downgrade(),
+                scroll: ScrollHandle::new(),
+                _changes: cx.observe(&document, |_, _, cx| cx.notify()),
+            }));
+        }
     }
 
     fn request(&mut self, import: Import, window: &mut Window, cx: &mut Context<Self>) {
@@ -154,7 +177,7 @@ impl Document {
                 this.update(cx, |this, cx| {
                     this.reader = None;
                     if let Some(sheets) = sheets {
-                        this.sheets = sheets;
+                        this.set_sheets(sheets, cx);
                     }
                     if matches!(&this.load, Load::Pending(latest) if *latest == import) {
                         match dataset {
@@ -181,13 +204,14 @@ impl Document {
         self.header_available =
             matches!(info.format, FileType::Csv | FileType::Tsv | FileType::Xlsx);
         if let FileMetadata::Xlsx { sheet, sheets } = info.metadata {
-            self.sheets = sheets;
+            self.set_sheets(sheets, cx);
             import.sheet = Some(sheet);
         }
         self.displayed = import;
         let table = cx.new(|cx| {
             let mut table = TableView::new(TableData::from_dataset(Arc::new(dataset)), window, cx);
             table.document_title = Some(self.title.clone());
+            table.worksheet_tabs = self.worksheet_tabs.clone().map(Into::into);
             if let Some(previous) = &self.table {
                 table.inherit_document_state(previous, cx);
             } else {
@@ -255,9 +279,8 @@ impl Document {
     ) -> AnyElement {
         let colors = Theme::global(cx).tokens.colors;
         let import = import.clone();
-        let retry = button("retry-open", "Retry", false, cx).on_click(
-            cx.listener(move |this, _, window, cx| this.request(import.clone(), window, cx)),
-        );
+        let retry =
+            cx.listener(move |this, _, window, cx| this.request(import.clone(), window, cx));
         // A failed replacement preserves the table and worksheet controls.
         if self.table.is_some() {
             return div()
@@ -268,7 +291,7 @@ impl Document {
                 .px_3()
                 .py_1()
                 .text_sm()
-                .child(retry)
+                .child(button("retry-open", "Retry", false, cx).on_click(retry))
                 .child(
                     div()
                         .min_w_0()
@@ -306,22 +329,35 @@ impl Document {
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        button("open-another-file", "Open Another File…", true, cx)
+                        StyledButton::new("open-another-file")
+                            .label("Open Another File…")
+                            .primary()
                             .on_click(|_, _, cx| super::choose_files(cx)),
                     )
-                    .child(retry)
                     .child(
-                        button("reveal-failed-file", "Show in Finder", false, cx)
+                        StyledButton::new("retry-open")
+                            .label("Retry")
+                            .secondary()
+                            .on_click(retry),
+                    )
+                    .child(
+                        StyledButton::new("reveal-failed-file")
+                            .label("Show in Finder")
+                            .secondary()
                             .on_click(cx.listener(|doc, _, _, cx| cx.reveal_path(&doc.path))),
                     ),
             )
             .child(
-                button("open-error-details", "Technical details", false, cx)
-                    .aria_expanded(self.show_error_details)
-                    .on_click(cx.listener(|doc, _, _, cx| {
-                        doc.show_error_details = !doc.show_error_details;
-                        cx.notify();
-                    })),
+                disclosure(
+                    "open-error-details",
+                    "Technical details",
+                    self.show_error_details,
+                    cx,
+                )
+                .on_click(cx.listener(|doc, _, _, cx| {
+                    doc.show_error_details = !doc.show_error_details;
+                    cx.notify();
+                })),
             );
         if self.show_error_details {
             let details = error.to_string();
@@ -380,37 +416,6 @@ impl Render for Document {
         } else {
             view = view.child(TableView::document_titlebar(self.title.clone(), window, cx));
         }
-        if !self.sheets.is_empty() {
-            let mut bar = div()
-                .id("worksheet-options")
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .py_1()
-                .overflow_x_scroll()
-                .bg(colors.surface)
-                .border_t_1()
-                .border_color(colors.border)
-                .text_sm();
-            for (index, name) in self.sheets.iter().enumerate() {
-                let sheet = name.clone();
-                let active = self.import_selection().sheet.as_ref() == Some(name);
-                bar = bar.child(
-                    button(("sheet", index), name.clone(), active, cx)
-                        .flex_none()
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.edit_import(
-                                |import| import.sheet = Some(sheet.clone()),
-                                window,
-                                cx,
-                            )
-                        })),
-                );
-            }
-            view = view.child(bar);
-        }
         match &self.load {
             Load::Ready => {}
             Load::Pending(_) => {
@@ -420,7 +425,69 @@ impl Render for Document {
                 view = view.child(self.failed_open(import, error, cx));
             }
         }
+        if self.table.is_none()
+            && let Some(tabs) = &self.worksheet_tabs
+        {
+            // A workbook with an unreadable first sheet still needs a route to its other sheets.
+            view = view.child(
+                div()
+                    .flex_none()
+                    .px_2()
+                    .bg(colors.surface)
+                    .border_t_1()
+                    .border_color(colors.border)
+                    .child(tabs.clone()),
+            );
+        }
         view
+    }
+}
+
+struct WorksheetTabs {
+    document: WeakEntity<Document>,
+    scroll: ScrollHandle,
+    _changes: Subscription,
+}
+
+impl Render for WorksheetTabs {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut scroller = div()
+            .id("worksheet-options")
+            .flex()
+            .min_w_0()
+            .py(px(2.))
+            .test_support();
+        if let Some(document) = self.document.upgrade() {
+            let doc = document.read(cx);
+            let mut tabs = segmented_tabs("worksheet-tabs", "Worksheets", cx)
+                .flex_shrink_1()
+                .min_w_0()
+                .overflow_x_scroll()
+                .track_scroll(&self.scroll);
+            for (index, name) in doc.sheets.iter().enumerate() {
+                let sheet = name.clone();
+                let parent = self.document.clone();
+                let scroll = self.scroll.clone();
+                let active = doc.import_selection().sheet.as_ref() == Some(name);
+                let tab = Tab::new(("sheet", index))
+                    .selected(active)
+                    .set_position(index + 1, doc.sheets.len())
+                    .accessibility_label(name.clone())
+                    .on_click(move |_, window, cx| {
+                        scroll.scroll_to_item(index);
+                        let _ = parent.update(cx, |doc, cx| {
+                            doc.edit_import(
+                                |import| import.sheet = Some(sheet.clone()),
+                                window,
+                                cx,
+                            );
+                        });
+                    });
+                tabs = tabs.child(segment(tab, name.clone(), active, cx).flex_none().px_2());
+            }
+            scroller = scroller.child(tabs);
+        }
+        scroller
     }
 }
 

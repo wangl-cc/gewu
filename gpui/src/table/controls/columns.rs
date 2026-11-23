@@ -1,6 +1,13 @@
 use gewu_core::ColumnId;
 use gpui_kit::{
-    base::input::{Input, InputEvent, InputState},
+    base::{
+        Disableable,
+        input::{Input, InputAccessibility, InputEvent, InputState},
+    },
+    component::{
+        Icon, IconName, Sizable,
+        button::{Button as StyledButton, ButtonVariants},
+    },
     *,
 };
 
@@ -20,7 +27,14 @@ pub(super) struct HideConfirmation {
 
 impl TableView {
     pub(in crate::table) fn open_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find column"));
+        let search = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Find column");
+            input.set_accessibility(
+                InputAccessibility::new(Some(Role::SearchInput))
+                    .with_label(Some("Find column".into())),
+            );
+            input
+        });
         let events = cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -75,7 +89,7 @@ impl TableView {
                     .border_color(colors.border)
                     .rounded_md()
                     .child(
-                        gpui_kit::component::Icon::new(gpui_kit::component::IconName::Search)
+                        Icon::new(IconName::Search)
                             .size(px(14.))
                             .text_color(colors.muted_foreground),
                     )
@@ -84,17 +98,30 @@ impl TableView {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_1()
                     .child(
-                        button("show-matching", "Show matching", false, cx).on_click(
-                            cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx)),
-                        ),
+                        StyledButton::new("show-matching")
+                            .label("Show matching")
+                            .secondary()
+                            .outline()
+                            .small()
+                            .disabled(to_show.is_empty())
+                            .on_click(
+                                cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx)),
+                            ),
                     )
                     .child(
-                        button("hide-matching", "Hide matching", false, cx).on_click(
-                            cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx)),
-                        ),
+                        StyledButton::new("hide-matching")
+                            .label("Hide matching")
+                            .secondary()
+                            .outline()
+                            .small()
+                            .disabled(matching.is_empty())
+                            .on_click(
+                                cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx)),
+                            ),
                     ),
             );
         let mut rows = div()
@@ -209,6 +236,16 @@ impl TableView {
             .child(rows)
             .child(
                 super::footer()
+                    .flex_wrap()
+                    .child(
+                        button("restore-column-order", "Restore default order", false, cx)
+                            .disabled(self.data.columns.is_in_source_order())
+                            .on_click(cx.listener(|t, _, _, cx| {
+                                if t.change_columns(true, TableColumns::restore_source_order, cx) {
+                                    cx.notify();
+                                }
+                            })),
+                    )
                     .child(
                         button("show-all-columns", "Show all", false, cx).on_click(
                             cx.listener(move |t, _, _, cx| t.set_visible(&all, true, cx)),
@@ -247,16 +284,18 @@ impl TableView {
             (true, false) => "sorting",
             _ => "filtering",
         };
-        let message = format!(
-            "Hide {}? This removes {removed} on {}.",
-            names.join(", "),
-            if names.len() == 1 {
-                "this column"
-            } else {
-                "these columns"
-            }
-        );
-        self.drawer("Hide columns", window, cx)
+        let (title, message) = if let [name] = names.as_slice() {
+            (
+                format!("Hide {name}?"),
+                format!("This removes {removed} on this column."),
+            )
+        } else {
+            (
+                format!("Hide {}?", crate::counted(names.len() as u64, "column")),
+                format!("This removes {removed} on {}.", names.join(", ")),
+            )
+        };
+        self.drawer(title, window, cx)
             .child(
                 div()
                     .id("hide-explanation")

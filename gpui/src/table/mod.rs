@@ -54,6 +54,7 @@ enum Drag {
 pub struct TableView {
     pub(crate) data: TableData,
     pub(crate) document_title: Option<SharedString>,
+    pub(crate) worksheet_tabs: Option<AnyView>,
     prefs: Preferences,
     _style_changes: Subscription,
     _window_activation: Subscription,
@@ -176,6 +177,7 @@ impl TableView {
         Self {
             prefs,
             document_title: None,
+            worksheet_tabs: None,
             _style_changes: style_changes,
             _window_activation: cx.observe_window_activation(window, |_, _, cx| cx.notify()),
             data,

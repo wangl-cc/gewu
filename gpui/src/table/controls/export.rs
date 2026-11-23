@@ -293,29 +293,35 @@ impl ExportController {
 
 impl Render for ExportController {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bar = div().flex().items_center().gap_1();
+        let bar = div().min_w_0().flex().items_center().gap_1();
+        let status = |text: SharedString| div().min_w_0().truncate().child(text);
         match self {
             ExportController::Idle => bar,
-            ExportController::Choosing { .. } => bar.child("Choosing export destination…"),
-            ExportController::Finished(message) => bar.child(message.clone()),
+            ExportController::Choosing { .. } => {
+                bar.child(status("Choosing export destination…".into()))
+            }
+            ExportController::Finished(message) => bar.child(status(message.clone().into())),
             ExportController::Failed(message) => bar
                 .text_color(base::Theme::global(cx).tokens.colors.destructive)
-                .child(message.clone()),
+                .child(status(message.clone().into())),
             ExportController::Writing(active) => {
                 let progress = active.job.progress();
-                bar.child(format!(
-                    "Exporting {} / {}",
-                    progress.rows_written,
-                    crate::counted(progress.total_rows, "row")
+                bar.child(status(
+                    format!(
+                        "Exporting {} / {}",
+                        progress.rows_written,
+                        crate::counted(progress.total_rows, "row")
+                    )
+                    .into(),
                 ))
                 .child(
-                    button("cancel-export", "Cancel export", false, cx).on_click(cx.listener(
-                        |t, _, _, _| {
+                    button("cancel-export", "Cancel export", false, cx)
+                        .flex_none()
+                        .on_click(cx.listener(|t, _, _, _| {
                             if let ExportController::Writing(active) = t {
                                 active.job.cancel();
                             }
-                        },
-                    )),
+                        })),
                 )
             }
         }

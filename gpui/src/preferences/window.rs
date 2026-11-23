@@ -1,5 +1,5 @@
 use super::*;
-use crate::panels::button;
+use crate::panels::{button, segment};
 
 struct Settings;
 struct SettingsWindow(AnyWindowHandle);
@@ -50,6 +50,7 @@ impl Render for Settings {
             .p_4()
             .bg(colors.background)
             .text_color(colors.foreground)
+            .text_size(px(12.))
             .child(section("Display"));
         type SetNumber = fn(&mut Preferences, f32);
         let numbers: [(&str, f32, f32, f32, SetNumber); 2] = [
@@ -88,15 +89,21 @@ impl Render for Settings {
                     ),
             );
         }
-        let mut density = crate::panels::radio_group("row-heights", "Row height");
+        let mut density = crate::panels::radio_group("row-heights", "Row height")
+            .gap_0()
+            .p(px(2.))
+            .rounded_md()
+            .bg(colors.muted);
         for height in [24_u32, 28, 32] {
-            density = density.child(crate::panels::radio(
-                ("row-height", height as usize),
-                height.to_string(),
-                p.row_height == height as f32,
-                cx,
-                move |_, _, cx| Preferences::update(cx, |p| p.row_height = height as f32),
-            ));
+            let label = height.to_string();
+            let selected = p.row_height == height as f32;
+            let radio = base::Radio::new(("row-height", height as usize))
+                .checked(selected)
+                .accessibility_label(label.clone())
+                .on_change(move |_, _, _, cx| {
+                    Preferences::update(cx, |p| p.row_height = height as f32)
+                });
+            density = density.child(segment(radio, label, selected, cx).flex_none().px_2());
         }
         let label = if [24., 28., 32.].contains(&p.row_height) {
             "Row height".to_owned()

@@ -144,7 +144,7 @@ impl TableView {
                     panel.mark_scatter(chart, Some(source_row), cx)
                 });
             }
-        }));
+        });
         self.scroll.center_if_outside(cell.row);
         self.reveal(cell);
         window.focus(&self.focus, cx);
@@ -496,11 +496,12 @@ impl TableView {
 
     fn drawer(
         &self,
-        title: &'static str,
+        title: impl Into<SharedString>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> base::ObservedElement<Stateful<Div>> {
         let colors = base::Theme::global(cx).tokens.colors;
+        let title = title.into();
         div()
             .id("table-drawer")
             .test_support()
@@ -521,6 +522,10 @@ impl TableView {
             .text_sm()
             .child(
                 div()
+                    .id("table-drawer-title")
+                    .role(Role::Label)
+                    .aria_label(title.clone())
+                    .test_support()
                     .flex_none()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title),

@@ -21,9 +21,18 @@ pub(crate) fn button(
 }
 
 fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
+    disclosure(id, "Chart display options", expanded, cx)
+}
+
+pub(crate) fn disclosure(
+    id: &'static str,
+    label: &'static str,
+    expanded: bool,
+    cx: &App,
+) -> base::Button {
     let colors = base::Theme::global(cx).tokens.colors;
     base::Button::new(id)
-        .accessibility_label("Chart display options")
+        .accessibility_label(label)
         .aria_expanded(expanded)
         .flex()
         .items_center()
@@ -36,10 +45,10 @@ fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
             expanded,
             colors.muted_foreground,
         ))
-        .child("Chart display options")
+        .child(label)
 }
 
-fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs {
+pub(crate) fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs {
     let colors = base::Theme::global(cx).tokens.colors;
     base::Tabs::new(id)
         .aria_label(label)

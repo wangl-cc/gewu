@@ -173,8 +173,12 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
     click(&mut w, ("toggle-column", group));
     w.ui.update(|window, _| {
         assert_eq!(
+            window.find("table-drawer-title").label(),
+            Some("Hide “group”?")
+        );
+        assert_eq!(
             window.find("hide-explanation").label(),
-            Some("Hide “group”? This removes filtering on this column.")
+            Some("This removes filtering on this column.")
         )
     });
     w.keys("escape");
@@ -196,6 +200,59 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
         w.clipboard().unwrap().lines().next().unwrap(),
         "plain\t2\tkeep"
     );
+}
+
+#[test]
+fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() {
+    use gpui_kit::{Role, point, px, test::TestQueryExt};
+
+    let mut w = window();
+    let ids = w.read(|t| t.data.column_ids(0..3));
+    let score = ids[1].into_raw() as usize;
+    let note = ids[2].into_raw() as usize;
+    w.click(w.cell(0, 0), Modifiers::default());
+    w.keys("cmd-alt-shift-l");
+    w.click(w.header(1), Modifiers::default());
+    let score_divider = w.read(|t| {
+        t.layout.bounds.origin
+            + point(
+                px(t.column_left(1).unwrap() + t.data.columns.width(1)),
+                px(16.),
+            )
+    });
+    w.ui.update(|window, cx| {
+        window.drag(score_divider, score_divider + point(px(80.), px(0.)), cx)
+    });
+    w.settle();
+    w.click(w.cell(0, 1), Modifiers::default());
+    let view = w.read(|t| t.data.view().clone());
+    let width = w.read(|t| t.data.columns.width(1));
+    assert!(w.read(|t| {
+        matches!(
+            t.data.columns.entry(1).width,
+            crate::columns::ColumnWidth::Manual(_)
+        )
+    }));
+
+    action(&mut w, ManageColumns);
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find_by_label("Find column").role(),
+            Some(Role::SearchInput)
+        );
+    });
+    click(&mut w, ("toggle-column", note));
+    click(&mut w, ("column-earlier", score));
+    assert_eq!(w.read(|t| t.data.column_ids(0..2)), [ids[1], ids[0]]);
+    click(&mut w, "restore-column-order");
+    assert_eq!(w.read(|t| t.data.column_ids(0..2)), ids[..2]);
+    assert!(w.read(|t| {
+        Arc::ptr_eq(&view, t.data.view())
+            && t.data.columns.len() == 2
+            && t.data.columns.width(1) == width
+            && t.selection
+                .is_some_and(|s| s.head.column == 1 && s.head.row == 0)
+    }));
 }
 
 #[test]

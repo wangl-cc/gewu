@@ -293,6 +293,39 @@ fn sheet_switches_keep_the_shown_table_on_failure_or_cancellation() {
 }
 
 #[test]
+fn a_narrow_workbook_shares_one_footer_between_worksheets_and_status() {
+    let session = Session::new();
+    session.open(vec![fixture("multi-sheet.xlsx")]);
+    let (doc, mut ui) = session.viewer(0);
+    ui.simulate_resize(gpui_kit::size(px(340.), px(440.)));
+    let last = doc.read_with(&session.app, |doc, _| {
+        doc.sheets.iter().position(|s| s == "Last").unwrap()
+    });
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        let footer = w.find("document-footer").bounds();
+        let tabs = w
+            .within("document-footer")
+            .find("worksheet-options")
+            .bounds();
+        let status = w.within("document-footer").find("footer-status").bounds();
+        assert_eq!(tabs.center().y, status.center().y);
+        assert!(footer.contains(&tabs.center()) && footer.contains(&status.center()));
+        assert!(tabs.right() <= status.left() && status.right() < w.viewport_size().width);
+        assert!(w.find(("sheet", last)).visible());
+        w.click(("sheet", last), cx);
+    });
+    ui.run_until_parked();
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        assert_eq!(w.find(("sheet", last)).selected(), Some(true));
+    });
+    doc.read_with(&session.app, |doc, _| {
+        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"))
+    });
+}
+
+#[test]
 fn worksheet_and_header_edits_compose_before_the_reader_finishes() {
     let session = Session::new();
     session.open(vec![fixture("multi-sheet.xlsx")]);

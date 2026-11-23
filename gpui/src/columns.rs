@@ -151,6 +151,19 @@ impl TableColumns {
         self.order.insert(to, slot);
         true
     }
+
+    pub fn is_in_source_order(&self) -> bool {
+        self.order.is_sorted()
+    }
+
+    /// Restore the relative source order of the visible columns.
+    pub fn restore_source_order(&mut self) -> bool {
+        if self.is_in_source_order() {
+            return false;
+        }
+        self.order.sort_unstable();
+        true
+    }
 }
 
 impl Index<usize> for TableColumns {
