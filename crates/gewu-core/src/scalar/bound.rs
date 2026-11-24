@@ -45,15 +45,15 @@ pub(crate) struct Bound {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct BoundData {
-    pub(crate) data_type: DataType,
-    pub(crate) value: Value,
-    pub(crate) display: String,
-    pub(crate) axis: f64,
+struct BoundData {
+    data_type: DataType,
+    value: Value,
+    display: String,
+    axis: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Value {
+enum Value {
     Exact {
         literal: Literal,
         lower: Endpoint,
@@ -69,7 +69,7 @@ pub(crate) enum Value {
 }
 
 impl Bound {
-    pub(crate) fn new(inner: BoundData) -> Self {
+    fn new(inner: BoundData) -> Self {
         Self {
             inner: Arc::new(inner),
         }
@@ -467,7 +467,7 @@ pub(crate) fn rescale_coefficient(coefficient: i256, power: i16) -> (Endpoint, E
     (Endpoint::Finite(lower), Endpoint::Finite(upper))
 }
 
-pub(crate) fn compare(left: &Value, right: &Value) -> Ordering {
+fn compare(left: &Value, right: &Value) -> Ordering {
     match (left, right) {
         (Value::Exact { literal: left, .. }, Value::Exact { literal: right, .. }) => {
             left.compare(right)
