@@ -156,8 +156,10 @@ impl TableView {
                 start_x,
                 start_width,
             } => {
-                self.data.columns.entry_mut(column).width =
-                    ColumnWidth::Manual((start_width + x - start_x).max(MIN_COLUMN));
+                self.data.columns.set_width(
+                    column,
+                    ColumnWidth::Manual((start_width + x - start_x).max(MIN_COLUMN)),
+                );
             }
             Drag::Select => {
                 self.edge_pointer = Some(local);

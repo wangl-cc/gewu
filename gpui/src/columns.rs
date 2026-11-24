@@ -69,8 +69,8 @@ impl TableColumns {
         &self.schema[self.order[index]]
     }
 
-    pub fn entry_mut(&mut self, index: usize) -> &mut GridColumn {
-        &mut self.schema[self.order[index]]
+    pub fn set_width(&mut self, index: usize, width: ColumnWidth) {
+        self.schema[self.order[index]].width = width;
     }
 
     pub fn get(&self, index: usize) -> Option<&ColumnInfo> {

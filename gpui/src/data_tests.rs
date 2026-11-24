@@ -58,8 +58,8 @@ fn hidden_and_reordered_columns_keep_their_identity_and_manual_width() {
     let mut table = sample();
     let first = table.columns[0].id;
     let second = table.columns[1].id;
-    table.columns.entry_mut(0).width = ColumnWidth::Manual(179.);
-    table.columns.entry_mut(1).width = ColumnWidth::Measured(84.);
+    table.columns.set_width(0, ColumnWidth::Manual(179.));
+    table.columns.set_width(1, ColumnWidth::Measured(84.));
     assert!(table.columns.move_to(0, 1));
     let row = gewu_core::ViewRow(0);
     assert_eq!(table.display_cell(row, first).unwrap().column, 1);

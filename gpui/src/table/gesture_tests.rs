@@ -112,7 +112,7 @@ fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
     let previous = w.read(|table| Rc::clone(&table.layout));
     w.ui.update(|window, cx| {
         w.table.update(cx, |table, cx| {
-            table.data.columns.entry_mut(0).width = ColumnWidth::Unmeasured;
+            table.data.columns.set_width(0, ColumnWidth::Unmeasured);
             table.scroll_to_row(128);
             cx.notify();
         });

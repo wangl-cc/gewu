@@ -288,8 +288,9 @@ impl TableView {
                     .is_some_and(|c| c.id == measurement.id)
                     && self.data.columns.entry(index).width == ColumnWidth::Unmeasured
                 {
-                    self.data.columns.entry_mut(index).width =
-                        ColumnWidth::Measured(measurement.width);
+                    self.data
+                        .columns
+                        .set_width(index, ColumnWidth::Measured(measurement.width));
                 }
             }
         }

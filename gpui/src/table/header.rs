@@ -96,7 +96,9 @@ impl TableView {
 
     pub(super) fn autofit(&mut self, column: usize, window: &Window) {
         let width = self.measure_width(column, self.layout.vertical.anchor().row, FIT_MAX, window);
-        self.data.columns.entry_mut(column).width = ColumnWidth::Measured(width);
+        self.data
+            .columns
+            .set_width(column, ColumnWidth::Measured(width));
     }
 
     fn measure_width(&mut self, column: usize, start: u64, max: f32, window: &Window) -> f32 {
