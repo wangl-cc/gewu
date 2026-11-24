@@ -1,4 +1,4 @@
-use gewu_core::{DatasetInfo, FileMetadata, FileType};
+use gewu_core::Dataset;
 use gpui_kit::{TestAppContext, VisualTestContext, px, test::TestWindowExt};
 
 use super::{format_file_size, open};
@@ -15,20 +15,16 @@ fn metadata_sizes_keep_exact_bytes_and_use_decimal_units() {
 #[test]
 fn copy_path_uses_the_complete_location_in_a_compact_info_window() {
     let app = TestAppContext::single();
-    let path = format!("/{}report.csv", "long-directory/".repeat(12));
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("long-directory/".repeat(12));
+    std::fs::create_dir_all(&nested).unwrap();
+    let path = nested.join("report.csv");
+    std::fs::write(&path, "value\n1\n").unwrap();
+    let data = Dataset::open(&path).unwrap();
+    let path = path.canonicalize().unwrap().display().to_string();
     let window = app.update(|cx| {
         gpui_kit::init(cx);
-        open(
-            DatasetInfo {
-                path: path.clone(),
-                row_count: 12,
-                columns: vec![],
-                file_size: 6_186,
-                format: FileType::Csv,
-                metadata: FileMetadata::Delimited,
-            },
-            cx,
-        );
+        open(&data, cx);
         cx.windows()[0]
     });
     let mut ui = VisualTestContext::from_window(window, &app);

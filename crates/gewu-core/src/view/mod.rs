@@ -167,7 +167,7 @@ mod tests {
     use arrow::array::{Int32Array, RecordBatch, StringArray};
 
     use super::*;
-    use crate::{AxisScale, ColumnError, ColumnFilter, ColumnOperation, Error, FileType, Filter};
+    use crate::{AxisScale, ColumnError, ColumnFilter, ColumnOperation, Error, Filter};
 
     fn dataset() -> Arc<Dataset> {
         let numbers: ArrayRef = Arc::new(Int32Array::from_iter_values(0..12_000));
@@ -178,21 +178,8 @@ mod tests {
                 "odd"
             }
         })));
-        let batch =
-            RecordBatch::try_from_iter([("number", numbers.clone()), ("label", labels.clone())])
-                .unwrap();
-        Arc::new(Dataset {
-            source_path: Default::default(),
-            schema: batch.schema(),
-            columns: vec![
-                Column::new("number", numbers).unwrap(),
-                Column::new("label", labels).unwrap(),
-            ],
-            n_rows: 12_000,
-            file_size: 0,
-            format: FileType::Csv,
-            metadata: crate::FileMetadata::Delimited,
-        })
+        let batch = RecordBatch::try_from_iter([("number", numbers), ("label", labels)]).unwrap();
+        Dataset::from_test_batch(batch)
     }
 
     #[test]
@@ -252,7 +239,7 @@ mod tests {
         {
             let dir = tempfile::tempdir().unwrap();
             let export_path = dir.path().join("all.csv");
-            let export = unsorted.export(&[c0, c1], FileType::Csv).unwrap();
+            let export = unsorted.export(&[c0, c1], crate::FileType::Csv).unwrap();
             assert_eq!(export.progress().total_rows, 12_000);
             export.write(&export_path).unwrap();
             assert_eq!(export.progress().rows_written, 12_000);

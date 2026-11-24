@@ -23,9 +23,7 @@ impl OrderedView {
         let Some(row) = self.row_window(display_row, 1).iter().next() else {
             return Ok(None);
         };
-        // Limit logical-null expansion for dictionary arrays to this cell.
-        let cell = array.slice(row, 1);
-        let filter = if cell.logical_null_count() != 0 {
+        let filter = if crate::column::is_null_at(array.as_ref(), row) {
             Filter::OnlyNulls
         } else if predicate::supports_equals(array.data_type()) {
             Filter::exact(vec![value_text::encode(array, row)?], false, false)
@@ -168,7 +166,7 @@ mod tests {
     fn cell_filter_uses_display_order_and_lossless_temporal_values() {
         use arrow::array::{RecordBatch, TimestampNanosecondArray};
 
-        use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
+        use crate::{ColumnSort, Dataset};
 
         let times: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
             Some(123_456_789),
@@ -176,20 +174,8 @@ mod tests {
             Some(123_456_788),
         ]));
         let order: ArrayRef = Arc::new(Int64Array::from(vec![2, 1, 3]));
-        let batch = RecordBatch::try_from_iter([("time", times.clone()), ("order", order.clone())])
-            .unwrap();
-        let dataset = Arc::new(Dataset {
-            source_path: Default::default(),
-            schema: batch.schema(),
-            columns: vec![
-                Column::new("time", times).unwrap(),
-                Column::new("order", order).unwrap(),
-            ],
-            n_rows: 3,
-            file_size: 0,
-            format: FileType::Parquet,
-            metadata: FileMetadata::Delimited,
-        });
+        let batch = RecordBatch::try_from_iter([("time", times), ("order", order)]).unwrap();
+        let dataset = Dataset::from_test_batch(batch);
         let time = dataset.column_id("time").unwrap();
         let sorted = dataset
             .unfiltered()

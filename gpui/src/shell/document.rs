@@ -199,12 +199,13 @@ impl Document {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let info = dataset.info();
-        self.header_available =
-            matches!(info.format, FileType::Csv | FileType::Tsv | FileType::Xlsx);
-        if let FileMetadata::Xlsx { sheet, sheets } = info.metadata {
-            self.set_sheets(sheets, cx);
-            import.sheet = Some(sheet);
+        self.header_available = matches!(
+            dataset.format(),
+            FileType::Csv | FileType::Tsv | FileType::Xlsx
+        );
+        if let FileMetadata::Xlsx { sheet, sheets } = dataset.metadata() {
+            self.set_sheets(sheets.clone(), cx);
+            import.sheet = Some(sheet.clone());
         }
         self.displayed = import;
         let table = cx.new(|cx| {
@@ -398,7 +399,7 @@ impl Render for Document {
         if let Some(table) = &self.table {
             let table = table.clone();
             view = view.on_action(move |_: &GetInfo, _, cx| {
-                info::open(table.read(cx).data.snapshot().dataset().info(), cx);
+                info::open(table.read(cx).data.snapshot().dataset(), cx);
             });
         } else {
             view = view.track_focus(&self.focus);

@@ -15,7 +15,7 @@ pub(crate) fn formatter(
 
 /// Format one cell, `None` for null.
 pub(crate) fn cell(array: &dyn Array, f: &ArrayFormatter<'_>, row: usize) -> Option<String> {
-    if array.is_null(row) {
+    if crate::column::is_null_at(array, row) {
         None
     } else {
         Some(f.value(row).to_string())

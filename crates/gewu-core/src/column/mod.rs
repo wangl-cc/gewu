@@ -14,7 +14,10 @@ pub(crate) mod value_text;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use arrow::array::ArrayRef;
+use arrow::{
+    array::{downcast_dictionary_array, Array, ArrayRef},
+    datatypes::DataType,
+};
 pub(crate) use dictionary::Dictionary;
 pub use error::{ColumnError, ColumnOperation, FilterError, FilterKind, ValueParseError};
 pub use id::ColumnId;
@@ -53,10 +56,17 @@ pub struct ValueChoice {
     pub count: u64,
 }
 
+/// Test one source cell for a logical null without expanding the entire dictionary's keys.
+pub(crate) fn is_null_at(array: &dyn Array, row: usize) -> bool {
+    downcast_dictionary_array!(array =>
+        array.key(row).is_none_or(|key| is_null_at(array.values().as_ref(), key)),
+        DataType::Null => true,
+        _ => array.is_null(row)
+    )
+}
+
 /// An immutable, first-class column owned by a [`crate::Dataset`].
 pub(crate) struct Column {
-    name: String,
-    nullable: bool,
     array: ArrayRef,
     /// Lazy compact encoding of the column's distinct values. `None` is
     /// cached when the type cannot be encoded or has too many values.
@@ -67,21 +77,14 @@ pub(crate) struct Column {
 impl Column {
     /// Build a column. Fails for Arrow types without Gewu semantics rather
     /// than exposing a column no operation can describe.
-    pub(crate) fn new(
-        name: impl Into<String>,
-        array: ArrayRef,
-    ) -> std::result::Result<Self, FileError> {
-        let name = name.into();
+    pub(crate) fn new(name: &str, array: ArrayRef) -> std::result::Result<Self, FileError> {
         if !types::is_describable(array.data_type()) {
             return Err(crate::FileError::UnsupportedColumnType {
-                column: name,
+                column: name.to_owned(),
                 data_type: array.data_type().clone(),
             });
         }
-        let nullable = array.is_nullable();
         Ok(Self {
-            name,
-            nullable,
             array,
             dictionary: OnceLock::new(),
             dictionary_lock: Mutex::new(()),
@@ -105,10 +108,6 @@ impl Column {
 
     pub(crate) fn array(&self) -> &ArrayRef {
         &self.array
-    }
-
-    pub(crate) fn info(&self, id: ColumnId) -> ColumnInfo {
-        ColumnInfo::from_column(id, self)
     }
 
     pub(crate) fn compile_filter<'a>(&'a self, filter: &Filter) -> predicate::Result<Selector<'a>> {
@@ -168,9 +167,7 @@ mod tests {
             (dictionary(DataType::Utf8), true, true, false, false),
         ] {
             assert_eq!(
-                col(arrow::array::new_null_array(&data_type, 1))
-                    .info(ColumnId::new(0))
-                    .capabilities,
+                ColumnCapabilities::from_arrow(&data_type),
                 ColumnCapabilities {
                     text_match: contains,
                     range: ordered,
@@ -439,7 +436,7 @@ mod tests {
             ] {
                 let column = col(arrow::array::new_null_array(&data_type, 2));
                 assert!(
-                    !column.info(ColumnId::new(0)).capabilities.text_match,
+                    !ColumnCapabilities::from_arrow(&data_type).text_match,
                     "{data_type}"
                 );
                 for text in ["", "needle"] {
@@ -592,7 +589,7 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(
-            col(array).info(ColumnId::new(0)).capabilities,
+            ColumnCapabilities::from_arrow(array.data_type()),
             ColumnCapabilities {
                 text_match: false,
                 range: true,

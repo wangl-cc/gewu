@@ -1,8 +1,8 @@
 //! Column metadata for presentation. Execution uses the original Arrow type.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
-use super::{predicate, Column, ColumnCapabilities, ColumnId};
+use super::{predicate, ColumnCapabilities, ColumnId};
 use crate::{
     stats,
     types::{display_type, value_type},
@@ -55,6 +55,7 @@ pub struct ColumnInfo {
     pub floating_point: bool,
     pub display_type: String,
     pub technical_type: String,
+    /// Whether the source schema permits null, regardless of this dataset’s missing count.
     pub nullable: bool,
     /// Lists, structs and maps. Only Parquet exports them structurally; other
     /// formats need [`crate::ExportOptions::nested_as_text`].
@@ -64,16 +65,16 @@ pub struct ColumnInfo {
 }
 
 impl ColumnInfo {
-    pub(super) fn from_column(id: ColumnId, column: &Column) -> Self {
-        let data_type = column.array.data_type();
+    pub(crate) fn from_field(id: ColumnId, field: &Field) -> Self {
+        let data_type = field.data_type();
         Self {
             id,
-            name: column.name.clone(),
+            name: field.name().clone(),
             value_category: ValueCategory::from_arrow(data_type),
             floating_point: value_type(data_type).is_floating(),
             display_type: display_type(data_type),
             technical_type: data_type.to_string(),
-            nullable: column.nullable,
+            nullable: field.is_nullable(),
             nested: data_type.is_nested(),
             capabilities: ColumnCapabilities::from_arrow(data_type),
             analysis: crate::stats::capabilities(data_type),
@@ -85,10 +86,7 @@ impl ColumnInfo {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::{
-        array::new_null_array,
-        datatypes::{Field, TimeUnit},
-    };
+    use arrow::datatypes::TimeUnit;
 
     use super::*;
 
@@ -120,9 +118,9 @@ mod tests {
                 "int64",
             ),
         ] {
-            let column = Column::new("value", new_null_array(&data_type, 1)).unwrap();
+            let field = Field::new("value", data_type.clone(), true);
             let id = ColumnId::new(3);
-            let info = column.info(id);
+            let info = ColumnInfo::from_field(id, &field);
             assert_eq!(info.id, id);
             assert_eq!(info.name, "value");
             assert_eq!(info.value_category, category);

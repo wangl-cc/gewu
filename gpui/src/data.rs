@@ -114,7 +114,7 @@ impl TableData {
     }
 
     pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
-        let columns = crate::columns::TableColumns::new(dataset.info().columns);
+        let columns = crate::columns::TableColumns::new(dataset.column_infos());
         Self {
             queries: QuerySession::new(AppliedView::new(dataset)),
             columns,

@@ -75,7 +75,7 @@ impl TableView {
         self.controls.menu = None;
         self.controls.drawer = Some(Drawer::Export(ExportDraft {
             view: self.data.view().clone(),
-            source: PathBuf::from(self.data.snapshot().dataset().info().path),
+            source: self.data.snapshot().dataset().path().to_owned(),
             columns: self.data.column_ids(0..self.data.columns.len()),
             format: if prefs.remember_export_format {
                 prefs.last_export_format

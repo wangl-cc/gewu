@@ -107,15 +107,7 @@ mod tests {
 
     fn dataset(array: &ArrayRef) -> Arc<Dataset> {
         let batch = RecordBatch::try_from_iter([("value", array.clone())]).unwrap();
-        Arc::new(Dataset {
-            source_path: Default::default(),
-            schema: batch.schema(),
-            columns: vec![crate::column::Column::new("value", array.clone()).unwrap()],
-            n_rows: array.len(),
-            file_size: 0,
-            format: crate::FileType::Csv,
-            metadata: crate::FileMetadata::Delimited,
-        })
+        Dataset::from_test_batch(batch)
     }
 
     fn view(array: &ArrayRef) -> Arc<FilteredView> {

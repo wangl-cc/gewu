@@ -2,55 +2,12 @@
 
 //! Candidates and distributions are scoped to immutable views.
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use gewu_core::{ColumnFilter, ColumnId, Filter, FilteredView};
-use parquet::arrow::ArrowWriter;
 
-/// name | label | price | id
-fn sample(tag: &str) -> (PathBuf, Arc<gewu_core::Dataset>) {
-    let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
-    let labels: ArrayRef = Arc::new(StringArray::from(vec![
-        Some("cat"),
-        Some("dog"),
-        None,
-        Some("cat"),
-        Some("bird"),
-        Some("dog"),
-    ]));
-    let prices: ArrayRef = Arc::new(Float64Array::from(vec![
-        Some(3.5),
-        Some(1.0),
-        Some(9.0),
-        None,
-        Some(2.25),
-        Some(7.0),
-    ]));
-    let ids: ArrayRef = Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50, 60]));
-    let batch = RecordBatch::try_from_iter(vec![
-        ("name", names),
-        ("label", labels),
-        ("price", prices),
-        ("id", ids),
-    ])
-    .unwrap();
-    write(tag, &batch)
-}
-
-fn write(tag: &str, batch: &RecordBatch) -> (PathBuf, Arc<gewu_core::Dataset>) {
-    let path = std::env::temp_dir().join(format!(
-        "gewu-facets-{tag}-{}-{:?}.parquet",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let file = std::fs::File::create(&path).unwrap();
-    let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
-    w.write(batch).unwrap();
-    w.close().unwrap();
-    let doc = Arc::new(gewu_core::Dataset::open(&path).unwrap());
-    (path, doc)
-}
+mod common;
+use common::sample;
 
 fn labels_of(doc: &Arc<FilteredView>, column: ColumnId) -> Vec<(String, u64)> {
     let choices = doc.filter_choices(column).unwrap();
@@ -85,7 +42,7 @@ fn busy_filters() -> Vec<ColumnFilter> {
 
 #[test]
 fn choices_ignore_only_the_edited_columns_filter() {
-    let (path, doc) = sample("distinct");
+    let doc = sample();
     let (c0, c1, c2) = (
         ColumnId::from_raw(0),
         ColumnId::from_raw(1),
@@ -105,12 +62,11 @@ fn choices_ignore_only_the_edited_columns_filter() {
         let expected = labels_of(&doc.filter(&others).unwrap(), column);
         assert_eq!(labels_of(&view, column), expected);
     }
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn choices_and_distribution_apply_column_filters() {
-    let (path, doc) = sample("search");
+    let doc = sample();
     let (c0, c1, c3) = (
         ColumnId::from_raw(0),
         ColumnId::from_raw(1),
@@ -131,12 +87,11 @@ fn choices_and_distribution_apply_column_filters() {
         .map(|result| result.expect("histogram domain").histogram)
         .unwrap();
     assert_eq!(h.counts.iter().sum::<u64>(), 2);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn histogram_domain_and_counts_use_rows_passing_the_other_filters() {
-    let (path, doc) = sample("hist");
+    let doc = sample();
     let (c2, c3) = (ColumnId::from_raw(2), ColumnId::from_raw(3));
     let mut filters = busy_filters();
     filters.push(ColumnFilter {
@@ -161,5 +116,4 @@ fn histogram_domain_and_counts_use_rows_passing_the_other_filters() {
         assert_eq!(actual.min_label, expected.min_label);
         assert_eq!(actual.max_label, expected.max_label);
     }
-    std::fs::remove_file(path).ok();
 }

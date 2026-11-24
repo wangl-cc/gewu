@@ -57,9 +57,9 @@ impl OrderedView {
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let indices = columns.iter().map(|c| c.index()).collect::<Vec<_>>();
-        let schema = Arc::new(self.dataset.schema.project(&indices)?);
+        let schema = Arc::new(self.dataset.schema().project(&indices)?);
         Ok(Export::new(
-            self.dataset.source_path.clone(),
+            self.dataset.path().to_path_buf(),
             schema,
             arrays,
             columns.to_vec(),

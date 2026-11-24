@@ -1,7 +1,7 @@
 //! An information window owns only a description of the file as it was opened.
 use std::path::PathBuf;
 
-use gewu_core::{DatasetInfo, FileMetadata, FileType};
+use gewu_core::{Dataset, FileMetadata, FileType};
 use gpui_kit::{
     base::{SelectableText, Theme},
     *,
@@ -31,15 +31,15 @@ fn format_file_size(bytes: u64) -> String {
     format!("{amount:.1} {unit} ({exact} bytes)")
 }
 
-impl From<DatasetInfo> for FileDetails {
-    fn from(info: DatasetInfo) -> Self {
-        let path = PathBuf::from(info.path);
+impl From<&Dataset> for FileDetails {
+    fn from(dataset: &Dataset) -> Self {
+        let path = dataset.path().to_owned();
         let name = path
             .file_name()
             .unwrap_or(path.as_os_str())
             .to_string_lossy()
             .into_owned();
-        let kind = match info.format {
+        let kind = match dataset.format() {
             FileType::Csv => "CSV",
             FileType::Tsv => "TSV",
             FileType::Xlsx => "Excel",
@@ -48,18 +48,21 @@ impl From<DatasetInfo> for FileDetails {
         let mut rows = vec![
             ("Name".into(), name),
             ("Kind".into(), format!("{kind} table")),
-            ("Size".into(), format_file_size(info.file_size)),
-            ("Rows".into(), format_count(info.row_count)),
-            ("Columns".into(), format_count(info.columns.len() as u64)),
+            ("Size".into(), format_file_size(dataset.file_size())),
+            ("Rows".into(), format_count(dataset.n_rows() as u64)),
+            (
+                "Columns".into(),
+                format_count(dataset.schema().fields().len() as u64),
+            ),
         ];
-        match info.metadata {
+        match dataset.metadata() {
             FileMetadata::Parquet {
                 row_groups,
                 compression,
                 created_by,
                 key_values,
             } => {
-                rows.push(("Row groups".into(), format_count(row_groups as u64)));
+                rows.push(("Row groups".into(), format_count(*row_groups as u64)));
                 rows.push((
                     "Compression".into(),
                     if compression.is_empty() {
@@ -69,12 +72,12 @@ impl From<DatasetInfo> for FileDetails {
                     },
                 ));
                 if let Some(writer) = created_by {
-                    rows.push(("Created by".into(), writer));
+                    rows.push(("Created by".into(), writer.clone()));
                 }
-                rows.extend(key_values);
+                rows.extend(key_values.iter().cloned());
             }
             FileMetadata::Xlsx { sheet, sheets } => {
-                rows.push(("Worksheet".into(), sheet));
+                rows.push(("Worksheet".into(), sheet.clone()));
                 rows.push(("Workbook sheets".into(), sheets.join(", ")));
             }
             FileMetadata::Delimited => {}
@@ -83,8 +86,8 @@ impl From<DatasetInfo> for FileDetails {
     }
 }
 
-pub(super) fn open(info: DatasetInfo, cx: &mut App) {
-    let details = FileDetails::from(info);
+pub(super) fn open(dataset: &Dataset, cx: &mut App) {
+    let details = FileDetails::from(dataset);
     let height = 108. + 25. * (details.rows.len() + 1).min(17) as f32;
     let options = platform::sized_window(470., height, cx);
     if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
@@ -153,10 +156,7 @@ impl Render for FileDetails {
                     .child(
                         button("copy-path", "Copy Path", false, cx).on_click(cx.listener(
                             |this, _, _, cx| {
-                                crate::clipboard::write_text(
-                                    this.path.display().to_string(),
-                                    cx,
-                                );
+                                crate::clipboard::write_text(this.path.display().to_string(), cx);
                             },
                         )),
                     )

@@ -7,7 +7,9 @@ use std::{
 
 use arrow::datatypes::SchemaRef;
 
-use crate::{column::Column, file, ColumnId, FileMetadata, FileType, OpenOptions, Result};
+use crate::{
+    column::Column, file, ColumnId, ColumnInfo, FileMetadata, FileType, OpenOptions, Result,
+};
 
 mod filter;
 mod info;
@@ -16,13 +18,13 @@ pub use info::DatasetInfo;
 
 /// An immutable tabular dataset loaded into memory.
 pub struct Dataset {
-    pub(crate) source_path: PathBuf,
-    pub(crate) schema: SchemaRef,
-    pub(crate) columns: Vec<Column>,
-    pub(crate) n_rows: usize,
-    pub(crate) file_size: u64,
-    pub(crate) format: FileType,
-    pub(crate) metadata: FileMetadata,
+    source_path: PathBuf,
+    schema: SchemaRef,
+    columns: Vec<Column>,
+    n_rows: usize,
+    file_size: u64,
+    format: FileType,
+    metadata: FileMetadata,
 }
 
 impl Dataset {
@@ -53,6 +55,15 @@ impl Dataset {
             .map_err(|error| crate::IoError::new(crate::IoOperation::ReadMetadata, path, error))?
             .len();
         let (format, loaded) = file::read(path, options)?;
+        Self::from_loaded(source_path, file_size, format, loaded)
+    }
+
+    fn from_loaded(
+        source_path: PathBuf,
+        file_size: u64,
+        format: FileType,
+        loaded: file::LoadedFile,
+    ) -> Result<Self> {
         let batch = loaded.batch;
         let schema = batch.schema();
 
@@ -83,6 +94,17 @@ impl Dataset {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_batch(batch: arrow::array::RecordBatch) -> Arc<Self> {
+        Arc::new(
+            Self::from_loaded(PathBuf::default(), 0, FileType::Csv, file::LoadedFile {
+                batch,
+                metadata: FileMetadata::Delimited,
+            })
+            .unwrap(),
+        )
+    }
+
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
@@ -91,16 +113,38 @@ impl Dataset {
         self.n_rows
     }
 
+    /// Canonical source path, preserving the platform's native path representation.
+    pub fn path(&self) -> &Path {
+        &self.source_path
+    }
+
+    pub fn format(&self) -> FileType {
+        self.format
+    }
+
+    pub fn metadata(&self) -> &FileMetadata {
+        &self.metadata
+    }
+
+    /// Size of the file in bytes when opened.
+    pub fn file_size(&self) -> u64 {
+        self.file_size
+    }
+
+    pub fn column_infos(&self) -> Vec<ColumnInfo> {
+        self.schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| ColumnInfo::from_field(ColumnId::new(i as u32), field))
+            .collect()
+    }
+
     pub fn info(&self) -> DatasetInfo {
         DatasetInfo {
             path: self.source_path.display().to_string(),
             row_count: self.n_rows as u64,
-            columns: self
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(i, col)| col.info(ColumnId::new(i as u32)))
-                .collect(),
+            columns: self.column_infos(),
             file_size: self.file_size,
             format: self.format,
             metadata: self.metadata.clone(),

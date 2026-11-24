@@ -81,7 +81,7 @@ impl OrderedView {
         let mut validity = vec![0; window.len().div_ceil(8)];
         offsets.push(0);
         for (index, row) in window.iter().enumerate() {
-            if !array.is_null(row) {
+            if !crate::column::is_null_at(array.as_ref(), row) {
                 // Keep the same display formatting, including inline Arrow errors.
                 write!(text, "{}", formatter.value(row)).expect("formatting into String succeeds");
                 validity[index / 8] |= 1 << (index % 8);
@@ -154,7 +154,40 @@ mod tests {
     };
 
     use super::*;
-    use crate::{column::Column, ColumnSort, Dataset, FileMetadata, FileType};
+    use crate::{ColumnSort, Dataset};
+
+    #[test]
+    fn dictionary_empty_text_and_logical_nulls_stay_distinct() {
+        use arrow::{
+            array::{DictionaryArray, Int8Array},
+            datatypes::Int8Type,
+        };
+
+        use crate::Filter;
+
+        let values = Arc::new(StringArray::from(vec![Some(""), None, Some("x")]));
+        let keys = Int8Array::from(vec![Some(2), None, Some(0), Some(1)]);
+        let dictionary = DictionaryArray::<Int8Type>::try_new(keys, values).unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("value", Arc::new(dictionary) as ArrayRef)]).unwrap();
+        let dataset = Dataset::from_test_batch(batch);
+        let view = dataset.unfiltered().unsorted();
+        let id = ColumnId::from_raw(0);
+        let segment = view.format_column(id, 0, 4).unwrap();
+        for (row, expected) in [Some("x"), None, Some(""), None].into_iter().enumerate() {
+            assert_eq!(segment.cell(row as u32), expected);
+            let expected_filter = expected.map_or(Filter::OnlyNulls, |value| {
+                Filter::exact(vec![value.to_owned()], false, false)
+            });
+            assert_eq!(
+                view.exact_filter_for_cell(id, row as u64)
+                    .unwrap()
+                    .unwrap()
+                    .filter,
+                expected_filter
+            );
+        }
+    }
 
     #[test]
     fn segments_keep_byte_offsets_nulls_and_display_order() {
@@ -176,18 +209,7 @@ mod tests {
             ("number", Arc::new(numbers) as ArrayRef),
         ])
         .unwrap();
-        let dataset = Arc::new(Dataset {
-            source_path: Default::default(),
-            schema: batch.schema(),
-            columns: vec![
-                Column::new("text", batch.column(0).clone()).unwrap(),
-                Column::new("number", batch.column(1).clone()).unwrap(),
-            ],
-            n_rows: batch.num_rows(),
-            file_size: 0,
-            format: FileType::Csv,
-            metadata: FileMetadata::Delimited,
-        });
+        let dataset = Dataset::from_test_batch(batch);
         let text = ColumnId::from_raw(0);
         let number = ColumnId::from_raw(1);
         let ordered = dataset
@@ -231,15 +253,7 @@ mod tests {
         tags.append(true);
         let tags: ArrayRef = Arc::new(tags.finish());
         let batch = RecordBatch::try_from_iter([("tags", tags)]).unwrap();
-        let dataset = Arc::new(Dataset {
-            source_path: Default::default(),
-            schema: batch.schema(),
-            columns: vec![Column::new("tags", batch.column(0).clone()).unwrap()],
-            n_rows: batch.num_rows(),
-            file_size: 0,
-            format: FileType::Parquet,
-            metadata: FileMetadata::Delimited,
-        });
+        let dataset = Dataset::from_test_batch(batch);
         let segment = dataset
             .unfiltered()
             .unsorted()

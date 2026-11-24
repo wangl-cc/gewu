@@ -1,51 +1,11 @@
 #![cfg(feature = "parquet")]
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Error, Filter, OrderedView};
-use parquet::arrow::ArrowWriter;
-
-/// name | label | price
-fn sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
-    let names: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"]));
-    let labels: ArrayRef = Arc::new(StringArray::from(vec![
-        Some("cat"),
-        Some("dog"),
-        None,
-        Some("cat"),
-        Some("bird"),
-        Some("dog"),
-    ]));
-    let prices: ArrayRef = Arc::new(Float64Array::from(vec![
-        Some(3.5),
-        Some(1.0),
-        Some(9.0),
-        None,
-        Some(2.25),
-        Some(7.0),
-    ]));
-    let ids: ArrayRef = Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50, 60]));
-    let batch = RecordBatch::try_from_iter(vec![
-        ("name", names),
-        ("label", labels),
-        ("price", prices),
-        ("id", ids),
-    ])
-    .unwrap();
-
-    let path = std::env::temp_dir().join(format!(
-        "gewu-test-{}-{:?}.parquet",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let file = std::fs::File::create(&path).unwrap();
-    let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
-    w.write(&batch).unwrap();
-    w.close().unwrap();
-    let doc = Arc::new(gewu_core::Dataset::open(&path).unwrap());
-    (path, doc)
-}
+mod common;
+use common::{open_batch, sample};
 
 fn names(doc: &Arc<OrderedView>) -> Vec<String> {
     let segment = doc.format_column(ColumnId::from_raw(0), 0, 100).unwrap();
@@ -56,7 +16,7 @@ fn names(doc: &Arc<OrderedView>) -> Vec<String> {
 
 #[test]
 fn opens_file() {
-    let (path, doc) = sample();
+    let doc = sample();
     let info = doc.info();
     assert_eq!(info.row_count, 6);
     assert_eq!(info.columns.len(), 4);
@@ -66,12 +26,47 @@ fn opens_file() {
     assert_eq!(names(&doc.unfiltered().unsorted()), [
         "a", "b", "c", "d", "e", "f"
     ]);
-    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn parquet_schema_nullability_is_independent_of_cell_values() {
+    use arrow::{
+        array::{Int32Array, NullArray},
+        datatypes::{DataType, Field, Schema},
+    };
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("optional", DataType::Int32, true),
+        Field::new("missing", DataType::Null, true),
+        Field::new("required", DataType::Int32, false),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int32Array::from(vec![42])),
+        Arc::new(NullArray::new(1)),
+        Arc::new(Int32Array::from(vec![42])),
+    ])
+    .unwrap();
+    let dataset = open_batch(&batch);
+    let columns = dataset.info().columns;
+    assert!(columns[0].nullable);
+    assert!(!columns[2].nullable);
+    let rows = dataset.unfiltered();
+    assert_eq!(rows.count_nulls(ColumnId::from_raw(0)).unwrap(), 0);
+    let view = rows.unsorted();
+    let missing = ColumnId::from_raw(1);
+    assert_eq!(view.format_column(missing, 0, 1).unwrap().cell(0), None);
+    assert_eq!(
+        view.exact_filter_for_cell(missing, 0)
+            .unwrap()
+            .unwrap()
+            .filter,
+        Filter::OnlyNulls
+    );
 }
 
 #[test]
 fn sorts_with_nulls_last() {
-    let (path, dataset) = sample();
+    let dataset = sample();
     let c2 = ColumnId::from_raw(2);
     let filtered = dataset.unfiltered();
     let asc = filtered
@@ -89,12 +84,11 @@ fn sorts_with_nulls_last() {
         }])
         .unwrap();
     assert_eq!(names(&desc), ["c", "f", "a", "e", "b", "d"]);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn checkbox_filter_and_choices() {
-    let (path, doc) = sample();
+    let doc = sample();
     let (c1, c2, c3) = (
         ColumnId::from_raw(1),
         ColumnId::from_raw(2),
@@ -140,12 +134,11 @@ fn checkbox_filter_and_choices() {
     let labels = filtered.filter_choices(c1).unwrap();
     assert_eq!(labels.values.unwrap().len(), all_labels);
     assert_eq!(labels.null_count, all_nulls);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn null_contains_and_typed_equality() {
-    let (path, dataset) = sample();
+    let dataset = sample();
     let (c1, c2) = (ColumnId::from_raw(1), ColumnId::from_raw(2));
     let doc = dataset
         .filter(&[ColumnFilter {
@@ -173,12 +166,11 @@ fn null_contains_and_typed_equality() {
         .unwrap()
         .unsorted();
     assert_eq!(names(&doc), ["e"]);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn dataset_queries_recompute_from_the_full_source() {
-    let (path, dataset) = sample();
+    let dataset = sample();
     let c1 = ColumnId::from_raw(1);
     let filtered = dataset
         .filter(&[ColumnFilter {
@@ -193,12 +185,11 @@ fn dataset_queries_recompute_from_the_full_source() {
     assert_eq!(names(&filtered), ["a", "d"]);
     drop(dataset);
     assert_eq!(filtered.row_count(), 2);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn range_filter_on_floats_skips_nulls() {
-    let (path, doc) = sample();
+    let doc = sample();
     let c2 = ColumnId::from_raw(2);
     // price: a 3.5, b 1.0, c 9.0, d null, e 2.25, f 7.0.
     // Include closed, open-ended, and unbounded ranges (nulls excluded).
@@ -219,12 +210,11 @@ fn range_filter_on_floats_skips_nulls() {
             .unsorted();
         assert_eq!(names(&view), expected);
     }
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn range_filter_on_integers() {
-    let (path, doc) = sample();
+    let doc = sample();
     let c3 = ColumnId::from_raw(3);
     // id: 10, 20, 30, 40, 50, 60. Fractional bounds round inward.
     for (min, max, expected) in [
@@ -243,12 +233,11 @@ fn range_filter_on_integers() {
             .unsorted();
         assert_eq!(names(&view), expected);
     }
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn range_filter_rejects_text_columns() {
-    let (path, doc) = sample();
+    let doc = sample();
     assert!(matches!(
         doc.filter(&[ColumnFilter {
             column: ColumnId::from_raw(1),
@@ -256,12 +245,11 @@ fn range_filter_rejects_text_columns() {
         }]),
         Err(Error::Filter(_))
     ));
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn histogram_counts() {
-    let (path, doc) = sample();
+    let doc = sample();
     let (c1, c2, c3) = (
         ColumnId::from_raw(1),
         ColumnId::from_raw(2),
@@ -295,11 +283,10 @@ fn histogram_counts() {
         .filter_distribution(c1, 10, gewu_core::AxisScale::Linear)
         .unwrap()
         .is_none());
-    std::fs::remove_file(path).ok();
 }
 
 /// name | day (date32) | at (timestamp µs, UTC) | n (int64) | x (float64)
-fn temporal_sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
+fn temporal_sample() -> Arc<gewu_core::Dataset> {
     use arrow::array::{Date32Array, TimestampMicrosecondArray};
     let names: ArrayRef = Arc::new(StringArray::from(vec!["Alpha", "beta", "Gamma", "delta"]));
     // 2024-01-01, 2024-01-02, null, 2024-03-15
@@ -330,17 +317,7 @@ fn temporal_sample() -> (PathBuf, Arc<gewu_core::Dataset>) {
         ("x", x),
     ])
     .unwrap();
-    let path = std::env::temp_dir().join(format!(
-        "gewu-temporal-{}-{:?}.parquet",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let file = std::fs::File::create(&path).unwrap();
-    let mut w = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
-    w.write(&batch).unwrap();
-    w.close().unwrap();
-    let doc = Arc::new(gewu_core::Dataset::open(&path).unwrap());
-    (path, doc)
+    open_batch(&batch)
 }
 
 fn find_names(doc: &Arc<OrderedView>, text: &str) -> Vec<String> {
@@ -357,30 +334,28 @@ fn find_names(doc: &Arc<OrderedView>, text: &str) -> Vec<String> {
 
 #[test]
 fn search_text_is_case_insensitive_substring() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let ordered = doc.unfiltered().unsorted();
     assert_eq!(find_names(&ordered, "ALPHA"), ["Alpha"]);
     assert_eq!(find_names(&ordered, "gam"), ["Gamma"]);
     // Characters that are special in LIKE patterns match literally.
     assert_eq!(find_names(&ordered, "%"), Vec::<String>::new());
     assert_eq!(find_names(&ordered, "_"), Vec::<String>::new());
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn search_integers_by_value() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let ordered = doc.unfiltered().unsorted();
     // Exact value, not a substring: 170 does not match 1700.
     assert_eq!(find_names(&ordered, "170"), ["beta"]);
     assert_eq!(find_names(&ordered, "-7"), ["delta"]);
     assert_eq!(find_names(&ordered, "+7"), ["Alpha"]);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn search_floats_by_typed_precision() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let ordered = doc.unfiltered().unsorted();
     assert_eq!(find_names(&ordered, "2.25"), ["beta"]);
     // "2.3" means [2.25, 2.35): includes 2.25.
@@ -390,12 +365,11 @@ fn search_floats_by_typed_precision() {
     assert_eq!(find_names(&ordered, "17"), ["Gamma"]);
     assert_eq!(find_names(&ordered, "5e-1"), ["Alpha"]);
     assert_eq!(find_names(&ordered, "NaN"), ["delta"]);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn search_dates_by_period() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let ordered = doc.unfiltered().unsorted();
     // A month or day matches the whole period; null dates never match.
     assert_eq!(find_names(&ordered, "2024-03"), ["delta"]);
@@ -413,12 +387,11 @@ fn search_dates_by_period() {
     );
     // Not a date: skipped, not an error.
     assert_eq!(find_names(&ordered, "2024-13"), Vec::<String>::new());
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn contains_filter_is_for_text_only() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let before = doc.unfiltered().unsorted();
     // Numbers and dates are filtered by range; "contains" would mean
     // something different for them, so it is refused.
@@ -433,12 +406,11 @@ fn contains_filter_is_for_text_only() {
         assert!(matches!(err, Error::Filter(_)), "{err}");
     }
     assert_eq!(names(&doc.unfiltered().unsorted()), names(&before));
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn dates_format_parse_and_filter() {
-    let (path, dataset) = temporal_sample();
+    let dataset = temporal_sample();
     let c1 = ColumnId::from_raw(1);
     let c2 = ColumnId::from_raw(2);
     let initial = dataset.unfiltered().unsorted();
@@ -488,12 +460,11 @@ fn dates_format_parse_and_filter() {
     assert!(h.integer);
     assert_eq!((h.lo, h.hi), (Some(19_723.0), Some(19_725.0)));
     assert_eq!(filtered.count_nulls(c1).unwrap(), 0);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
 fn find_marks_matching_cells() {
-    let (path, doc) = temporal_sample();
+    let doc = temporal_sample();
     let cols: Vec<ColumnId> = (0..5).map(ColumnId::from_raw).collect();
     let ordered = doc.unfiltered().unsorted();
     // "170" matches n = 170 only; "2024-01-02" matches the day column.
@@ -507,5 +478,4 @@ fn find_marks_matching_cells() {
             .collect();
         assert_eq!(hits, expected, "query {query}");
     }
-    std::fs::remove_file(path).ok();
 }
