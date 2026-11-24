@@ -34,7 +34,7 @@ pub(super) fn grid(table: &TableView, window: &Window) -> Stateful<Div> {
     grid
 }
 
-pub(super) fn rows(table: &TableView, layout: &Layout, cx: &Context<TableView>) -> AnyElement {
+pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableView>) -> AnyElement {
     let mut headers = div()
         .id("column-headers")
         .role(Role::Row)

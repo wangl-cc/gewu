@@ -46,6 +46,7 @@ enum BlockText {
     Ready {
         segment: FormattedColumnSegment,
         visible: Vec<OnceCell<SharedString>>,
+        originals: Vec<Option<SharedString>>,
     },
     Failed(SharedString),
 }
@@ -62,11 +63,17 @@ impl Block {
             Ok(segment) => {
                 let len = segment.row_count();
                 let visible = (0..len).map(|_| OnceCell::new()).collect();
-                // Reserve both the native segment and a possible rendered copy of its bytes.
+                // Reserve the native text and one owned copy, including a possible preview
+                // ellipsis.
                 let budget = 2 * segment.text_bytes()
-                    + len as usize * (size_of::<OnceCell<SharedString>>() + size_of::<u32>() + 1);
+                    + len as usize
+                        * (size_of::<OnceCell<SharedString>>() + size_of::<u32>() + 1 + "…".len());
                 Self {
-                    text: BlockText::Ready { segment, visible },
+                    text: BlockText::Ready {
+                        segment,
+                        visible,
+                        originals: Vec::new(),
+                    },
                     tick,
                     budget,
                 }
@@ -84,7 +91,9 @@ impl Block {
 
     fn preview(&self, row: u32) -> Option<Option<SharedString>> {
         match &self.text {
-            BlockText::Ready { segment, visible } => {
+            BlockText::Ready {
+                segment, visible, ..
+            } => {
                 let rendered = visible.get(row as usize)?;
                 Some(
                     segment
@@ -94,6 +103,37 @@ impl Block {
             }
             BlockText::Failed(_) => None,
         }
+    }
+
+    fn full_text(&mut self, row: u32) -> Option<Option<SharedString>> {
+        let BlockText::Ready {
+            segment,
+            visible,
+            originals,
+        } = &mut self.text
+        else {
+            return None;
+        };
+        let index = row as usize;
+        let rendered = visible.get(index)?;
+        Some(segment.cell(row).map(|text| {
+            let shown = rendered.get_or_init(|| preview(text));
+            if shown.as_ref() == text {
+                return shown.clone();
+            }
+            if originals.is_empty() {
+                originals.resize(visible.len(), None);
+                self.budget += originals.capacity() * size_of::<Option<SharedString>>();
+            }
+            originals[index]
+                .get_or_insert_with(|| {
+                    // The full copy was reserved at block creation. Also retain the truncated
+                    // preview.
+                    self.budget += shown.len();
+                    SharedString::new(text)
+                })
+                .clone()
+        }))
     }
 }
 
@@ -233,9 +273,14 @@ impl TableData {
     }
 
     /// Cached text of a cell: `Some(None)` is null; unfetched or failed blocks have no value.
-    pub fn cell(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
-        self.cached_cell_text(column, row)
-            .map(|value| value.map(SharedString::new))
+    pub fn cell(&mut self, column: usize, row: u64) -> Option<Option<SharedString>> {
+        let block = self
+            .cache
+            .get_mut(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
+        let before = block.budget;
+        let text = block.full_text((row % BLOCK_ROWS) as u32);
+        self.cache_bytes += block.budget - before;
+        text
     }
 
     pub(crate) fn cached_cell_text(&self, column: usize, row: u64) -> Option<Option<&str>> {

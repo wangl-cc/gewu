@@ -96,17 +96,30 @@ fn copy_uses_core_tsv_export() {
 #[test]
 fn grid_preview_preserves_utf8_boundaries_and_single_line_while_details_keep_the_original() {
     let long = "猫".repeat(500);
-    let input = format!("label\n\"{long}\nsecond line\"\n");
+    let short = "short enough for the grid and long enough to own its bytes";
+    let input = format!("label\n\"{long}\nsecond line\"\n{short}\n");
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("long.csv");
     std::fs::write(&file, input).unwrap();
     let mut data = TableData::from_dataset(Arc::new(Dataset::open(file).unwrap()));
-    data.prefetch(&[0], 0..1);
+    data.prefetch(&[0], 0..2);
+    let initial_budget = data.cache_bytes;
     let clipped = data.cell_preview(0, 0).unwrap().unwrap();
     assert!(clipped.ends_with('…') && clipped.len() <= 1027);
+    let single_line = data.cell_preview(0, 1).unwrap().unwrap();
     assert_eq!(
-        data.cell(0, 0).unwrap().unwrap().as_ref(),
-        format!("{long}\nsecond line")
+        data.cell(0, 1).unwrap().unwrap().as_ptr(),
+        single_line.as_ptr()
     );
+    assert_eq!(data.cache_bytes, initial_budget);
+    let original = data.cell(0, 0).unwrap().unwrap();
+    assert_eq!(original.as_ref(), format!("{long}\nsecond line"));
+    let full_budget = data.cache_bytes;
+    assert!(full_budget >= initial_budget + clipped.len());
+    assert_eq!(
+        data.cell(0, 0).unwrap().unwrap().as_ptr(),
+        original.as_ptr()
+    );
+    assert_eq!(data.cache_bytes, full_budget);
     assert_eq!(preview("first\r\nsecond").as_ref(), "first…");
 }
