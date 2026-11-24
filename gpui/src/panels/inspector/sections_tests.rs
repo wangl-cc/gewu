@@ -59,6 +59,48 @@ fn expanded_sections_follow_capabilities_and_keep_unaffected_cached_analysis() {
 }
 
 #[test]
+fn hidden_inspector_defers_analysis_until_its_current_rows_are_shown() {
+    use gewu_app::TableQuery;
+    use gewu_core::{ColumnFilter, Filter};
+    use gpui_kit::{AppContext, TestAppContext};
+
+    use super::super::{Inspector, Showing};
+
+    let original = crate::panels::tests::dataset();
+    let columns = original.dataset().info().columns;
+    let filtered = original
+        .applying(Arc::new(TableQuery {
+            filters: vec![ColumnFilter {
+                column: columns[0].id,
+                filter: Filter::exact(vec!["keep".into()], false, false),
+            }],
+            ..Default::default()
+        }))
+        .unwrap();
+    let app = TestAppContext::single();
+    let inspector = app.update(|cx| cx.new(|cx| Inspector::new(original, columns.clone(), cx)));
+    app.update(|cx| {
+        inspector.update(cx, |panel, cx| {
+            panel.set_visible(false, cx);
+            panel.set_context(filtered, columns, cx);
+            assert!(panel.task.is_none());
+        })
+    });
+    app.run_until_parked();
+    app.read(|cx| assert!(matches!(inspector.read(cx).showing, Showing::Empty)));
+    app.update(|cx| inspector.update(cx, |panel, cx| panel.set_visible(true, cx)));
+    app.run_until_parked();
+    app.read(|cx| {
+        let Showing::Column(result) = &inspector.read(cx).showing else {
+            panic!("expected the current filtered column analysis");
+        };
+        assert!(result.sections.iter().any(|(_, data)| {
+            matches!(data, Some(Ok(SectionData::Values { distinct: 1, rows })) if rows == &[("keep".into(), 3)])
+        }));
+    });
+}
+
+#[test]
 fn changing_rows_column_and_bin_count_only_displays_the_final_analysis() {
     use gewu_app::TableQuery;
     use gewu_core::{ColumnFilter, Filter};

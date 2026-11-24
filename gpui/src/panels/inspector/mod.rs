@@ -75,6 +75,7 @@ impl Default for InspectorSettings {
 }
 
 pub(crate) struct Inspector {
+    visible: bool,
     snapshot: AppliedView,
     columns: Vec<ColumnInfo>,
     selected: Option<ColumnId>,
@@ -92,7 +93,31 @@ impl Inspector {
         visible_columns: Vec<ColumnInfo>,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::with_settings(snapshot, visible_columns, InspectorSettings::default(), cx)
+        Self::with_settings(
+            snapshot,
+            visible_columns,
+            InspectorSettings::default(),
+            true,
+            cx,
+        )
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.visible == visible {
+            return;
+        }
+        self.visible = visible;
+        if visible && matches!(self.showing, Showing::Empty) {
+            self.load(cx);
+        } else if !visible && matches!(self.showing, Showing::Loading) {
+            self.task = None;
+            self.showing = Showing::Empty;
+        }
+        cx.notify();
     }
 
     pub(crate) fn settings(&self) -> InspectorSettings {
@@ -106,11 +131,20 @@ impl Inspector {
         }
     }
 
-    pub(crate) fn mark_scatter(&self, chart_id: EntityId, row: Option<gewu_core::SourceRow>, cx: &mut App) {
+    pub(crate) fn mark_scatter(
+        &self,
+        chart_id: EntityId,
+        row: Option<gewu_core::SourceRow>,
+        cx: &mut App,
+    ) {
         if let Showing::Chart(chart) = &self.showing
             && chart.entity_id() == chart_id
         {
-            chart.update(cx, |chart, cx| chart.mark(row, cx));
+            // A scatter click dispatches the table action while the chart is still borrowed.
+            let chart = chart.downgrade();
+            cx.defer(move |cx| {
+                let _ = chart.update(cx, |chart, cx| chart.mark(row, cx));
+            });
         }
     }
 
@@ -118,9 +152,11 @@ impl Inspector {
         snapshot: AppliedView,
         visible_columns: Vec<ColumnInfo>,
         settings: InspectorSettings,
+        visible: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut inspector = Self {
+            visible,
             snapshot,
             columns: visible_columns,
             selected: None,
@@ -194,6 +230,9 @@ impl Inspector {
     fn load(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.showing = Showing::Empty;
+        if !self.visible {
+            return;
+        }
         let page = self.settings.page;
         let desired = if page == Page::Chart {
             self.y
@@ -240,6 +279,7 @@ impl Inspector {
                 })
                 .await;
             let _ = this.update(cx, |inspector, cx| {
+                inspector.task = None;
                 inspector.showing = match result {
                     Ok(Loaded::Column(result)) => Showing::Column(result),
                     Ok(Loaded::Chart(result)) => Showing::Chart(cx.new(|cx| {

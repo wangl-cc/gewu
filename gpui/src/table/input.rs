@@ -69,13 +69,14 @@ impl TableView {
                 self.cycle_sort(column, ev.modifiers.shift, cx);
             }
         } else if let Some(cell) = l.cell_at(x, y) {
-            self.selection = Some(match (self.selection, ev.modifiers.shift) {
+            let selection = match (self.selection, ev.modifiers.shift) {
                 (Some(s), true) => Selection {
                     anchor: s.anchor,
                     head: cell,
                 },
                 _ => Selection::single(cell),
-            });
+            };
+            self.set_selection(Some(selection), cx);
             if ev.click_count == 2 {
                 self.show_cell(cell, window, cx);
             } else {
@@ -196,8 +197,8 @@ impl TableView {
         let layout = self.compute_layout(self.layout.bounds);
         self.horizontal = HorizontalScroll::Offset(layout.scroll_x);
         self.scroll = layout.vertical.clone();
-        if let (Some(selection), Some(head)) = (&mut self.selection, layout.drag_cell_at(x, y)) {
-            selection.head = head;
+        if let (Some(selection), Some(head)) = (self.selection, layout.drag_cell_at(x, y)) {
+            self.set_selection(Some(Selection { head, ..selection }), cx);
         }
         if before == (self.scroll.anchor(), self.scroll_x()) {
             self.edge_pointer = None;
@@ -287,7 +288,7 @@ impl TableView {
             Motion::PageDown => (page, 0),
         };
         let next = current.moved(dr, dc, action.extend, rows, columns);
-        self.selection = Some(next);
+        self.set_selection(Some(next), cx);
         let before = (self.scroll.anchor(), self.scroll_x());
         self.reveal(next.head);
         if before != (self.scroll.anchor(), self.scroll_x()) {

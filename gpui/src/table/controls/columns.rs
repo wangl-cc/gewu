@@ -12,7 +12,12 @@ use gpui_kit::{
 };
 
 use super::{Cell, ColumnDrag, Drawer, Order, Preferences, Selection, TableView, button};
-use crate::columns::TableColumns;
+use crate::{columns::TableColumns, data::TableQuery};
+
+fn uses_column(query: &TableQuery, id: ColumnId) -> bool {
+    query.filters.iter().any(|filter| filter.column == id)
+        || query.sorts.iter().any(|sort| sort.column == id)
+}
 
 #[derive(Default)]
 pub(super) struct ColumnListScroll {
@@ -411,13 +416,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let conditioned = [self.requested_query(), self.data.query().as_ref()]
-            .into_iter()
-            .any(|query| {
-                query.sorts.iter().any(|s| ids.contains(&s.column))
-                    || query.filters.iter().any(|f| ids.contains(&f.column))
-            });
-        if conditioned && !Preferences::get(cx).skip_hide_warning {
+        if self.hiding_clears_conditions(ids) && !Preferences::get(cx).skip_hide_warning {
             if let Some(Drawer::Columns { confirm, .. }) = &mut self.controls.drawer {
                 *confirm = Some(HideConfirmation {
                     ids: ids.to_owned(),
@@ -431,28 +430,37 @@ impl TableView {
         }
     }
 
+    fn hiding_clears_conditions(&self, ids: &[ColumnId]) -> bool {
+        ids.iter().any(|&id| {
+            uses_column(self.data.query(), id) || uses_column(self.requested_query(), id)
+        })
+    }
+
     fn set_visible(&mut self, ids: &[ColumnId], visible: bool, cx: &mut Context<Self>) {
-        if !self.change_columns(false, |columns| columns.set_visible(ids, visible), cx) {
-            return;
-        }
-        if !visible
-            && (self
-                .requested_query()
-                .filters
-                .iter()
-                .any(|f| ids.contains(&f.column))
-                || self
-                    .requested_query()
-                    .sorts
-                    .iter()
-                    .any(|s| ids.contains(&s.column)))
-        {
+        if visible {
+            self.controls.pending_hides.retain(|id| !ids.contains(id));
+        } else if self.hiding_clears_conditions(ids) {
+            self.controls.pending_hides.extend_from_slice(ids);
+            self.controls.pending_hides.sort_unstable();
+            self.controls.pending_hides.dedup();
             self.edit_query(cx, |query| {
                 query.filters.retain(|f| !ids.contains(&f.column));
                 query.sorts.retain(|s| !ids.contains(&s.column));
             });
+            return;
         }
+        self.change_columns(false, |columns| columns.set_visible(ids, visible), cx);
         cx.notify();
+    }
+
+    pub(in crate::table) fn finish_column_hides(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut ids = std::mem::take(&mut self.controls.pending_hides);
+        if ids.is_empty() || self.data.queries().error().is_some() {
+            return false;
+        }
+        // A subsequent edit can restore a condition before the cleanup query finishes.
+        ids.retain(|&id| !uses_column(self.data.query(), id));
+        self.update_columns(false, |columns| columns.set_visible(&ids, false), cx)
     }
 
     fn move_column(&mut self, id: ColumnId, by: isize, cx: &mut Context<Self>) {
@@ -476,6 +484,19 @@ impl TableView {
         update: impl FnOnce(&mut TableColumns) -> bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.update_columns(reordered, update, cx) {
+            return false;
+        }
+        self.sync_panels(cx);
+        true
+    }
+
+    fn update_columns(
+        &mut self,
+        reordered: bool,
+        update: impl FnOnce(&mut TableColumns) -> bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let selected = self.selection.and_then(|s| {
             Some((
                 s,
@@ -486,7 +507,7 @@ impl TableView {
         if !update(&mut self.data.columns) {
             return false;
         }
-        self.selection = selected.and_then(|(s, anchor, head)| {
+        let selection = selected.and_then(|(s, anchor, head)| {
             let relocate = |cell: Cell, id| {
                 let column = self
                     .data
@@ -501,8 +522,9 @@ impl TableView {
                 head: relocate(s.head, head)?,
             })
         });
-        self.visible_columns_changed(reordered, cx);
-        self.sync_panels(cx);
+        self.set_selection(selection, cx);
+        self.reset_grid_interaction();
+        self.sync_find_columns(reordered, cx);
         true
     }
 }

@@ -142,7 +142,7 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
                             && table.data.columns.get(column).is_some_and(|c| c.id == id)
                         {
                             table.commit_grid_layout(cx);
-                            table.selection = Some(Selection::single(cell));
+                            table.set_selection(Some(Selection::single(cell)), cx);
                             table.reveal(cell);
                             window.focus(&table.focus, cx);
                             cx.notify();

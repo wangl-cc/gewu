@@ -12,7 +12,7 @@ Find never changes filters, sorting, rows, exports or Inspector statistics. Sort
 
 Filters always apply to the whole table, never to the rows currently shown, so relaxing a filter brings rows back. Changing only the sort reorders the same rows and keeps their Inspector results. Reordering, showing or hiding a column without conditions changes no rows.
 
-Hiding a column clears its filter and sort; showing it again brings it back without them. The app asks for confirmation before hiding a sorted or filtered column, with an optional "Do not ask again". Find and export follow the visible columns in their current order.
+Hiding a column clears its filter and sort. A column with active conditions stays visible until the query that clears them succeeds. Showing it again brings it back without those conditions. The app asks for confirmation before hiding a sorted or filtered column, with an optional "Do not ask again". Find and export follow the visible columns in their current order.
 
 Sorting supports multiple keys in priority order: the first key orders the rows, and each later key orders only rows tied on the keys before it. Nulls sort last in both directions, and rows with equal keys keep their source order. Clearing all sorting restores source order.
 

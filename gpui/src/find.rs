@@ -25,11 +25,6 @@ use crate::data::BLOCK_ROWS;
 
 pub(crate) const TYPING_DELAY: Duration = Duration::from_millis(150);
 
-struct Scope {
-    view: Arc<OrderedView>,
-    columns: Vec<(ColumnId, SharedString)>,
-}
-
 #[derive(Default)]
 struct Highlights(HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>);
 
@@ -76,7 +71,8 @@ pub(crate) struct FindController {
     message: FindMessage,
     session: Option<Arc<Find>>,
     cursor: Option<CellMatch>,
-    scope: Option<Scope>,
+    view: Option<Arc<OrderedView>>,
+    columns: Vec<(ColumnId, SharedString)>,
     viewport_rows: Range<u64>,
     viewport_columns: Vec<ColumnId>,
     queued: i64,
@@ -149,9 +145,13 @@ impl Highlights {
 impl EventEmitter<CellMatch> for FindController {}
 
 impl FindController {
-    pub(crate) fn set_scope(
+    pub(crate) fn set_view(&mut self, view: Option<Arc<OrderedView>>, cx: &mut Context<Self>) {
+        self.view = view;
+        self.restart_scope(None, cx);
+    }
+
+    pub(crate) fn set_columns(
         &mut self,
-        view: Option<Arc<OrderedView>>,
         columns: Vec<(ColumnId, SharedString)>,
         retain_match: bool,
         cx: &mut Context<Self>,
@@ -161,9 +161,15 @@ impl FindController {
             .filter(|c| retain_match && columns.iter().any(|(id, _)| *id == c.column));
         self.viewport_columns
             .retain(|id| columns.iter().any(|(column, _)| column == id));
-        self.scope = view.map(|view| Scope { view, columns });
+        self.columns = columns;
+        if self.view.is_some() {
+            self.restart_scope(hit, cx);
+        }
+    }
+
+    fn restart_scope(&mut self, hit: Option<CellMatch>, cx: &mut Context<Self>) {
         self.invalidate();
-        if self.open {
+        if self.open && self.view.is_some() {
             if let Some(hit) = hit {
                 self.cursor = Some(hit);
                 self.report(hit, false);
@@ -179,11 +185,9 @@ impl FindController {
     }
 
     fn report(&mut self, hit: CellMatch, wrapped: bool) {
-        if let Some(scope) = &self.scope
-            && let Some((_, name)) = scope.columns.iter().find(|(id, _)| *id == hit.column)
-            && let Some(source) = scope
-                .view
-                .source_row_at(hit.display_row)
+        if let Some(view) = &self.view
+            && let Some((_, name)) = self.columns.iter().find(|(id, _)| *id == hit.column)
+            && let Some(source) = view.source_row_at(hit.display_row)
         {
             self.message = FindMessage::Location {
                 source,
@@ -234,7 +238,8 @@ impl FindController {
         Self {
             input,
             _subscription: subscription,
-            scope: Some(Scope { view, columns }),
+            view: Some(view),
+            columns,
             open: false,
             message: FindMessage::Idle,
             session: None,
@@ -269,7 +274,7 @@ impl FindController {
 
     fn restart_find(&mut self, cx: &mut Context<Self>) {
         self.invalidate();
-        if self.open && self.scope.is_some() {
+        if self.open && self.view.is_some() {
             self.advance_find(1, TYPING_DELAY, cx);
             self.load_highlights(cx);
         }
@@ -281,11 +286,11 @@ impl FindController {
             return Some(session.clone());
         }
         let text = self.text(cx);
-        let Scope { view, columns } = self.scope.as_ref()?;
-        if text.trim().is_empty() || columns.is_empty() || self.highlight_failed {
+        let view = self.view.as_ref()?;
+        if text.trim().is_empty() || self.columns.is_empty() || self.highlight_failed {
             return None;
         }
-        let ids = columns.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let ids = self.columns.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         match view.find(&text, &ids) {
             Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
             Err(err) => {

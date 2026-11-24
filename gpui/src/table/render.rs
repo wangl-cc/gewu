@@ -115,7 +115,7 @@ impl Render for TableView {
             .key_context("GewuGrid")
             .on_action(cx.listener(Self::navigate))
             .on_action(cx.listener(|t, _: &base::input::SelectAll, _, cx| {
-                t.selection = Selection::all(t.data.row_count(), t.data.columns.len());
+                t.set_selection(Selection::all(t.data.row_count(), t.data.columns.len()), cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|t, _: &actions::FilterSelection, _, cx| t.filter_selected(cx)))
@@ -260,13 +260,12 @@ impl Render for TableView {
                 .border_color(colors.border)
                 .text_sm()
         };
+        let inspector_visible = self.inspector_visible(cx);
         let toolbar = toolbar.child(self.find.clone()).child(
             base::Button::new("show-inspector")
                 .accessibility_label("Inspector")
-                .aria_expanded(self.controls.inspector_visible)
-                .when(self.controls.inspector_visible, |button| {
-                    button.bg(colors.secondary)
-                })
+                .aria_expanded(inspector_visible)
+                .when(inspector_visible, |button| button.bg(colors.secondary))
                 .flex_none()
                 .size(px(30.))
                 .flex()

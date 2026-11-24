@@ -78,6 +78,16 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
             Some("Scatter plot, 60 points, row 25 selected")
         );
     });
+    action(&mut w, ManageColumns);
+    click(&mut w, ("column-earlier", 1usize));
+    click(&mut w, "close-table-drawer");
+    assert_eq!(w.selection().unwrap().head.column, 0);
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find("scatter-plot").label(),
+            Some("Scatter plot, 60 points, row 25 selected")
+        );
+    });
     w.keys("up");
     assert_eq!(w.selection().unwrap().head.row, 58);
     w.ui.update(|window, _| {
@@ -158,6 +168,45 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     });
     click(&mut w, "copy-cell");
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
+}
+
+#[test]
+fn a_failed_pending_filter_keeps_its_conditioned_column_visible() {
+    use gpui_kit::{px, size};
+
+    let mut w = window();
+    w.ui.simulate_resize(size(px(960.), px(840.)));
+    w.settle();
+    let group = w.read(|t| t.data.columns[0].id);
+    w.click(w.cell(0, 0), Modifiers::default());
+    w.keys("cmd-alt-shift-l");
+    assert_eq!(w.source_rows(), [0, 2, 4]);
+    w.click(w.cell(0, 1), Modifiers::default());
+    w.keys("cmd-alt-f");
+    click(&mut w, "Range");
+    w.ui.update(|window, cx| {
+        window.click("Minimum", cx);
+        window.input("not-a-number", cx);
+        window.click("apply-filter", cx);
+    });
+    // Confirm before the in-flight query has returned its error.
+    w.ui.update(|window, cx| window.dispatch_action(Box::new(ManageColumns), cx));
+    w.ui.update(|window, cx| window.click(("toggle-column", group.into_raw() as usize), cx));
+    w.ui.update(|window, cx| window.click("confirm-hide", cx));
+    assert!(w.read(|t| t.data.queries().is_running() && t.data.columns.position(group).is_some()));
+    w.settle();
+    assert!(w.read(|t| t.data.queries().error().is_some()));
+    assert!(w.read(|t| t.data.columns.position(group).is_some()));
+    assert_eq!(w.source_rows(), [0, 2, 4]);
+    click(&mut w, "close-table-drawer");
+    click(&mut w, "filtered-count");
+    w.ui.update(|window, _| {
+        assert!(
+            window
+                .find(("locate-filter", group.into_raw() as usize))
+                .visible()
+        );
+    });
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Document controls operate on stable column identities and the displayed view snapshot.
 use std::{cell::Cell as ValueCell, rc::Rc};
 
-use gewu_core::{ColumnFilter, ColumnId, Filter};
+use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow, ViewRow};
 use gpui_kit::{
     base::{self, input::InputState},
     prelude::FluentBuilder,
@@ -23,10 +23,18 @@ mod sorting;
 pub(super) struct Controls {
     drawer: Option<Drawer>,
     menu: Option<menus::OpenMenu>,
+    /// Column visibility commits with the query that clears these columns' conditions.
+    pending_hides: Vec<ColumnId>,
     panel_focus: Option<FocusHandle>,
     inspector: Option<Entity<Inspector>>,
-    pub(super) inspector_visible: bool,
+    marked_point: Option<MarkedPoint>,
     export: Option<Entity<export::ExportController>>,
+}
+
+struct MarkedPoint {
+    chart: EntityId,
+    column: ColumnId,
+    row: SourceRow,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -106,6 +114,30 @@ enum Drawer {
 }
 
 impl TableView {
+    pub(super) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        self.selection = selection;
+        let Some(mark) = &self.controls.marked_point else {
+            return;
+        };
+        // Reordering visible columns moves the cell's coordinates but keeps its identity.
+        if selection.is_some_and(|s| {
+            s.anchor == s.head
+                && self
+                    .data
+                    .columns
+                    .get(s.head.column)
+                    .is_some_and(|col| col.id == mark.column)
+                && self.data.view().source_row_at(ViewRow(s.head.row)) == Some(mark.row)
+        }) {
+            return;
+        }
+        let chart = mark.chart;
+        self.controls.marked_point = None;
+        if let Some(panel) = &self.controls.inspector {
+            panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
+        }
+    }
+
     pub(super) fn reveal_scatter_point(
         &mut self,
         hit: &crate::actions::RevealScatterPoint,
@@ -113,7 +145,7 @@ impl TableView {
         cx: &mut Context<Self>,
     ) {
         self.commit_grid_layout(cx);
-        let Some(panel) = &self.controls.inspector else {
+        let Some(panel) = self.controls.inspector.clone() else {
             return;
         };
         let Some(id) = panel.read(cx).plotted_column(hit.chart) else {
@@ -125,25 +157,14 @@ impl TableView {
         let Some(cell) = self.data.display_cell(row, id) else {
             return;
         };
-        let selected = Selection::single(cell);
-        self.selection = Some(selected);
-        let chart = hit.chart;
-        let source_row = hit.source_row;
-        let panel = panel.downgrade();
-        let observed_panel = panel.clone();
-        self.scatter_selection = Some(cx.observe_self(move |table, cx| {
-            if table.selection != Some(selected) {
-                let _ = observed_panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
-                table.scatter_selection = None;
-            }
-        }));
-        // The chart can still be borrowed by the pointer handler that dispatched this action.
-        cx.defer_in(window, move |table, _, cx| {
-            if table.selection == Some(selected) {
-                let _ = panel.update(cx, |panel, cx| {
-                    panel.mark_scatter(chart, Some(source_row), cx)
-                });
-            }
+        self.set_selection(Some(Selection::single(cell)), cx);
+        self.controls.marked_point = Some(MarkedPoint {
+            chart: hit.chart,
+            column: id,
+            row: hit.source_row,
+        });
+        panel.update(cx, |panel, cx| {
+            panel.mark_scatter(hit.chart, Some(hit.source_row), cx)
         });
         self.scroll.center_if_outside(cell.row);
         self.reveal(cell);
@@ -152,8 +173,7 @@ impl TableView {
     }
 
     pub(crate) fn initialize_inspector(&mut self, cx: &mut Context<Self>) {
-        self.controls.inspector_visible = Preferences::get(cx).show_inspector;
-        if self.controls.inspector_visible {
+        if Preferences::get(cx).show_inspector {
             self.inspector(cx);
         }
     }
@@ -164,17 +184,15 @@ impl TableView {
         cx: &mut Context<Self>,
     ) {
         let previous = &previous.read(cx).controls;
-        self.controls.inspector_visible = previous.inspector_visible;
         self.controls.export = previous.export.clone();
-        let settings = previous
-            .inspector
-            .as_ref()
-            .map(|panel| panel.read(cx).settings());
-        if let Some(settings) = settings {
+        if let Some(panel) = &previous.inspector {
+            let visible = panel.read(cx).is_visible();
+            let settings = panel.read(cx).settings();
             let snapshot = self.data.snapshot();
             let columns = self.data.columns.iter().cloned().collect();
-            self.controls.inspector =
-                Some(cx.new(|cx| Inspector::with_settings(snapshot, columns, settings, cx)));
+            self.controls.inspector = Some(
+                cx.new(|cx| Inspector::with_settings(snapshot, columns, settings, visible, cx)),
+            );
         }
     }
 
@@ -190,16 +208,25 @@ impl TableView {
             .clone()
     }
 
+    pub(super) fn inspector_visible(&self, cx: &App) -> bool {
+        self.controls
+            .inspector
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).is_visible())
+    }
+
     pub(super) fn toggle_inspector(&mut self, cx: &mut Context<Self>) {
-        self.set_inspector_visible(!self.controls.inspector_visible, cx);
+        self.set_inspector_visible(!self.inspector_visible(cx), cx);
     }
 
     fn set_inspector_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.controls.menu = None;
         self.controls.drawer = None;
-        self.controls.inspector_visible = visible;
         if visible {
             self.inspector(cx);
+        }
+        if let Some(panel) = &self.controls.inspector {
+            panel.update(cx, |panel, cx| panel.set_visible(visible, cx));
         }
         Preferences::update(cx, |p| p.show_inspector = visible);
         cx.notify();
@@ -349,13 +376,10 @@ impl TableView {
         if let Some(menu) = &self.controls.menu {
             elements.push(menu.element());
         }
-        if self.controls.inspector_visible {
-            elements.extend(
-                self.controls
-                    .inspector
-                    .iter()
-                    .map(|p| p.clone().into_any_element()),
-            );
+        if let Some(panel) = &self.controls.inspector
+            && panel.read(cx).is_visible()
+        {
+            elements.push(panel.clone().into_any_element());
         }
         let panel = match &self.controls.drawer {
             Some(Drawer::Filter { editor, .. }) => editor.clone().into_any_element(),

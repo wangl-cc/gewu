@@ -193,7 +193,7 @@ impl TableView {
                                         };
                                         t.reveal(cell);
                                         if row < t.data.row_count() {
-                                            t.selection = Some(Selection::single(cell));
+                                            t.set_selection(Some(Selection::single(cell)), cx);
                                         }
                                     }
                                     t.close_panel(w, cx);

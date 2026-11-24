@@ -60,7 +60,7 @@ pub struct TableView {
     _window_activation: Subscription,
     pub(crate) scroll: VerticalScroll,
     horizontal: HorizontalScroll,
-    pub(crate) selection: Option<Selection>,
+    selection: Option<Selection>,
     drag: Drag,
     edge_pointer: Option<Point<Pixels>>,
     edge_frame_pending: bool,
@@ -72,7 +72,6 @@ pub struct TableView {
     pub(crate) find: Entity<crate::find::FindController>,
     _find_reveal: Subscription,
     _find_changed: Subscription,
-    scatter_selection: Option<Subscription>,
     notice: Option<Notice>,
     controls: controls::Controls,
     query_task: Option<Task<()>>,
@@ -164,11 +163,8 @@ impl TableView {
             cx.new(|cx| crate::find::FindController::new(data.view().clone(), scope, window, cx));
         let reveal = cx.subscribe(&find, |table, _, hit: &gewu_core::CellMatch, cx| {
             table.commit_grid_layout(cx);
-            if let Some(cell) = table
-                .data
-                .display_cell(hit.display_row, hit.column)
-            {
-                table.selection = Some(Selection::single(cell));
+            if let Some(cell) = table.data.display_cell(hit.display_row, hit.column) {
+                table.set_selection(Some(Selection::single(cell)), cx);
                 table.reveal(cell);
                 cx.notify();
             }
@@ -206,7 +202,6 @@ impl TableView {
             focus: cx.focus_handle(),
             find,
             _find_changed: changed,
-            scatter_selection: None,
             _find_reveal: reveal,
             notice: None,
             controls: Default::default(),
@@ -227,13 +222,15 @@ impl TableView {
         });
     }
 
-    fn visible_columns_changed(&mut self, reordered: bool, cx: &mut Context<Self>) {
+    fn reset_grid_interaction(&mut self) {
         self.drag = Drag::None;
         self.edge_pointer = None;
         self.header_hover = None;
         self.thumb_hover = None;
         self.body_pointer = None;
-        let view = (!self.data.queries().is_running()).then(|| self.data.view().clone());
+    }
+
+    fn sync_find_columns(&mut self, reordered: bool, cx: &mut Context<Self>) {
         let columns = self
             .data
             .columns
@@ -241,7 +238,7 @@ impl TableView {
             .map(|c| (c.id, c.name.clone().into()))
             .collect();
         self.find
-            .update(cx, |find, cx| find.set_scope(view, columns, reordered, cx));
+            .update(cx, |find, cx| find.set_columns(columns, reordered, cx));
         self.refresh_highlights(cx);
     }
 

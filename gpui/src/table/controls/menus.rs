@@ -70,7 +70,7 @@ impl TableView {
         if let Some(cell) = cell
             && !self.selection.is_some_and(|s| s.rows().contains(&cell.row))
         {
-            self.selection = Some(Selection::single(cell));
+            self.set_selection(Some(Selection::single(cell)), cx);
         }
         let target = MenuTarget {
             column: self.data.columns[column].id,

@@ -75,23 +75,29 @@ impl TableView {
         edit: impl FnOnce(&mut TableQuery),
     ) {
         if let Some(mut job) = self.data.edit_query(edit) {
-            self.visible_columns_changed(false, cx);
+            self.find.update(cx, |find, cx| find.set_view(None, cx));
             self.query_task = Some(cx.spawn(async move |this, cx| {
                 loop {
                     let result = cx.background_spawn(async move { job.run() }).await;
                     let next = this.update(cx, |table, cx| {
-                        match table.data.finish_query(result) {
+                        let installed = match table.data.finish_query(result) {
                             QueryCompletion::Run(next) => return Some(next),
                             QueryCompletion::Installed => {
-                                table.sync_panels(cx);
                                 table.scroll.set_rows(table.data.row_count());
-                                table.selection = None;
-                                table.drag = Drag::None;
+                                table.set_selection(None, cx);
+                                table.reset_grid_interaction();
+                                true
                             }
-                            QueryCompletion::Unchanged => {}
+                            QueryCompletion::Unchanged => false,
+                        };
+                        let columns_changed = table.finish_column_hides(cx);
+                        if installed || columns_changed {
+                            table.sync_panels(cx);
                         }
                         table.query_task = None;
-                        table.visible_columns_changed(false, cx);
+                        table.find.update(cx, |find, cx| {
+                            find.set_view(Some(table.data.view().clone()), cx)
+                        });
                         cx.notify();
                         None
                     });
