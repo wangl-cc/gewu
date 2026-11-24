@@ -1,26 +1,75 @@
 //! Write one pasteboard item so spreadsheets can select TSV and editors can select plain text.
 use gpui_kit::{App, ClipboardItem, Global};
 
-/// All document windows write to one clipboard. Only the latest request may publish its result.
+/// Orders requests across windows, even while their TSV is still being generated.
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct CopyRequest(u64);
+struct CopyGeneration(u64);
 
-impl Global for CopyRequest {}
+impl Global for CopyGeneration {}
 
-impl CopyRequest {
-    pub fn begin(cx: &mut App) -> Self {
+impl CopyGeneration {
+    fn advance(cx: &mut App) -> Self {
         let latest = cx.default_global::<Self>();
         latest.0 = latest.0.wrapping_add(1);
         *latest
     }
+}
 
-    pub fn is_current(self, cx: &App) -> bool {
-        cx.try_global::<Self>() == Some(&self)
+/// Toolkit text fields write the native pasteboard without going through `write_text`.
+pub(crate) struct CopyRequest {
+    generation: CopyGeneration,
+    clipboard: ClipboardState,
+}
+
+impl CopyRequest {
+    pub fn begin(cx: &mut App) -> Self {
+        Self {
+            generation: CopyGeneration::advance(cx),
+            clipboard: ClipboardState::read(cx),
+        }
+    }
+
+    pub fn is_current(&self, cx: &App) -> bool {
+        cx.try_global::<CopyGeneration>() == Some(&self.generation)
+            && self.clipboard == ClipboardState::read(cx)
+    }
+}
+
+#[derive(Eq, PartialEq)]
+enum ClipboardState {
+    #[cfg(target_os = "macos")]
+    ChangeCount(isize),
+    #[cfg(test)]
+    TestContents(Option<ClipboardItem>),
+    #[cfg(not(target_os = "macos"))]
+    Untracked,
+}
+
+impl ClipboardState {
+    fn read(_cx: &App) -> Self {
+        // The GPUI test platform only exposes the contents of its in-memory clipboard.
+        #[cfg(test)]
+        if _cx.is_test() {
+            return Self::TestContents(_cx.read_from_clipboard());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::from_board(&objc2_app_kit::NSPasteboard::generalPasteboard())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::Untracked
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn from_board(board: &objc2_app_kit::NSPasteboard) -> Self {
+        Self::ChangeCount(board.changeCount())
     }
 }
 
 pub(crate) fn write_text(value: String, cx: &mut App) {
-    CopyRequest::begin(cx);
+    CopyGeneration::advance(cx);
     cx.write_to_clipboard(ClipboardItem::new_string(value));
 }
 
@@ -76,6 +125,17 @@ mod macos {
                 text
             );
         }
+        board.clearContents();
+    }
+
+    #[test]
+    fn copying_identical_contents_advances_the_native_pasteboard() {
+        let board = NSPasteboard::pasteboardWithUniqueName();
+        write(&board, "same").unwrap();
+        let pending = super::ClipboardState::from_board(&board);
+        assert!(pending == super::ClipboardState::from_board(&board));
+        write(&board, "same").unwrap();
+        assert!(pending != super::ClipboardState::from_board(&board));
         board.clearContents();
     }
 }

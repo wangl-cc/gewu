@@ -302,6 +302,38 @@ fn copying_a_cell_supersedes_an_unfinished_row_copy() {
 }
 
 #[test]
+fn copy_and_cut_in_the_find_field_supersede_pending_row_copies() {
+    let mut w = open();
+    w.click(w.cell(1, 2), Modifiers::default());
+    w.keys("cmd-f");
+    w.type_in_find("marker");
+    for command in ["cmd-c", "cmd-x"] {
+        w.keys("cmd-a");
+        w.ui.update(|window, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("previous".into()));
+            w.table.update(cx, |table, cx| table.copy(window, cx));
+            window.press(command, cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some("marker")
+            );
+        });
+        w.settle();
+        assert_eq!(w.clipboard().as_deref(), Some("marker"));
+    }
+    // Cut left no text selected. A subsequent no-op Copy must let the row copy finish.
+    w.ui.update(|window, cx| {
+        w.table.update(cx, |table, cx| table.copy(window, cx));
+        window.press("cmd-c", cx);
+    });
+    w.settle();
+    assert_eq!(
+        w.clipboard().as_deref(),
+        Some("drop\t99\tmarker-hidden\r\n")
+    );
+}
+
+#[test]
 fn the_newest_copy_wins_across_document_windows() {
     use gpui_kit::AppContext;
 
@@ -325,7 +357,10 @@ fn the_newest_copy_wins_across_document_windows() {
     w.settle();
     assert_eq!(w.clipboard().as_deref(), Some("newer cell"));
     w.keys("cmd-c");
-    assert_eq!(w.clipboard().as_deref(), Some("drop\t99\tmarker-hidden\r\n"));
+    assert_eq!(
+        w.clipboard().as_deref(),
+        Some("drop\t99\tmarker-hidden\r\n")
+    );
 }
 
 #[test]
