@@ -74,3 +74,22 @@ The visual review candidate at `00525ae` passed 303 workspace tests, including 7
 Before the visual review changes, the candidate passed all 291 workspace tests on 2026-11-22. A separate run with the alternate GPUI backend passed all 69 frontend library tests. Clippy passed with warnings denied for all targets in both configurations, and workspace Rustdoc passed with warnings denied. Rust formatting and repository Markdown passed their checks. `cargo deny --locked check` reported zero errors, with warnings for duplicate dependencies and an unmatched advisory exception. The unused exception was removed during the visual review. The Core and application model dependency trees contained no GPUI crates.
 
 Before the Find styling change, Core also passed with no codecs enabled (127 tests), CSV alone (137), XLSX alone (137) and Parquet alone (184). Configurations without CSV emitted the existing `unused_mut` warning in `file/mod.rs` when compiling the in-memory export buffer.
+
+## Code review follow-up on 2026-11-24
+
+The pre-change checkpoint is `7688116`. The implementation through `1c86c30` passed 339 workspace tests, including 109 native UI tests. The alternate GPUI backend passed the same 109 UI tests. The scroll example passed its two additional tests. Core passed 130 tests with codecs disabled, 140 with CSV alone, 189 with Parquet alone and 140 with XLSX alone.
+
+Window regressions cover a failed conditioned column hide, analysis deferred by a hidden Inspector, a missing-only draft switching editors, and cross-window copy ordering. Copy and Cut in a focused Find field supersede an older row copy. A no-selection Copy lets the pending row copy finish. An isolated AppKit pasteboard also distinguished two writes of identical text by their change counts. The native change-count check applies on macOS. Other platform builds track the order of Gewu’s own copy requests.
+
+Measurements used an Apple M4 Mac mini with 16 GB of memory, macOS 27.2.1 and a 1920×1080 display at 1× and 60 Hz.
+
+| Workload | Observed result |
+| --- | --- |
+| Filter editor, 2 million rows and 28 columns (`f2ca04d`) | Two Criterion runs per version measured choices at 918–922 µs before and 499–519 µs after. Distribution took 1.511–1.520 ms before and 1.309–1.311 ms after. Each executable called the editor’s Core API with a warm column dictionary, bypassing the application’s completed-result cache. The other filters selected 489,136 and 264,130 rows respectively, verified with DuckDB. Scanning the bitmap directly removes 1,956,544 and 1,056,520 bytes of temporary `u32` row storage per call, calculated from those counts. |
+| Dictionary frequencies (`f2ca04d`) | With 65,536 distinct 100-byte strings and 131,072 keys, two release runs per version took 509–510 µs before and 253 µs after for one selected row. With all rows selected, they took 4.027–4.059 ms before and 3.856–3.868 ms after. Each run reports the median of 31 calls. |
+| Sort panel construction (`5b3d90b`) | For a one-row table with 256 columns and 24 sort rules, two GPUI debug runs per version had median construction times of 4.36–4.80 ms before and 1.74–1.79 ms after. The four runs used the versions in A/B/B/A order with 30 warmed samples each. |
+| Accessible grid text (`4b3ef5c`) | A 960×640 native window showed eight multiline cells of about 1 MiB each. Three paired release runs each measured 100 synchronous full draws after warm-up. With accessibility active, the medians of the runs’ p50/p95/p99 went from 830/914/982 µs to 573/622/639 µs. Rust allocations of at least 1 MiB fell from 24 to 16 per draw. With accessibility off, both versions had zero such allocations and p50/p95 of 61/63 µs. |
+
+AppKit returned the exact 1,048,596-byte multiline value from a native accessibility cell. It returned “Missing value” and “Empty string” for the other two cells. VoiceOver speech was not exercised in this check.
+
+The release scroll replay used the same 2-million-row Parquet file and a 1280×800 grid at both revisions. Each revision checked 7,776 complete cells in each of the slow, fast and jump workloads and found zero unexpected blanks. The sorted-grid window regression checks cell and gutter identities after six jumps. The scatter replay verified all 360 pointer positions against the expected source records for a 2,048-point sample. Both display-paced scroll attempts reported an inactive, invisible window. A foreground FPS comparison remains open.
