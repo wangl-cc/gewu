@@ -15,6 +15,7 @@ The default app uses gpui-fast. To build the gpui-pre backend, pass `--no-defaul
 
 ```sh
 cargo test --locked --workspace
+cargo test --locked -p gewu-gpui --example scroll
 cargo check --locked -p gewu-gpui --no-default-features --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked -p gewu-gpui --no-default-features --all-targets -- -D warnings

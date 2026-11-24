@@ -426,43 +426,44 @@ pub(crate) fn write_delimited_to_memory(
             .into())
         }
     };
-    format
-        .require_enabled()
-        .map_err(|_| ExportError::FormatDisabled { format })?;
-    let mut buffer = LimitedBuffer {
-        bytes: Vec::new(),
-        limit,
-        exceeded: false,
-    };
-    #[cfg(feature = "csv")]
-    let result = delimited::write(
-        &mut buffer,
-        delimiter,
-        options.include_header,
-        data,
-        progress,
-    );
     #[cfg(not(feature = "csv"))]
-    let result = {
-        let _ = (delimiter, options, data, progress);
+    {
+        let _ = (delimiter, options, data, progress, limit);
         Err(ExportError::FormatDisabled { format })
-    };
-    if buffer.exceeded {
-        return Err(ExportError::SizeLimit {
-            limit: limit as u64,
-        });
     }
-    result.map_err(|error| ExportError::encode(format, error))?;
-    Ok(buffer.bytes)
-}
+    #[cfg(feature = "csv")]
+    {
+        let mut buffer = LimitedBuffer {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        };
+        let result = delimited::write(
+            &mut buffer,
+            delimiter,
+            options.include_header,
+            data,
+            progress,
+        );
 
+        if buffer.exceeded {
+            return Err(ExportError::SizeLimit {
+                limit: limit as u64,
+            });
+        }
+        result.map_err(|error| ExportError::encode(format, error))?;
+        Ok(buffer.bytes)
+    }
+}
 /// An in-memory destination that refuses to grow past its limit.
+#[cfg(feature = "csv")]
 struct LimitedBuffer {
     bytes: Vec<u8>,
     limit: usize,
     exceeded: bool,
 }
 
+#[cfg(feature = "csv")]
 impl std::io::Write for LimitedBuffer {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
         if self.bytes.len() + data.len() > self.limit {
