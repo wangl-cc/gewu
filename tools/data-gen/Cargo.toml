@@ -15,3 +15,6 @@ arrow.workspace = true
 parquet.workspace = true
 rand = "0.10"
 rand_distr = "0.6"
+
+[dev-dependencies]
+tempfile = "3"

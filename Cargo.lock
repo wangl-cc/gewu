@@ -2454,6 +2454,7 @@ dependencies = [
  "parquet",
  "rand 0.10.3",
  "rand_distr",
+ "tempfile",
 ]
 
 [[package]]

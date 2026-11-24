@@ -292,11 +292,15 @@ fn columns() -> Vec<(&'static str, Gen)> {
     ]
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "sample.parquet".into());
-    let n: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(1_000_000);
-    let seed: u64 = args.next().map(|s| s.parse().unwrap()).unwrap_or(42);
+    let n: usize = args
+        .next()
+        .map(|s| s.parse())
+        .transpose()?
+        .unwrap_or(1_000_000);
+    let seed: u64 = args.next().map(|s| s.parse()).transpose()?.unwrap_or(42);
 
     let columns = columns();
     // One RNG per column, so adding a column never changes the others.
@@ -307,26 +311,27 @@ fn main() {
     let props = WriterProperties::builder()
         .set_compression(Compression::ZSTD(ZstdLevel::default()))
         .build();
-    let file = std::fs::File::create(&path).unwrap();
-    let mut writer: Option<ArrowWriter<std::fs::File>> = None;
-    let mut file = Some(file);
-
     let batch_size = 256 * 1024;
-    for start in (0..n).step_by(batch_size) {
+    let mut batches = (0..n).step_by(batch_size).map(|start| {
         let len = batch_size.min(n - start);
         let arrays = columns
             .iter()
             .zip(rngs.iter_mut())
             .map(|((name, gen), rng)| (*name, gen(rng, start, len)));
-        let batch = RecordBatch::try_from_iter(arrays).unwrap();
-        let w = writer.get_or_insert_with(|| {
-            ArrowWriter::try_new(file.take().unwrap(), batch.schema(), Some(props.clone())).unwrap()
-        });
-        w.write(&batch).unwrap();
+        RecordBatch::try_from_iter(arrays)
+    });
+    let first = batches.next().ok_or("row count must be positive")??;
+    let file = std::fs::File::create(&path)?;
+    let mut writer = ArrowWriter::try_new(file, first.schema(), Some(props))?;
+    writer.write(&first)?;
+    drop(first);
+    for batch in batches {
+        writer.write(&batch?)?;
     }
-    writer.unwrap().close().unwrap();
+    writer.close()?;
     println!(
         "wrote {n} rows × {} columns to {path} (seed {seed})",
         columns.len()
     );
+    Ok(())
 }
