@@ -186,14 +186,7 @@ impl FilterEditor {
             let result: gewu_core::Result<_> = cx
                 .background_spawn(async move {
                     let cache = snapshot.analyses();
-                    let facet = if capabilities.exact {
-                        cache.filter_choices(id)?
-                    } else {
-                        Arc::new(FilterChoices {
-                            values: None,
-                            null_count: snapshot.filtered().facet(id)?.count_nulls(id)?,
-                        })
-                    };
+                    let facet = cache.filter_choices(id)?;
                     let modes = Draft::modes(capabilities, facet.values.is_some() || keep_exact);
                     let mode = if modes.contains(&mode) {
                         mode

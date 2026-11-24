@@ -1,7 +1,5 @@
 //! Filter editor candidates and distributions over visible rows.
 
-use std::sync::Arc;
-
 use arrow::buffer::BooleanBuffer;
 
 use super::{FilteredView, OrderedView};
@@ -48,7 +46,7 @@ impl FilteredView {
     /// The values an editor for `column`'s filter can offer: those in rows
     /// passing every filter except `column`'s own, so its alternatives stay
     /// visible. See [`Self::facet`].
-    pub fn filter_choices(self: &Arc<Self>, column: ColumnId) -> Result<FilterChoices> {
+    pub fn filter_choices(&self, column: ColumnId) -> Result<FilterChoices> {
         let data = self.column(column)?;
         let mask = self.selection.facet_mask(column);
         if predicate::supports_equals(data.array().data_type()) {
@@ -65,7 +63,7 @@ impl FilteredView {
     /// A range editor's histogram for `column`, over the same rows as
     /// [`Self::filter_choices`].
     pub fn filter_distribution(
-        self: &Arc<Self>,
+        &self,
         column: ColumnId,
         bins: u32,
         scale: crate::AxisScale,

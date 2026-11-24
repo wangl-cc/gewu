@@ -52,8 +52,11 @@ fn parquet_schema_nullability_is_independent_of_cell_values() {
     assert!(!columns[2].nullable);
     let rows = dataset.unfiltered();
     assert_eq!(rows.count_nulls(ColumnId::from_raw(0)).unwrap(), 0);
-    let view = rows.unsorted();
     let missing = ColumnId::from_raw(1);
+    let choices = rows.filter_choices(missing).unwrap();
+    assert!(choices.values.is_none());
+    assert_eq!(choices.null_count, 1);
+    let view = rows.unsorted();
     assert_eq!(view.format_column(missing, 0, 1).unwrap().cell(0), None);
     assert_eq!(
         view.exact_filter_for_cell(missing, 0)

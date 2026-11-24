@@ -19,7 +19,11 @@ pub(super) enum MissingPolicy {
 
 impl MissingPolicy {
     fn include(include: bool) -> Self {
-        if include { Self::Include } else { Self::Exclude }
+        if include {
+            Self::Include
+        } else {
+            Self::Exclude
+        }
     }
 }
 

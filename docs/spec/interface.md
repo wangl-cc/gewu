@@ -46,7 +46,7 @@ Filter editors show the available modes in one segmented control when there is m
 
 Inspector distributions keep configurable bin counts in their display menu. Hovering a bar shows its interval and the number of rows in it. For floating-point bins, the tooltip uses the next cut as an exclusive upper bound when available. Length distributions report intervals in the column’s length unit. Frequency rows show counts and proportions.
 
-Chart display options are separate from the range being edited. The Text and Range editors offer three missing-value policies: exclude, include, or only missing. A long floating-point bound set by brushing can show a shorter approximation marked with ≈. Focus the field to see and edit the exact bound. Applying the draft uses the exact text. Integer, decimal and temporal bounds retain their native precision.
+Chart display options are separate from the range being edited. The Text, Range and Current selection editors offer three missing-value policies: exclude, include, or only missing. A long floating-point bound set by brushing can show a shorter approximation marked with ≈. Focus the field to see and edit the exact bound. Applying the draft uses the exact text. Integer, decimal and temporal bounds retain their native precision.
 
 ## Cells, copying and export
 
