@@ -23,9 +23,9 @@ impl TableView {
                         continue;
                     }
                 };
-                let current = find
-                    .current_match()
-                    .is_some_and(|hit| hit.column == info.id && hit.display_row == row);
+                let current = find.current_match().is_some_and(|hit| {
+                    hit.column == info.id && hit.display_row == gewu_core::ViewRow(row)
+                });
                 let first_span = text_matches.len();
                 if current || find.matched(info.id, row) {
                     let bounds = Bounds::new(
@@ -97,13 +97,12 @@ impl TableView {
             .collect();
         let gutter = rows
             .clone()
-            .map(|row| {
-                (
+            .filter_map(|row| {
+                let source = self.data.view().source_row_at(gewu_core::ViewRow(row))?;
+                Some((
                     row_y(row),
-                    SharedString::from(
-                        (self.data.source_row(row) + self.prefs.row_number_base).to_string(),
-                    ),
-                )
+                    SharedString::from((source.0 + self.prefs.row_number_base).to_string()),
+                ))
             })
             .collect();
         let stripes = rows.filter(|r| r % 2 == 1).map(row_y).collect();

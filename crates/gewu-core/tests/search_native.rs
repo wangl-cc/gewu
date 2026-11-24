@@ -28,7 +28,7 @@ fn check_queries(array: ArrayRef, queries: &[(&str, Vec<u64>)]) {
         let find = doc.find(query, &[c0]).unwrap();
         let hits = find.next(None, 256).unwrap();
         assert_eq!(
-            hits.iter().map(|hit| hit.display_row).collect::<Vec<_>>(),
+            hits.iter().map(|hit| hit.display_row.0).collect::<Vec<_>>(),
             *expected,
             "Find query {query:?}, type {:?}",
             batch.schema().field(0).data_type()

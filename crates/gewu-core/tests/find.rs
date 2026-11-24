@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, Date32Array, Int32Array, RecordBatch, StringArray};
 use gewu_core::{
     CellMatch, ColumnFilter, ColumnHighlight, ColumnId, ColumnSort, Error, Filter, FindCounts,
-    OrderedView, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
+    OrderedView, ViewRow, MAX_FIND_HIGHLIGHT_ROWS, MAX_FIND_PAGE_SIZE,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -63,7 +63,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
     let find = doc.find("hit", &[c0]).unwrap();
 
     let cell = CellMatch {
-        display_row: 98_300,
+        display_row: ViewRow(98_300),
         column: c0,
     };
     assert_eq!(
@@ -93,7 +93,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
         }
         for hit in page.iter() {
             assert_eq!(hit, &CellMatch {
-                display_row: expected,
+                display_row: ViewRow(expected),
                 column: c0,
             });
             expected += 1;
@@ -116,7 +116,7 @@ fn public_pages_continue_beyond_one_hundred_thousand_in_both_directions() {
             .all(|pair| pair[0].display_row < pair[1].display_row));
         for hit in page.iter().rev() {
             assert_eq!(hit, &CellMatch {
-                display_row: expected,
+                display_row: ViewRow(expected),
                 column: c0,
             });
             expected = expected.saturating_sub(1);
@@ -158,15 +158,15 @@ fn find_uses_view_order_scope_and_typed_predicates_without_mutating_the_view() {
     let find = view.find("12", &[c0, c1]).unwrap();
     assert_eq!(find.next(None, 10).unwrap(), vec![
         CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: c1,
         },
         CellMatch {
-            display_row: 1,
+            display_row: ViewRow(1),
             column: c0,
         },
         CellMatch {
-            display_row: 2,
+            display_row: ViewRow(2),
             column: c0,
         },
     ]);
@@ -241,7 +241,7 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     assert_eq!(
         find.counts_at(
             CellMatch {
-                display_row: 1,
+                display_row: ViewRow(1),
                 column: c1
             },
             || false
@@ -254,45 +254,45 @@ fn pages_and_cursors_follow_the_captured_column_order() {
     );
     assert_eq!(find.next(None, 3).unwrap(), [
         CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: c1,
         },
         CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: c0,
         },
         CellMatch {
-            display_row: 1,
+            display_row: ViewRow(1),
             column: c1,
         },
     ]);
     // Cursor columns are source IDs, not positions in the scope order.
     let after = find.next(
         Some(&CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: c1,
         }),
         2,
     );
     assert_eq!(after.unwrap(), [
         CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: c0,
         },
         CellMatch {
-            display_row: 1,
+            display_row: ViewRow(1),
             column: c1,
         },
     ]);
     let before = find.previous(
         Some(&CellMatch {
-            display_row: 1,
+            display_row: ViewRow(1),
             column: c0,
         }),
         1,
     );
     assert_eq!(before.unwrap(), [CellMatch {
-        display_row: 1,
+        display_row: ViewRow(1),
         column: c1,
     }]);
     let highlight = find.highlight(&[c0, c1], 0, 1).unwrap();

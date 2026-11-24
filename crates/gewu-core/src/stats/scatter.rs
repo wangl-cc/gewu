@@ -79,7 +79,7 @@ impl ScatterAxisKind {
 
 #[derive(Debug, Clone)]
 pub struct ScatterPoint {
-    pub source_row: u64,
+    pub source_row: crate::SourceRow,
     /// Approximate plot coordinates; use labels for original precision.
     pub x: f64,
     pub y: f64,
@@ -207,7 +207,7 @@ pub(crate) fn analyze(
     for row in ids {
         let index = row as usize;
         points.push(ScatterPoint {
-            source_row: u64::from(row),
+            source_row: crate::SourceRow(u64::from(row)),
             x: read_x.map_or(f64::from(row), |numeric| read(numeric, index)),
             y: read(read_y, index),
             x_label: xf
@@ -326,7 +326,11 @@ mod tests {
                 (result.eligible_rows, result.non_positive_rows),
                 (eligible, excluded)
             );
-            let point = result.points.iter().find(|p| p.source_row == 4).unwrap();
+            let point = result
+                .points
+                .iter()
+                .find(|p| p.source_row == crate::SourceRow(4))
+                .unwrap();
             assert_eq!((point.x, point.y), (3.0, 2.0));
             assert_eq!((&*point.x_label, &*point.y_label), ("3.0", "2.0"));
         }
@@ -360,11 +364,11 @@ mod tests {
         assert!(result
             .points
             .iter()
-            .all(|p| p.source_row >= 990 && p.y >= 990.0));
+            .all(|p| p.source_row.0 >= 990 && p.y >= 990.0));
         let ids = |r: ScatterResult| {
             r.points
                 .into_iter()
-                .map(|p| p.source_row)
+                .map(|p| p.source_row.0)
                 .collect::<Vec<_>>()
         };
         let rev: Vec<u32> = (0..1000).rev().collect();
@@ -406,7 +410,7 @@ mod tests {
             result
                 .points
                 .iter()
-                .map(|p| p.source_row)
+                .map(|p| p.source_row.0)
                 .collect::<Vec<_>>(),
             [0, 4]
         );
@@ -470,12 +474,12 @@ mod tests {
             first
                 .points
                 .iter()
-                .map(|p| p.source_row)
+                .map(|p| p.source_row.0)
                 .collect::<Vec<_>>(),
             reversed
                 .points
                 .iter()
-                .map(|p| p.source_row)
+                .map(|p| p.source_row.0)
                 .collect::<Vec<_>>()
         );
     }

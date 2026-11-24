@@ -33,7 +33,7 @@ fn analysis_and_scatter_remain_bound_to_independent_views() {
         scatter(&current)
             .points
             .iter()
-            .map(|p| p.source_row)
+            .map(|p| p.source_row.0)
             .collect::<Vec<_>>(),
         [1, 2]
     );

@@ -11,7 +11,7 @@ use arrow::{
     datatypes::{DataType, Field, Int32Type},
 };
 use criterion::{criterion_group, criterion_main, Criterion};
-use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Filter};
+use gewu_core::{ColumnFilter, ColumnId, ColumnSort, Filter, ViewRow};
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
 
 fn dataset(columns: Vec<(&str, ArrayRef)>) -> (tempfile::NamedTempFile, Arc<gewu_core::Dataset>) {
@@ -184,7 +184,7 @@ fn find_full_counts(c: &mut Criterion) {
         // The UI skips the count for a query with no first hit. Benchmark the API's full scan
         // against the first cell in that case as well.
         let through = first.unwrap_or(gewu_core::CellMatch {
-            display_row: 0,
+            display_row: ViewRow(0),
             column: columns[0],
         });
         group.bench_function(name, |b| {

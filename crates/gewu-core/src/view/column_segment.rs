@@ -60,7 +60,7 @@ pub enum SourceRows<'a> {
 pub struct SourceRow(pub u64);
 
 /// A zero-based row position in one particular ordered view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ViewRow(pub u64);
 
 impl OrderedView {

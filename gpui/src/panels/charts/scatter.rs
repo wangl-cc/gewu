@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gewu_core::{AxisScale, ScatterResult};
+use gewu_core::{AxisScale, ScatterResult, SourceRow};
 use gpui_kit::{
     base::{self, TestSupportExt},
     *,
@@ -54,7 +54,7 @@ impl ScatterChart {
             .iter()
             .map(|p| {
                 if source_x {
-                    p.source_row as f64
+                    p.source_row.0 as f64
                 } else {
                     seconds(p.x, sample.x_axis_kind)
                 }
@@ -116,14 +116,14 @@ impl ScatterChart {
         self.focus.dispatch_action(
             &RevealScatterPoint {
                 chart: cx.entity_id(),
-                source_row: gewu_core::SourceRow(self.sample.points[index].source_row),
+                source_row: self.sample.points[index].source_row,
             },
             window,
             cx,
         );
     }
 
-    pub(in crate::panels) fn mark(&mut self, row: Option<u64>, cx: &mut Context<Self>) {
+    pub(in crate::panels) fn mark(&mut self, row: Option<SourceRow>, cx: &mut Context<Self>) {
         self.selected =
             row.and_then(|row| self.sample.points.iter().position(|p| p.source_row == row));
         cx.notify();
@@ -301,7 +301,7 @@ impl Render for ScatterChart {
         .aspect_ratio(4. / 3.);
         let count = crate::counted(self.sample.points.len() as u64, "point");
         let label = if let Some(i) = selected {
-            let row = self.sample.points[i].source_row.saturating_add(base);
+            let row = self.sample.points[i].source_row.0.saturating_add(base);
             format!("Scatter plot, {count}, row {row} selected")
         } else {
             format!("Scatter plot, {count}")
@@ -342,7 +342,7 @@ impl Render for ScatterChart {
         }
         let readout = self.hover.map(|i| {
             let point = &self.sample.points[i];
-            let row = point.source_row.saturating_add(base);
+            let row = point.source_row.0.saturating_add(base);
             let x = if self.source_x {
                 row.to_string()
             } else {

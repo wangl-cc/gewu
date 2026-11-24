@@ -16,10 +16,10 @@ fn navigation_crosses_page_boundaries_wraps_and_cancels_opposite_steps() {
     let view = source.unfiltered().unsorted();
     let find = view.find("hit", &[col]).unwrap();
     let (last, wrapped) = step(&find, None, 300).unwrap();
-    assert_eq!(last.unwrap().display_row, 299);
+    assert_eq!(last.unwrap().display_row.0, 299);
     assert!(!wrapped);
     let (first, wrapped) = step(&find, last, 601).unwrap();
-    assert_eq!(first.unwrap().display_row, 0);
+    assert_eq!(first.unwrap().display_row.0, 0);
     assert!(wrapped);
     let (back, wrapped) = step(&find, first, -301).unwrap();
     assert_eq!(back, last);

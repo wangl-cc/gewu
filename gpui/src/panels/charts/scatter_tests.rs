@@ -17,14 +17,14 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
         non_positive_rows: 0,
         points: vec![
             ScatterPoint {
-                source_row: 4,
+                source_row: gewu_core::SourceRow(4),
                 x: 4.,
                 y: 2.,
                 x_label: "4".into(),
                 y_label: "2.000000000000001".into(),
             },
             ScatterPoint {
-                source_row: 8,
+                source_row: gewu_core::SourceRow(8),
                 x: 8.,
                 y: 10.,
                 x_label: "8".into(),
@@ -61,14 +61,18 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
     });
     let mut ui = VisualTestContext::from_window(handle, &app);
     ui.update(|w, cx| w.render_frame(cx));
-    let bounds = ui.update(|w, _| w.find("scatter-plot").bounds());
+    let bounds = ui.update(|w, _| {
+        let plot = w.find("scatter-plot");
+        assert_eq!(plot.label(), Some("Scatter plot, 2 points"));
+        plot.bounds()
+    });
     let first = point(bounds.left() + px(51.), bounds.bottom() - px(23.));
     ui.simulate_mouse_move(first, None, Modifiers::default());
     ui.run_until_parked();
     app.read(|cx| {
         let c = chart.read(cx);
         assert_eq!(c.hover, Some(0));
-        assert_eq!(c.sample.points[0].source_row, 4);
+        assert_eq!(c.sample.points[0].source_row, gewu_core::SourceRow(4));
         assert_eq!(c.sample.points[0].y_label, "2.000000000000001");
     });
     ui.update(|w, cx| {

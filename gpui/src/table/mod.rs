@@ -166,7 +166,7 @@ impl TableView {
             table.commit_grid_layout(cx);
             if let Some(cell) = table
                 .data
-                .display_cell(gewu_core::ViewRow(hit.display_row), hit.column)
+                .display_cell(hit.display_row, hit.column)
             {
                 table.selection = Some(Selection::single(cell));
                 table.reveal(cell);

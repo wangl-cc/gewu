@@ -108,11 +108,7 @@ impl TableWindow {
     }
 
     pub fn source_rows(&self) -> Vec<u64> {
-        self.read(|t| {
-            (0..t.data.row_count())
-                .map(|r| t.data.source_row(r))
-                .collect()
-        })
+        self.read(|t| t.data.view().source_rows(0, u32::MAX))
     }
 
     pub fn clipboard(&self) -> Option<String> {

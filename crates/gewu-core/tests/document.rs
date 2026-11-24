@@ -324,7 +324,7 @@ fn find_names(doc: &Arc<OrderedView>, text: &str) -> Vec<String> {
     let names = names(doc);
     let cols: Vec<ColumnId> = (0..5).map(ColumnId::from_raw).collect();
     let hits = doc.find(text, &cols).unwrap().next(None, 256).unwrap();
-    let mut rows: Vec<usize> = hits.iter().map(|hit| hit.display_row as usize).collect();
+    let mut rows: Vec<usize> = hits.iter().map(|hit| hit.display_row.0 as usize).collect();
     rows.dedup();
     rows.into_iter().map(|row| names[row].clone()).collect()
 }
@@ -474,7 +474,7 @@ fn find_marks_matching_cells() {
             .next(None, 10)
             .unwrap()
             .into_iter()
-            .map(|hit| (hit.display_row, hit.column.into_raw()))
+            .map(|hit| (hit.display_row.0, hit.column.into_raw()))
             .collect();
         assert_eq!(hits, expected, "query {query}");
     }

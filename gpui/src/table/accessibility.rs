@@ -82,11 +82,13 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
         if top >= bottom {
             continue;
         }
-        let source = table.data.source_row(row);
+        let Some(source) = table.data.view().source_row_at(gewu_core::ViewRow(row)) else {
+            continue;
+        };
         let mut row_node = div()
-            .id(("source-row", source))
+            .id(("source-row", source.0))
             .role(Role::Row)
-            .aria_label(format!("Row {}", source + table.prefs.row_number_base))
+            .aria_label(format!("Row {}", source.0 + table.prefs.row_number_base))
             .absolute()
             .top(px(top))
             .h(px(bottom - top))
@@ -115,7 +117,7 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
                 .aria_label(format!(
                     "{}, row {}",
                     table.data.columns.entry(column).label,
-                    source + table.prefs.row_number_base
+                    source.0 + table.prefs.row_number_base
                 ))
                 .aria_value(text)
                 .aria_selected(selected.is_some())
@@ -136,8 +138,7 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
                 let entity = cx.weak_entity();
                 node = node.on_a11y_action(action, move |_, window, cx| {
                     _ = entity.update(cx, |table, cx| {
-                        if row < table.data.row_count()
-                            && table.data.source_row(row) == source
+                        if table.data.view().source_row_at(gewu_core::ViewRow(row)) == Some(source)
                             && table.data.columns.get(column).is_some_and(|c| c.id == id)
                         {
                             table.commit_grid_layout(cx);

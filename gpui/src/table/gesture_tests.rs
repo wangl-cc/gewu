@@ -335,5 +335,8 @@ fn resize_scroll_and_sort_through_the_window() {
         w.read(|t| t.data.columns[COLUMNS - 1].id)
     );
     w.click(header, normal);
-    assert_eq!(w.read(|t| t.data.source_row(0)), ROWS - 1);
+    assert_eq!(
+        w.read(|t| t.data.view().source_row_at(gewu_core::ViewRow(0))),
+        Some(gewu_core::SourceRow(ROWS - 1))
+    );
 }

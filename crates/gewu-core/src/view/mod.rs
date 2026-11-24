@@ -231,7 +231,7 @@ mod tests {
         let find = unsorted.find("odd", &[c1]).unwrap();
         let hits = find.next(None, 2).unwrap();
         assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].display_row, 1);
+        assert_eq!(hits[0].display_row.0, 1);
         assert_eq!(hits[0].column, c1);
 
         #[cfg(feature = "csv")]
@@ -413,7 +413,7 @@ mod tests {
         drop(ds);
         assert_eq!(ordered.row_count(), 2);
         assert_eq!(ordered.source_rows(0, 2), [11999, 11998]);
-        assert_eq!(find.next(None, 10).unwrap()[0].display_row, 0);
+        assert_eq!(find.next(None, 10).unwrap()[0].display_row.0, 0);
     }
 
     #[test]

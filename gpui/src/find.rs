@@ -183,7 +183,7 @@ impl FindController {
             && let Some((_, name)) = scope.columns.iter().find(|(id, _)| *id == hit.column)
             && let Some(source) = scope
                 .view
-                .source_row_at(gewu_core::ViewRow(hit.display_row))
+                .source_row_at(hit.display_row)
         {
             self.message = FindMessage::Location {
                 source,

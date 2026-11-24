@@ -28,7 +28,7 @@ const FIND_BATCH_ROWS: usize = 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellMatch {
     /// Zero-based row offset in the captured view, not a source row number.
-    pub display_row: u64,
+    pub display_row: crate::ViewRow,
     /// Source schema column ID.
     pub column: ColumnId,
 }
@@ -254,7 +254,7 @@ impl Find {
             while position >= batch_start && position < batch_end {
                 if scratch.matched[position - batch_start] {
                     found.push(CellMatch {
-                        display_row: (position / n_columns) as u64,
+                        display_row: crate::ViewRow((position / n_columns) as u64),
                         column: self.columns[position % n_columns].0,
                     });
                     if found.len() == limit as usize {
@@ -345,10 +345,10 @@ impl Find {
 
     fn cell_position(&self, cursor: &CellMatch) -> Result<usize> {
         let invalid_row = || crate::FindError::InvalidCursorRow {
-            row: cursor.display_row,
+            row: cursor.display_row.0,
             row_count: self.rows.len() as u64,
         };
-        let row = usize::try_from(cursor.display_row).map_err(|_| invalid_row())?;
+        let row = usize::try_from(cursor.display_row.0).map_err(|_| invalid_row())?;
         let column = self
             .columns
             .iter()

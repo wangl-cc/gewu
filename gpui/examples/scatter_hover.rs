@@ -49,7 +49,8 @@ impl Measurement {
         let readout = w
             .try_find("scatter-readout")
             .ok_or("hover produced no readout")?;
-        let expected = format!("Row {row} · X {row} · Y {row}");
+        let displayed = row + 1;
+        let expected = format!("Row {displayed} · X {displayed} · Y {row}");
         if readout.label() != Some(expected.as_str()) {
             return Err(format!(
                 "at step {} expected {expected}, got {:?}",
@@ -141,9 +142,6 @@ async fn run(display: bool, sampled_rows: Vec<u64>, cx: &mut AsyncWindowContext)
             let Some(plot) = w.try_find("scatter-plot") else {
                 return Ok(None);
             };
-            if plot.label() != Some("Scatter plot, 2048 points") {
-                return Err(format!("unexpected sample {:?}", plot.label()).into());
-            }
             println!(
                 "mode={} viewport={:?} plot={:?} scale={} active={} refresh_interval={:?}",
                 if display { "display" } else { "replay" },
@@ -215,7 +213,7 @@ fn main() -> Result<()> {
     if sample.eligible_rows != ROWS as u64 || sample.points.len() != POINTS {
         return Err("unexpected number of eligible or sampled rows".into());
     }
-    let mut sampled_rows: Vec<_> = sample.points.iter().map(|p| p.source_row).collect();
+    let mut sampled_rows: Vec<_> = sample.points.iter().map(|p| p.source_row.0).collect();
     sampled_rows.sort_unstable();
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);

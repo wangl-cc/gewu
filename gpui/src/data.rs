@@ -8,8 +8,7 @@ use std::{cell::OnceCell, collections::HashMap, ops::Range, sync::Arc};
 
 use gewu_app::{QueryCompletion, QueryJob, QueryResult, QuerySession};
 use gewu_core::{
-    ColumnId, Dataset, ExportOptions, FileType, FormattedColumnSegment, OrderedView, SourceRows,
-    ValueCategory,
+    ColumnId, Dataset, ExportOptions, FileType, FormattedColumnSegment, OrderedView, ValueCategory,
 };
 use gpui_kit::SharedString;
 
@@ -300,14 +299,6 @@ impl TableData {
         self.cache
             .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?
             .preview((row % BLOCK_ROWS) as u32)
-    }
-
-    /// The source (file) row of a display row.
-    pub fn source_row(&self, row: u64) -> u64 {
-        match self.view().row_ids() {
-            SourceRows::All(_) => row,
-            SourceRows::Selected(rows) => rows[row as usize] as u64,
-        }
     }
 
     pub fn column_ids(&self, columns: Range<usize>) -> Vec<ColumnId> {

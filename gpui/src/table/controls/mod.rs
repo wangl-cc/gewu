@@ -128,7 +128,7 @@ impl TableView {
         let selected = Selection::single(cell);
         self.selection = Some(selected);
         let chart = hit.chart;
-        let source_row = hit.source_row.0;
+        let source_row = hit.source_row;
         let panel = panel.downgrade();
         let observed_panel = panel.clone();
         self.scatter_selection = Some(cx.observe_self(move |table, cx| {

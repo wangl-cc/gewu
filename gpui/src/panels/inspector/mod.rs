@@ -106,7 +106,7 @@ impl Inspector {
         }
     }
 
-    pub(crate) fn mark_scatter(&self, chart_id: EntityId, row: Option<u64>, cx: &mut App) {
+    pub(crate) fn mark_scatter(&self, chart_id: EntityId, row: Option<gewu_core::SourceRow>, cx: &mut App) {
         if let Showing::Chart(chart) = &self.showing
             && chart.entity_id() == chart_id
         {
