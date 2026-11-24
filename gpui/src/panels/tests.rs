@@ -56,19 +56,18 @@ fn selecting_one_exact_value_submits_a_filter_and_retains_alternatives_when_reop
         assert_eq!(w.find("Values").role(), Some(gpui_kit::Role::Tab));
         assert_eq!(w.find("Values").selected(), Some(true));
         assert_eq!(w.find("Text").selected(), Some(false));
-        assert_eq!(w.find("include-missing").checked(), Some(true));
+        assert!(w.try_find("include-missing").is_none());
         assert_eq!(w.find("apply-filter").checked(), None);
         let group = w.find("value-selection").bounds();
         for member in [
             w.find("all-values").bounds(),
             w.find(("facet", 0usize)).bounds(),
-            w.find("include-missing").bounds(),
         ] {
             assert!(group.contains(&member.center()));
         }
         assert!(group.bottom() < w.find("apply-filter").bounds().top());
         w.click("no-values", cx);
-        assert_eq!(w.find("include-missing").checked(), Some(false));
+        assert!(w.try_find("include-missing").is_none());
         w.click(("facet", 0usize), cx);
         w.click("apply-filter", cx);
     });
@@ -198,17 +197,31 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
     ui.update(|w, cx| w.click("Chart", cx));
     settle(&mut ui);
     ui.update(|w, cx| {
-        w.click("X axis", cx);
         assert_eq!(w.find("Chart").role(), Some(gpui_kit::Role::Tab));
         assert_eq!(w.find("Chart").selected(), Some(true));
         assert_eq!(w.find("Column").selected(), Some(false));
+        assert_eq!(w.find("log-x").disabled(), Some(true));
+        assert_eq!(w.find("log-x").checked(), Some(false));
+        assert_ne!(w.find("log-y").disabled(), Some(true));
+        assert_eq!(w.find("log-y").checked(), Some(false));
+        assert_eq!(w.find("scatter-limits").value(), Some("2,048"));
+        assert!(w.try_find(("points", 2048usize)).is_none());
+        w.click("scatter-limits", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
         assert_eq!(
             w.find(("points", 2048usize)).role(),
             Some(gpui_kit::Role::RadioButton)
         );
         assert_eq!(w.find(("points", 2048usize)).checked(), Some(true));
         assert_eq!(w.find(("points", 512usize)).checked(), Some(false));
-        assert_eq!(w.find("log-y").checked(), Some(false));
+        w.press("escape", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert!(w.try_find(("points", 2048usize)).is_none());
+        w.click("X axis", cx);
         assert_eq!(w.find("X axis").expanded(), Some(true));
         assert_eq!(w.find("X axis").role(), Some(gpui_kit::Role::ComboBox));
         assert_eq!(w.find("X axis").value(), Some("Source row"));
@@ -219,6 +232,7 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
     settle(&mut ui);
     ui.update(|w, cx| {
         assert_eq!(w.find("X axis").value(), Some("Source row · column 2"));
+        assert_ne!(w.find("log-x").disabled(), Some(true));
         w.click("X axis", cx);
         w.press("up", cx);
         w.press("enter", cx);
@@ -228,6 +242,159 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
         assert_eq!(w.find("X axis").value(), Some("Source row · column 1"));
         assert_eq!(w.find("X axis").expanded(), Some(false));
     });
+}
+
+#[test]
+fn missing_policy_controls_hide_without_nulls_and_appear_when_nullable() {
+    let cx = TestAppContext::single();
+    let complete = dataset();
+    let group_col = complete.dataset().info().columns[0].clone();
+    let score = complete.dataset().info().columns[1].clone();
+    let (handle, _) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(complete.clone(), score.clone(), None, w, cx))
+        })
+        .unwrap()
+    });
+    let mut ui = VisualTestContext::from_window(handle, &cx);
+    settle(&mut ui);
+    ui.update(|w, cx| w.click("Range", cx));
+    settle(&mut ui);
+    ui.update(|w, _| {
+        assert!(w.try_find("exclude-missing").is_none());
+        assert!(w.try_find("only-missing").is_none());
+    });
+    let (text_handle, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(complete.clone(), group_col, None, w, cx))
+        })
+        .unwrap()
+    });
+    let mut text_ui = VisualTestContext::from_window(text_handle, &cx);
+    settle(&mut text_ui);
+    text_ui.update(|w, cx| w.click("Text", cx));
+    settle(&mut text_ui);
+    text_ui.update(|w, _| assert!(w.try_find("only-missing").is_none()));
+
+    let (complete_filtered, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |w, cx| {
+            let mut query = gewu_app::TableQuery::default();
+            query.filters.push(gewu_core::ColumnFilter {
+                column: score.id,
+                filter: Filter::range(Some("2".into()), None, false),
+            });
+            let filtered = complete.applying(Arc::new(query)).unwrap();
+            cx.new(|cx| {
+                FilterEditor::new(
+                    filtered,
+                    score,
+                    Some(Filter::range(Some("2".into()), None, false)),
+                    w,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let mut filtered_ui = VisualTestContext::from_window(complete_filtered, &cx);
+    settle(&mut filtered_ui);
+    filtered_ui.update(|w, cx| w.click("Range", cx));
+    settle(&mut filtered_ui);
+    filtered_ui.update(|w, _| {
+        assert!(w.try_find("exclude-missing").is_some());
+        assert!(w.try_find("only-missing").is_some());
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let nullable_path = dir.path().join("nullable.csv");
+    std::fs::write(&nullable_path, "label,amount\na,10\n,20\nb,\n").unwrap();
+    let nullable = AppliedView::new(Arc::new(Dataset::open(nullable_path).unwrap()));
+    let label_col = nullable.dataset().info().columns[0].clone();
+    let amount_col = nullable.dataset().info().columns[1].clone();
+    let (h2, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(nullable.clone(), label_col, None, w, cx))
+        })
+        .unwrap()
+    });
+    let mut ui2 = VisualTestContext::from_window(h2, &cx);
+    settle(&mut ui2);
+    ui2.update(|w, cx| {
+        assert!(w.try_find("include-missing").is_some());
+        assert!(
+            w.find("value-selection")
+                .bounds()
+                .contains(&w.find("include-missing").bounds().center())
+        );
+        w.click("Text", cx);
+    });
+    settle(&mut ui2);
+    ui2.update(|w, _| {
+        assert!(w.try_find("exclude-missing").is_some());
+        assert!(w.try_find("only-missing").is_some());
+    });
+
+    let (h3, _) = cx.update(|cx| {
+        gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(nullable, amount_col, None, w, cx))
+        })
+        .unwrap()
+    });
+    let mut ui3 = VisualTestContext::from_window(h3, &cx);
+    settle(&mut ui3);
+    ui3.update(|w, cx| w.click("Range", cx));
+    settle(&mut ui3);
+    ui3.update(|w, _| assert!(w.try_find("only-missing").is_some()));
+}
+
+#[test]
+fn column_inspector_aligns_picker_full_width_and_omits_redundant_storage() {
+    let cx = TestAppContext::single();
+    let snapshot = dataset();
+    let columns = snapshot.dataset().info().columns;
+    let (handle, _) = cx.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(options(), cx, |_, cx| {
+            cx.new(|cx| {
+                let mut panel = Inspector::new(snapshot, columns.clone(), cx);
+                panel.inspect(columns[1].id, cx);
+                panel
+            })
+        })
+        .unwrap()
+    });
+    let mut ui = VisualTestContext::from_window(handle, &cx);
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        let column_tab = w.find("Column").bounds();
+        let chart_tab = w.find("Chart").bounds();
+        let picker = w.find("Inspect column").bounds();
+        assert!(picker.left() <= column_tab.left());
+        assert!(picker.right() >= chart_tab.right());
+        let texts = gpui_kit::base::test_support::texts(w);
+        assert!(
+            !texts.iter().any(|t| t.text() == "Storage"),
+            "int64 column should not repeat Storage: Int64"
+        );
+        assert!(w.try_find(("bins", 40usize)).is_none());
+        w.click("histogram-options", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert_eq!(
+            w.find(("bins", 40usize)).role(),
+            Some(gpui_kit::Role::RadioButton)
+        );
+        assert_eq!(w.find(("bins", 40usize)).checked(), Some(true));
+        assert_eq!(
+            w.find("inspector-log-counts").role(),
+            Some(gpui_kit::Role::CheckBox)
+        );
+        w.press("escape", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, _| assert!(w.try_find(("bins", 40usize)).is_none()));
 }
 
 #[test]
@@ -273,6 +440,20 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
     ui.update(|w, cx| w.click("Range", cx));
     settle(&mut ui);
     ui.update(|w, cx| {
+        assert!(w.try_find("filter-log-counts").is_none());
+        w.click("range-display-options", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert_eq!(
+            w.find("filter-log-counts").role(),
+            Some(gpui_kit::Role::CheckBox)
+        );
+        w.click("range-display-options", cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        assert!(w.try_find("filter-log-counts").is_none());
         let plot = w.find(("range-bin", 1usize)).bounds();
         let low = w.find("Minimum").bounds();
         let high = w.find("Maximum").bounds();

@@ -8,6 +8,7 @@ use crate::{actions::RevealScatterPoint, preferences::Preferences};
 
 const TICK_LINE_HEIGHT: Pixels = px(14.);
 const TICK_LABEL_GAP: Pixels = px(4.);
+const PLOT_INSET_FRACTION: f32 = 0.045;
 
 struct Plot {
     x: Axis,
@@ -18,8 +19,7 @@ struct Plot {
 pub(in crate::panels) struct ScatterChart {
     sample: Arc<ScatterResult>,
     source_x: bool,
-    x_title: SharedString,
-    y_title: SharedString,
+    axis_context: Option<SharedString>,
     plot: Option<Arc<Plot>>,
     hover: Option<usize>,
     selected: Option<usize>,
@@ -49,16 +49,35 @@ fn plot_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
     )
 }
 
+fn data_bounds(drawing: Bounds<Pixels>) -> Bounds<Pixels> {
+    let pad_x = (drawing.size.width * PLOT_INSET_FRACTION)
+        .max(px(6.))
+        .min(drawing.size.width * 0.25);
+    let pad_y = (drawing.size.height * PLOT_INSET_FRACTION)
+        .max(px(6.))
+        .min(drawing.size.height * 0.25);
+    Bounds::new(
+        drawing.origin + point(pad_x, pad_y),
+        size(
+            (drawing.size.width - pad_x * 2.).max(px(0.)),
+            (drawing.size.height - pad_y * 2.).max(px(0.)),
+        ),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn scatter_data_bounds(canvas: Bounds<Pixels>) -> Bounds<Pixels> {
+    data_bounds(plot_bounds(canvas))
+}
+
 impl ScatterChart {
     pub fn new(
         sample: Arc<ScatterResult>,
         x_scale: AxisScale,
         y_scale: AxisScale,
-        x_name: Option<&str>,
-        y_name: &str,
+        source_x: bool,
         cx: &App,
     ) -> Self {
-        let source_x = x_name.is_none();
         let xs: Vec<_> = sample
             .points
             .iter()
@@ -91,16 +110,16 @@ impl ScatterChart {
             false,
             4,
         );
-        let title = |axis: &str, name: &str, model: &Option<Axis>| {
-            let context = model.as_ref().and_then(|a| a.context.as_deref());
-            match context {
-                Some(context) => format!("{axis} · {name} · {context}"),
-                None => format!("{axis} · {name}"),
-            }
-            .into()
+        let axis_context = match (
+            x.as_ref().and_then(|axis| axis.context.as_deref()),
+            y.as_ref().and_then(|axis| axis.context.as_deref()),
+        ) {
+            (Some(xc), Some(yc)) if xc == yc => Some(xc.to_owned().into()),
+            (Some(xc), Some(yc)) => Some(format!("X: {xc} · Y: {yc}").into()),
+            (Some(xc), None) => Some(format!("X: {xc}").into()),
+            (None, Some(yc)) => Some(format!("Y: {yc}").into()),
+            (None, None) => None,
         };
-        let x_title = title("X", x_name.unwrap_or("Source row"), &x);
-        let y_title = title("Y", y_name, &y);
         let plot = x.zip(y).map(|(x, y)| {
             let points = xs
                 .into_iter()
@@ -112,8 +131,7 @@ impl ScatterChart {
         Self {
             sample,
             source_x,
-            x_title,
-            y_title,
+            axis_context,
             plot,
             hover: None,
             selected: None,
@@ -139,6 +157,23 @@ impl ScatterChart {
         cx.notify();
     }
 
+    pub(in crate::panels) fn has_plot(&self) -> bool {
+        self.plot.is_some()
+    }
+
+    pub(in crate::panels) fn summary_text(&self) -> String {
+        let plotted = self.sample.points.len() as u64;
+        if plotted == self.sample.eligible_rows {
+            crate::counted(plotted, "point")
+        } else {
+            format!(
+                "{} of {} points",
+                crate::messages::format_count(plotted),
+                crate::messages::format_count(self.sample.eligible_rows),
+            )
+        }
+    }
+
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
         let last = self.sample.points.len() - 1;
         self.hover = Some(match (self.hover, forward) {
@@ -159,14 +194,19 @@ impl Plot {
         )
     }
 
-    fn nearest(&self, position: Point<Pixels>, bounds: Bounds<Pixels>) -> Option<usize> {
-        if !bounds.contains(&position) {
+    fn nearest(
+        &self,
+        position: Point<Pixels>,
+        hit_bounds: Bounds<Pixels>,
+        data_bounds: Bounds<Pixels>,
+    ) -> Option<usize> {
+        if !hit_bounds.contains(&position) {
             return None;
         }
         let mut nearest = None;
         let mut best = 10f32.powi(2);
         for (i, xy) in self.points.iter().enumerate() {
-            let p = Self::point(bounds, *xy);
+            let p = Self::point(data_bounds, *xy);
             let distance =
                 (position.x - p.x).as_f32().powi(2) + (position.y - p.y).as_f32().powi(2);
             if distance < best {
@@ -215,6 +255,7 @@ impl Render for ScatterChart {
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal).id,
             move |bounds, hitbox, window, cx| {
                 let drawing = plot_bounds(bounds);
+                let data = data_bounds(drawing);
                 let font = window.text_style().font();
                 let rule = px(1. / window.scale_factor());
                 let mut previous_x_label = None;
@@ -260,7 +301,7 @@ impl Render for ScatterChart {
                     );
                 };
                 for tick in &plot.x.ticks {
-                    let x = drawing.left() + drawing.size.width * tick.fraction;
+                    let x = data.left() + data.size.width * tick.fraction;
                     window.paint_quad(fill(
                         Bounds::new(point(x, drawing.top()), size(rule, drawing.size.height)),
                         colors.chart_grid,
@@ -275,7 +316,7 @@ impl Render for ScatterChart {
                     );
                 }
                 for tick in &plot.y.ticks {
-                    let y = drawing.bottom() - drawing.size.height * tick.fraction;
+                    let y = data.bottom() - data.size.height * tick.fraction;
                     window.paint_quad(fill(
                         Bounds::new(point(drawing.left(), y), size(drawing.size.width, rule)),
                         colors.chart_grid,
@@ -283,7 +324,7 @@ impl Render for ScatterChart {
                     draw_tick(tick.label.text(base), drawing.left(), y, true, window, cx);
                 }
                 for (i, &xy) in plot.points.iter().enumerate() {
-                    let p = Plot::point(drawing, xy);
+                    let p = Plot::point(data, xy);
                     let active = hovered == Some(i);
                     let r = px(if active { 3.5 } else { 2.5 });
                     window.paint_quad(
@@ -299,20 +340,21 @@ impl Render for ScatterChart {
                     );
                 }
                 if let Some(i) = selected {
-                    let center = Plot::point(drawing, plot.points[i]);
-                    let ring = Bounds::new(center - point(px(5.), px(5.)), size(px(10.), px(10.)));
-                    window.paint_quad(
-                        outline(ring, colors.canvas, BorderStyle::Solid)
-                            .border_widths(ring_width + px(1.5))
-                            .corner_radii(px(5.)),
-                    );
+                    let center = Plot::point(data, plot.points[i]);
+                    let halo =
+                        Bounds::new(center - point(px(7.5), px(7.5)), size(px(15.), px(15.)));
+                    window.paint_quad(fill(halo, colors.canvas).corner_radii(px(7.5)));
+                    let ring =
+                        Bounds::new(center - point(px(6.5), px(6.5)), size(px(13.), px(13.)));
                     window.paint_quad(
                         outline(ring, ring_color, BorderStyle::Solid)
-                            .border_widths(ring_width)
-                            .corner_radii(px(5.)),
+                            .border_widths(ring_width.max(px(1.75)))
+                            .corner_radii(px(6.5)),
                     );
+                    let core = Bounds::new(center - point(px(3.), px(3.)), size(px(6.), px(6.)));
+                    window.paint_quad(fill(core, ring_color).corner_radii(px(3.)));
                 }
-                Self::bind_pointer(handle, plot, drawing, hitbox, window);
+                Self::bind_pointer(handle, plot, drawing, data, hitbox, window);
             },
         )
         .w_full()
@@ -372,33 +414,32 @@ impl Render for ScatterChart {
             figure = figure.aria_value(text.clone());
         }
         content = content
-            .child(div().w_full().truncate().child(self.y_title.clone()))
             .child(figure.child(chart).test_support())
+            .children(
+                self.axis_context
+                    .clone()
+                    .map(|context| div().w_full().truncate().child(context)),
+            )
+            .children(crate::messages::omitted_pairs(
+                self.sample.non_positive_rows,
+            ))
             .child(
                 div()
                     .w_full()
-                    .truncate()
-                    .text_center()
-                    .child(self.x_title.clone()),
+                    .h(px(16.))
+                    .flex()
+                    .items_center()
+                    .children(readout.map(|readout| {
+                        div()
+                            .id("scatter-readout")
+                            .w_full()
+                            .truncate()
+                            .text_color(colors.foreground)
+                            .aria_label(readout.clone())
+                            .child(readout)
+                            .test_support()
+                    })),
             );
-        content = content.child(format!(
-            "{} sampled of {} pairs",
-            self.sample.points.len(),
-            self.sample.eligible_rows
-        ));
-        content = content.children(crate::messages::omitted_pairs(
-            self.sample.non_positive_rows,
-        ));
-        if let Some(readout) = readout {
-            content = content.child(
-                div()
-                    .id("scatter-readout")
-                    .text_color(colors.foreground)
-                    .aria_label(readout.clone())
-                    .child(readout)
-                    .test_support(),
-            );
-        }
         content
     }
 }
@@ -407,14 +448,15 @@ impl ScatterChart {
     fn bind_pointer(
         entity: WeakEntity<Self>,
         plot: Arc<Plot>,
-        bounds: Bounds<Pixels>,
+        hit_bounds: Bounds<Pixels>,
+        data_bounds: Bounds<Pixels>,
         hitbox: HitboxId,
         window: &mut Window,
     ) {
         let nearest = move |position, window: &Window| {
             hitbox
                 .is_hovered(window)
-                .then(|| plot.nearest(position, bounds))
+                .then(|| plot.nearest(position, hit_bounds, data_bounds))
                 .flatten()
         };
         let hit = nearest.clone();

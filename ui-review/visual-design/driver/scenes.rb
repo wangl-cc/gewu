@@ -124,31 +124,34 @@ class Scene
   def range
     click("Water temperature, row 1")
     command("action filter")
-    click("Range") unless node("Only missing")
+    click("Range") unless node("Display options")
     start = position(require_node(/\[12\.7,.*rows?$/))
     finish = position(require_node(/15\.6\) · 4 rows$/))
     command("drag #{(start + finish).join(" ")}")
     command("resize 680 580")
-    capture("14-range-filter", "Only missing")
+    capture("14-range-filter", "Display options")
   end
 
   def chart
     click("Water temperature, row 1")
     command("action analyze")
     command("action chart")
-    click("Chart display options") unless node("Log Y")
     %w[off on].each do |state|
       click("Log Y") if state == "on"
       # Row 81 of the fixture has temperature 16.4 on a 10.2–19.2 domain.
       # Select its actual point so the same screenshots exercise the selection ring.
-      x0, y0, x1, y1 = require_node(/Scatter plot, 96 points/)["rect"]
+      x0, y0, x1, y1 = require_node(/Scatter plot, 96 points/)["rect"].map { |v| v / @state.fetch("scale") }
       fraction = if state == "off"
         (16.4 - 10.2) / (19.2 - 10.2)
       else
         Math.log(16.4 / 10.2) / Math.log(19.2 / 10.2)
       end
-      x = x0 + 50 + (x1 - x0 - 58) * 80 / 95.0
-      y = y0 + 8 + (y1 - y0 - 33) * (1 - fraction)
+      draw_w = x1 - x0 - 58
+      draw_h = y1 - y0 - 33
+      pad_x = [draw_w * 0.045, 6.0].max
+      pad_y = [draw_h * 0.045, 6.0].max
+      x = x0 + 50 + pad_x + (draw_w - 2 * pad_x) * 80 / 95.0
+      y = y0 + 8 + pad_y + (draw_h - 2 * pad_y) * (1 - fraction)
       command("left #{x} #{y}")
       capture("log-y-#{state}", "Log Y") do
         require_node("Scatter plot, 96 points, row 81 selected")

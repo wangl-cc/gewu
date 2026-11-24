@@ -57,39 +57,69 @@ impl FilterEditor {
         if let Some(preview) = self.preview.as_deref().and_then(Option::as_ref) {
             content = content.child(self.range_plot(preview, window, cx));
         }
-        content = content.child(
+        content.child(
             div()
                 .flex()
                 .gap_2()
                 .child(self.range_field(0, window, cx))
                 .child(self.range_field(1, window, cx)),
-        );
-        content = content.child(
-            crate::panels::display_options("range-display-options", self.display_options, cx)
+        )
+    }
+
+    fn range_plot(&self, h: &RangeHistogram, window: &Window, cx: &mut Context<Self>) -> Div {
+        let colors = crate::theme::GewuPalette::get(cx);
+        let cues = crate::theme::VisualCues::get(cx);
+        let hairline = px(1. / window.scale_factor());
+        let has_bins = h.histogram.lo.is_some() && h.histogram.hi.is_some();
+        let peak = h.histogram.counts.iter().copied().max().unwrap_or(0);
+        let custom = self.scale == AxisScale::Log10 || self.log_counts;
+        let mut options_host = div()
+            .relative()
+            .flex_none()
+            .child(
+                crate::panels::options_trigger(
+                    "range-display-options",
+                    custom,
+                    self.display_options,
+                    cx,
+                )
                 .on_click(cx.listener(|editor, _, _, cx| {
                     editor.display_options = !editor.display_options;
                     cx.notify();
                 })),
-        );
-        if !self.display_options {
-            return content;
-        }
-        let mut options = row().gap_3();
-        if self.column.capabilities.logarithmic {
-            options = options.child(crate::panels::checkbox(
-                "filter-log-bins",
-                "Log bins",
-                self.scale == AxisScale::Log10,
-                cx,
-                cx.listener(|editor, _, _, cx| {
-                    editor.scale = charts::toggle_scale(editor.scale);
-                    editor.load(cx);
+            )
+            .on_mouse_down_out(cx.listener(|editor, _, _, cx| {
+                if editor.display_options {
+                    editor.display_options = false;
                     cx.notify();
-                }),
-            ));
-        }
-        if self.preview.as_deref().is_some_and(Option::is_some) {
-            options = options.child(crate::panels::checkbox(
+                }
+            }));
+        if self.display_options {
+            let mut popover =
+                crate::panels::elevated(div().id("range-options-popover"), window, cx)
+                    .occlude()
+                    .absolute()
+                    .top(px(26.))
+                    .right_0()
+                    .w(px(176.))
+                    .p(px(10.))
+                    .flex()
+                    .flex_col()
+                    .gap_2();
+            if self.column.capabilities.logarithmic {
+                popover = popover.child(crate::panels::checkbox(
+                    "filter-log-bins",
+                    "Log bins",
+                    self.scale == AxisScale::Log10,
+                    cx,
+                    cx.listener(|editor, _, _, cx| {
+                        editor.scale = charts::toggle_scale(editor.scale);
+                        editor.load(cx);
+                        cx.notify();
+                    }),
+                ));
+            }
+            popover = popover.child(crate::panels::checkbox(
                 "filter-log-counts",
                 "Log frequency",
                 self.log_counts,
@@ -99,27 +129,20 @@ impl FilterEditor {
                     cx.notify();
                 }),
             ));
+            options_host = options_host.child(popover.test_support());
         }
-        content.child(options)
-    }
-
-    fn range_plot(&self, h: &RangeHistogram, window: &Window, cx: &mut Context<Self>) -> Div {
-        let colors = crate::theme::GewuPalette::get(cx);
-        let cues = crate::theme::VisualCues::get(cx);
-        let hairline = px(1. / window.scale_factor());
-        let mut chart = div()
+        let header = div()
+            .w_full()
             .flex()
-            .flex_col()
-            .gap_1()
-            .rounded_md()
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.canvas)
-            .p_2()
-            .font_features(crate::theme::tabular_digits())
-            .text_size(px(11.))
-            .text_color(colors.muted_foreground);
-        if h.histogram.lo.is_some() && h.histogram.hi.is_some() {
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(div().text_size(px(10.5)).children(
+                (has_bins && peak > 0).then(|| charts::histogram_peak_label(peak, self.log_counts)),
+            ))
+            .child(options_host);
+        let mut body = div().flex().flex_col().gap_1();
+        if has_bins {
             let mut bars = div()
                 .relative()
                 .w_full()
@@ -131,15 +154,14 @@ impl FilterEditor {
                 .child(
                     div()
                         .absolute()
-                        .top(relative(0.5))
+                        .top(relative(0.55))
                         .w_full()
                         .h(hairline)
                         .bg(colors.chart_grid),
                 );
-            let peak = h.histogram.counts.iter().copied().max().unwrap_or(0);
             let selected = self.selected_bins(cx);
             for (i, count) in h.histogram.counts.iter().enumerate() {
-                let height = charts::bar_height(*count, peak, self.log_counts);
+                let height = charts::bar_height(*count, peak, self.log_counts) * 0.90;
                 let (a, b) = charts::bin_fraction(&h.histogram, i);
                 let active = selected.is_some_and(|(lo, hi)| (lo..=hi).contains(&i));
                 let interval = charts::bin_interval(&h.ranges, i, self.column.floating_point);
@@ -226,19 +248,32 @@ impl FilterEditor {
                     MouseButton::Left,
                     cx.listener(|editor, _, _, _| editor.drag = None),
                 );
-            chart = chart
-                .child(bars)
-                .child(charts::histogram_axis(&h.histogram));
+            body = body.child(bars).child(charts::histogram_axis(&h.histogram));
         } else {
-            chart = chart.child(if self.scale == AxisScale::Log10 {
+            body = body.child(if self.scale == AxisScale::Log10 {
                 "No positive finite values to plot"
             } else {
                 "No values to plot"
             });
         }
-        chart.children(crate::messages::omitted_values(
+        body = body.children(crate::messages::omitted_values(
             h.histogram.non_positive_count,
             h.histogram.infinite_count,
-        ))
+        ));
+        // Paint header last via reverse column order so the corner floating card stacks above bins.
+        div()
+            .flex()
+            .flex_col_reverse()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.canvas)
+            .p_2()
+            .font_features(crate::theme::tabular_digits())
+            .text_size(px(11.))
+            .text_color(colors.muted_foreground)
+            .child(body)
+            .child(header)
     }
 }

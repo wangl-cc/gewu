@@ -26,6 +26,33 @@ pub(in crate::panels) fn chevron(down: bool, color: Hsla) -> impl IntoElement {
     .flex_none()
 }
 
+pub(in crate::panels) fn sliders_icon(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let o = bounds.origin;
+            for (y, knob_x) in [(3.5, 2.75), (8.375, 6.75)] {
+                window.paint_quad(
+                    fill(
+                        Bounds::new(o + point(px(1.5), px(y)), size(px(10.), px(1.25))),
+                        color,
+                    )
+                    .corner_radii(px(0.625)),
+                );
+                window.paint_quad(
+                    fill(
+                        Bounds::new(o + point(px(knob_x), px(y - 1.125)), size(px(3.5), px(3.5))),
+                        color,
+                    )
+                    .corner_radii(px(1.75)),
+                );
+            }
+        },
+    )
+    .size(px(13.))
+    .flex_none()
+}
+
 impl Inspector {
     pub(super) fn picker(
         &self,
@@ -67,6 +94,83 @@ impl Inspector {
             searchable: true,
         }
         .element(window, cx, choose);
+        if picker == Picker::Column {
+            return div().min_w_0().w_full().h(px(28.)).child(field);
+        }
+        let colors = crate::theme::GewuPalette::get(cx);
+        let (short, direction, log_id, log_label, scale) = match picker {
+            Picker::X => (
+                "X",
+                Axis::Horizontal,
+                "log-x",
+                "Log X",
+                self.settings.x_scale,
+            ),
+            Picker::Y => ("Y", Axis::Vertical, "log-y", "Log Y", self.settings.y_scale),
+            Picker::Column => unreachable!(),
+        };
+        let supports_log = self
+            .info(selected)
+            .is_some_and(|c| c.capabilities.logarithmic);
+        let pressed = supports_log && scale == AxisScale::Log10;
+        let click_log = cx.listener(move |panel, _, _, cx| {
+            let scale = match direction {
+                Axis::Horizontal => &mut panel.settings.x_scale,
+                Axis::Vertical => &mut panel.settings.y_scale,
+            };
+            *scale = charts::toggle_scale(*scale);
+            panel.load(cx);
+            cx.notify();
+        });
+        let log_toggle = base::Toggle::new(log_id)
+            .pressed(pressed)
+            .disabled(!supports_log)
+            .accessibility_label(log_label)
+            .styles(|styles| {
+                styles.disabled(|style| {
+                    style
+                        .opacity(crate::theme::DISABLED_OPACITY)
+                        .cursor_default()
+                })
+            })
+            .flex_none()
+            .h(px(28.))
+            .px(px(8.))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .when(pressed, |toggle| {
+                toggle
+                    .bg(colors.accent)
+                    .text_color(colors.accent_foreground)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .when(supports_log, |toggle| {
+                        toggle
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(colors.accent_hover))
+                            .active(move |s| s.bg(colors.accent_pressed()))
+                    })
+            })
+            .when(!pressed, |toggle| {
+                toggle
+                    .bg(colors.button_secondary)
+                    .text_color(colors.muted_foreground)
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(supports_log, |toggle| {
+                        toggle
+                            .cursor_pointer()
+                            .hover(move |s| {
+                                s.bg(colors.button_secondary_hover)
+                                    .text_color(colors.foreground)
+                            })
+                            .active(move |s| s.bg(colors.secondary_pressed()))
+                    })
+            })
+            .when(supports_log, |toggle| {
+                toggle
+                    .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+                    .on_change(move |_, ev, w, cx| click_log(ev, w, cx))
+            })
+            .child("Log");
         div()
             .flex()
             .items_center()
@@ -74,115 +178,99 @@ impl Inspector {
             .child(
                 div()
                     .flex_none()
+                    .w(px(14.))
                     .text_xs()
-                    .whitespace_nowrap()
-                    .w(px(96.))
-                    .child(title),
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors.muted_foreground)
+                    .child(short),
             )
             .child(div().min_w_0().flex_1().h(px(28.)).child(field))
+            .child(log_toggle)
     }
 
-    pub(super) fn chart_options(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn scatter_limit_popover(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> base::Popover {
         let colors = crate::theme::GewuPalette::get(cx);
-        let mut choices =
-            crate::panels::segmented_radios("scatter-limits", "Maximum points", window, cx);
-        for limit in [512, 1024, 2048, 4096] {
-            let label = limit.to_string();
-            let selected = self.settings.limit == limit;
-            let click = cx.listener(move |panel, _, _, cx| {
-                panel.settings.limit = limit;
-                panel.load(cx);
-                cx.notify();
-            });
-            let radio = base::Radio::new(("points", limit as usize))
-                .checked(selected)
-                .accessibility_label(label.clone())
-                .on_change(move |_, e, w, cx| click(e, w, cx));
-            choices = choices.child(segment(radio, label, selected, cx));
-        }
-        let mut controls = div()
+        let custom = self.settings.limit != 2048;
+        let active = custom || self.scatter_options_open;
+        let formatted_limit = crate::messages::format_count(u64::from(self.settings.limit));
+        let ink = if active {
+            colors.accent
+        } else {
+            colors.muted_foreground
+        };
+        let trigger = base::Button::new("scatter-limits")
+            .accessibility_label("Maximum points")
+            .aria_value(formatted_limit.clone())
+            .aria_expanded(self.scatter_options_open)
             .flex()
-            .flex_col()
-            .flex_none()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(colors.muted_foreground)
-                    .child("Maximum points"),
-            )
-            .child(choices);
-        for (direction, column, scale) in [
-            (Axis::Horizontal, self.x, self.settings.x_scale),
-            (Axis::Vertical, self.y, self.settings.y_scale),
-        ] {
-            if !self
-                .info(column)
-                .is_some_and(|c| c.capabilities.logarithmic)
-            {
-                continue;
+            .items_center()
+            .gap_1()
+            .h(px(22.))
+            .px(px(6.))
+            .rounded(px(5.))
+            .cursor_pointer()
+            .text_size(px(11.))
+            .font_features(crate::theme::tabular_digits())
+            .text_color(ink)
+            .when(self.scatter_options_open, |b| b.bg(colors.button_secondary))
+            .hover(move |s| {
+                s.bg(colors.button_secondary_hover)
+                    .text_color(colors.foreground)
+            })
+            .active(move |s| s.bg(colors.secondary_pressed()))
+            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+            .child(format!("Max {formatted_limit}"))
+            .child(chevron(true, ink));
+        let content = self.scatter_options_open.then(|| {
+            let mut choices = crate::panels::segmented_radios(
+                "scatter-limit-choices",
+                "Maximum points",
+                window,
+                cx,
+            );
+            for limit in [512u32, 1024, 2048, 4096] {
+                let selected = self.settings.limit == limit;
+                let label = crate::messages::format_count(u64::from(limit));
+                let pick = cx.listener(move |panel, _, _, cx| {
+                    panel.settings.limit = limit;
+                    panel.scatter_options_open = false;
+                    panel.load(cx);
+                    cx.notify();
+                });
+                let radio = base::Radio::new(("points", limit as usize))
+                    .checked(selected)
+                    .accessibility_label(label.clone())
+                    .on_change(move |_, ev, w, cx| pick(ev, w, cx));
+                choices = choices.child(segment(radio, label, selected, cx));
             }
-            let (id, label) = match direction {
-                Axis::Horizontal => ("log-x", "Log X"),
-                Axis::Vertical => ("log-y", "Log Y"),
-            };
-            let checked = scale == AxisScale::Log10;
-            let click = cx.listener(move |panel, _, _, cx| {
-                let scale = match direction {
-                    Axis::Horizontal => &mut panel.settings.x_scale,
-                    Axis::Vertical => &mut panel.settings.y_scale,
-                };
-                *scale = charts::toggle_scale(*scale);
-                panel.load(cx);
-                cx.notify();
-            });
-            let active = window.is_window_active();
-            let switch = base::Switch::new(id)
-                .checked(checked)
-                .accessibility_label(label)
-                .on_change(move |_, e, w, cx| click(e, w, cx))
-                .group("axis-switch")
-                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
-                .cursor_pointer()
+            crate::panels::elevated(div(), window, cx)
+                .w(px(228.))
+                .p_3()
                 .flex()
-                .items_center()
-                .justify_between()
-                .h(px(24.))
-                .child(label)
+                .flex_col()
+                .gap_2()
                 .child(
                     div()
-                        .id("switch-track")
-                        .w(px(27.))
-                        .h(px(16.))
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .px(px(2.))
-                        .bg(if checked && active {
-                            colors.accent
-                        } else {
-                            colors.switch_track_off
-                        })
-                        .group_hover("axis-switch", move |s| {
-                            s.bg(if checked && active {
-                                colors.accent_hover
-                            } else {
-                                colors.input_hover()
-                            })
-                        })
-                        .group_active("axis-switch", move |s| {
-                            s.bg(if checked && active {
-                                colors.accent_pressed()
-                            } else {
-                                colors.muted_foreground
-                            })
-                        })
-                        .when(checked, |s| s.justify_end())
-                        .child(div().size(px(12.)).rounded_full().bg(colors.switch_thumb)),
-                );
-            controls = controls.child(switch);
-        }
-        controls
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors.muted_foreground)
+                        .child("Maximum points"),
+                )
+                .child(choices)
+        });
+        base::Popover::new("scatter-limit-popover")
+            .anchor(Anchor::TopRight)
+            .offset(px(4.))
+            .open(self.scatter_options_open)
+            .trigger(trigger)
+            .on_open_change(cx.listener(|panel, open: &bool, _, cx| {
+                panel.scatter_options_open = *open;
+                cx.notify();
+            }))
+            .content(move |_, _, _| div().children(content))
     }
 }

@@ -170,7 +170,6 @@ impl TableView {
             let menu = if target.cell.is_some() {
                 menu.item(item("Copy Cell", CopyCell))
                     .item(item("Copy Selected Rows", CopyRows))
-                    .separator()
                     .item(item("View Cell…", Detail))
             } else {
                 menu.item(item("Sort Ascending", Ascending))
@@ -191,7 +190,12 @@ impl TableView {
                 menu
             }
         });
-        self.present_menu(popup, event.position, window, cx);
+        let anchor = if target.cell.is_some() {
+            event.position + point(px(4.), px(12.))
+        } else {
+            event.position
+        };
+        self.present_menu(popup, anchor, window, cx);
         cx.stop_propagation();
     }
 

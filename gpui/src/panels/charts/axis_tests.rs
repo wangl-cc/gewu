@@ -45,3 +45,60 @@ fn log_ticks_stay_in_original_units_and_temporal_axes_in_seconds() {
     assert_eq!(x.ticks[0].label.text(0), "0");
     assert_eq!(x.ticks[0].label.text(1), "1");
 }
+
+#[test]
+fn log_ticks_format_ordinary_magnitudes_without_scientific_notation() {
+    let ordinary = Axis::for_points(
+        &[10.2, 19.2],
+        |i| ["10.2", "19.2"][i].to_owned(),
+        ScatterAxisKind::Number,
+        AxisScale::Log10,
+        false,
+        4,
+    )
+    .unwrap();
+    assert_eq!(
+        ordinary
+            .ticks
+            .iter()
+            .map(|t| t.label.text(0))
+            .collect::<Vec<_>>(),
+        ["10.2", "19.2"]
+    );
+
+    let decades = Axis::for_points(
+        &[1., 1000.],
+        |i| ["1", "1000"][i].to_owned(),
+        ScatterAxisKind::Number,
+        AxisScale::Log10,
+        false,
+        4,
+    )
+    .unwrap();
+    assert_eq!(
+        decades
+            .ticks
+            .iter()
+            .map(|t| t.label.text(0))
+            .collect::<Vec<_>>(),
+        ["1", "10", "100", "1000"]
+    );
+
+    let extreme = Axis::for_points(
+        &[1e-4, 1e10],
+        |i| ["1e-4", "1e10"][i].to_owned(),
+        ScatterAxisKind::Number,
+        AxisScale::Log10,
+        false,
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        extreme
+            .ticks
+            .iter()
+            .map(|t| t.label.text(0))
+            .collect::<Vec<_>>(),
+        ["1e-4", "1000", "1e10"]
+    );
+}

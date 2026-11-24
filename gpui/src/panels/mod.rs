@@ -5,6 +5,8 @@ mod draft;
 mod filter;
 mod inspector;
 
+#[cfg(test)]
+pub(crate) use charts::scatter_data_bounds;
 pub(crate) use filter::{FilterEditor, FilterEvent};
 use gpui_kit::{base, prelude::FluentBuilder, *};
 pub(crate) use inspector::{Inspector, Page as InspectorPage};
@@ -43,8 +45,32 @@ pub(crate) fn button_base(id: impl Into<ElementId>) -> base::Button {
     })
 }
 
-fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
-    disclosure(id, "Chart display options", expanded, cx)
+pub(in crate::panels) fn options_trigger(
+    id: &'static str,
+    active: bool,
+    expanded: bool,
+    cx: &App,
+) -> base::Button {
+    let colors = crate::theme::GewuPalette::get(cx);
+    base::Button::new(id)
+        .accessibility_label("Display options")
+        .aria_expanded(expanded)
+        .size(px(22.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .cursor_pointer()
+        .when(expanded, |b| b.bg(colors.button_secondary))
+        .hover(move |s| s.bg(colors.button_secondary_hover))
+        .active(move |s| s.bg(colors.secondary_pressed()))
+        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+        .child(inspector::controls::sliders_icon(if active || expanded {
+            colors.accent
+        } else {
+            colors.muted_foreground
+        }))
 }
 
 pub(crate) fn disclosure(
@@ -199,12 +225,12 @@ pub(crate) fn checkbox(
         .accessibility_label(label.clone())
         .checked(checked)
         .group("checkbox")
+        .cursor_pointer()
         .focus_visible(move |s| s.shadow(colors.focus_shadows()))
         .on_change(move |_, ev, w, cx| activate(ev, w, cx))
         .flex()
         .items_center()
         .gap_2()
-        .cursor_pointer()
         .text_size(px(13.))
         .child(
             div()
@@ -261,50 +287,6 @@ pub(crate) fn checkbox(
                 }),
         )
         .child(div().min_w_0().truncate().child(label))
-}
-
-pub(crate) fn radio_group(id: &'static str, label: &'static str) -> base::RadioGroup {
-    base::RadioGroup::new(id)
-        .axis(Axis::Horizontal)
-        .aria_label(label)
-        .flex()
-        .items_center()
-        .flex_wrap()
-        .gap_1()
-}
-
-pub(crate) fn radio(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    checked: bool,
-    cx: &App,
-    activate: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> base::Radio {
-    let label = label.into();
-    let control = base::Radio::new(id)
-        .checked(checked)
-        .accessibility_label(label.clone())
-        .on_change(move |_, ev, w, cx| activate(ev, w, cx))
-        .flex()
-        .items_center()
-        .justify_center()
-        .line_height(relative(1.));
-    style_control(control, label, ButtonTone::for_selection(checked), cx)
-}
-
-pub(crate) fn toggle(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    pressed: bool,
-    cx: &App,
-    activate: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> base::Toggle {
-    let label = label.into();
-    let control = base::Toggle::new(id)
-        .pressed(pressed)
-        .accessibility_label(label.clone())
-        .on_change(move |_, ev, w, cx| activate(ev, w, cx));
-    style_control(control, label, ButtonTone::for_selection(pressed), cx)
 }
 
 enum ButtonTone {

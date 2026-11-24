@@ -17,7 +17,7 @@ impl TableView {
                 div()
                     .truncate()
                     .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(name),
             );
         #[cfg(target_os = "macos")]
@@ -27,7 +27,7 @@ impl TableView {
                 .pl(if window.is_fullscreen() {
                     px(12.)
                 } else {
-                    px(84.)
+                    px(90.)
                 })
                 .on_mouse_down(
                     MouseButton::Left,

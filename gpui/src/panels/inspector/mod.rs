@@ -83,6 +83,7 @@ pub(crate) struct Inspector {
     y: Option<ColumnId>,
     settings: InspectorSettings,
     chart_options_open: bool,
+    scatter_options_open: bool,
     showing: Showing,
     task: Option<Task<()>>,
 }
@@ -164,6 +165,7 @@ impl Inspector {
             y: None,
             settings,
             chart_options_open: false,
+            scatter_options_open: false,
             showing: Showing::Empty,
             task: None,
         };
@@ -244,8 +246,7 @@ impl Inspector {
         };
         let snapshot = self.snapshot.clone();
         let x = self.x;
-        let x_name = self.info(x).map(|column| column.name.clone());
-        let y_name = col.name.clone();
+        let source_x = x.is_none();
         let limit = self.settings.limit;
         let settings = self.settings;
         let bin_scale = if col.capabilities.logarithmic {
@@ -282,9 +283,9 @@ impl Inspector {
                 inspector.task = None;
                 inspector.showing = match result {
                     Ok(Loaded::Column(result)) => Showing::Column(result),
-                    Ok(Loaded::Chart(result)) => Showing::Chart(cx.new(|cx| {
-                        ScatterChart::new(result, x_scale, y_scale, x_name.as_deref(), &y_name, cx)
-                    })),
+                    Ok(Loaded::Chart(result)) => Showing::Chart(
+                        cx.new(|cx| ScatterChart::new(result, x_scale, y_scale, source_x, cx)),
+                    ),
                     Err(error) => Showing::Failed(error),
                 };
                 cx.notify();
@@ -373,13 +374,17 @@ impl Inspector {
                 ))
             }
             Page::Chart => {
-                pane = pane
-                    .child(self.picker(Picker::X, "X axis", self.x, window, cx))
-                    .child(self.picker(Picker::Y, "Y axis", self.y, window, cx))
-                    .child(self.chart_options(window, cx))
+                pane = pane.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.picker(Picker::X, "X axis", self.x, window, cx))
+                        .child(self.picker(Picker::Y, "Y axis", self.y, window, cx)),
+                );
             }
         }
-        match &self.showing {
+        pane = match &self.showing {
             Showing::Empty => pane.child("No plottable columns"),
             Showing::Loading => pane.child("Loading analysis…"),
             Showing::Failed(error) => pane
@@ -396,7 +401,34 @@ impl Inspector {
                     )),
                 ),
             Showing::Column(results) => pane.child(self.column_view(results, window, cx)),
-            Showing::Chart(chart) => pane.child(chart.clone()),
-        }
+            Showing::Chart(chart) => {
+                let summary = chart
+                    .read(cx)
+                    .has_plot()
+                    .then(|| chart.read(cx).summary_text());
+                pane.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(chart.clone())
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .text_size(px(11.))
+                                .text_color(colors.muted_foreground)
+                                .font_features(crate::theme::tabular_digits())
+                                .child(div().min_w_0().truncate().children(summary))
+                                .child(self.scatter_limit_popover(window, cx)),
+                        ),
+                )
+            }
+        };
+        pane
     }
 }

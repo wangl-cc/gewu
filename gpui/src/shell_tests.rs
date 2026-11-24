@@ -405,6 +405,31 @@ fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
             );
         }
         assert!(w.find("close-find").bounds().right() < w.find("show-inspector").bounds().left());
+        assert!(
+            field.contains(&w.find("close-find").bounds().center()),
+            "clear button should live inside the search field"
+        );
+        w.click("close-find", cx);
+    });
+    ui.run_until_parked();
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        assert!(w.try_find("close-find").is_none());
+        assert!(
+            doc.read(cx)
+                .table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus
+                .is_focused(w)
+        );
+        w.click("table-search", cx);
+    });
+    ui.run_until_parked();
+    ui.update(|w, cx| w.input("two", cx));
+    ui.run_until_parked();
+    ui.update(|w, cx| {
         w.press("escape", cx);
         assert!(
             doc.read(cx)
@@ -460,6 +485,8 @@ fn chart_page_and_point_limit_survive_replacing_the_worksheet() {
     });
     ui.update(|w, cx| w.click("Chart", cx));
     ui.run_until_parked();
+    ui.update(|w, cx| w.click("scatter-limits", cx));
+    ui.run_until_parked();
     ui.update(|w, cx| w.click(("points", 512usize), cx));
     ui.run_until_parked();
     ui.update(|w, cx| w.click("Column", cx));
@@ -467,7 +494,7 @@ fn chart_page_and_point_limit_survive_replacing_the_worksheet() {
     ui.update(|w, cx| w.click("Chart", cx));
     ui.run_until_parked();
     ui.update(|w, cx| {
-        assert_eq!(w.find(("points", 512usize)).checked(), Some(true));
+        assert_eq!(w.find("scatter-limits").value(), Some("512"));
         w.click(("sheet", last), cx);
     });
     ui.run_until_parked();
@@ -477,7 +504,7 @@ fn chart_page_and_point_limit_survive_replacing_the_worksheet() {
     ui.update(|w, cx| {
         w.render_frame(cx);
         assert_eq!(w.find("Chart").selected(), Some(true));
-        assert_eq!(w.find(("points", 512usize)).checked(), Some(true));
+        assert_eq!(w.find("scatter-limits").value(), Some("512"));
     });
 }
 

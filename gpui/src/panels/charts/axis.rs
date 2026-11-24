@@ -68,6 +68,26 @@ fn logarithmic_ticks(lo: f64, hi: f64, count: usize) -> Vec<f64> {
     }
 }
 
+fn log_tick_label(v: f64) -> String {
+    if !v.is_finite() || v <= 0. {
+        return v.to_string();
+    }
+    let exp = v.log10().floor() as i32;
+    if (-3..=3).contains(&exp) {
+        return labels::significant_digits(v, if exp == 3 { 4 } else { 3 });
+    }
+    let text = format!("{v:.2e}");
+    if let Some((coefficient, power)) = text.split_once('e') {
+        let short = if coefficient.contains('.') {
+            coefficient.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            coefficient
+        };
+        return format!("{short}e{power}");
+    }
+    text
+}
+
 /// Choose readable decimal intervals within the data domain. Use exact endpoints when
 /// the interval cannot be represented, for example across both extremes of f64.
 pub(super) fn numeric_ticks(lo: f64, hi: f64, count: usize, rows: bool) -> Vec<f64> {
@@ -156,11 +176,20 @@ impl Axis {
                 format!("{}–{} · UTC", a.year(), b.year())
             });
         }
+        let collapsed_log_endpoints = scale == AxisScale::Log10
+            && ticks.len() == 2
+            && log_tick_label(lo) == log_tick_label(hi);
         for v in ticks {
             let label = if rows {
                 Label::Row(v as u64)
             } else if scale == AxisScale::Log10 {
-                Label::Text(format!("{v:e}"))
+                if collapsed_log_endpoints && v == lo {
+                    Label::Text(endpoints.lower.clone())
+                } else if collapsed_log_endpoints && v == hi {
+                    Label::Text(endpoints.upper.clone())
+                } else {
+                    Label::Text(log_tick_label(v))
+                }
             } else if let Some((a, b)) = utc_range
                 && let Some(t) = labels::utc(v)
             {

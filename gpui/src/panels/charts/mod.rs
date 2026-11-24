@@ -5,6 +5,8 @@ use gewu_core::{AxisScale, Histogram, RangeBounds};
 use gpui_kit::*;
 pub(super) use labels::significant_digits;
 pub(super) use scatter::ScatterChart;
+#[cfg(test)]
+pub(crate) use scatter::scatter_data_bounds;
 
 pub(super) fn toggle_scale(scale: AxisScale) -> AxisScale {
     match scale {
@@ -48,6 +50,14 @@ pub(super) fn bin_interval(ranges: &[RangeBounds], index: usize, floating_point:
     }
 }
 
+pub(super) fn histogram_peak_label(peak: u64, log_counts: bool) -> String {
+    format!(
+        "max {}{}",
+        crate::messages::format_count(peak),
+        if log_counts { " · log" } else { "" }
+    )
+}
+
 pub(super) fn histogram(
     histogram: &Histogram,
     log_counts: bool,
@@ -72,24 +82,22 @@ pub(super) fn histogram(
     let mut plot = div()
         .relative()
         .w_full()
-        .aspect_ratio(4. / 3.)
+        .h(px(96.))
         .border_b(hairline)
-        .border_color(colors.chart_grid);
-    for fraction in [0.25, 0.5, 0.75] {
-        plot = plot.child(
+        .border_color(colors.chart_grid)
+        .child(
             div()
                 .absolute()
-                .top(relative(fraction))
+                .top(relative(0.55))
                 .w_full()
                 .h(hairline)
                 .bg(colors.chart_grid),
         );
-    }
     let peak = histogram.counts.iter().copied().max().unwrap_or(0);
     for (index, &count) in histogram.counts.iter().enumerate() {
         let (start, end) = bin_fraction(histogram, index);
         let hint = format!("{} · {}", interval(index), crate::counted(count, "row"));
-        let height = bar_height(count, peak, log_counts);
+        let height = bar_height(count, peak, log_counts) * 0.90;
         let group = "inspector-histogram-bin";
         plot = plot.child(
             div()
@@ -111,6 +119,7 @@ pub(super) fn histogram(
                     div()
                         .w_full()
                         .h(relative(height))
+                        .rounded_t(px(1.))
                         .bg(colors.chart_primary)
                         .group_hover(group, move |style| style.bg(colors.chart_primary_hover)),
                 )
@@ -124,6 +133,14 @@ pub(super) fn histogram(
         .font_features(crate::theme::tabular_digits())
         .text_color(colors.muted_foreground)
         .text_size(px(11.))
+        .children((peak > 0).then(|| {
+            div()
+                .w_full()
+                .flex()
+                .justify_end()
+                .text_size(px(10.5))
+                .child(histogram_peak_label(peak, log_counts))
+        }))
         .child(plot)
         .child(histogram_axis(histogram))
         .children(crate::messages::omitted_values(

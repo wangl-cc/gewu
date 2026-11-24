@@ -1,6 +1,9 @@
 use gewu_core::RangeBound;
 
-use super::{AxisScale, Histogram, RangeBounds, bin_interval, histogram_label, middle_tick};
+use super::{
+    AxisScale, Histogram, RangeBounds, bin_interval, histogram_label, histogram_peak_label,
+    middle_tick,
+};
 
 fn bound(coordinate: f64) -> RangeBound {
     let text = coordinate.to_string();
@@ -75,4 +78,6 @@ fn large_histogram_tick_and_endpoint_labels_agree() {
     );
     assert_eq!(histogram_label("1999999"), "1,999,999");
     assert_eq!(histogram_label("-1200.5"), "-1,200.5");
+    assert_eq!(histogram_peak_label(50_000, false), "max 50,000");
+    assert_eq!(histogram_peak_label(50_000, true), "max 50,000 · log");
 }

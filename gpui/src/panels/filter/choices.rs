@@ -143,6 +143,9 @@ impl FilterEditor {
                     })),
             );
         }
+        let show_missing = facet.null_count > 0
+            || self.applied_has_missing_rule()
+            || self.draft.missing == MissingPolicy::Only;
         div()
             .flex()
             .flex_col()
@@ -162,14 +165,14 @@ impl FilterEditor {
                     .bg(colors.canvas)
                     .child(actions.border_b_1().border_color(colors.border))
                     .child(list)
-                    .child(
+                    .children(show_missing.then(|| {
                         div()
                             .border_t_1()
                             .border_color(colors.border)
                             .px_2()
                             .py_1()
-                            .child(self.include_missing(facet.null_count, cx)),
-                    )
+                            .child(self.include_missing(facet.null_count, cx))
+                    }))
                     .test_support(),
             )
     }

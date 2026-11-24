@@ -2,6 +2,7 @@ use gewu_core::ColumnId;
 use gpui_kit::{
     base::input::{Input, InputAccessibility, InputEvent, InputState},
     component::{Icon, IconName},
+    prelude::FluentBuilder,
     *,
 };
 
@@ -64,51 +65,80 @@ impl TableView {
         }
         let mut panel = self.drawer("Visible columns", window, cx);
         let query = search.read(cx).value().to_lowercase();
-        let mut all = Vec::new();
         let mut matches = Vec::new();
         for (position, column) in self.data.columns.visible_then_hidden() {
-            all.push(column.id);
             if query.is_empty() || column.name.to_lowercase().contains(&query) {
                 matches.push((position, column));
             }
         }
         let matching: Vec<_> = matches.iter().map(|(_, column)| column.id).collect();
         let to_show = matching.clone();
-        panel = panel
+        let all_shown = matches.iter().all(|(position, _)| position.is_some());
+        let all_hidden = matches.iter().all(|(position, _)| position.is_none());
+        let (show_id, show_label) = if query.is_empty() {
+            ("show-all-columns", "Show all")
+        } else {
+            ("show-matching", "Show matching")
+        };
+        let hide_label = if query.is_empty() {
+            "Hide all"
+        } else {
+            "Hide matching"
+        };
+        let show_disabled = to_show.is_empty() || all_shown;
+        let hide_disabled = matching.is_empty() || all_hidden;
+        panel = panel.child(
+            crate::panels::input_frame(div(), true, &search.focus_handle(cx), window, cx)
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .child(
+                    Icon::new(IconName::Search)
+                        .size(px(14.))
+                        .text_color(colors.muted_foreground),
+                )
+                .child(div().min_w_0().flex_1().child(Input::new(search))),
+        );
+        let actions = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_2()
+            .border_b_1()
+            .border_color(colors.border)
             .child(
-                crate::panels::input_frame(div(), true, &search.focus_handle(cx), window, cx)
-                    .flex_none()
+                crate::panels::button_base(show_id)
+                    .accessibility_label(show_label)
+                    .disabled(show_disabled)
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_2()
-                    .child(
-                        Icon::new(IconName::Search)
-                            .size(px(14.))
-                            .text_color(colors.muted_foreground),
-                    )
-                    .child(div().min_w_0().flex_1().child(Input::new(search))),
+                    .h(px(24.))
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .when(!show_disabled, |link| {
+                        link.cursor_pointer()
+                            .hover(move |s| s.underline().text_color(colors.foreground))
+                    })
+                    .child(show_label)
+                    .on_click(cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx))),
             )
             .child(
-                div()
+                crate::panels::button_base("hide-matching")
+                    .accessibility_label(hide_label)
+                    .disabled(hide_disabled)
                     .flex()
-                    .flex_wrap()
                     .items_center()
-                    .gap_1()
-                    .child(
-                        button("show-matching", "Show matching", false, cx)
-                            .disabled(to_show.is_empty())
-                            .on_click(
-                                cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx)),
-                            ),
-                    )
-                    .child(
-                        button("hide-matching", "Hide matching", false, cx)
-                            .disabled(matching.is_empty())
-                            .on_click(
-                                cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx)),
-                            ),
-                    ),
+                    .h(px(24.))
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .when(!hide_disabled, |link| {
+                        link.cursor_pointer()
+                            .hover(move |s| s.underline().text_color(colors.foreground))
+                    })
+                    .child(hide_label)
+                    .on_click(cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx))),
             );
         let mut rows = div()
             .id("column-list")
@@ -135,6 +165,7 @@ impl TableView {
                 .flex()
                 .items_center()
                 .h(px(29.))
+                .px_2()
                 .flex_none()
                 .gap_2()
                 .hover(move |r| r.bg(colors.button_secondary_hover))
@@ -221,7 +252,20 @@ impl TableView {
             rows = rows.child(row);
         }
         panel
-            .child(rows)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.canvas)
+                    .child(actions)
+                    .child(rows),
+            )
             .child(
                 super::footer()
                     .flex_wrap()
@@ -233,11 +277,6 @@ impl TableView {
                                     cx.notify();
                                 }
                             })),
-                    )
-                    .child(
-                        button("show-all-columns", "Show all", false, cx).on_click(
-                            cx.listener(move |t, _, _, cx| t.set_visible(&all, true, cx)),
-                        ),
                     )
                     .child(self.close_button("Done", cx)),
             )

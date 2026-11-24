@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use gewu_core::{ColumnId, ColumnSort};
-use gpui_kit::{component::menu::PopupMenu, *};
+use gpui_kit::{base, component::menu::PopupMenu, prelude::FluentBuilder, *};
 
 use super::{ColumnDrag, Drawer, Order, TableView, button};
 use crate::panels::choice::{Choice, ChoiceField, column_labels};
@@ -104,26 +104,18 @@ impl TableView {
         &self,
         id: ColumnId,
         descending: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> base::RadioGroup {
+    ) -> base::Button {
         let raw = id.into_raw() as usize;
-        let mut group =
-            crate::panels::segmented_radios(("sort-direction", raw), "Sort direction", window, cx)
-                .w(px(76.));
-        for (value, key, label, short) in [
-            (false, "ascending", "Ascending", "Asc"),
-            (true, "descending", "Descending", "Desc"),
-        ] {
-            let selected = descending == value;
-            let choose = cx.listener(move |t, _, _, cx| t.set_direction(id, value, cx));
-            let radio = base::Radio::new((key, raw))
-                .checked(selected)
-                .accessibility_label(label)
-                .on_change(move |_, event, window, cx| choose(event, window, cx));
-            group = group.child(crate::panels::segment(radio, short, selected, cx));
-        }
-        group
+        let (text, accessible) = if descending {
+            ("↓ Desc", "Sort descending")
+        } else {
+            ("↑ Asc", "Sort ascending")
+        };
+        button(("sort-direction", raw), text, false, cx)
+            .accessibility_label(accessible)
+            .w(px(66.))
+            .on_click(cx.listener(move |t, _, _, cx| t.set_direction(id, !descending, cx)))
     }
 
     pub(super) fn sort_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -240,17 +232,19 @@ impl TableView {
                     window,
                     cx,
                 )))
-                .child(self.sort_direction(id, descending, window, cx))
-                .child(
-                    super::icon_button(("earlier-sort", raw), "Move rule earlier", "↑", cx)
-                        .disabled(index == 0)
-                        .on_click(cx.listener(move |t, _, _, cx| t.move_sort(id, -1, cx))),
-                )
-                .child(
-                    super::icon_button(("later-sort", raw), "Move rule later", "↓", cx)
-                        .disabled(index + 1 == sorts.len())
-                        .on_click(cx.listener(move |t, _, _, cx| t.move_sort(id, 1, cx))),
-                )
+                .child(self.sort_direction(id, descending, cx))
+                .when(sorts.len() > 1, |row| {
+                    row.child(
+                        super::icon_button(("earlier-sort", raw), "Move rule earlier", "↑", cx)
+                            .disabled(index == 0)
+                            .on_click(cx.listener(move |t, _, _, cx| t.move_sort(id, -1, cx))),
+                    )
+                    .child(
+                        super::icon_button(("later-sort", raw), "Move rule later", "↓", cx)
+                            .disabled(index + 1 == sorts.len())
+                            .on_click(cx.listener(move |t, _, _, cx| t.move_sort(id, 1, cx))),
+                    )
+                })
                 .child(
                     super::icon_button(("remove-sort", raw), "Remove rule", "×", cx).on_click(
                         cx.listener(move |t, _, _, cx| {

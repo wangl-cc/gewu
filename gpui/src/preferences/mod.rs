@@ -50,7 +50,7 @@ impl Default for Preferences {
             show_row_numbers: true,
             row_number_base: 1,
             copy_includes_headers: true,
-            statistics_digits: 8,
+            statistics_digits: 5,
             remember_export_format: true,
             last_export_format: FileType::Parquet,
             parquet_compression: ParquetCompression::Zstd,

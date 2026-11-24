@@ -3,6 +3,25 @@ use base::TestSupportExt;
 use super::*;
 
 impl FilterEditor {
+    pub(super) fn applied_has_missing_rule(&self) -> bool {
+        self.snapshot
+            .query()
+            .filters
+            .iter()
+            .find(|f| f.column == self.column.id)
+            .is_some_and(|entry| {
+                matches!(
+                    entry.filter,
+                    Filter::OnlyNulls
+                        | Filter::NotNull
+                        | Filter::Condition {
+                            include_nulls: false,
+                            ..
+                        }
+                )
+            })
+    }
+
     pub(super) fn input(
         label: &'static str,
         input: &Entity<InputState>,
@@ -153,7 +172,12 @@ impl Render for FilterEditor {
                     ),
                 Mode::Missing => panel,
             };
-            if self.draft.mode != Mode::Values || !has_choices {
+            let show_missing_policy = (self.draft.mode != Mode::Values || !has_choices)
+                && (self.draft.mode == Mode::Missing
+                    || facet.null_count > 0
+                    || self.draft.missing != MissingPolicy::Include
+                    || self.applied_has_missing_rule());
+            if show_missing_policy {
                 let mut choices =
                     crate::panels::segmented_radios("missing-policy", "Missing values", window, cx);
                 for (id, label, policy) in [

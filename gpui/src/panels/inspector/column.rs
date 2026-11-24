@@ -1,4 +1,34 @@
+use gpui_kit::prelude::FluentBuilder;
+
 use super::*;
+
+fn show_storage(col: &ColumnInfo) -> bool {
+    if col.technical_type.eq_ignore_ascii_case(&col.display_type) {
+        return false;
+    }
+    !matches!(
+        (col.display_type.as_str(), col.technical_type.as_str()),
+        ("bool", "Boolean") | ("string", "Utf8")
+    )
+}
+
+fn format_integer_statistic(text: &str) -> String {
+    let (sign, digits) = text
+        .strip_prefix('-')
+        .map_or(("", text), |rest| ("-", rest));
+    if digits.len() > 3 && digits.bytes().all(|b| b.is_ascii_digit()) {
+        let mut formatted = String::with_capacity(text.len() + digits.len() / 3);
+        formatted.push_str(sign);
+        for (offset, byte) in digits.bytes().enumerate() {
+            if offset > 0 && (digits.len() - offset).is_multiple_of(3) {
+                formatted.push(',');
+            }
+            formatted.push(byte as char);
+        }
+        return formatted;
+    }
+    text.to_owned()
+}
 
 fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &App) -> Div {
     let colors = crate::theme::GewuPalette::get(cx);
@@ -27,35 +57,65 @@ impl Inspector {
     pub(super) fn column_view(
         &self,
         results: &ColumnResults,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let colors = crate::theme::GewuPalette::get(cx);
-        let mut content = div().flex().flex_col().gap_4().flex_none();
-        for (section, result) in &results.sections {
+        let mut content = div().flex().flex_col().gap_3().flex_none();
+        for (index, (section, result)) in results.sections.iter().enumerate() {
             let section = *section;
             let expanded = result.is_some();
-            let mut group = div().flex().flex_col().gap_2().child(
-                base::Button::new(("inspect-section", section as usize))
-                    .accessibility_label(section.title())
-                    .w_full()
-                    .flex()
-                    .justify_start()
-                    .items_center()
-                    .gap_1()
-                    .cursor_pointer()
-                    .text_color(colors.muted_foreground)
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(controls::chevron(expanded, colors.muted_foreground))
-                    .child(section.title())
-                    .aria_expanded(expanded)
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.settings.expansion[section as usize] = Some(!expanded);
-                        panel.load(cx);
-                        cx.notify();
-                    })),
-            );
+            let header = base::Button::new(("inspect-section", section as usize))
+                .accessibility_label(section.title())
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .justify_start()
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .text_color(colors.foreground)
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(controls::chevron(expanded, colors.muted_foreground))
+                .child(section.title())
+                .aria_expanded(expanded)
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                    panel.settings.expansion[section as usize] = Some(!expanded);
+                    panel.load(cx);
+                    cx.notify();
+                }));
+            let options = match result {
+                Some(Ok(SectionData::Distribution(_))) => Some(self.histogram_options_popover(
+                    results.column.capabilities.logarithmic,
+                    window,
+                    cx,
+                )),
+                Some(Ok(SectionData::Lengths(_))) => {
+                    Some(self.histogram_options_popover(false, window, cx))
+                }
+                _ => None,
+            };
+            let mut group = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .when(index > 0, |group| {
+                    group
+                        .pt_3()
+                        .border_t(px(1. / window.scale_factor()))
+                        .border_color(colors.border)
+                })
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_1()
+                        .child(header)
+                        .children(options),
+                );
             if let Some(result) = result {
                 group = match result {
                     Ok(data) => group.child(self.section_data(data, &results.column, window, cx)),
@@ -91,16 +151,17 @@ impl Inspector {
         let count = self.snapshot.filtered().row_count();
         let mut body = div().flex().flex_col().gap_1();
         match data {
-            SectionData::Overview(missing) => body
-                .child(metric("Type", col.display_type.clone(), cx))
-                .child(metric("Storage", col.technical_type.clone(), cx))
-                .child(metric(
-                    "Nullable",
-                    if col.nullable { "Yes" } else { "No" },
-                    cx,
-                ))
-                .child(metric("Rows", format_count(count), cx))
-                .child(metric("Missing", format_count(*missing), cx)),
+            SectionData::Overview(missing) => {
+                body = body.child(metric("Type", col.display_type.clone(), cx));
+                if show_storage(col) {
+                    body = body.child(metric("Storage", col.technical_type.clone(), cx));
+                }
+                if !col.nullable {
+                    body = body.child(metric("Nullable", "No", cx));
+                }
+                body.child(metric("Rows", format_count(count), cx))
+                    .child(metric("Missing", format_count(*missing), cx))
+            }
             SectionData::Structure(fields) => {
                 for f in fields {
                     body = body.child(format!(
@@ -120,12 +181,17 @@ impl Inspector {
                     ("Maximum", &s.max_label),
                 ] {
                     if let Some(value) = value {
-                        let displayed = col
-                            .floating_point
-                            .then(|| value.parse::<f64>().ok())
-                            .flatten()
-                            .map(|v| charts::significant_digits(v, digits))
-                            .unwrap_or_else(|| value.clone());
+                        let displayed = if col.floating_point {
+                            value
+                                .parse::<f64>()
+                                .ok()
+                                .map(|v| charts::significant_digits(v, digits))
+                                .unwrap_or_else(|| value.clone())
+                        } else if col.value_category == gewu_core::ValueCategory::Number {
+                            format_integer_statistic(value)
+                        } else {
+                            value.clone()
+                        };
                         let exact = value.clone();
                         body = body.child(metric(name, displayed, cx).id(name).tooltip(
                             move |window, cx| {
@@ -162,15 +228,13 @@ impl Inspector {
                 }
                 body
             }
-            SectionData::Distribution(h) => body
-                .child(self.histogram_options(col.capabilities.logarithmic, cx))
-                .child(charts::histogram(
-                    &h.histogram,
-                    self.settings.log_counts,
-                    |i| charts::bin_interval(&h.ranges, i, col.floating_point),
-                    window,
-                    cx,
-                )),
+            SectionData::Distribution(h) => body.child(charts::histogram(
+                &h.histogram,
+                self.settings.log_counts,
+                |i| charts::bin_interval(&h.ranges, i, col.floating_point),
+                window,
+                cx,
+            )),
             SectionData::Lengths(s) => {
                 let units = match s.unit {
                     gewu_core::LengthUnit::Characters => "Unicode scalars",
@@ -183,36 +247,41 @@ impl Inspector {
                     cx,
                 ));
                 if let Some(v) = s.min {
-                    body = body.child(metric("Minimum", v.to_string(), cx));
+                    body = body.child(metric("Minimum", format_count(v), cx));
                 }
                 if let Some(v) = s.max {
-                    body = body.child(metric("Maximum", v.to_string(), cx));
+                    body = body.child(metric("Maximum", format_count(v), cx));
                 }
                 if let Some(v) = s.mean {
                     body = body.child(metric("Mean", charts::significant_digits(v, digits), cx));
                 }
-                body.child(self.histogram_options(false, cx))
-                    .child(charts::histogram(
-                        &s.histogram,
-                        self.settings.log_counts,
-                        |i| match s.bin_range(i) {
-                            Some(range) if range.start() == range.end() => {
-                                format!("Length {} ({units})", range.start())
-                            }
-                            Some(range) => {
-                                format!("Length {} – {} ({units})", range.start(), range.end())
-                            }
-                            None => "No lengths".into(),
-                        },
-                        window,
-                        cx,
-                    ))
+                body.child(charts::histogram(
+                    &s.histogram,
+                    self.settings.log_counts,
+                    |i| match s.bin_range(i) {
+                        Some(range) if range.start() == range.end() => {
+                            format!("Length {} ({units})", range.start())
+                        }
+                        Some(range) => {
+                            format!("Length {} – {} ({units})", range.start(), range.end())
+                        }
+                        None => "No lengths".into(),
+                    },
+                    window,
+                    cx,
+                ))
             }
             SectionData::Values { distinct, rows } => {
                 let colors = crate::theme::GewuPalette::get(cx);
                 body = body.child(metric("Estimated distinct", format_count(*distinct), cx));
                 if !rows.is_empty() {
-                    body = body.child("Common values · estimated");
+                    body = body.child(
+                        div()
+                            .mt_1()
+                            .text_size(px(11.))
+                            .text_color(colors.muted_foreground)
+                            .child("Common values · estimated"),
+                    );
                 }
                 for (label, frequency) in rows {
                     let part = *frequency as f64 / count.max(1) as f64;
@@ -221,11 +290,14 @@ impl Inspector {
                             div()
                                 .w_full()
                                 .flex()
+                                .items_baseline()
                                 .gap_2()
                                 .child(div().min_w_0().flex_1().truncate().child(label.clone()))
                                 .child(
                                     div()
                                         .flex_none()
+                                        .text_size(px(12.))
+                                        .text_color(colors.muted_foreground)
                                         .font_features(crate::theme::tabular_digits())
                                         .child(format!(
                                             "{} ({:.1}%)",
@@ -254,54 +326,94 @@ impl Inspector {
         }
     }
 
-    fn histogram_options(&self, supports_log: bool, cx: &mut Context<Self>) -> Div {
-        let mut controls = div().flex().flex_col().gap_2().child(
-            crate::panels::display_options("histogram-options", self.chart_options_open, cx)
-                .on_click(cx.listener(|p, _, _, cx| {
-                    p.chart_options_open = !p.chart_options_open;
-                    cx.notify();
-                })),
+    fn histogram_options_popover(
+        &self,
+        supports_log: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> base::Popover {
+        let colors = crate::theme::GewuPalette::get(cx);
+        let custom = self.settings.bins != 40
+            || self.settings.log_counts
+            || (supports_log && self.settings.bin_scale == AxisScale::Log10);
+        let trigger = crate::panels::options_trigger(
+            "histogram-options",
+            custom,
+            self.chart_options_open,
+            cx,
         );
-        if !self.chart_options_open {
-            return controls;
-        }
-        let mut choices = crate::panels::radio_group("histogram-bins", "Number of bins");
-        for bins in [10, 20, 40, 60, 100] {
-            choices = choices.child(crate::panels::radio(
-                ("bins", bins as usize),
-                format!("{bins} bins"),
-                self.settings.bins == bins,
-                cx,
-                cx.listener(move |panel, _, _, cx| {
+        let content = self.chart_options_open.then(|| {
+            let mut choices =
+                crate::panels::segmented_radios("histogram-bins", "Number of bins", window, cx);
+            for bins in [10u32, 20, 40, 60, 100] {
+                let selected = self.settings.bins == bins;
+                let pick = cx.listener(move |panel, _, _, cx| {
                     panel.settings.bins = bins;
                     panel.load(cx);
                     cx.notify();
-                }),
-            ));
-        }
-        controls = controls.child(choices);
-        if supports_log {
-            controls = controls.child(crate::panels::toggle(
-                "inspector-log-bins",
-                "Log bins",
-                self.settings.bin_scale == AxisScale::Log10,
+                });
+                let radio = base::Radio::new(("bins", bins as usize))
+                    .checked(selected)
+                    .accessibility_label(format!("{bins} bins"))
+                    .on_change(move |_, ev, w, cx| pick(ev, w, cx));
+                choices = choices.child(segment(radio, bins.to_string(), selected, cx));
+            }
+            let mut body = crate::panels::elevated(div(), window, cx)
+                .w(px(236.))
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(colors.muted_foreground)
+                                .child("Bins"),
+                        )
+                        .child(choices),
+                );
+            let mut flags = div().flex().flex_col().gap_2();
+            if supports_log {
+                flags = flags.child(crate::panels::checkbox(
+                    "inspector-log-bins",
+                    "Log bins",
+                    self.settings.bin_scale == AxisScale::Log10,
+                    cx,
+                    cx.listener(|panel, _, _, cx| {
+                        panel.settings.bin_scale = charts::toggle_scale(panel.settings.bin_scale);
+                        panel.load(cx);
+                        cx.notify();
+                    }),
+                ));
+            }
+            flags = flags.child(crate::panels::checkbox(
+                "inspector-log-counts",
+                "Log frequency",
+                self.settings.log_counts,
                 cx,
                 cx.listener(|panel, _, _, cx| {
-                    panel.settings.bin_scale = charts::toggle_scale(panel.settings.bin_scale);
-                    panel.load(cx);
+                    panel.settings.log_counts = !panel.settings.log_counts;
                     cx.notify();
                 }),
             ));
-        }
-        controls.child(crate::panels::toggle(
-            "inspector-log-counts",
-            "Log frequency",
-            self.settings.log_counts,
-            cx,
-            cx.listener(|panel, _, _, cx| {
-                panel.settings.log_counts = !panel.settings.log_counts;
+            body = body.child(flags);
+            body
+        });
+        base::Popover::new("histogram-options-popover")
+            .anchor(Anchor::TopRight)
+            .offset(px(4.))
+            .open(self.chart_options_open)
+            .trigger(trigger)
+            .on_open_change(cx.listener(|panel, open: &bool, _, cx| {
+                panel.chart_options_open = *open;
                 cx.notify();
-            }),
-        ))
+            }))
+            .content(move |_, _, _| div().children(content))
     }
 }

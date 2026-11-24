@@ -6,7 +6,7 @@ use gpui_kit::{
     WindowOptions, point, px, size, test::TestWindowExt,
 };
 
-use super::{ScatterChart, TICK_LINE_HEIGHT, plot_bounds, tick_label_top};
+use super::{Plot, ScatterChart, TICK_LINE_HEIGHT, data_bounds, plot_bounds, tick_label_top};
 
 #[test]
 fn corner_tick_labels_have_clearance_and_fit_in_the_canvas() {
@@ -17,6 +17,19 @@ fn corner_tick_labels_have_clearance_and_fit_in_the_canvas() {
 
     assert!(x_label_top - y_label_bottom >= px(4.));
     assert!(x_label_top + TICK_LINE_HEIGHT <= canvas.bottom());
+}
+
+#[test]
+fn extreme_points_receive_inset_padding_from_plot_edges() {
+    let canvas = Bounds::new(point(px(0.), px(0.)), size(px(276.), px(207.)));
+    let drawing = plot_bounds(canvas);
+    let data = data_bounds(drawing);
+    let min_pt = Plot::point(data, (0., 0.));
+    let max_pt = Plot::point(data, (1., 1.));
+    assert!(min_pt.x - drawing.left() >= px(6.));
+    assert!(drawing.right() - max_pt.x >= px(6.));
+    assert!(drawing.bottom() - min_pt.y >= px(6.));
+    assert!(max_pt.y - drawing.top() >= px(6.));
 }
 
 #[test]
@@ -61,8 +74,7 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
                         sample.clone(),
                         AxisScale::Linear,
                         AxisScale::Linear,
-                        None,
-                        "Score",
+                        true,
                         cx,
                     )
                 })
@@ -77,8 +89,8 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
         assert_eq!(plot.label(), Some("Scatter plot, 2 points"));
         plot.bounds()
     });
-    let plot = plot_bounds(bounds);
-    let first = point(plot.left() + px(1.), plot.bottom() - px(1.));
+    let plot = data_bounds(plot_bounds(bounds));
+    let first = point(plot.left(), plot.bottom());
     ui.simulate_mouse_move(first, None, Modifiers::default());
     ui.run_until_parked();
     app.read(|cx| {
@@ -87,7 +99,7 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
         assert_eq!(c.sample.points[0].source_row, gewu_core::SourceRow(4));
         assert_eq!(c.sample.points[0].y_label, "2.000000000000001");
     });
-    ui.update(|w, cx| w.drag(first, point(plot.right() - px(1.), plot.top() + px(1.)), cx));
+    ui.update(|w, cx| w.drag(first, point(plot.right(), plot.top()), cx));
     ui.run_until_parked();
     app.read(|cx| assert!(Arc::ptr_eq(&chart.read(cx).sample, &sample)));
     ui.simulate_mouse_move(point(px(1.), bounds.bottom()), None, Modifiers::default());

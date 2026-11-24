@@ -16,7 +16,10 @@ use gewu_core::{
     OrderedView,
 };
 use gpui_kit::{
-    base::input::{Input, InputEvent, InputState},
+    base::{
+        self,
+        input::{Input, InputEvent, InputState},
+    },
     prelude::FluentBuilder,
     *,
 };
@@ -511,23 +514,13 @@ impl Render for FindController {
                 None
             }
         });
-        let field = div()
-            .id("table-search")
+        let trigger = div()
             .flex_1()
+            .min_w_0()
+            .h_full()
             .flex()
             .items_center()
             .gap_1()
-            .min_w_0()
-            .h(px(28.))
-            .px_2()
-            .bg(colors.canvas)
-            .border_1()
-            .border_color(colors.border)
-            .hover(move |s| s.border_color(colors.input_hover()))
-            .when(focused && window.is_window_active(), |field| {
-                field.shadow(colors.focus_shadows())
-            })
-            .rounded(px(6.))
             .child(icon)
             .child(div().flex_1().min_w_0().child(Input::new(input)))
             .children(notice.filter(|_| searching).map(|text| {
@@ -570,8 +563,52 @@ impl Render for FindController {
                     this.input.update(cx, |input, cx| input.focus(w, cx));
                     cx.notify();
                 }
-            }))
-            .test_support();
+            }));
+        let mut field = div()
+            .id("table-search")
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .h(px(28.))
+            .pl_2()
+            .pr(px(if searching { 4. } else { 8. }))
+            .bg(colors.canvas)
+            .border_1()
+            .border_color(colors.border)
+            .hover(move |s| s.border_color(colors.input_hover()))
+            .when(focused && window.is_window_active(), |field| {
+                field.shadow(colors.focus_shadows())
+            })
+            .rounded(px(6.))
+            .child(trigger);
+        if searching {
+            field = field.child(
+                base::Button::new("close-find")
+                    .accessibility_label("Clear search")
+                    .size(px(20.))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .items_center()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .text_color(colors.muted_foreground)
+                    .hover(move |style| {
+                        style
+                            .bg(colors.button_secondary_hover)
+                            .text_color(colors.foreground)
+                    })
+                    .active(move |style| style.bg(colors.secondary_pressed()))
+                    .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(base::input::Escape), cx)
+                    })
+                    .child("×"),
+            );
+        }
+        let field = field.test_support();
         let mut bar = div()
             .id("find-toolbar")
             .role(Role::Group)
@@ -581,7 +618,7 @@ impl Render for FindController {
             .flex()
             .items_center()
             .gap_1()
-            .w(px(if searching { 350. } else { 240. }))
+            .w(px(if searching { 300. } else { 240. }))
             .max_w(relative(0.62))
             .child(field);
         if searching {
@@ -618,13 +655,6 @@ impl Render for FindController {
                 .child(
                     arrow("next", "Next match", "›")
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
-                )
-                .child(
-                    crate::panels::button("close-find", "Done", false, cx)
-                        .flex_none()
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(base::input::Escape), cx)
-                        }),
                 );
         }
         bar.into_any_element()

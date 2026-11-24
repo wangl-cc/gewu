@@ -56,8 +56,9 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
     assert_eq!(w.source_rows()[59], 24);
     action(&mut w, crate::actions::ShowChartInspector);
     let plot = w.ui.update(|win, _| win.find("scatter-plot").bounds());
-    let x = plot.left() + px(50.) + (plot.size.width - px(58.)) * (24. / 118.);
-    let hit = point(x, plot.top() + px(9.));
+    let data = crate::panels::scatter_data_bounds(plot);
+    let x = data.left() + data.size.width * (24. / 118.);
+    let hit = point(x, data.top());
     let miss = plot.center();
     let before = w.selection();
     w.click(miss, Modifiers::default());
@@ -145,14 +146,20 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     };
     open_menu(&mut w);
     w.ui.update(|window, _| {
-        let first = window.within("popup-menu").find(0usize);
+        let bounds = window.find("popup-menu").bounds();
+        let mut menu = window.within("popup-menu");
+        assert!(
+            bounds.top() > position.y,
+            "cell menu should open below the clicked line ({bounds:?} vs {position:?})"
+        );
+        let first = menu.find(0usize);
         assert_eq!(
-            window
-                .within("popup-menu")
-                .within(0usize)
-                .find("menu-content")
-                .value(),
+            menu.within(0usize).find("menu-content").value(),
             Some("Copy Cell")
+        );
+        assert_eq!(
+            menu.within(2usize).find("menu-content").value(),
+            Some("View Cell…")
         );
         assert!((gpui_kit::px(24.)..=gpui_kit::px(26.)).contains(&first.bounds().size.height));
     });
@@ -160,7 +167,7 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
 
     open_menu(&mut w);
-    w.ui.update(|window, cx| window.within("popup-menu").click(3usize, cx));
+    w.ui.update(|window, cx| window.within("popup-menu").click(2usize, cx));
     w.settle();
     assert!(w.read(|table| matches!(
         &table.controls.drawer,
@@ -687,29 +694,64 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
             window.find("table-drawer").bounds().bottom()
                 <= window.find("filtered-count").bounds().top()
         );
+        assert!(window.try_find("clear-all-filters").is_none());
+        assert!(window.try_find("close-table-drawer").is_none());
+    });
+    w.keys("escape");
+    w.click(w.cell(0, 1), Modifiers::default());
+    w.keys("cmd-alt-shift-l");
+    click(&mut w, "filtered-count");
+    w.ui.update(|window, _| {
+        assert!(window.try_find("close-table-drawer").is_none());
+        assert!(window.try_find("clear-all-filters").is_some());
     });
     click(&mut w, "clear-all-filters");
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);
     action(&mut w, EditSort);
-    for name in ["group", "score"] {
-        click(&mut w, "add-sort");
-        w.ui.update(|window, cx| window.input(name, cx));
-        w.settle();
-        w.ui.update(|window, _| assert_eq!(window.find(name).label(), Some(name)));
-        w.keys("enter");
-    }
+    click(&mut w, "add-sort");
+    w.ui.update(|window, cx| window.input("group", cx));
+    w.settle();
+    w.ui.update(|window, _| assert_eq!(window.find("group").label(), Some("group")));
+    w.keys("enter");
+    w.ui.update(|window, _| {
+        assert!(
+            window
+                .try_find(("earlier-sort", ids[0].into_raw() as usize))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find(("later-sort", ids[0].into_raw() as usize))
+                .is_none()
+        );
+    });
+    click(&mut w, "add-sort");
+    w.ui.update(|window, cx| window.input("score", cx));
+    w.settle();
+    w.ui.update(|window, _| assert_eq!(window.find("score").label(), Some("score")));
+    w.keys("enter");
     w.ui.update(|window, _| {
         let select = window
             .within(("sort-column", 0usize))
             .find("input")
             .bounds();
         let direction = window
-            .find(("ascending", ids[0].into_raw() as usize))
+            .find(("sort-direction", ids[0].into_raw() as usize))
             .bounds();
         let select_height = select.size.height + gpui_kit::px(2. / window.scale_factor());
         assert_eq!(select_height, gpui_kit::px(28.));
-        assert_eq!(direction.size.height + gpui_kit::px(4.), select_height);
+        assert_eq!(direction.size.height, select_height);
         assert_eq!(select.center().y, direction.center().y);
+        assert!(
+            window
+                .try_find(("earlier-sort", ids[0].into_raw() as usize))
+                .is_some()
+        );
+        assert!(
+            window
+                .try_find(("later-sort", ids[0].into_raw() as usize))
+                .is_some()
+        );
     });
     w.ui.update(|window, cx| window.right_click(("sort-column", 1usize), cx));
     w.settle();
@@ -730,7 +772,7 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
     w.settle();
     w.keys("down enter");
     w.ui.update(|window, cx| assert!(focus.contains_focused(window, cx)));
-    click(&mut w, ("descending", ids[1].into_raw() as usize));
+    click(&mut w, ("sort-direction", ids[1].into_raw() as usize));
     click(&mut w, ("sort-column", 0usize));
     click(&mut w, "note");
     w.ui.update(|window, cx| {

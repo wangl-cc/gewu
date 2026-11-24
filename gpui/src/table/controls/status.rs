@@ -210,19 +210,16 @@ impl TableView {
                 .child(crate::panels::filter_description(&entry.filter));
             panel = panel.child(div().flex().flex_col().gap_0().child(row).child(detail));
         }
-        panel
-            .child(
-                super::footer()
-                    .child(
-                        button("clear-all-filters", "Clear all filters", false, cx).on_click(
-                            cx.listener(|t, _, w, cx| {
-                                t.close_panel(w, cx);
-                                t.clear_filters(cx);
-                            }),
-                        ),
-                    )
-                    .child(self.close_button("Done", cx)),
-            )
-            .into_any_element()
+        if self.data.query().filters.len() > 1 {
+            panel = panel.child(super::footer().child(
+                button("clear-all-filters", "Clear all filters", false, cx).on_click(cx.listener(
+                    |t, _, w, cx| {
+                        t.close_panel(w, cx);
+                        t.clear_filters(cx);
+                    },
+                )),
+            ));
+        }
+        panel.into_any_element()
     }
 }
