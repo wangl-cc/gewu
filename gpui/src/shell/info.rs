@@ -7,7 +7,7 @@ use gpui_kit::{
     *,
 };
 
-use crate::{panels::button, platform};
+use crate::{messages::format_count, panels::button, platform};
 
 struct FileDetails {
     path: PathBuf,
@@ -18,12 +18,7 @@ fn format_file_size(bytes: u64) -> String {
     if bytes < 1_000 {
         return format!("{bytes} {}", if bytes == 1 { "byte" } else { "bytes" });
     }
-    let mut exact = bytes.to_string();
-    let mut i = exact.len();
-    while i > 3 {
-        i -= 3;
-        exact.insert(i, ',');
-    }
+    let exact = format_count(bytes);
     let mut amount = bytes as f64 / 1_000.;
     let mut unit = "KB";
     for next in ["MB", "GB", "TB", "PB", "EB"] {
@@ -54,8 +49,8 @@ impl From<DatasetInfo> for FileDetails {
             ("Name".into(), name),
             ("Kind".into(), format!("{kind} table")),
             ("Size".into(), format_file_size(info.file_size)),
-            ("Rows".into(), info.row_count.to_string()),
-            ("Columns".into(), info.columns.len().to_string()),
+            ("Rows".into(), format_count(info.row_count)),
+            ("Columns".into(), format_count(info.columns.len() as u64)),
         ];
         match info.metadata {
             FileMetadata::Parquet {
@@ -64,7 +59,7 @@ impl From<DatasetInfo> for FileDetails {
                 created_by,
                 key_values,
             } => {
-                rows.push(("Row groups".into(), row_groups.to_string()));
+                rows.push(("Row groups".into(), format_count(row_groups as u64)));
                 rows.push((
                     "Compression".into(),
                     if compression.is_empty() {

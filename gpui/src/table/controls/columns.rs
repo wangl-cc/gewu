@@ -217,18 +217,20 @@ impl TableView {
                             cx.notify();
                         }
                     }));
-                if index > 0 {
-                    row = row.child(
+                row = row
+                    .child(
                         super::icon_button(("column-earlier", raw), "Move column earlier", "↑", cx)
+                            .disabled(index == 0)
                             .on_click(cx.listener(move |t, _, _, cx| t.move_column(id, -1, cx))),
-                    );
-                }
-                if index + 1 < self.data.columns.len() {
-                    row = row.child(
+                    )
+                    .child(
                         super::icon_button(("column-later", raw), "Move column later", "↓", cx)
+                            .disabled(index + 1 == self.data.columns.len())
                             .on_click(cx.listener(move |t, _, _, cx| t.move_column(id, 1, cx))),
                     );
-                }
+            } else {
+                row = row
+                    .children((0..2).map(|_| div().size(px(super::ICON_BUTTON_SIZE)).flex_none()));
             }
             rows = rows.child(row);
         }
@@ -330,7 +332,12 @@ impl TableView {
                         button("confirm-hide", "Hide", false, cx)
                             .bg(colors.destructive)
                             .text_color(colors.destructive_foreground)
-                            .hover(move |s| s.bg(colors.destructive.opacity(0.9)))
+                            .hover(move |s| {
+                                s.bg(crate::theme::hover_fill(
+                                    colors.destructive,
+                                    colors.destructive_foreground,
+                                ))
+                            })
                             .on_click(cx.listener(|t, _, w, cx| t.confirm_hide(w, cx))),
                     ),
             )

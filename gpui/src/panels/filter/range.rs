@@ -138,8 +138,7 @@ impl FilterEditor {
                 let height = charts::bar_height(*count, peak, self.log_counts);
                 let (a, b) = charts::bin_fraction(&h.histogram, i);
                 let active = selected.is_some_and(|(lo, hi)| (lo..=hi).contains(&i));
-                let range = &h.ranges[i];
-                let interval = charts::bin_interval(range);
+                let interval = charts::bin_interval(&h.ranges, i, self.column.floating_point);
                 let hint = format!("{interval} · {}", crate::counted(*count, "row"));
                 bars =
                     bars.child(

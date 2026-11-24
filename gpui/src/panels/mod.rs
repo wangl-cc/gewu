@@ -16,8 +16,13 @@ pub(crate) fn button(
     cx: &App,
 ) -> base::Button {
     let label = label.into();
-    let control = base::Button::new(id).accessibility_label(label.clone());
+    let control = button_base(id).accessibility_label(label.clone());
     style_control(control, label, accented, cx)
+}
+
+pub(crate) fn button_base(id: impl Into<ElementId>) -> base::Button {
+    base::Button::new(id)
+        .styles(|styles| styles.disabled(|style| style.opacity(0.45).cursor_default()))
 }
 
 fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
@@ -216,7 +221,7 @@ fn style_control<T: Styled + StatefulInteractiveElement + ParentElement>(
         })
         .hover(move |style| {
             style.bg(if accented {
-                colors.primary.opacity(0.86)
+                crate::theme::hover_fill(colors.primary, colors.primary_foreground)
             } else {
                 colors.accent
             })

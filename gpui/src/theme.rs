@@ -33,6 +33,7 @@ pub(crate) fn document_colors(appearance: ThemeAppearance, accent: Option<Hsla>)
     let accent = accent.unwrap_or_else(|| rgb(fallback).into());
     colors.primary = accent;
     colors.primary_foreground = contrasting_ink(accent);
+    colors.destructive_foreground = contrasting_ink(colors.destructive);
     colors.ring = accent;
     colors.selection = accent.alpha(0.18);
     colors
@@ -51,11 +52,29 @@ fn luminance(color: Hsla) -> f32 {
 }
 
 fn contrasting_ink(color: Hsla) -> Hsla {
-    if luminance(color) > 0.179 {
+    if contrast_ratio(black(), color) > contrast_ratio(white(), color) {
         black()
     } else {
         white()
     }
+}
+
+fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
+    let a = luminance(a);
+    let b = luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Change a filled control's background in the direction that increases ink contrast.
+/// Keeping the fill opaque makes the result independent of the surface under the button.
+pub(crate) fn hover_fill(mut fill: Hsla, ink: Hsla) -> Hsla {
+    let step = if luminance(ink) < luminance(fill) {
+        0.045
+    } else {
+        -0.045
+    };
+    fill.l = (fill.l + step).clamp(0., 1.);
+    fill
 }
 
 pub(crate) fn modal_backdrop() -> Hsla {

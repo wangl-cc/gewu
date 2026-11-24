@@ -208,6 +208,7 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
 
     let mut w = window();
     let ids = w.read(|t| t.data.column_ids(0..3));
+    let group = ids[0].into_raw() as usize;
     let score = ids[1].into_raw() as usize;
     let note = ids[2].into_raw() as usize;
     w.click(w.cell(0, 0), Modifiers::default());
@@ -240,12 +241,33 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
             window.find_by_label("Find column").role(),
             Some(Role::SearchInput)
         );
+        let type_start = window.find(("toggle-column", score)).bounds().right();
+        for raw in [group, note] {
+            assert_eq!(
+                window.find(("toggle-column", raw)).bounds().right(),
+                type_start
+            );
+        }
+        assert_eq!(
+            window.find(("column-earlier", group)).disabled(),
+            Some(true)
+        );
+        assert_eq!(window.find(("column-later", note)).disabled(), Some(true));
     });
     click(&mut w, ("toggle-column", note));
+    w.ui.update(|window, _| {
+        assert_eq!(
+            window.find(("toggle-column", note)).bounds().right(),
+            window.find(("toggle-column", score)).bounds().right(),
+        );
+    });
     click(&mut w, ("column-earlier", score));
     assert_eq!(w.read(|t| t.data.column_ids(0..2)), [ids[1], ids[0]]);
     click(&mut w, "restore-column-order");
     assert_eq!(w.read(|t| t.data.column_ids(0..2)), ids[..2]);
+    w.ui.update(|window, _| {
+        assert_eq!(window.find("restore-column-order").disabled(), Some(true));
+    });
     assert!(w.read(|t| {
         Arc::ptr_eq(&view, t.data.view())
             && t.data.columns.len() == 2

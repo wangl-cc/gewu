@@ -25,7 +25,20 @@ pub(super) fn bar_height(count: u64, peak: u64, logarithmic: bool) -> f32 {
     }
 }
 
-pub(super) fn bin_interval(bounds: &RangeBounds) -> String {
+pub(super) fn bin_interval(ranges: &[RangeBounds], index: usize, floating_point: bool) -> String {
+    let bounds = &ranges[index];
+    if floating_point
+        && let Some(upper) = &bounds.max
+        && let Some(cut) = ranges.get(index + 1).and_then(|next| next.min.as_ref())
+        && cut.coordinate.next_down() == upper.coordinate
+    {
+        // The next bin starts at the true cut. Showing it exclusively avoids exposing
+        // the float predecessor that encodes this same interval in a filter.
+        return match &bounds.min {
+            Some(lower) => format!("[{}, {})", lower.label, cut.label),
+            None => format!("< {}", cut.label),
+        };
+    }
     match (&bounds.min, &bounds.max) {
         (Some(a), Some(b)) if a.label == b.label => a.label.clone(),
         (Some(a), Some(b)) => format!("{} – {}", a.label, b.label),
@@ -140,8 +153,8 @@ pub(super) fn histogram_axis(h: &Histogram) -> Div {
                 .relative()
                 .flex()
                 .justify_between()
-                .child(endpoints.lower)
-                .child(endpoints.upper)
+                .child(histogram_label(&endpoints.lower))
+                .child(histogram_label(&endpoints.upper))
                 .children(middle_tick(h, a, b).map(|(at, text)| {
                     div()
                         .absolute()
@@ -189,5 +202,32 @@ fn middle_tick(h: &Histogram, minimum: &str, maximum: &str) -> Option<(f32, Stri
     } else {
         tick
     };
-    (min_value < value && value < max_value).then(|| (fraction, significant_digits(value, 4)))
+    (min_value < value && value < max_value).then(|| {
+        let mut label = value.to_string();
+        if value.fract() != 0. && label.len() > 12 {
+            // Axis coordinates are approximate, and generating a tick can introduce a
+            // floating-point tail. Keep ordinary tick labels clear of that noise.
+            label = significant_digits(value, 12);
+        }
+        (fraction, histogram_label(&label))
+    })
 }
+
+fn histogram_label(text: &str) -> String {
+    let (sign, digits) = text
+        .strip_prefix('-')
+        .map_or(("", text), |rest| ("-", rest));
+    let (whole, fraction) = digits
+        .find('.')
+        .map_or((digits, ""), |dot| digits.split_at(dot));
+    if text.len() <= 12
+        && let Ok(whole) = whole.parse::<u64>()
+    {
+        return format!("{sign}{}{fraction}", crate::messages::format_count(whole));
+    }
+    labels::compact(text)
+}
+
+#[cfg(test)]
+#[path = "histogram_labels_tests.rs"]
+mod histogram_labels_tests;

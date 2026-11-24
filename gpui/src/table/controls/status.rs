@@ -1,10 +1,13 @@
-use gpui_kit::component::{
-    Icon, Sizable,
-    button::{Button as StyledButton, ButtonVariants},
+use gpui_kit::{
+    assets::IconName,
+    component::{
+        Icon, Sizable,
+        button::{Button as StyledButton, ButtonVariants},
+    },
 };
 
 use super::*;
-use crate::table::Notice;
+use crate::{messages::format_count, table::Notice};
 
 impl TableView {
     pub(in crate::table) fn status_bar(
@@ -19,7 +22,8 @@ impl TableView {
             crate::counted(rows, "row")
         } else {
             format!(
-                "{rows} / {}",
+                "{} / {}",
+                format_count(rows),
                 crate::counted(self.data.snapshot().dataset().n_rows() as u64, "row")
             )
         };
@@ -47,7 +51,7 @@ impl TableView {
         if let Some(selection) = self.selection {
             status = status.child(div().min_w_0().truncate().child(format!(
                 "{} selected",
-                selection.rows().end - selection.rows().start
+                format_count(selection.rows().end - selection.rows().start)
             )));
         }
         if self.data.queries().is_running() {
@@ -121,9 +125,14 @@ impl TableView {
                     .open(open)
                     .overlay_closable(self.controls.menu.is_none())
                     .trigger(
-                        button(id, format!("{count} {noun}"), false, cx)
-                            .flex_none()
-                            .aria_expanded(open),
+                        button(
+                            id,
+                            format!("{} {noun}", format_count(count as u64)),
+                            false,
+                            cx,
+                        )
+                        .flex_none()
+                        .aria_expanded(open),
                     )
                     .on_open_change(cx.listener(move |t, open: &bool, w, cx| {
                         if *open {
@@ -170,7 +179,7 @@ impl TableView {
                             StyledButton::new(("locate-filter", raw))
                                 .ghost()
                                 .small()
-                                .icon(Icon::default().path("icons/locate.svg"))
+                                .icon(Icon::new(IconName::Locate))
                                 .label(crate::data::preview_with_limit(&column.name, 36))
                                 .accessibility_label(format!("Show column {}", column.name))
                                 .tooltip("Show column")

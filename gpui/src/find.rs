@@ -492,6 +492,8 @@ impl Render for FindController {
         };
         let count = self.counter.as_ref().and_then(|counter| {
             if let Some((current, total)) = counter.position() {
+                let current = crate::messages::format_count(current);
+                let total = crate::messages::format_count(total);
                 Some((
                     format!("{current}/{total}"),
                     format!("Match {current} of {total}"),

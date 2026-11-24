@@ -6,6 +6,7 @@ use gpui_kit::{base::input, *};
 
 use crate::{actions::*, platform};
 
+mod assets;
 mod document;
 mod info;
 mod picker;
@@ -38,7 +39,7 @@ struct Documents {
 impl Global for Documents {}
 
 pub(crate) fn run(arguments: impl Iterator<Item = PathBuf>) {
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    let app = gpui_kit::application().with_assets(assets::AppAssets);
     let (send, receive) = async_channel::unbounded();
     app.on_open_urls(move |urls| {
         let paths: Vec<_> = urls

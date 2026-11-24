@@ -20,6 +20,8 @@ File > Open Recent lists successfully opened documents in most-recent-first orde
 
 When filters are active, the status bar shows the result and source row counts, plus clickable counts of filtered and sorted columns. The filter summary can locate a column in the table or clear one or all filters; the sort summary opens the sort editor. The summaries describe the applied result while a new query is pending.
 
+Status bar counts, Find counts, and Inspector row and missing-value counts use thousands separators.
+
 When filters match no rows, the table keeps its headers visible and offers actions to edit a condition or clear the filters.
 
 ## Column headers and sorting
@@ -42,7 +44,7 @@ Filter > Filter Column… (Command-Option-F) opens the selected column’s edito
 
 Filter editors show the available modes in one segmented control when there is more than one choice. The Values editor groups the value checklist, bulk selection actions and Missing checkbox together. Select All and Deselect All also change the Missing checkbox. The Range editor shows the distribution above two side-by-side fields for the inclusive minimum and maximum. Dragging across bins highlights the chosen interval and updates the bound fields. Text and Range show the missing-value controls separately from the content condition. Switching modes preserves the shared missing-value choice and each mode’s own draft. Reset clears the whole draft, including missing-value handling; Apply submits it, and closing discards it. Clear Column Filter in the header menu removes the applied filter at once.
 
-Inspector distributions keep configurable bin counts in their display menu. Hovering a bar shows its inclusive interval and the number of rows in it. Length distributions report intervals in the column’s length unit. Frequency rows show counts and proportions.
+Inspector distributions keep configurable bin counts in their display menu. Hovering a bar shows its interval and the number of rows in it. For floating-point bins, the tooltip uses the next cut as an exclusive upper bound when available. Length distributions report intervals in the column’s length unit. Frequency rows show counts and proportions.
 
 Chart display options are separate from the range being edited. The Text and Range editors offer three missing-value policies: exclude, include, or only missing. A long floating-point bound set by brushing can show a shorter approximation marked with ≈. Focus the field to see and edit the exact bound. Applying the draft uses the exact text. Integer, decimal and temporal bounds retain their native precision.
 

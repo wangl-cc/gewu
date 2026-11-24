@@ -75,6 +75,8 @@ impl Inspector {
     }
 
     fn section_data(&self, data: &SectionData, col: &ColumnInfo, cx: &mut Context<Self>) -> Div {
+        use crate::messages::format_count;
+
         let digits = crate::preferences::Preferences::get(cx).statistics_digits;
         let count = self.snapshot.filtered().row_count();
         let mut body = div().flex().flex_col().gap_1();
@@ -87,8 +89,8 @@ impl Inspector {
                     if col.nullable { "Yes" } else { "No" },
                     cx,
                 ))
-                .child(metric("Rows", count.to_string(), cx))
-                .child(metric("Missing", missing.to_string(), cx)),
+                .child(metric("Rows", format_count(count), cx))
+                .child(metric("Missing", format_count(*missing), cx)),
             SectionData::Structure(fields) => {
                 for f in fields {
                     body = body.child(format!(
@@ -145,8 +147,8 @@ impl Inspector {
                 }
                 if s.nan_count + s.infinite_count > 0 {
                     body = body
-                        .child(metric("NaN", s.nan_count.to_string(), cx))
-                        .child(metric("Infinite", s.infinite_count.to_string(), cx));
+                        .child(metric("NaN", format_count(s.nan_count), cx))
+                        .child(metric("Infinite", format_count(s.infinite_count), cx));
                 }
                 body
             }
@@ -155,7 +157,7 @@ impl Inspector {
                 .child(charts::histogram(
                     &h.histogram,
                     self.settings.log_counts,
-                    |i| charts::bin_interval(&h.ranges[i]),
+                    |i| charts::bin_interval(&h.ranges, i, col.floating_point),
                     cx,
                 )),
             SectionData::Lengths(s) => {
@@ -166,7 +168,7 @@ impl Inspector {
                 };
                 body = body.child(metric("Units", units, cx)).child(metric(
                     "Empty",
-                    s.empty_count.to_string(),
+                    format_count(s.empty_count),
                     cx,
                 ));
                 if let Some(v) = s.min {
@@ -195,7 +197,7 @@ impl Inspector {
                     ))
             }
             SectionData::Values { distinct, rows } => {
-                body = body.child(metric("Estimated distinct", distinct.to_string(), cx));
+                body = body.child(metric("Estimated distinct", format_count(*distinct), cx));
                 if !rows.is_empty() {
                     body = body.child("Common values · estimated");
                 }
@@ -212,7 +214,11 @@ impl Inspector {
                                     div()
                                         .flex_none()
                                         .font_features(crate::theme::tabular_digits())
-                                        .child(format!("{frequency} ({:.1}%)", part * 100.)),
+                                        .child(format!(
+                                            "{} ({:.1}%)",
+                                            format_count(*frequency),
+                                            part * 100.,
+                                        )),
                                 ),
                         )
                         .child(

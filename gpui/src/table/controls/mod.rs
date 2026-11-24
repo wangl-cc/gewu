@@ -539,6 +539,8 @@ impl TableView {
     }
 }
 
+const ICON_BUTTON_SIZE: f32 = 22.;
+
 fn icon_button(
     id: impl Into<ElementId>,
     label: &'static str,
@@ -546,9 +548,9 @@ fn icon_button(
     cx: &App,
 ) -> base::Button {
     let colors = base::Theme::global(cx).tokens.colors;
-    base::Button::new(id)
+    crate::panels::button_base(id)
         .accessibility_label(label)
-        .size(px(22.))
+        .size(px(ICON_BUTTON_SIZE))
         .flex_none()
         .flex()
         .items_center()

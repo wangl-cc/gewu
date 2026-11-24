@@ -41,17 +41,13 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     let rect = |x: f32, y: f32, w: f32, h: f32| {
         Bounds::new(origin + point(px(x), px(y)), size_(w.max(0.), h.max(0.)))
     };
+    let row_area = |x, width| rect(x, HEADER_HEIGHT, width, l.body_bottom() - HEADER_HEIGHT);
     let text_y = |y: f32| y + (row_height - font_size * 1.3) / 2.;
     let line_height = px(font_size * 1.3);
 
     window.paint_quad(fill(rect(0., 0., w, h), bg));
     // Cells, one content mask per column.
-    let body = rect(
-        l.gutter,
-        HEADER_HEIGHT,
-        l.body_right() - l.gutter,
-        l.body_bottom() - HEADER_HEIGHT,
-    );
+    let body = row_area(l.gutter, l.body_right() - l.gutter);
     window.with_content_mask(Some(ContentMask { bounds: body }), |window| {
         for &y in &frame.stripes {
             window.paint_quad(fill(rect(l.gutter, y, w - l.gutter, row_height), stripe));
@@ -100,20 +96,10 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
         } in &frame.columns
         {
             window.paint_quad(fill(
-                rect(
-                    x + width - hairline,
-                    HEADER_HEIGHT,
-                    hairline,
-                    h - HEADER_HEIGHT,
-                ),
+                row_area(x + width - hairline, hairline),
                 grid.opacity(0.6),
             ));
-            let mask = rect(
-                x + PAD,
-                HEADER_HEIGHT,
-                (width - 2. * PAD).max(0.),
-                h - HEADER_HEIGHT,
-            );
+            let mask = row_area(x + PAD, width - 2. * PAD);
             window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
                 for PaintCell {
                     y,
@@ -162,44 +148,37 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     });
 
     // Row number gutter with source rows.
-    window.paint_quad(fill(
-        rect(0., HEADER_HEIGHT, l.gutter, h - HEADER_HEIGHT),
-        header_bg,
-    ));
-    window.paint_quad(fill(rect(l.gutter - hairline, 0., hairline, h), grid));
-    window.with_content_mask(
-        Some(ContentMask {
-            bounds: rect(0., HEADER_HEIGHT, l.gutter, h),
-        }),
-        |window| {
-            for (y, label) in &frame.gutter {
-                if frame.selection.is_some_and(|bounds| {
-                    px(*y) < bounds.bottom() && px(*y + row_height) > bounds.top()
-                }) {
-                    window.paint_quad(fill(
-                        rect(0., *y, l.gutter - hairline, row_height),
-                        selection,
-                    ));
-                }
-                let line = window.text_system().shape_line(
-                    label.clone(),
-                    px(font_size),
-                    &[run(label.len(), muted)],
-                    None,
-                );
-                let tx = l.gutter - PAD - line.width.as_f32();
-                line.paint(
-                    origin + point(px(tx), px(text_y(*y))),
-                    line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                )
-                .ok();
+    let gutter = row_area(0., l.gutter);
+    window.paint_quad(fill(gutter, header_bg));
+    window.paint_quad(fill(row_area(l.gutter - hairline, hairline), grid));
+    window.with_content_mask(Some(ContentMask { bounds: gutter }), |window| {
+        for (y, label) in &frame.gutter {
+            if frame.selection.is_some_and(|bounds| {
+                px(*y) < bounds.bottom() && px(*y + row_height) > bounds.top()
+            }) {
+                window.paint_quad(fill(
+                    rect(0., *y, l.gutter - hairline, row_height),
+                    selection,
+                ));
             }
-        },
-    );
+            let line = window.text_system().shape_line(
+                label.clone(),
+                px(font_size),
+                &[run(label.len(), muted)],
+                None,
+            );
+            let tx = l.gutter - PAD - line.width.as_f32();
+            line.paint(
+                origin + point(px(tx), px(text_y(*y))),
+                line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .ok();
+        }
+    });
 
     // Header.
     window.paint_quad(fill(rect(0., 0., w, HEADER_HEIGHT), header_bg));
