@@ -110,12 +110,6 @@ impl TableColumns {
         self.entry(index).width.points()
     }
 
-    pub fn widths(&self) -> impl Clone + Iterator<Item = f32> {
-        self.order
-            .iter()
-            .map(|&slot| self.schema[slot].width.points())
-    }
-
     pub fn invalidate_measurements(&mut self) {
         for column in &mut self.schema {
             if matches!(column.width, ColumnWidth::Measured(_)) {
@@ -124,8 +118,7 @@ impl TableColumns {
         }
     }
 
-    pub fn set_visible(&mut self, ids: &[ColumnId], visible: bool) -> bool {
-        let mut requested: HashSet<_> = ids.iter().copied().collect();
+    pub fn set_visible(&mut self, mut requested: HashSet<ColumnId>, visible: bool) -> bool {
         let previous = self.order.len();
         if visible {
             for &slot in &self.order {

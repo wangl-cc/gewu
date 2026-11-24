@@ -285,7 +285,7 @@ pub(crate) fn analyze(view: ColView<'_>) -> Result<ValueSummary> {
     }
     // Low-cardinality columns already have (or cheaply build) a shared code
     // per row: count codes exactly instead of hashing values.
-    if let Ok(Some(dictionary)) = view.column().dictionary() {
+    if let Some(dictionary) = view.column().dictionary()? {
         return encoded(&view, dictionary);
     }
     let array = view.array().as_ref();
@@ -387,6 +387,20 @@ mod tests {
 
     fn hash(value: usize) -> u64 {
         hash_native(value as u64)
+    }
+
+    #[test]
+    fn dictionary_construction_errors_reach_value_analysis() {
+        let array: ArrayRef = Arc::new(
+            arrow::array::TimestampSecondArray::from(vec![0]).with_timezone("Unknown/Timezone"),
+        );
+        let fixture = crate::col_view::test::Fixture::all(&array);
+        assert!(matches!(
+            analyze(fixture.view()),
+            Err(crate::AnalysisError::Column(crate::ColumnError::Internal(
+                crate::InternalError::Arrow(_)
+            )))
+        ));
     }
 
     #[test]

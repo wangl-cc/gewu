@@ -25,7 +25,7 @@ fn expanded_sections_follow_capabilities_and_keep_unaffected_cached_analysis() {
         Section::Overview,
         Section::Values
     ]);
-    let snapshots = |s| ColumnResults::load(&snapshot, numeric, s, AxisScale::Linear);
+    let snapshots = |s| ColumnResults::load(&snapshot, numeric.clone(), s, AxisScale::Linear);
     let result = snapshots(settings);
     let stats = |r: &ColumnResults| {
         r.sections
@@ -175,7 +175,7 @@ fn common_values_bound_each_label_and_preserve_frequencies_and_full_cached_value
     let col = &snapshot.dataset().info().columns[0];
     let data = ColumnResults::load(
         &snapshot,
-        col,
+        col.clone(),
         InspectorSettings::default(),
         AxisScale::Linear,
     );

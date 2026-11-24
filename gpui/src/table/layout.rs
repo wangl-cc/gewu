@@ -15,13 +15,13 @@ pub(super) enum HorizontalScroll {
 
 impl HorizontalScroll {
     pub(super) fn offset(self, columns: &TableColumns, viewport: f32) -> f32 {
-        self.offset_with_widths(columns, columns.widths(), viewport)
+        self.offset_with_widths(columns, |index| columns.width(index), viewport)
     }
 
     fn offset_with_widths(
         self,
         columns: &TableColumns,
-        mut widths: impl Iterator<Item = f32>,
+        width: impl Fn(usize) -> f32,
         viewport: f32,
     ) -> f32 {
         match self {
@@ -31,8 +31,8 @@ impl HorizontalScroll {
                     return from;
                 };
                 let index = index.index();
-                let left: f32 = widths.by_ref().take(index).sum();
-                let right_aligned = left + widths.next().unwrap_or_default() - viewport;
+                let left: f32 = (0..index).map(&width).sum();
+                let right_aligned = left + width(index) - viewport;
                 // Show the entire column when it fits, otherwise keep as much of it in view as
                 // possible.
                 from.clamp(left.min(right_aligned), left.max(right_aligned))
@@ -64,7 +64,7 @@ impl Layout {
             bounds,
             gutter,
             grid_columns,
-            grid_columns.widths(),
+            |index| grid_columns.width(index),
             scroll,
             horizontal,
         )
@@ -74,12 +74,13 @@ impl Layout {
         bounds: Bounds<Pixels>,
         gutter: f32,
         grid_columns: &TableColumns,
-        widths: impl Iterator<Item = f32> + Clone,
+        width: impl Fn(usize) -> f32,
         scroll: &VerticalScroll,
         horizontal: HorizontalScroll,
     ) -> Self {
         let size = bounds.size;
         let body_width = (size.width.as_f32() - SCROLLBAR - gutter).max(0.);
+        let widths = (0..grid_columns.len()).map(&width);
         let content_width = widths.clone().sum::<f32>();
         let scrollbar_height = if content_width > body_width {
             SCROLLBAR
@@ -91,7 +92,7 @@ impl Layout {
             (size.height.as_f32() - HEADER_HEIGHT - scrollbar_height).max(0.),
         ));
         let scroll_x = horizontal
-            .offset_with_widths(grid_columns, widths.clone(), body_width)
+            .offset_with_widths(grid_columns, &width, body_width)
             .clamp(0., (content_width - body_width).max(0.));
         let mut columns = Vec::new();
         let mut x = 0.;
@@ -163,6 +164,18 @@ impl Layout {
             let right = (x + width).min(self.body_right());
             (right > left).then_some((index, left, right - left))
         })
+    }
+
+    /// Horizontal edges of the cells in the selection that were laid out for this frame.
+    /// Keep partial edge cells at their full width; the paint mask clips their outlines.
+    pub(super) fn column_edges(&self, columns: Range<usize>) -> Option<(f32, f32)> {
+        let mut overlap = self
+            .columns
+            .iter()
+            .filter(|(index, ..)| columns.contains(index));
+        let first = overlap.next()?;
+        let last = overlap.next_back().unwrap_or(first);
+        Some((first.1, last.1 + last.2))
     }
 
     pub(super) fn column_at(&self, x: f32) -> Option<usize> {
@@ -245,16 +258,15 @@ impl TableView {
             if !changed {
                 break;
             }
-            let widths = self.data.columns.widths().enumerate().map(|(index, base)| {
-                measured
-                    .get(&index)
-                    .map_or(base, |measurement| measurement.width)
-            });
             layout = Layout::with_widths(
                 bounds,
                 layout.gutter,
                 &self.data.columns,
-                widths,
+                |index| {
+                    measured
+                        .get(&index)
+                        .map_or_else(|| self.data.columns.width(index), |column| column.width)
+                },
                 &self.scroll,
                 self.horizontal,
             );

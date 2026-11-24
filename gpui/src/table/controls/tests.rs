@@ -210,6 +210,35 @@ fn a_failed_pending_filter_keeps_its_conditioned_column_visible() {
 }
 
 #[test]
+fn finishing_a_hide_closes_the_filter_editor_anchored_to_that_column() {
+    for sort_already_displayed in [false, true] {
+        let mut w = window();
+        let group = w.read(|t| t.data.columns[0].id);
+        w.ui.update(|_, cx| {
+            w.table
+                .update(cx, |table, cx| table.cycle_sort(0, false, cx))
+        });
+        if sort_already_displayed {
+            w.settle();
+        }
+        assert_eq!(
+            w.read(|t| !t.data.query().sorts.is_empty()),
+            sort_already_displayed
+        );
+        w.ui.update(|window, cx| window.dispatch_action(Box::new(ManageColumns), cx));
+        w.ui.update(|window, cx| window.click(("toggle-column", group.into_raw() as usize), cx));
+        w.ui.update(|window, cx| window.click("confirm-hide", cx));
+        w.ui.update(|window, cx| window.dispatch_action(Box::new(EditFilter), cx));
+        assert!(
+            w.read(|t| t.data.queries().is_running() && t.filter_panel_column() == Some(group))
+        );
+        w.settle();
+        assert!(w.read(|t| t.data.columns.position(group).is_none()));
+        assert_eq!(w.read(|t| t.filter_panel_column()), None);
+    }
+}
+
+#[test]
 fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
     let mut w = window();
     let ids = w.read(|t| t.data.column_ids(0..3));

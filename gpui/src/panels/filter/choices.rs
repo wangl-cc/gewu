@@ -7,14 +7,13 @@ pub(super) struct ChoiceRow {
     label: SharedString,
     accessible: SharedString,
     count: SharedString,
-    checked: bool,
 }
 
 impl FilterEditor {
     pub(super) fn install_choices(&mut self, facet: Arc<FilterChoices>, cx: &mut Context<Self>) {
         if self
-            .facet
-            .as_ref()
+            .draft
+            .facet()
             .is_some_and(|old| Arc::ptr_eq(old, &facet))
         {
             return;
@@ -29,27 +28,17 @@ impl FilterEditor {
                     accessible: format!("{label}, {}", crate::counted(choice.count, "row")).into(),
                     label,
                     count: choice.count.to_string().into(),
-                    checked: false,
                 }
             })
             .collect();
-        self.facet = Some(facet);
-        self.sync_checks();
+        self.draft.set_facet(Some(facet));
         self.search_choices(cx);
-    }
-
-    pub(super) fn sync_checks(&mut self) {
-        if let Some(choices) = self.facet.as_ref().and_then(|facet| facet.values.as_ref()) {
-            for (row, choice) in self.rows.iter_mut().zip(choices) {
-                row.checked = self.draft.value_checked(&choice.value);
-            }
-        }
     }
 
     pub(super) fn search_choices(&mut self, cx: &mut Context<Self>) {
         self.search_task = None;
         self.matches.clear();
-        let Some(facet) = self.facet.clone() else {
+        let Some(facet) = self.draft.facet().cloned() else {
             return;
         };
         let query = self.search.read(cx).value();
@@ -97,20 +86,11 @@ impl FilterEditor {
             .flex_col();
         for &index in &self.matches {
             let choice = &self.rows[index];
-            let checked = choice.checked;
+            let checked = self.draft.value_checked(index);
             let source = facet.clone();
             let toggle = cx.listener(move |editor, _: &ClickEvent, _, cx| {
-                if let Some(value) = editor
-                    .facet
-                    .as_ref()
-                    .filter(|f| Arc::ptr_eq(f, &source))
-                    .and_then(|f| f.values.as_ref())
-                    .and_then(|v| v.get(index))
-                {
-                    editor.draft.toggle(value.value.clone());
-                    editor.rows[index].checked = !editor.rows[index].checked;
-                    cx.notify();
-                }
+                editor.draft.toggle(&source, index);
+                cx.notify();
             });
             list = list.child(
                 crate::panels::checkbox(
@@ -154,7 +134,6 @@ impl FilterEditor {
                     .child(label)
                     .on_click(cx.listener(move |editor, _, _, cx| {
                         editor.draft.select_all(all);
-                        editor.sync_checks();
                         cx.notify();
                     })),
             );

@@ -93,3 +93,13 @@ Measurements used an Apple M4 Mac mini with 16 GB of memory, macOS 27.2.1 and a 
 AppKit returned the exact 1,048,596-byte multiline value from a native accessibility cell. It returned “Missing value” and “Empty string” for the other two cells. VoiceOver speech was not exercised in this check.
 
 The release scroll replay used the same 2-million-row Parquet file and a 1280×800 grid at both revisions. Each revision checked 7,776 complete cells in each of the slow, fast and jump workloads and found zero unexpected blanks. The sorted-grid window regression checks cell and gutter identities after six jumps. The scatter replay verified all 360 pointer positions against the expected source records for a 2,048-point sample. Both display-paced scroll attempts reported an inactive, invisible window. A foreground FPS comparison remains open.
+
+### Invariant review
+
+The working tree based on `547899b` passed 345 workspace tests, including 112 GPUI window and unit tests. The alternate GPUI backend passed the same 112 tests. A window regression checks that the active cell’s outline uses the width measured in its first frame. Another opens a filter editor while its column is being hidden, both with an installed sort and an in-flight sort.
+
+On macOS, an AppKit probe read the row title and value together for three accessible cells. Row 1 returned the complete 1,048,596-byte UTF-8 value spanning two lines. Rows 2 and 3 returned “Missing value” and “Empty string” respectively.
+
+Two paired release replays used the M4 Mac mini and 1× display described above. The `547899b` and working-tree builds ran in A/B/B/A order with a 1280×800 grid on the same 2-million-row, 28-column Parquet dataset. Each build checked 466,560 nonempty cells and 38,880 row-number regions across 1,440 frames. Both had zero unexpected blanks. Random-jump forced-draw p95 was 0.81/0.81 ms at the baseline and 0.80/0.80 ms in the working tree. Fast scrolling measured 0.77/0.78 ms and 0.76/0.78 ms respectively. Slow scrolling varied from 0.34 to 0.86 ms across the four runs.
+
+Both display-paced attempts reported an inactive, invisible window. Foreground FPS remains unmeasured for this revision.

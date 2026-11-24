@@ -16,10 +16,8 @@ pub(crate) fn label(numeric: Numeric<'_>, selection: &Selection<'_>) -> Result<O
         return Ok(None);
     };
     if central.len() == 1 {
-        return Ok(format::cell(
-            central.as_ref(),
-            &format::formatter(central.as_ref())?,
-            0,
+        return Ok(Some(
+            format::formatter(central.as_ref())?.value(0).to_string(),
         ));
     }
     midpoint(&central, 0, 1)

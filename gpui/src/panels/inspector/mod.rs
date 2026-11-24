@@ -269,7 +269,7 @@ impl Inspector {
                 .background_spawn(async move {
                     match page {
                         Page::Column => Ok(Loaded::Column(ColumnResults::load(
-                            &snapshot, &col, settings, bin_scale,
+                            &snapshot, col, settings, bin_scale,
                         ))),
                         Page::Chart => snapshot
                             .analyses()
@@ -396,13 +396,7 @@ impl Inspector {
                         },
                     )),
                 ),
-            Showing::Column(results) => {
-                if let Some(col) = self.info(self.selected) {
-                    pane.child(self.column_view(col, results, cx))
-                } else {
-                    pane
-                }
-            }
+            Showing::Column(results) => pane.child(self.column_view(results, cx)),
             Showing::Chart(chart) => pane.child(chart.clone()),
         }
     }

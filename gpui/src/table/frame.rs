@@ -2,43 +2,61 @@ use super::*;
 
 impl TableView {
     pub(super) fn build_frame(&mut self, layout: Rc<Layout>, cx: &App) -> Frame {
-        let visible: Vec<usize> = layout.columns.iter().map(|c| c.0).collect();
-        let rows = layout.vertical.visible_rows();
-        let formatting_error = self.data.prefetch(&visible, rows.clone());
+        let visible = layout.columns.iter().map(|c| c.0);
+        let visible_rows = layout.vertical.visible_rows();
+        let formatting_error = self.data.prefetch(visible, visible_rows.clone());
 
         let find = self.find.read(cx);
         let row_y = |row: u64| HEADER_HEIGHT + layout.vertical.row_top(row) as f32;
+        let sources = self.data.view().source_rows_in(visible_rows.clone());
+        assert_eq!(
+            sources.len() as u64,
+            visible_rows.end - visible_rows.start,
+            "the viewport must fit the displayed view"
+        );
+        let selected_rows = self.selection.map(|s| s.rows());
+        let rows: Vec<_> = visible_rows
+            .zip(sources)
+            .map(|(row, source)| FrameRow {
+                display: gewu_core::ViewRow(row),
+                source,
+                y: row_y(row),
+                label: (source.0 + self.prefs.row_number_base).to_string().into(),
+                selected: selected_rows
+                    .as_ref()
+                    .is_some_and(|selected| selected.contains(&row)),
+            })
+            .collect();
         let mut matches = vec![];
         let mut text_matches = Vec::new();
         let mut current_match = None;
         let mut columns = Vec::with_capacity(layout.columns.len());
         for &(column, x, width) in &layout.columns {
             let info = &self.data.columns[column];
-            let mut cells = Vec::with_capacity(rows.clone().count());
-            for row in rows.clone() {
-                let (text, null) = match self.data.cell_preview(column, row) {
+            let mut cells = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let (text, null) = match self.data.cell_preview(column, row.display.0) {
                     Some(Some(text)) => (text, false),
                     Some(None) => (SharedString::new_static("null"), true),
                     None => {
                         continue;
                     }
                 };
-                let current = find.current_match().is_some_and(|hit| {
-                    hit.column == info.id && hit.display_row == gewu_core::ViewRow(row)
-                });
+                let current = find
+                    .current_match()
+                    .is_some_and(|hit| hit.column == info.id && hit.display_row == row.display);
                 let first_span = text_matches.len();
-                if current || find.matched(info.id, row) {
-                    let bounds = Bounds::new(
-                        point(px(x), px(row_y(row))),
-                        size_(width, self.prefs.row_height),
-                    );
+                if current || find.matched(info.id, row.display.0) {
+                    let bounds =
+                        Bounds::new(point(px(x), px(row.y)), size_(width, self.prefs.row_height));
                     if current {
                         current_match = Some(bounds);
                     }
                     matches.push(bounds);
                     if info.capabilities.text_match
                         && let Some(session) = find.session()
-                        && let Some(Some(source)) = self.data.cached_cell_text(column, row)
+                        && let Some(Some(source)) =
+                            self.data.cached_cell_text(column, row.display.0)
                     {
                         let prefix = crate::data::single_line_prefix(
                             source,
@@ -48,7 +66,7 @@ impl TableView {
                     }
                 }
                 cells.push(PaintCell {
-                    y: row_y(row),
+                    y: row.y,
                     text,
                     missing: null,
                     spans: first_span..text_matches.len(),
@@ -95,22 +113,8 @@ impl TableView {
                 }
             })
             .collect();
-        let gutter = rows
-            .clone()
-            .filter_map(|row| {
-                let source = self.data.view().source_row_at(gewu_core::ViewRow(row))?;
-                Some((
-                    row_y(row),
-                    SharedString::from((source.0 + self.prefs.row_number_base).to_string()),
-                ))
-            })
-            .collect();
-        let stripes = rows.filter(|r| r % 2 == 1).map(row_y).collect();
         let cell_bounds = |rows: Range<u64>, cols: Range<usize>| -> Option<Bounds<Pixels>> {
-            let x0 = layout.gutter + self.data.columns.widths().take(cols.start).sum::<f32>()
-                - layout.scroll_x;
-            let x1 = layout.gutter + self.data.columns.widths().take(cols.end).sum::<f32>()
-                - layout.scroll_x;
+            let (x0, x1) = layout.column_edges(cols)?;
             let y0 = (HEADER_HEIGHT as f64 + layout.vertical.row_top(rows.start)).max(-1e6) as f32;
             let y1 = (HEADER_HEIGHT as f64 + layout.vertical.row_top(rows.end)).min(1e6) as f32;
             (y1 > HEADER_HEIGHT && y0 < layout.body_bottom())
@@ -140,9 +144,8 @@ impl TableView {
             thumb: layout.vertical_thumb(),
             layout,
             header,
-            gutter,
+            rows,
             columns,
-            stripes,
             matches,
             current_match,
             text_matches,

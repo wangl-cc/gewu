@@ -1,4 +1,4 @@
-use gewu_app::QueryCompletion;
+use gewu_app::{QueryCompletion, QueryJob, QueryResult};
 
 use super::*;
 
@@ -79,28 +79,7 @@ impl TableView {
             self.query_task = Some(cx.spawn(async move |this, cx| {
                 loop {
                     let result = cx.background_spawn(async move { job.run() }).await;
-                    let next = this.update(cx, |table, cx| {
-                        let installed = match table.data.finish_query(result) {
-                            QueryCompletion::Run(next) => return Some(next),
-                            QueryCompletion::Installed => {
-                                table.scroll.set_rows(table.data.row_count());
-                                table.set_selection(None, cx);
-                                table.reset_grid_interaction();
-                                true
-                            }
-                            QueryCompletion::Unchanged => false,
-                        };
-                        let columns_changed = table.finish_column_hides(cx);
-                        if installed || columns_changed {
-                            table.sync_panels(cx);
-                        }
-                        table.query_task = None;
-                        table.find.update(cx, |find, cx| {
-                            find.set_view(Some(table.data.view().clone()), cx)
-                        });
-                        cx.notify();
-                        None
-                    });
+                    let next = this.update(cx, |table, cx| table.finish_query(result, cx));
                     match next {
                         Ok(Some(next)) => job = next,
                         _ => break,
@@ -109,5 +88,31 @@ impl TableView {
             }));
         }
         cx.notify();
+    }
+
+    fn finish_query(&mut self, result: QueryResult, cx: &mut Context<Self>) -> Option<QueryJob> {
+        match self.data.finish_query(result) {
+            QueryCompletion::Run(next) => return Some(next),
+            QueryCompletion::Ignored => return None,
+            QueryCompletion::Installed => {
+                self.scroll.set_rows(self.data.row_count());
+                self.set_selection(None, cx);
+                self.apply_pending_hides(cx);
+                self.grid_changed(cx);
+                self.refresh_query_drawer(cx);
+            }
+            QueryCompletion::Reverted => {
+                if self.apply_pending_hides(cx) {
+                    self.grid_changed(cx);
+                }
+            }
+            QueryCompletion::Failed => self.controls.pending_hides.clear(),
+        }
+        self.query_task = None;
+        self.find.update(cx, |find, cx| {
+            find.set_view(Some(self.data.view().clone()), cx)
+        });
+        cx.notify();
+        None
     }
 }

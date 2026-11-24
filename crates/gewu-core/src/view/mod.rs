@@ -7,7 +7,7 @@ use arrow::array::ArrayRef;
 use crate::{
     col_view::ColView,
     column::Column,
-    execution::sort::{codes_match_arrow_order, sort_rows, SortKey},
+    execution::sort::{codes_match_arrow_order, sort_source_rows, SortKey},
     row_ids::RowIds,
     ColumnId, ColumnSort, Dataset, Result,
 };
@@ -27,6 +27,7 @@ pub(crate) use selection::FilterSelection;
 /// Provides column analysis, filter metadata, and sorting.
 pub struct FilteredView {
     dataset: Arc<Dataset>,
+    /// Source order, both for the full dataset and rows materialized from a filter bitmap.
     rows: RowIds,
     /// Filter bitmaps behind `rows`; empty for an unfiltered view.
     selection: FilterSelection,
@@ -122,7 +123,8 @@ impl FilteredView {
                 codes,
             });
         }
-        let sorted = sort_rows(self.rows.as_slice(), &keys)?;
+        let mut sorted: Vec<_> = self.rows.as_slice().iter_u32().collect();
+        sort_source_rows(&mut sorted, &keys)?;
         Ok(Arc::new(OrderedView {
             dataset: self.dataset.clone(),
             rows: RowIds::Selected(sorted.into()),

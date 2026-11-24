@@ -106,6 +106,16 @@ impl<'a> Numeric<'a> {
         supports(array.data_type()).then_some(Self(array))
     }
 
+    pub(super) fn for_operation(
+        array: &'a ArrayRef,
+        operation: crate::AnalysisOperation,
+    ) -> Result<Self> {
+        Self::new(array).ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
+            operation,
+            data_type: array.data_type().clone(),
+        })
+    }
+
     /// Compute moments and retain source rows for exact extrema.
     fn summarize(self, selection: &Selection<'_>) -> summary::NumericSummary {
         dispatch!(self.0, summarize(selection))
@@ -208,19 +218,11 @@ fn median_values<T: ArrowPrimitiveType>(
 }
 
 pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStatistics> {
-    if !supports(view.data_type()) {
-        return Err(crate::AnalysisError::UnsupportedOperation {
-            operation: crate::AnalysisOperation::Statistics,
-            data_type: view.data_type().clone(),
-        });
-    }
     let selection = view.selection();
-    let numeric = Numeric::new(view.array()).expect("supported numeric type");
+    let numeric = Numeric::for_operation(view.array(), crate::AnalysisOperation::Statistics)?;
     let summary = numeric.summarize(selection);
     let formatter = crate::format::formatter(view.array().as_ref())?;
-    let label = |row: Option<usize>| {
-        row.and_then(|row| crate::format::cell(view.array().as_ref(), &formatter, row))
-    };
+    let label = |row: Option<usize>| row.map(|row| formatter.value(row).to_string());
     Ok(NumericStatistics {
         min_label: label(summary.min_row),
         max_label: label(summary.max_row),

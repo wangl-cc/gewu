@@ -30,7 +30,7 @@ impl CopyRequest {
     }
 
     pub fn is_current(&self, cx: &App) -> bool {
-        cx.try_global::<CopyGeneration>() == Some(&self.generation)
+        cx.global::<CopyGeneration>() == &self.generation
             && self.clipboard == ClipboardState::read(cx)
     }
 }

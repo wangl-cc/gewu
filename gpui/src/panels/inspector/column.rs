@@ -24,17 +24,12 @@ fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &A
 }
 
 impl Inspector {
-    pub(super) fn column_view(
-        &self,
-        col: &ColumnInfo,
-        results: &ColumnResults,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(super) fn column_view(&self, results: &ColumnResults, cx: &mut Context<Self>) -> Div {
         let colors = base::Theme::global(cx).tokens.colors;
         let mut content = div().flex().flex_col().gap_4().flex_none();
         for (section, result) in &results.sections {
             let section = *section;
-            let expanded = self.settings.expanded(section, col);
+            let expanded = result.is_some();
             let mut group = div().flex().flex_col().gap_2().child(
                 base::Button::new(("inspect-section", section as usize))
                     .accessibility_label(section.title())
@@ -58,7 +53,7 @@ impl Inspector {
             );
             if let Some(result) = result {
                 group = match result {
-                    Ok(data) => group.child(self.section_data(data, col, cx)),
+                    Ok(data) => group.child(self.section_data(data, &results.column, cx)),
                     Err(error) => group.child(crate::errors::message(error)).child(
                         button(("retry-section", section as usize), "Retry", false, cx).on_click(
                             cx.listener(|p, _, _, cx| {

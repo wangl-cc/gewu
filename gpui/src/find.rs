@@ -147,7 +147,7 @@ impl EventEmitter<CellMatch> for FindController {}
 impl FindController {
     pub(crate) fn set_view(&mut self, view: Option<Arc<OrderedView>>, cx: &mut Context<Self>) {
         self.view = view;
-        self.restart_scope(None, cx);
+        self.restart_scope(None, Duration::ZERO, cx);
     }
 
     pub(crate) fn set_columns(
@@ -163,38 +163,45 @@ impl FindController {
             .retain(|id| columns.iter().any(|(column, _)| column == id));
         self.columns = columns;
         if self.view.is_some() {
-            self.restart_scope(hit, cx);
+            self.restart_scope(hit, Duration::ZERO, cx);
         }
     }
 
-    fn restart_scope(&mut self, hit: Option<CellMatch>, cx: &mut Context<Self>) {
+    fn restart_scope(&mut self, hit: Option<CellMatch>, delay: Duration, cx: &mut Context<Self>) {
         self.invalidate();
         if self.open && self.view.is_some() {
             if let Some(hit) = hit {
-                self.cursor = Some(hit);
-                self.report(hit, false);
+                self.show_match(hit, false);
                 if let Some(session) = self.find_session(cx) {
                     self.start_count(session, hit, cx);
                 }
             } else {
-                self.advance_find(1, Duration::ZERO, cx);
+                self.advance_find(1, delay, cx);
             }
             self.load_highlights(cx);
         }
         cx.notify();
     }
 
-    fn report(&mut self, hit: CellMatch, wrapped: bool) {
-        if let Some(view) = &self.view
-            && let Some((_, name)) = self.columns.iter().find(|(id, _)| *id == hit.column)
-            && let Some(source) = view.source_row_at(hit.display_row)
-        {
-            self.message = FindMessage::Location {
-                source,
-                name: name.clone(),
-                wrapped,
-            };
-        }
+    // Scope changes cancel navigation in invalidate(). A retained hit keeps its view and
+    // is checked against the new columns by set_columns before it reaches this method.
+    fn show_match(&mut self, hit: CellMatch, wrapped: bool) {
+        let Some(source) = self
+            .view
+            .as_ref()
+            .and_then(|view| view.source_row_at(hit.display_row))
+        else {
+            unreachable!("a Find hit belongs to its active ordered view");
+        };
+        let Some((_, name)) = self.columns.iter().find(|(id, _)| *id == hit.column) else {
+            unreachable!("a Find hit belongs to its active column scope");
+        };
+        self.cursor = Some(hit);
+        self.message = FindMessage::Location {
+            source,
+            name: name.clone(),
+            wrapped,
+        };
     }
 
     pub(crate) fn message(&self, cx: &App) -> String {
@@ -230,7 +237,7 @@ impl FindController {
                         find.open = true;
                         cx.notify();
                     }
-                    InputEvent::Change => find.restart_find(cx),
+                    InputEvent::Change => find.restart_scope(None, TYPING_DELAY, cx),
                     InputEvent::PressEnter { shift, .. } => find.find_match(*shift, cx),
                     _ => {}
                 },
@@ -269,15 +276,6 @@ impl FindController {
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.invalidate();
-        cx.notify();
-    }
-
-    fn restart_find(&mut self, cx: &mut Context<Self>) {
-        self.invalidate();
-        if self.open && self.view.is_some() {
-            self.advance_find(1, TYPING_DELAY, cx);
-            self.load_highlights(cx);
-        }
         cx.notify();
     }
 
@@ -439,16 +437,16 @@ impl FindController {
                 table.navigation = None;
                 match result {
                     Ok((session, hit, wrapped)) => {
-                        table.cursor = hit;
                         if let Some(hit) = hit {
+                            table.show_match(hit, wrapped);
                             if let Some(counter) = &mut table.counter {
                                 counter.movement += i128::from(by);
                             } else {
                                 table.start_count(session, hit, cx);
                             }
-                            table.report(hit, wrapped);
                             cx.emit(hit);
                         } else {
+                            table.cursor = None;
                             table.message = FindMessage::Notice("No matches".into());
                         }
                     }

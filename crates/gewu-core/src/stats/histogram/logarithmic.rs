@@ -1,6 +1,8 @@
 //! Geometric cuts are prepared once, then native values decide bin membership.
 //! Logarithms affect cut placement and plotting only, never filter comparison.
 
+use std::num::NonZeroU32;
+
 use arrow::{
     array::{downcast_integer_array, Array, AsArray, PrimitiveArray},
     datatypes::*,
@@ -15,23 +17,9 @@ use crate::{
     AxisScale,
 };
 
-pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
+pub(super) fn build<H: Output>(view: ColView<'_>, bins: NonZeroU32) -> Result<H> {
     let array = view.array();
-    if bins == 0 {
-        return Err(crate::AnalysisError::InvalidBinCount {
-            operation: crate::AnalysisOperation::Distribution,
-            value: bins,
-            min: 1,
-            max: u32::MAX,
-        });
-    }
-    if !crate::stats::supports_logarithmic(array.data_type()) {
-        return Err(crate::AnalysisError::UnsupportedOperation {
-            operation: crate::AnalysisOperation::Distribution,
-            data_type: array.data_type().clone(),
-        });
-    }
-    let bins = bins as usize;
+    let bins = bins.get() as usize;
     let selection = view.selection();
     match array.data_type() {
         t if t.is_integer() => {
@@ -72,7 +60,10 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
             |v| v,
             |v| v,
         ),
-        _ => unreachable!("validated logarithmic type"),
+        data_type => Err(crate::AnalysisError::UnsupportedOperation {
+            operation: crate::AnalysisOperation::Distribution,
+            data_type: data_type.clone(),
+        }),
     }
 }
 
@@ -425,6 +416,7 @@ mod tests {
 
     fn verify(fixture: Fixture, bins: u32) -> Histogram {
         let view = fixture.view();
+        let bins = NonZeroU32::new(bins).unwrap();
         let result: RangeHistogram = build(fixture.view(), bins).unwrap();
         let histogram: Histogram = build(fixture.view(), bins).unwrap();
         assert_eq!(histogram, result.histogram);
@@ -626,10 +618,8 @@ mod tests {
         );
         let histogram = verify(Fixture::new(&array, vec![]), 5);
         assert!(histogram.counts.is_empty());
-        let all = Fixture::all(&array);
-        assert!(build::<Histogram>(all.view(), 0).is_err());
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![1, 10]));
         let dates = Fixture::all(&dates);
-        assert!(build::<Histogram>(dates.view(), 5).is_err());
+        assert!(build::<Histogram>(dates.view(), NonZeroU32::new(5).unwrap()).is_err());
     }
 }

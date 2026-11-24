@@ -61,21 +61,22 @@ pub(super) enum SectionData {
 }
 
 pub(super) struct ColumnResults {
+    pub(super) column: ColumnInfo,
     pub(super) sections: Vec<(Section, Option<gewu_core::Result<SectionData>>)>,
 }
 
 impl ColumnResults {
     pub(super) fn load(
         snapshot: &AppliedView,
-        col: &ColumnInfo,
+        col: ColumnInfo,
         settings: InspectorSettings,
         scale: AxisScale,
     ) -> Self {
         let id = col.id;
         let cache = snapshot.analyses();
-        let sections = Section::available(col)
+        let sections = Section::available(&col)
             .map(|section| {
-                let result = settings.expanded(section, col).then(|| match section {
+                let result = settings.expanded(section, &col).then(|| match section {
                     Section::Overview => cache.count_nulls(id).map(SectionData::Overview),
                     Section::Statistics => cache.statistics(id).map(SectionData::Statistics),
                     Section::Distribution => cache
@@ -98,7 +99,10 @@ impl ColumnResults {
                 (section, result)
             })
             .collect();
-        Self { sections }
+        Self {
+            column: col,
+            sections,
+        }
     }
 }
 

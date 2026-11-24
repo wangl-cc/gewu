@@ -78,14 +78,11 @@ impl Render for FilterEditor {
             .child(section(format!("Filter · {}", self.column.name)));
         if self.draft.mode == Mode::Values
             && self
-                .facet
-                .as_ref()
+                .draft
+                .facet()
                 .is_some_and(|facet| facet.values.is_none())
         {
-            panel = panel.child(super::super::exact_description(
-                self.draft.values.iter(),
-                self.draft.excluded,
-            ));
+            panel = panel.child(self.draft.exact_description());
         } else if let Some(applied) = self
             .snapshot
             .query()
@@ -102,7 +99,7 @@ impl Render for FilterEditor {
                     .child(crate::errors::message(error)),
             );
         }
-        if let Some(facet) = &self.facet {
+        if let Some(facet) = self.draft.facet() {
             let has_choices = facet.values.is_some();
             let modes = Draft::modes(
                 self.column.capabilities,
@@ -226,7 +223,7 @@ impl Render for FilterEditor {
                     )
                     .child(
                         button("apply-filter", "Apply", true, cx)
-                            .disabled(self.facet.is_none() || self.error.is_some())
+                            .disabled(self.draft.facet().is_none() || self.error.is_some())
                             .on_click(cx.listener(|editor, _, _, cx| {
                                 editor.draft.search = editor.text.read(cx).value().to_string();
                                 editor.draft.low = editor.low.read(cx).value().to_string();

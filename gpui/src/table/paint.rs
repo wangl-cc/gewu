@@ -49,8 +49,11 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     // Cells, one content mask per column.
     let body = row_area(l.gutter, l.body_right() - l.gutter);
     window.with_content_mask(Some(ContentMask { bounds: body }), |window| {
-        for &y in &frame.stripes {
-            window.paint_quad(fill(rect(l.gutter, y, w - l.gutter, row_height), stripe));
+        for row in frame.rows.iter().filter(|row| row.display.0 % 2 == 1) {
+            window.paint_quad(fill(
+                rect(l.gutter, row.y, w - l.gutter, row_height),
+                stripe,
+            ));
         }
         if let Some(y) = frame.hovered_row_y {
             window.paint_quad(fill(
@@ -152,10 +155,11 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     window.paint_quad(fill(gutter, header_bg));
     window.paint_quad(fill(row_area(l.gutter - hairline, hairline), grid));
     window.with_content_mask(Some(ContentMask { bounds: gutter }), |window| {
-        for (y, label) in &frame.gutter {
-            if frame.selection.is_some_and(|bounds| {
-                px(*y) < bounds.bottom() && px(*y + row_height) > bounds.top()
-            }) {
+        for FrameRow {
+            y, label, selected, ..
+        } in &frame.rows
+        {
+            if *selected {
                 window.paint_quad(fill(
                     rect(0., *y, l.gutter - hairline, row_height),
                     selection,

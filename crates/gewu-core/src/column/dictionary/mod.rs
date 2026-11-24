@@ -22,7 +22,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, UInt32Array},
+    array::{
+        downcast_dictionary_array, Array, ArrayRef, AsArray, DictionaryArray, NullBufferBuilder,
+        UInt32Array,
+    },
     buffer::{BooleanBuffer, NullBuffer},
     compute::take,
     datatypes::*,
@@ -88,7 +91,10 @@ impl Dictionary {
 
         use DataType::*;
         match array.data_type() {
-            Dictionary(..) => Self::from_dict_array(array),
+            Dictionary(..) => downcast_dictionary_array!(
+                array => Self::from_dict_array(array),
+                _ => unreachable!("matched Arrow dictionary")
+            ),
             Boolean => {
                 let array = array.as_boolean();
                 Self::from_canonical_array(array)
@@ -176,9 +182,10 @@ impl Dictionary {
         /// Rows converted to row format at a time, to bound memory.
         const CHUNK: usize = 64 * 1024;
 
-        let Ok(converter) = RowConverter::new(vec![SortField::new(array.data_type().clone())])
-        else {
-            return Ok(None);
+        let converter = match RowConverter::new(vec![SortField::new(array.data_type().clone())]) {
+            Ok(converter) => converter,
+            Err(arrow::error::ArrowError::NotYetImplemented(_)) => return Ok(None),
+            Err(error) => return Err(error.into()),
         };
         let nulls = array.nulls().cloned();
         let mut seen: HashMap<Box<[u8]>, u8> = HashMap::new();
@@ -224,90 +231,54 @@ impl Dictionary {
     /// `keys`/`values`, so no row hashing is needed: collect the referenced
     /// dictionary values, reuse [`Self::build`] on that small array, then
     /// walk the keys once to write the shared per-row code array.
-    fn from_dict_array(array: &ArrayRef) -> Result<Option<Self>> {
-        let dictionary = array.as_any_dictionary();
-        let keys = dictionary.keys();
-        let dictionary_values = dictionary.values().clone();
-        if dictionary_values.len() > MAX_DISTINCT_VALUES + 1 {
+    fn from_dict_array<K: ArrowDictionaryKeyType>(
+        array: &DictionaryArray<K>,
+    ) -> Result<Option<Self>> {
+        let values = array.values();
+        if values.len() > MAX_DISTINCT_VALUES + 1 {
             return Ok(None);
         }
 
-        let value_nulls = dictionary_values.logical_nulls();
-        let mut referenced: Vec<u32> = Vec::new();
-        let mut entry_slot = vec![u32::MAX; dictionary_values.len()];
-        if !scan_keys(keys, |key| {
-            let Some(entry) = key else {
-                return;
-            };
-            if value_nulls
-                .as_ref()
-                .is_some_and(|nulls| nulls.is_null(entry))
-            {
-                return;
-            }
-            let Some(slot) = entry_slot.get_mut(entry) else {
-                return;
-            };
-            if *slot == u32::MAX {
-                *slot = referenced.len() as u32;
-                referenced.push(entry as u32);
-            }
-        }) {
-            return Ok(None);
+        let mut used = vec![false; values.len()];
+        for entry in array.keys_iter().flatten() {
+            used[entry] = true;
         }
-
-        let referenced_values = take(
-            dictionary_values.as_ref(),
-            &UInt32Array::from(referenced),
-            None,
-        )?;
+        let referenced = UInt32Array::from_iter_values(
+            used.into_iter()
+                .enumerate()
+                .filter(|&(entry, used)| used && !crate::column::is_null_at(values.as_ref(), entry))
+                .map(|(entry, _)| entry as u32),
+        );
+        let referenced_values = take(values.as_ref(), &referenced, None)?;
         let Some(encoded) = Self::build(&referenced_values)? else {
             return Ok(None);
         };
 
-        let mut key_to_code = vec![u8::MAX; dictionary_values.len()];
-        for (entry, &slot) in entry_slot.iter().enumerate() {
-            if slot != u32::MAX {
-                key_to_code[entry] = encoded.codes[slot as usize];
-            }
+        let mut entry_codes = vec![None; values.len()];
+        for (&entry, code) in referenced.values().iter().zip(encoded.codes) {
+            entry_codes[entry as usize] = Some(code);
         }
 
-        let mut codes = Vec::with_capacity(array.len());
-        let mut buf = [0u64; 256];
-        let mut null_bits = BooleanBufferBuilder::new(array.len());
-        let mut has_null = false;
-
-        if !scan_keys(keys, |key| {
-            let code =
-                key.and_then(|entry| key_to_code.get(entry).copied().filter(|&c| c != u8::MAX));
-            match code {
-                Some(code) => {
-                    null_bits.append(true);
-                    buf[code as usize] += 1;
-                    codes.push(code);
+        let mut counts = vec![0; encoded.values.len()];
+        let mut nulls = NullBufferBuilder::new(array.len());
+        let codes = array
+            .keys_iter()
+            .map(|key| {
+                let code = key.and_then(|entry| entry_codes[entry]);
+                nulls.append(code.is_some());
+                if let Some(code) = code {
+                    counts[code as usize] += 1;
                 }
-                None => {
-                    null_bits.append(false);
-                    has_null = true;
-                    codes.push(0);
-                }
-            }
-        }) {
-            return Ok(None);
-        }
-
-        let nulls = if has_null {
-            Some(NullBuffer::new(null_bits.finish()))
-        } else {
-            None
-        };
-        let all_counts = buf[..encoded.values.len()].to_vec();
+                // Null rows carry a placeholder code; only the validity bit is read.
+                code.unwrap_or(0)
+            })
+            .collect();
         Ok(Some(Self {
             codes,
-            nulls,
+            nulls: nulls.finish(),
             values: encoded.values,
             labels: encoded.labels,
-            all_counts,
+            all_counts: counts,
         }))
     }
 
@@ -338,7 +309,7 @@ impl Dictionary {
                 Vec::new()
             } else {
                 let formatter = crate::format::formatter(values.as_ref())?;
-                vec![crate::format::cell(values.as_ref(), &formatter, 0).unwrap_or_default()]
+                vec![formatter.value(0).to_string()]
             };
             return Ok(Some(Self {
                 codes,
@@ -358,9 +329,7 @@ impl Dictionary {
         let labels = {
             let formatter = crate::format::formatter(sorted_values.as_ref())?;
             (0..sorted_values.len())
-                .map(|i| {
-                    crate::format::cell(sorted_values.as_ref(), &formatter, i).unwrap_or_default()
-                })
+                .map(|i| formatter.value(i).to_string())
                 .collect()
         };
 
@@ -433,34 +402,6 @@ impl Dictionary {
     pub(crate) fn all_counts(&self) -> &[u64] {
         &self.all_counts
     }
-}
-
-/// Visit every key of a native Dictionary array; `None` for a null key.
-/// Returns false if the key type is not an Arrow dictionary index type.
-fn scan_keys(keys: &dyn Array, mut f: impl FnMut(Option<usize>)) -> bool {
-    macro_rules! visit {
-        ($array:expr) => {{
-            for row in 0..$array.len() {
-                f(if $array.is_null(row) {
-                    None
-                } else {
-                    Some($array.value(row) as usize)
-                });
-            }
-        }};
-    }
-    match keys.data_type() {
-        DataType::Int8 => visit!(keys.as_primitive::<Int8Type>()),
-        DataType::Int16 => visit!(keys.as_primitive::<Int16Type>()),
-        DataType::Int32 => visit!(keys.as_primitive::<Int32Type>()),
-        DataType::Int64 => visit!(keys.as_primitive::<Int64Type>()),
-        DataType::UInt8 => visit!(keys.as_primitive::<UInt8Type>()),
-        DataType::UInt16 => visit!(keys.as_primitive::<UInt16Type>()),
-        DataType::UInt32 => visit!(keys.as_primitive::<UInt32Type>()),
-        DataType::UInt64 => visit!(keys.as_primitive::<UInt64Type>()),
-        _ => return false,
-    }
-    true
 }
 
 #[cfg(test)]

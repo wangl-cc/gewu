@@ -18,9 +18,10 @@ impl OrderedView {
         display_row: u64,
     ) -> Result<Option<ColumnFilter>> {
         let array = self.column_array(column)?;
-        let Some(row) = self.row_window(display_row, 1).iter().next() else {
+        let Some(source) = self.source_row_at(crate::ViewRow(display_row)) else {
             return Ok(None);
         };
+        let row = source.0 as usize;
         let filter = if crate::column::is_null_at(array.as_ref(), row) {
             Filter::OnlyNulls
         } else if predicate::supports_equals(array.data_type()) {
@@ -69,15 +70,8 @@ impl FilteredView {
         scale: crate::AxisScale,
     ) -> Result<Option<RangeHistogram>> {
         let data = self.column(column)?;
-        if !(1..=60).contains(&bins) {
-            return Err(crate::AnalysisError::InvalidBinCount {
-                operation: crate::AnalysisOperation::FilterDistribution,
-                value: bins,
-                min: 1,
-                max: 60,
-            }
-            .into());
-        }
+        let bins =
+            super::analysis::validate_bins(bins, 60, crate::AnalysisOperation::FilterDistribution)?;
         let mask = self.selection.facet_mask(column);
         Ok(stats::build_scaled(
             ColView::from_mask(data, mask.as_ref()),

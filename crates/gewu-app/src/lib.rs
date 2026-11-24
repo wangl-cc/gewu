@@ -18,6 +18,17 @@ pub struct TableQuery {
     pub sorts: Vec<ColumnSort>,
 }
 
+impl TableQuery {
+    /// Filters form a conjunction. Sort keys keep their user-specified priority.
+    fn order_filters(query: &mut Arc<Self>) {
+        if !query.filters.is_sorted_by_key(|filter| filter.column) {
+            Arc::make_mut(query)
+                .filters
+                .sort_by_key(|filter| filter.column);
+        }
+    }
+}
+
 /// One displayed result. Cloning preserves the identity of its dataset, rows and analyses.
 #[derive(Clone)]
 pub struct AppliedView {
@@ -42,13 +53,11 @@ impl AppliedView {
     /// Apply to the full dataset. An unchanged query retains the ordered view; changing
     /// only the sort retains the filter result and all its cached analyses.
     pub fn applying(&self, mut query: Arc<TableQuery>) -> Result<Self> {
-        if !query
-            .filters
-            .windows(2)
-            .all(|pair| pair[0].column <= pair[1].column)
-        {
-            Arc::make_mut(&mut query).filters.sort_by_key(|f| f.column);
-        }
+        TableQuery::order_filters(&mut query);
+        self.apply_ordered_query(query)
+    }
+
+    fn apply_ordered_query(&self, query: Arc<TableQuery>) -> Result<Self> {
         if query == self.query {
             return Ok(self.clone());
         }

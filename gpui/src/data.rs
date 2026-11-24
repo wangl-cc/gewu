@@ -221,14 +221,18 @@ impl TableData {
     }
 
     /// Format missing blocks and keep the visible working set resident.
-    pub fn prefetch(&mut self, columns: &[usize], rows: Range<u64>) -> Option<SharedString> {
+    pub fn prefetch(
+        &mut self,
+        columns: impl IntoIterator<Item = usize>,
+        rows: Range<u64>,
+    ) -> Option<SharedString> {
         self.tick += 1;
         if rows.is_empty() {
             return None;
         }
         let mut error = None;
         let blocks = rows.start / BLOCK_ROWS..=(rows.end - 1) / BLOCK_ROWS;
-        for &column in columns {
+        for column in columns {
             for block in blocks.clone() {
                 let key = (self.columns[column].id, block);
                 let entry = self.cache.entry(key).or_insert_with(|| {

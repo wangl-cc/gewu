@@ -148,7 +148,7 @@ impl Render for TableView {
                             let frame = table.build_frame(Rc::clone(&geometry.layout), cx);
                             let semantics = window
                                 .is_a11y_active()
-                                .then(|| accessibility::rows(table, &frame.layout, cx));
+                                .then(|| accessibility::rows(table, &frame, cx));
                             let header = table.hover_target(&frame.layout);
                             let error = frame
                                 .formatting_error

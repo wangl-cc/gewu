@@ -80,7 +80,7 @@ impl TableView {
             if ev.click_count == 2 {
                 self.show_cell(cell, window, cx);
             } else {
-                self.drag = Drag::Select;
+                self.drag = Drag::Select { edge_pointer: None };
             }
         }
         cx.notify();
@@ -162,22 +162,12 @@ impl TableView {
                     ColumnWidth::Manual((start_width + x - start_x).max(MIN_COLUMN)),
                 );
             }
-            Drag::Select => {
-                self.edge_pointer = Some(local);
-                self.extend_drag(window, cx);
-            }
+            Drag::Select { .. } => self.extend_drag(local, window, cx),
         }
         cx.notify();
     }
 
-    fn extend_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(local) = self.edge_pointer else {
-            return;
-        };
-        if !matches!(self.drag, Drag::Select) {
-            self.edge_pointer = None;
-            return;
-        }
+    fn extend_drag(&mut self, local: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let (x, y) = (local.x.as_f32(), local.y.as_f32());
         let edge_delta = |coord: f32, min: f32, max: f32| {
             let margin = 8_f32.min(((max - min) / 2.).max(0.));
@@ -200,18 +190,21 @@ impl TableView {
         if let (Some(selection), Some(head)) = (self.selection, layout.drag_cell_at(x, y)) {
             self.set_selection(Some(Selection { head, ..selection }), cx);
         }
-        if before == (self.scroll.anchor(), self.scroll_x()) {
-            self.edge_pointer = None;
-            return;
-        }
-        if !self.edge_frame_pending {
+        let moved = before != (self.scroll.anchor(), self.scroll_x());
+        self.drag = Drag::Select {
+            edge_pointer: moved.then_some(local),
+        };
+        if moved && !self.edge_frame_pending {
             self.edge_frame_pending = true;
             let entity = cx.weak_entity();
             window.on_next_frame(move |w, cx| {
                 let _ = entity.update(cx, |t, cx| {
                     t.edge_frame_pending = false;
-                    if t.edge_pointer.is_some() {
-                        t.extend_drag(w, cx);
+                    if let Drag::Select {
+                        edge_pointer: Some(local),
+                    } = t.drag
+                    {
+                        t.extend_drag(local, w, cx);
                         cx.notify();
                     }
                 });
@@ -221,7 +214,6 @@ impl TableView {
 
     pub(super) fn mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.drag = Drag::None;
-        self.edge_pointer = None;
         cx.notify();
     }
 

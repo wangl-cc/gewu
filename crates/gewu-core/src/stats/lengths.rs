@@ -1,5 +1,7 @@
 //! Length statistics measure each selected value once, then bin the lengths.
 
+use std::num::NonZeroU32;
+
 use arrow::{
     array::{Array, AsArray},
     datatypes::DataType,
@@ -55,7 +57,7 @@ pub(super) fn unit(data_type: &DataType) -> Option<LengthUnit> {
     }
 }
 
-pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
+pub(crate) fn analyze(view: ColView<'_>, bins: NonZeroU32) -> Result<LengthSummary> {
     let unit =
         unit(view.data_type()).ok_or_else(|| crate::AnalysisError::UnsupportedOperation {
             operation: crate::AnalysisOperation::Lengths,
@@ -110,7 +112,7 @@ fn summarize(
     array: &dyn Array,
     selection: &Selection<'_>,
     unit: LengthUnit,
-    bins: u32,
+    bins: NonZeroU32,
     length: impl Fn(usize) -> u64,
 ) -> LengthSummary {
     let mut min = u64::MAX;
@@ -151,7 +153,7 @@ fn summarize(
         };
     }
     let span = u128::from(max) - u128::from(min) + 1;
-    let bins = span.min(u128::from(bins)) as usize;
+    let bins = span.min(u128::from(bins.get())) as usize;
     histogram.counts = vec![0; bins];
     let mut lo = min as f64;
     let mut hi = (u128::from(max) + 1) as f64;
@@ -215,7 +217,7 @@ mod tests {
             None,
         ]));
         let all = crate::col_view::test::Fixture::all(&array);
-        let result = analyze(all.view(), 40).unwrap();
+        let result = analyze(all.view(), NonZeroU32::new(40).unwrap()).unwrap();
         assert_eq!(result.unit, LengthUnit::Characters);
         assert_eq!(
             (result.min, result.max, result.empty_count),
@@ -223,7 +225,7 @@ mod tests {
         );
         assert_eq!(result.mean, Some(4.0 / 3.0));
         assert_eq!(result.histogram.counts, [1, 0, 2]);
-        let grouped = analyze(all.view(), 2).unwrap();
+        let grouped = analyze(all.view(), NonZeroU32::new(2).unwrap()).unwrap();
         assert_eq!(grouped.histogram.counts, [1, 2]);
         assert_eq!(grouped.bin_range(0), Some(0..=1));
         assert_eq!(grouped.bin_range(1), Some(2..=2));
@@ -231,7 +233,7 @@ mod tests {
         assert_eq!(crate::stats::count_nulls(all.view()), 1);
         for rows in [vec![], vec![3]] {
             let selected = crate::col_view::test::Fixture::new(&array, rows.clone());
-            let result = analyze(selected.view(), 40).unwrap();
+            let result = analyze(selected.view(), NonZeroU32::new(40).unwrap()).unwrap();
             assert_eq!((result.min, result.max, result.mean), (None, None, None));
             assert!(result.histogram.counts.is_empty());
             assert_eq!(
@@ -240,7 +242,7 @@ mod tests {
             );
         }
         let selected = crate::col_view::test::Fixture::new(&array, vec![2]);
-        let result = analyze(selected.view(), 40).unwrap();
+        let result = analyze(selected.view(), NonZeroU32::new(40).unwrap()).unwrap();
         assert_eq!(result.histogram.counts, [1]);
         assert_eq!(
             (result.histogram.lo, result.histogram.hi),
@@ -259,7 +261,7 @@ mod tests {
         ]);
         let array: ArrayRef = Arc::new(array.slice(1, 4));
         let selected = crate::col_view::test::Fixture::new(&array, vec![0, 1, 2]);
-        let result = analyze(selected.view(), 40).unwrap();
+        let result = analyze(selected.view(), NonZeroU32::new(40).unwrap()).unwrap();
         assert_eq!(result.unit, LengthUnit::Elements);
         assert_eq!(
             (result.min, result.max, result.mean),

@@ -214,6 +214,16 @@ mod tests {
             numbers.distribution(c0, 0, AxisScale::Linear),
             Err(Error::Analysis(_))
         ));
+        for scale in [AxisScale::Linear, AxisScale::Log10] {
+            for bins in [0, 61] {
+                assert!(matches!(
+                    numbers.filter_distribution(c0, bins, scale),
+                    Err(Error::Analysis(crate::AnalysisError::InvalidBinCount {
+                        operation: crate::AnalysisOperation::FilterDistribution, value, min: 1, max: 60
+                    })) if value == bins
+                ));
+            }
+        }
         assert!(matches!(text.lengths(c0, 0), Err(Error::Analysis(_))));
         for bins in [10, 20] {
             for histogram in [
@@ -369,6 +379,7 @@ mod tests {
             )),
         ];
         let rows: Vec<u32> = (0..n as u32).filter(|row| row % 3 != 1).collect();
+        let bins = std::num::NonZeroU32::new(7).unwrap();
         for array in arrays {
             let by_rows = Fixture::new(&array, rows.clone());
             let by_mask = Fixture::masked(&array, rows.clone());
@@ -385,8 +396,8 @@ mod tests {
             );
             if *array.data_type() == DataType::Utf8 {
                 assert_eq!(
-                    crate::stats::analyze_lengths(by_rows.view(), 7).unwrap(),
-                    crate::stats::analyze_lengths(by_mask.view(), 7).unwrap(),
+                    crate::stats::analyze_lengths(by_rows.view(), bins).unwrap(),
+                    crate::stats::analyze_lengths(by_mask.view(), bins).unwrap(),
                 );
             } else {
                 assert_eq!(
@@ -395,10 +406,10 @@ mod tests {
                 );
                 for scale in [AxisScale::Linear, AxisScale::Log10] {
                     let counts = |view| {
-                        crate::stats::counts_scaled::<crate::Histogram>(view, 7, scale).unwrap()
+                        crate::stats::counts_scaled::<crate::Histogram>(view, bins, scale).unwrap()
                     };
                     let ranges = |view| {
-                        crate::stats::build_scaled(view, 7, scale)
+                        crate::stats::build_scaled(view, bins, scale)
                             .unwrap()
                             .expect("sample has finite positive values")
                     };

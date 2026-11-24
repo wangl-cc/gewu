@@ -7,11 +7,11 @@ fn sample() -> TableData {
 #[test]
 fn cached_blocks_are_replaced_with_the_sorted_view() {
     let mut data = sample();
-    data.prefetch(&[0], 0..3);
+    data.prefetch([0], 0..3);
     assert_eq!(data.cell(0, 1).unwrap().as_deref(), Some("drop"));
     assert!(data.cell(0, 200).is_none());
     assert_eq!(data.cell_preview(0, 1).unwrap().as_deref(), Some("drop"));
-    data.prefetch(&[0], 1..2);
+    data.prefetch([0], 1..2);
     let block = &data.cache[&(data.columns[0].id, 0)];
     assert!(matches!(&block.text, BlockText::Ready { visible, .. }
         if visible[1].get().is_some()));
@@ -27,7 +27,7 @@ fn cached_blocks_are_replaced_with_the_sorted_view() {
     ));
     assert_eq!(data.query().sorts, [sort]);
     assert!(data.cell(0, 1).is_none());
-    data.prefetch(&[0], 1..2);
+    data.prefetch([0], 1..2);
     assert_eq!(data.cell(0, 0).unwrap().as_deref(), Some("drop"));
 }
 
@@ -44,11 +44,11 @@ fn a_failed_visible_block_reports_the_error_without_yielding_cell_text() {
             0,
         ),
     );
-    let error = data.prefetch(&[0], 0..1).unwrap();
+    let error = data.prefetch([0], 0..1).unwrap();
     assert!(error.contains("fixture"));
     assert!(data.cell_preview(0, 0).is_none());
     assert!(data.cell(0, 0).is_none());
-    assert!(data.prefetch(&[1], 0..1).is_none());
+    assert!(data.prefetch([1], 0..1).is_none());
 }
 
 #[test]
@@ -68,10 +68,10 @@ fn hidden_and_reordered_columns_keep_their_identity_and_manual_width() {
             .display_cell(gewu_core::ViewRow(u64::MAX), first)
             .is_none()
     );
-    assert!(table.columns.set_visible(&[first, second], false));
+    assert!(table.columns.set_visible([first, second].into(), false));
     assert!(table.display_cell(row, first).is_none());
     table.columns.invalidate_measurements();
-    assert!(table.columns.set_visible(&[first, second], true));
+    assert!(table.columns.set_visible([first, second].into(), true));
     let manual = table.columns.position(first).unwrap().index();
     let automatic = table.columns.position(second).unwrap().index();
     assert_eq!(table.columns.width(manual), 179.);
@@ -102,7 +102,7 @@ fn grid_preview_preserves_utf8_boundaries_and_single_line_while_details_keep_the
     let file = directory.path().join("long.csv");
     std::fs::write(&file, input).unwrap();
     let mut data = TableData::from_dataset(Arc::new(Dataset::open(file).unwrap()));
-    data.prefetch(&[0], 0..2);
+    data.prefetch([0], 0..2);
     let initial_budget = data.cache_bytes;
     let clipped = data.cell_preview(0, 0).unwrap().unwrap();
     assert!(clipped.ends_with('…') && clipped.len() <= 1027);

@@ -1,5 +1,5 @@
 //! Document controls operate on stable column identities and the displayed view snapshot.
-use std::{cell::Cell as ValueCell, rc::Rc};
+use std::{cell::Cell as ValueCell, collections::HashSet, rc::Rc};
 
 use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow, ViewRow};
 use gpui_kit::{
@@ -24,7 +24,7 @@ pub(super) struct Controls {
     drawer: Option<Drawer>,
     menu: Option<menus::OpenMenu>,
     /// Column visibility commits with the query that clears these columns' conditions.
-    pending_hides: Vec<ColumnId>,
+    pub(super) pending_hides: HashSet<ColumnId>,
     panel_focus: Option<FocusHandle>,
     inspector: Option<Entity<Inspector>>,
     marked_point: Option<MarkedPoint>,
@@ -86,7 +86,7 @@ impl Render for ColumnDrag {
 
 enum PopoverTarget {
     Point(Point<Pixels>),
-    Header(ColumnId),
+    Header(Rc<ValueCell<Point<Pixels>>>),
 }
 
 enum Drawer {
@@ -245,23 +245,29 @@ impl TableView {
             .update(cx, |panel, cx| panel.inspect(column, cx));
     }
 
-    pub(super) fn sync_panels(&mut self, cx: &mut Context<Self>) {
+    /// Row or column coordinates changed. Drop interactions tied to the old grid.
+    pub(super) fn grid_changed(&mut self, cx: &mut Context<Self>) {
+        self.reset_grid_interaction();
         self.controls.menu = None;
-        let snapshot = self.data.snapshot();
+        if matches!(self.controls.drawer, Some(Drawer::Cell { .. })) {
+            self.controls.drawer = None;
+        }
         if let Some(panel) = &self.controls.inspector {
             panel.update(cx, |panel, cx| {
                 panel.set_context(
-                    snapshot.clone(),
+                    self.data.snapshot(),
                     self.data.columns.iter().cloned().collect(),
                     cx,
                 )
             });
         }
+    }
+
+    pub(super) fn refresh_query_drawer(&mut self, cx: &mut Context<Self>) {
         match &self.controls.drawer {
             Some(Drawer::Filter { editor, .. }) => {
-                editor.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx))
+                editor.update(cx, |panel, cx| panel.set_snapshot(self.data.snapshot(), cx))
             }
-            Some(Drawer::Cell { .. }) => self.controls.drawer = None,
             Some(Drawer::Sort { summary: true }) if self.data.query().sorts.is_empty() => {
                 self.controls.drawer = None
             }
@@ -361,7 +367,6 @@ impl TableView {
             query.filters.retain(|f| f.column != id);
             if let Some(filter) = filter {
                 query.filters.push(ColumnFilter { column: id, filter });
-                query.filters.sort_by_key(|f| f.column);
             }
         });
     }
@@ -400,8 +405,7 @@ impl TableView {
         let entity = cx.weak_entity();
         let target = match &self.controls.drawer {
             Some(Drawer::Cell { anchor, .. }) => Some(PopoverTarget::Point(*anchor)),
-            Some(Drawer::Filter { column, .. }) => Some(PopoverTarget::Header(*column)),
-            _ => None,
+            _ => filter_anchor.map(PopoverTarget::Header),
         };
         let overlay = if let Some(target) = target {
             let popup = div()
@@ -422,21 +426,13 @@ impl TableView {
                     .snap_to_window()
                     .child(popup)
                     .into_any_element(),
-                PopoverTarget::Header(column) => {
-                    let table = cx.entity();
+                PopoverTarget::Header(anchor) => {
                     // Resolve against this frame's grid, after measuring and clipping its headers.
                     canvas(
                         move |_, window, cx| {
-                            let at = filter_anchor.as_ref().map_or_else(
-                                || {
-                                    let table = table.read(cx);
-                                    table.filter_anchor(column, &table.layout)
-                                },
-                                |anchor| anchor.get(),
-                            );
                             let mut popup = anchored()
                                 .anchor(Anchor::TopCenter)
-                                .position(at)
+                                .position(anchor.get())
                                 .snap_to_window()
                                 .child(popup)
                                 .into_any_element();

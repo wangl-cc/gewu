@@ -1,6 +1,6 @@
 //! Per-column display text and source row indices.
 
-use std::fmt::Write;
+use std::{fmt::Write, ops::Range};
 
 use super::OrderedView;
 use crate::{format, ColumnId, InternalError, Result};
@@ -8,7 +8,6 @@ use crate::{format, ColumnId, InternalError, Result};
 /// Display text for one column packed into one UTF-8 buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormattedColumnSegment {
-    row_count: u32,
     text: String,
     /// One offset per row plus the final end offset.
     offsets: Vec<u32>,
@@ -18,7 +17,7 @@ pub struct FormattedColumnSegment {
 
 impl FormattedColumnSegment {
     pub fn row_count(&self) -> u32 {
-        self.row_count
+        (self.offsets.len() - 1) as u32
     }
 
     /// Size of the packed UTF-8 text, excluding offsets and validity bits.
@@ -28,15 +27,14 @@ impl FormattedColumnSegment {
 
     /// Text of a row relative to the segment start; `None` for null or out of range.
     pub fn cell(&self, row: u32) -> Option<&str> {
-        if row >= self.row_count {
+        if row >= self.row_count() {
             return None;
         }
         let row = row as usize;
         if self.validity[row / 8] & (1 << (row % 8)) == 0 {
             return None;
         }
-        self.text
-            .get(self.offsets[row] as usize..self.offsets[row + 1] as usize)
+        Some(&self.text[self.offsets[row] as usize..self.offsets[row + 1] as usize])
     }
 
     /// Transfer UTF-8 bytes, row offsets (including the final end offset), and
@@ -75,7 +73,7 @@ impl OrderedView {
     ) -> Result<FormattedColumnSegment> {
         let array = self.column(column)?.array();
         let formatter = format::formatter(array.as_ref())?;
-        let window = self.row_window(start, count);
+        let window = self.row_window(start..start.saturating_add(u64::from(count)));
         let mut text = String::new();
         let mut offsets = Vec::with_capacity(window.len() + 1);
         let mut validity = vec![0; window.len().div_ceil(8)];
@@ -92,7 +90,6 @@ impl OrderedView {
             offsets.push(end);
         }
         Ok(FormattedColumnSegment {
-            row_count: window.len() as u32,
             text,
             offsets,
             validity,
@@ -110,10 +107,7 @@ impl OrderedView {
 
     /// Resolve a displayed position back to the original dataset.
     pub fn source_row_at(&self, ViewRow(row): ViewRow) -> Option<SourceRow> {
-        self.row_window(row, 1)
-            .iter()
-            .next()
-            .map(|row| SourceRow(row as u64))
+        self.source_rows_in(row..row.saturating_add(1)).next()
     }
 
     /// Find a zero-based source row in this display order without building a reverse index.
@@ -131,17 +125,27 @@ impl OrderedView {
 
     /// Source row indices in display order, without formatting any cells.
     pub fn source_rows(&self, start: u64, count: u32) -> Vec<u64> {
-        self.row_window(start, count)
-            .iter()
-            .map(|row| row as u64)
+        self.source_rows_in(start..start.saturating_add(u64::from(count)))
+            .map(|source| source.0)
             .collect()
     }
 
-    pub(super) fn row_window(&self, start: u64, count: u32) -> crate::row_ids::RowWindow<'_> {
-        let len = self.rows.len() as u64;
-        let start = start.min(len);
-        let end = start.saturating_add(u64::from(count)).min(len);
-        self.rows.as_slice().window(start as usize, end as usize)
+    /// Iterate the source rows of a displayed range in order without copying the indices.
+    /// The range is clipped to the available rows.
+    pub fn source_rows_in(
+        &self,
+        displayed: Range<u64>,
+    ) -> impl ExactSizeIterator<Item = SourceRow> + '_ {
+        self.row_window(displayed)
+            .iter()
+            .map(|row| SourceRow(row as u64))
+    }
+
+    pub(super) fn row_window(&self, displayed: Range<u64>) -> crate::row_ids::RowWindow<'_> {
+        self.rows.as_slice().window(
+            usize::try_from(displayed.start).unwrap_or(usize::MAX),
+            usize::try_from(displayed.end).unwrap_or(usize::MAX),
+        )
     }
 }
 
@@ -212,6 +216,12 @@ mod tests {
         let dataset = Dataset::from_test_batch(batch);
         let text = ColumnId::from_raw(0);
         let number = ColumnId::from_raw(1);
+        let in_file_order = dataset.unfiltered().unsorted();
+        assert_eq!(in_file_order.source_rows_in(1..3).collect::<Vec<_>>(), [
+            SourceRow(1),
+            SourceRow(2)
+        ]);
+        assert_eq!(in_file_order.source_rows_in(u64::MAX..u64::MAX).len(), 0);
         let ordered = dataset
             .unfiltered()
             .sort(&[ColumnSort {
@@ -220,6 +230,10 @@ mod tests {
             }])
             .unwrap();
         assert_eq!(ordered.source_rows(1, 64), [8, 7, 6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(ordered.source_rows_in(8..u64::MAX).collect::<Vec<_>>(), [
+            SourceRow(1),
+            SourceRow(0)
+        ]);
         assert_eq!(
             ordered.format_column(number, 1, 1).unwrap().cell(0),
             Some("8")

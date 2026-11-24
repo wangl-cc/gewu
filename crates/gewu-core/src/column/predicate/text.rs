@@ -10,22 +10,18 @@ use rapidhash::RapidHashSet;
 use regex::RegexBuilder;
 
 use super::Result;
-use crate::execution::predicate::{collect_bits, Predicate};
+use crate::{
+    execution::predicate::{collect_bits, Predicate},
+    FilterKind,
+};
 
 /// Non-null membership over plain strings. Dictionary columns are matched per
 /// distinct value by the column compiler, which also owns exclusion and null policy.
 pub(super) fn selected_values<'a>(array: &'a ArrayRef, values: &[String]) -> Result<Predicate<'a>> {
-    if !matches!(
-        array.data_type(),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) {
-        return Err(crate::FilterError::UnsupportedType {
-            condition: crate::FilterKind::Exact,
-            data_type: array.data_type().clone(),
-        });
-    }
     let selected: RapidHashSet<String> = values.iter().cloned().collect();
-    Ok(strings(array, move |value| selected.contains(value)))
+    strings(array, FilterKind::Exact, move |value| {
+        selected.contains(value)
+    })
 }
 
 pub(super) fn contains<'a>(
@@ -34,18 +30,9 @@ pub(super) fn contains<'a>(
     case_sensitive: bool,
     matcher: Option<&regex::Regex>,
 ) -> Result<Predicate<'a>> {
-    if !matches!(
-        array.data_type(),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) {
-        return Err(crate::FilterError::UnsupportedType {
-            condition: crate::FilterKind::Text,
-            data_type: array.data_type().clone(),
-        });
-    }
     if case_sensitive {
         let text = text.to_owned();
-        return Ok(strings(array, move |value| value.contains(&text)));
+        return strings(array, FilterKind::Text, move |value| value.contains(&text));
     }
     // If a session-wide matcher was provided, reuse it; otherwise compile one.
     let matcher = match matcher {
@@ -58,14 +45,16 @@ pub(super) fn contains<'a>(
         ),
     };
     if !text.is_ascii() {
-        return Ok(strings(array, move |value| matcher.is_match(value)));
+        return strings(array, FilterKind::Text, move |value| {
+            matcher.is_match(value)
+        });
     }
     // Unicode simple case folding only maps non-ASCII characters (such as the
     // Kelvin sign) onto ASCII letters, so ASCII values match an ASCII needle
     // under ASCII case folding exactly. Those characters take at least two
     // bytes, so no value shorter than the needle can match.
     let needle = text.to_ascii_lowercase().into_bytes();
-    Ok(strings(array, move |value| {
+    strings(array, FilterKind::Text, move |value| {
         if value.len() < needle.len() {
             false
         } else if value.is_ascii() {
@@ -73,7 +62,7 @@ pub(super) fn contains<'a>(
         } else {
             matcher.is_match(value)
         }
-    }))
+    })
 }
 
 /// Whether `haystack` contains `needle` (already ASCII-lowercased), ignoring ASCII case.
@@ -98,18 +87,9 @@ pub(super) fn text_match<'a>(
     match mode {
         TextMatch::Contains => contains(array, text, case_sensitive, None),
         TextMatch::Equals => {
-            if !matches!(
-                array.data_type(),
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-            ) {
-                return Err(crate::FilterError::UnsupportedType {
-                    condition: crate::FilterKind::Text,
-                    data_type: array.data_type().clone(),
-                });
-            }
             let text = text.to_owned();
             if case_sensitive {
-                return Ok(strings(array, move |value| value == text));
+                return strings(array, FilterKind::Text, move |value| value == text);
             }
             let folded = RegexBuilder::new(&format!(r"\A(?:{})\z", regex::escape(&text)))
                 .case_insensitive(true)
@@ -118,27 +98,33 @@ pub(super) fn text_match<'a>(
             let ascii = text.is_ascii();
             // ASCII folding only applies when both sides are ASCII: under Unicode
             // folding an ASCII input still matches characters such as the Kelvin sign.
-            Ok(strings(array, move |value| {
+            strings(array, FilterKind::Text, move |value| {
                 if ascii && value.is_ascii() {
                     value.eq_ignore_ascii_case(&text)
                 } else {
                     folded.is_match(value)
                 }
-            }))
+            })
         }
     }
 }
 
 fn strings<'a>(
     array: &'a ArrayRef,
+    condition: FilterKind,
     test: impl Fn(&str) -> bool + Send + Sync + 'a,
-) -> Predicate<'a> {
-    match array.data_type() {
+) -> Result<Predicate<'a>> {
+    Ok(match array.data_type() {
         DataType::Utf8 => bind(array.as_string::<i32>(), test),
         DataType::LargeUtf8 => bind(array.as_string::<i64>(), test),
         DataType::Utf8View => bind(array.as_string_view(), test),
-        _ => unreachable!("plain string dispatch"),
-    }
+        data_type => {
+            return Err(crate::FilterError::UnsupportedType {
+                condition,
+                data_type: data_type.clone(),
+            })
+        }
+    })
 }
 
 fn bind<'a, A>(array: A, is_match: impl Fn(&str) -> bool + Send + Sync + 'a) -> Predicate<'a>

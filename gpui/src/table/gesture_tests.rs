@@ -70,19 +70,20 @@ fn jumped_frames_show_the_ordered_values_and_source_row_numbers_immediately() {
     w.click(w.header(0), Modifiers::default());
     w.click(w.header(0), Modifiers::default());
     for row in [129, 5, ROWS - 1, 67, 0, 215] {
-        w.app.update(|cx| {
+        w.ui.update(|window, cx| {
             w.table.update(cx, |t, cx| {
                 t.scroll_to_row(row);
-                let layout = t.compute_layout(t.layout.bounds);
-                let rows = layout.vertical.visible_rows();
+                let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+                let rows = geometry.layout.vertical.visible_rows();
                 let view = t.data.view().clone();
                 let count = (rows.end - rows.start) as u32;
                 let expected_rows = view.source_rows(rows.start, count);
-                let frame = t.build_frame(layout.into(), cx);
-                assert_eq!(frame.gutter.len(), expected_rows.len());
-                for ((_, label), source) in frame.gutter.iter().zip(expected_rows) {
+                let frame = t.build_frame(geometry.layout, cx);
+                assert_eq!(frame.rows.len(), expected_rows.len());
+                for (frame_row, source) in frame.rows.iter().zip(expected_rows) {
+                    assert_eq!(frame_row.source.0, source);
                     assert_eq!(
-                        label.as_ref(),
+                        frame_row.label.as_ref(),
                         (source + t.prefs.row_number_base).to_string()
                     );
                 }
@@ -100,6 +101,25 @@ fn jumped_frames_show_the_ordered_values_and_source_row_numbers_immediately() {
             })
         });
     }
+}
+
+#[test]
+fn selection_uses_the_column_widths_measured_for_this_frame() {
+    let (_files, mut w) = open();
+    w.ui.update(|window, cx| {
+        w.table.update(cx, |table, cx| {
+            let cell = Cell { row: 0, column: 2 };
+            table.set_selection(Some(Selection::single(cell)), cx);
+            table.data.columns.invalidate_measurements();
+            let geometry = table.prepare_grid_layout(table.layout.bounds, window);
+            let (_, left, width) = geometry.layout.columns[cell.column];
+            let frame = table.build_frame(geometry.layout, cx);
+            let bounds = frame.head.unwrap();
+            assert_eq!(bounds.left(), px(left));
+            assert_eq!(bounds.size.width, px(width));
+            assert_eq!(frame.selection, frame.head);
+        });
+    });
 }
 
 #[test]

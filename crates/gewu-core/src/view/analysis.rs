@@ -1,5 +1,7 @@
 //! Typed column and scatter analyses over an immutable [`FilteredView`].
 
+use std::num::NonZeroU32;
+
 use super::FilteredView;
 use crate::{
     col_view::ColView, stats, AxisScale, ColumnId, Histogram, LengthSummary, NumericStatistics,
@@ -17,9 +19,9 @@ impl FilteredView {
         y_scale: AxisScale,
     ) -> Result<crate::ScatterResult> {
         let x = x_column
-            .map(|column| self.column_array(column).map(|array| (column, array)))
+            .map(|column| self.column_array(column))
             .transpose()?;
-        let y = (y_column, self.column_array(y_column)?);
+        let y = self.column_array(y_column)?;
         Ok(stats::scatter::analyze(
             x,
             y,
@@ -63,13 +65,7 @@ impl FilteredView {
         scale: AxisScale,
     ) -> Result<H> {
         Ok(self.with_analysis_view(column, |view| {
-            validate_bins(bins)?;
-            if scale == AxisScale::Log10 && !stats::supports_logarithmic(view.data_type()) {
-                return Err(crate::AnalysisError::UnsupportedOperation {
-                    operation: crate::AnalysisOperation::Distribution,
-                    data_type: view.data_type().clone(),
-                });
-            }
+            let bins = validate_bins(bins, u32::MAX, crate::AnalysisOperation::Distribution)?;
             stats::counts_scaled(view, bins, scale)
         })?)
     }
@@ -82,7 +78,7 @@ impl FilteredView {
     /// Length statistics and a linear histogram; bins must be positive.
     pub fn lengths(&self, column: ColumnId, bins: u32) -> Result<LengthSummary> {
         Ok(self.with_analysis_view(column, |view| {
-            validate_bins(bins)?;
+            let bins = validate_bins(bins, u32::MAX, crate::AnalysisOperation::Distribution)?;
             stats::analyze_lengths(view, bins)
         })?)
     }
@@ -96,14 +92,17 @@ impl FilteredView {
     }
 }
 
-fn validate_bins(bins: u32) -> stats::Result<()> {
-    if bins == 0 {
-        return Err(crate::AnalysisError::InvalidBinCount {
-            operation: crate::AnalysisOperation::Distribution,
+pub(super) fn validate_bins(
+    bins: u32,
+    max: u32,
+    operation: crate::AnalysisOperation,
+) -> stats::Result<NonZeroU32> {
+    NonZeroU32::new(bins)
+        .filter(|n| n.get() <= max)
+        .ok_or(crate::AnalysisError::InvalidBinCount {
+            operation,
             value: bins,
             min: 1,
-            max: u32::MAX,
-        });
-    }
-    Ok(())
+            max,
+        })
 }

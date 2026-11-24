@@ -3,7 +3,7 @@
 
 use gpui_kit::*;
 
-use super::{Cell, HEADER_HEIGHT, Layout, Selection, TableView};
+use super::{Cell, Frame, HEADER_HEIGHT, Selection, TableView};
 
 pub(super) fn grid(table: &TableView, window: &Window) -> Stateful<Div> {
     let grid = div()
@@ -34,7 +34,8 @@ pub(super) fn grid(table: &TableView, window: &Window) -> Stateful<Div> {
     grid
 }
 
-pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableView>) -> AnyElement {
+pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>) -> AnyElement {
+    let layout = &frame.layout;
     let mut headers = div()
         .id("column-headers")
         .role(Role::Row)
@@ -75,20 +76,18 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
     }
     let mut overlay = div().relative().size_full().child(headers);
 
-    for row in layout.vertical.visible_rows() {
-        let top = HEADER_HEIGHT + layout.vertical.row_top(row) as f32;
-        let bottom = (top + table.prefs.row_height).min(layout.body_bottom());
-        let top = top.max(HEADER_HEIGHT);
+    for frame_row in &frame.rows {
+        let bottom = (frame_row.y + frame.style.row_height).min(layout.body_bottom());
+        let top = frame_row.y.max(HEADER_HEIGHT);
         if top >= bottom {
             continue;
         }
-        let Some(source) = table.data.view().source_row_at(gewu_core::ViewRow(row)) else {
-            continue;
-        };
+        let row = frame_row.display.0;
+        let source = frame_row.source;
         let mut row_node = div()
             .id(("source-row", source.0))
             .role(Role::Row)
-            .aria_label(format!("Row {}", source.0 + table.prefs.row_number_base))
+            .aria_label(format!("Row {}", frame_row.label))
             .absolute()
             .top(px(top))
             .h(px(bottom - top))
@@ -117,7 +116,7 @@ pub(super) fn rows(table: &mut TableView, layout: &Layout, cx: &Context<TableVie
                 .aria_label(format!(
                     "{}, row {}",
                     table.data.columns.entry(column).label,
-                    source.0 + table.prefs.row_number_base
+                    frame_row.label
                 ))
                 .aria_value(text)
                 .aria_selected(selected.is_some())

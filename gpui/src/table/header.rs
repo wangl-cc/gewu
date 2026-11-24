@@ -106,9 +106,7 @@ impl TableView {
         font.features = crate::theme::tabular_digits();
         let measure = |text: &str, font_size: f32| {
             // A very long first value can determine the cap without shaping the entire cell.
-            let limit = text.floor_char_boundary(1024.min(text.len()));
-            let preview = &text[..limit];
-            let preview = preview.lines().next().unwrap_or("");
+            let preview = crate::data::single_line_prefix(text, crate::data::GRID_PREVIEW_BYTES);
             let run = TextRun {
                 len: preview.len(),
                 font: font.clone(),
@@ -124,7 +122,7 @@ impl TableView {
                 .as_f32()
         };
         let rows = start..start.saturating_add(SAMPLE_ROWS).min(self.data.row_count());
-        self.data.prefetch(&[column], rows.clone());
+        self.data.prefetch([column], rows.clone());
         // Size for a future sort of any priority so sorting does not reflow measured columns.
         let last = self.data.snapshot().dataset().schema().fields().len();
         let sort = ["▲", "▼"].into_iter().fold(0.0f32, |width, arrow| {

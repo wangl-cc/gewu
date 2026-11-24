@@ -32,7 +32,12 @@ pub struct QueryResult {
 
 /// The change to the displayed table after delivering a completed query.
 pub enum QueryCompletion {
-    Unchanged,
+    /// This result does not belong to the active job.
+    Ignored,
+    /// Later edits returned to the already displayed query.
+    Reverted,
+    /// The current job failed. The displayed view is still usable.
+    Failed,
     Installed,
     Run(QueryJob),
 }
@@ -40,7 +45,7 @@ pub enum QueryCompletion {
 impl QueryJob {
     pub fn run(self) -> QueryResult {
         QueryResult {
-            result: self.base.applying(self.requested.clone()),
+            result: self.base.apply_ordered_query(self.requested.clone()),
             requested: self.requested,
         }
     }
@@ -77,6 +82,7 @@ impl QuerySession {
     /// Apply an edit to the latest request. An active job always finishes before a new one starts.
     pub fn edit(&mut self, edit: impl FnOnce(&mut TableQuery)) -> Option<QueryJob> {
         edit(Arc::make_mut(&mut self.requested));
+        TableQuery::order_filters(&mut self.requested);
         if self.is_running() {
             return None;
         }
@@ -100,12 +106,12 @@ impl QuerySession {
     pub fn finish(&mut self, completed: QueryResult) -> QueryCompletion {
         if !matches!(&self.phase, Phase::Running(active) if Arc::ptr_eq(active, &completed.requested))
         {
-            return QueryCompletion::Unchanged;
+            return QueryCompletion::Ignored;
         }
         if completed.requested != self.requested {
             return self
                 .start()
-                .map_or(QueryCompletion::Unchanged, QueryCompletion::Run);
+                .map_or(QueryCompletion::Reverted, QueryCompletion::Run);
         }
         match completed.result {
             Ok(view) => {
@@ -117,7 +123,7 @@ impl QuerySession {
             Err(error) => {
                 self.requested = self.displayed.query().clone();
                 self.phase = Phase::Failed(error);
-                QueryCompletion::Unchanged
+                QueryCompletion::Failed
             }
         }
     }

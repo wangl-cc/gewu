@@ -37,7 +37,9 @@ enum Thumb {
 
 enum Drag {
     None,
-    Select,
+    Select {
+        edge_pointer: Option<Point<Pixels>>,
+    },
     Resize {
         column: usize,
         start_x: f32,
@@ -62,7 +64,6 @@ pub struct TableView {
     horizontal: HorizontalScroll,
     selection: Option<Selection>,
     drag: Drag,
-    edge_pointer: Option<Point<Pixels>>,
     edge_frame_pending: bool,
     header_hover: Option<usize>,
     thumb_hover: Option<Thumb>,
@@ -104,15 +105,22 @@ struct PaintHeader {
     funnel: Option<bool>,
 }
 
+struct FrameRow {
+    display: gewu_core::ViewRow,
+    source: gewu_core::SourceRow,
+    y: f32,
+    label: SharedString,
+    selected: bool,
+}
+
 /// Everything one paint needs, moved into the canvas.
 struct Frame {
     formatting_error: Option<SharedString>,
     layout: Rc<Layout>,
     header: Vec<PaintHeader>,
     style: Preferences,
-    gutter: Vec<(f32, SharedString)>,
+    rows: Vec<FrameRow>,
     columns: Vec<PaintColumn>,
-    stripes: Vec<f32>,
     matches: Vec<Bounds<Pixels>>,
     current_match: Option<Bounds<Pixels>>,
     text_matches: Vec<Range<usize>>,
@@ -193,7 +201,6 @@ impl TableView {
             horizontal: HorizontalScroll::Offset(0.),
             selection: None,
             drag: Drag::None,
-            edge_pointer: None,
             edge_frame_pending: false,
             header_hover: None,
             thumb_hover: None,
@@ -224,7 +231,6 @@ impl TableView {
 
     fn reset_grid_interaction(&mut self) {
         self.drag = Drag::None;
-        self.edge_pointer = None;
         self.header_hover = None;
         self.thumb_hover = None;
         self.body_pointer = None;

@@ -14,6 +14,9 @@ fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
     };
     let first = Cell { row: 0, column: 2 };
     let last = Cell { row: 1, column: 3 };
+    assert_eq!(layout.column_edges(2..3), Some((-10., 70.)));
+    assert_eq!(layout.column_edges(0..8), Some((-10., 130.)));
+    assert_eq!(layout.column_edges(4..5), None);
     assert_eq!(layout.cell_at(24., 32.), Some(first));
     assert_eq!(layout.cell_at(70., 64.), Some(last));
     for (x, y) in [(23., 32.), (24., 31.), (130., 48.), (80., 96.)] {

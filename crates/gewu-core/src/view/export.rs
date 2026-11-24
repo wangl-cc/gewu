@@ -24,8 +24,7 @@ impl OrderedView {
     ) -> Result<Export> {
         let mut rows = Vec::new();
         for range in ranges {
-            let count = u32::try_from(range.end.saturating_sub(range.start)).unwrap_or(u32::MAX);
-            rows.extend(self.row_window(range.start, count).iter_u32());
+            rows.extend(self.row_window(range.clone()).iter_u32());
         }
         self.export_with_rows(RowIds::Selected(rows.into()), columns, format)
     }

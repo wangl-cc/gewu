@@ -440,27 +440,29 @@ impl TableView {
         if visible {
             self.controls.pending_hides.retain(|id| !ids.contains(id));
         } else if self.hiding_clears_conditions(ids) {
-            self.controls.pending_hides.extend_from_slice(ids);
-            self.controls.pending_hides.sort_unstable();
-            self.controls.pending_hides.dedup();
+            self.controls.pending_hides.extend(ids);
             self.edit_query(cx, |query| {
                 query.filters.retain(|f| !ids.contains(&f.column));
                 query.sorts.retain(|s| !ids.contains(&s.column));
             });
             return;
         }
-        self.change_columns(false, |columns| columns.set_visible(ids, visible), cx);
+        self.change_columns(
+            false,
+            |columns| columns.set_visible(ids.iter().copied().collect(), visible),
+            cx,
+        );
         cx.notify();
     }
 
-    pub(in crate::table) fn finish_column_hides(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(in crate::table) fn apply_pending_hides(&mut self, cx: &mut Context<Self>) -> bool {
         let mut ids = std::mem::take(&mut self.controls.pending_hides);
-        if ids.is_empty() || self.data.queries().error().is_some() {
+        if ids.is_empty() {
             return false;
         }
         // A subsequent edit can restore a condition before the cleanup query finishes.
         ids.retain(|&id| !uses_column(self.data.query(), id));
-        self.update_columns(false, |columns| columns.set_visible(&ids, false), cx)
+        self.update_columns(false, |columns| columns.set_visible(ids, false), cx)
     }
 
     fn move_column(&mut self, id: ColumnId, by: isize, cx: &mut Context<Self>) {
@@ -487,7 +489,7 @@ impl TableView {
         if !self.update_columns(reordered, update, cx) {
             return false;
         }
-        self.sync_panels(cx);
+        self.grid_changed(cx);
         true
     }
 
@@ -497,33 +499,36 @@ impl TableView {
         update: impl FnOnce(&mut TableColumns) -> bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let selected = self.selection.and_then(|s| {
-            Some((
+        let selected = self.selection.map(|s| {
+            (
                 s,
-                self.data.columns.get(s.anchor.column)?.id,
-                self.data.columns.get(s.head.column)?.id,
-            ))
+                self.data.columns[s.anchor.column].id,
+                self.data.columns[s.head.column].id,
+            )
         });
         if !update(&mut self.data.columns) {
             return false;
         }
-        let selection = selected.and_then(|(s, anchor, head)| {
-            let relocate = |cell: Cell, id| {
-                let column = self
-                    .data
-                    .columns
-                    .position(id)
-                    .map(|column| column.index())
-                    .or_else(|| (!self.data.columns.is_empty()).then_some(0))?;
-                Some(Cell { column, ..cell })
-            };
-            Some(Selection {
-                anchor: relocate(s.anchor, anchor)?,
-                head: relocate(s.head, head)?,
-            })
-        });
+        let columns = &self.data.columns;
+        if self
+            .filter_panel_column()
+            .is_some_and(|id| columns.position(id).is_none())
+        {
+            self.controls.drawer = None;
+        }
+        let selection = selected
+            .filter(|_| !columns.is_empty())
+            .map(|(s, anchor, head)| {
+                let relocate = |cell: Cell, id| Cell {
+                    column: columns.position(id).map_or(0, |column| column.index()),
+                    ..cell
+                };
+                Selection {
+                    anchor: relocate(s.anchor, anchor),
+                    head: relocate(s.head, head),
+                }
+            });
         self.set_selection(selection, cx);
-        self.reset_grid_interaction();
         self.sync_find_columns(reordered, cx);
         true
     }

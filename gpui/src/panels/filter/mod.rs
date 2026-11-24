@@ -65,7 +65,6 @@ pub(crate) struct FilterEditor {
     snapshot: AppliedView,
     column: ColumnInfo,
     draft: Draft,
-    facet: Option<Arc<FilterChoices>>,
     rows: Vec<ChoiceRow>,
     matches: Vec<usize>,
     search_task: Option<Task<()>>,
@@ -136,7 +135,6 @@ impl FilterEditor {
             snapshot,
             column,
             draft,
-            facet: None,
             rows: Vec::new(),
             matches: Vec::new(),
             search_task: None,
@@ -163,7 +161,7 @@ impl FilterEditor {
         let changed = !Arc::ptr_eq(snapshot.filtered(), self.snapshot.filtered());
         self.snapshot = snapshot;
         if changed {
-            self.facet = None;
+            self.draft.set_facet(None);
             self.rows.clear();
             self.matches.clear();
             self.search_task = None;
@@ -303,7 +301,6 @@ impl FilterEditor {
 
     fn select_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         self.draft.mode = mode;
-        self.sync_checks();
         if mode == Mode::Range && self.preview.is_none() {
             self.load(cx);
         }
@@ -311,10 +308,10 @@ impl FilterEditor {
     }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.draft = Draft::default();
+        self.draft.reset();
         let modes = Draft::modes(
             self.column.capabilities,
-            self.facet.as_ref().is_some_and(|f| f.values.is_some()),
+            self.draft.facet().is_some_and(|f| f.values.is_some()),
         );
         self.drag = None;
         for input in [&self.search, &self.text, &self.low, &self.high] {

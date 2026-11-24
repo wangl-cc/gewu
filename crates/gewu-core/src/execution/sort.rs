@@ -1,6 +1,6 @@
 //! Columnar multi-key sort of source row IDs.
 //!
-//! The input is a set of selected source row IDs plus one source column per
+//! The input is a filtered view's source-ordered row IDs plus one source column per
 //! key; the output is the same IDs in display order. Equal keys always keep
 //! ascending source-row order, so the result is deterministic and matches
 //! Arrow's `lexsort_to_indices` with the row ID appended as a final key.
@@ -31,7 +31,7 @@ use arrow::{
     row::{RowConverter, SortField},
 };
 
-use crate::{column::Dictionary, row_ids::RowSlice};
+use crate::column::Dictionary;
 
 /// One sort key: a source column and its direction. Nulls always sort last.
 #[derive(Clone, Copy)]
@@ -65,19 +65,9 @@ pub(crate) fn codes_match_arrow_order(data_type: &DataType) -> bool {
     }
 }
 
-pub(crate) fn sort_rows(rows: RowSlice<'_>, keys: &[SortKey<'_>]) -> Result<Vec<u32>, ArrowError> {
-    let mut sorted: Vec<u32> = rows.iter_u32().collect();
-    // Every kernel is stable over its input, so starting from ascending IDs
-    // gives the source-row tie-break without a separate pass.
-    if !sorted.is_sorted() {
-        sorted.sort_unstable();
-    }
-    sort_ascending(&mut sorted, keys)?;
-    Ok(sorted)
-}
-
-/// Sort `rows`, which hold distinct source IDs in ascending order, by `keys`.
-fn sort_ascending(rows: &mut [u32], keys: &[SortKey<'_>]) -> Result<(), ArrowError> {
+/// Sort a filtered view's ascending source IDs in place. Stable runs give tied
+/// values their original source order, including when refining later keys.
+pub(crate) fn sort_source_rows(rows: &mut [u32], keys: &[SortKey<'_>]) -> Result<(), ArrowError> {
     let Some((key, rest)) = keys.split_first() else {
         return Ok(());
     };
@@ -113,7 +103,7 @@ fn refine(
     }
     for run in runs {
         if run.len() > 1 {
-            sort_ascending(&mut rows[run], rest)?;
+            sort_source_rows(&mut rows[run], rest)?;
         }
     }
     Ok(())
@@ -357,8 +347,10 @@ fn sort_row_format(rows: &mut [u32], keys: &[SortKey<'_>]) -> Result<(), ArrowEr
         .iter()
         .map(|key| SortField::new_with_options(key.array.data_type().clone(), key.options()))
         .collect();
-    let Ok(converter) = RowConverter::new(fields) else {
-        return sort_comparators(rows, keys);
+    let converter = match RowConverter::new(fields) {
+        Ok(converter) => converter,
+        Err(ArrowError::NotYetImplemented(_)) => return sort_comparators(rows, keys),
+        Err(error) => return Err(error),
     };
     let ids = UInt32Array::from(rows.to_vec());
     let columns = keys
@@ -409,6 +401,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::row_ids::RowSlice;
 
     /// Sort with every applicable kernel and compare against Arrow lexsort
     /// with the source row appended as the final key.
@@ -455,14 +448,15 @@ mod tests {
                 })
                 .collect()
         };
-        assert_eq!(sort_rows(rows, &keys(true)).unwrap(), expected, "codes");
-        assert_eq!(sort_rows(rows, &keys(false)).unwrap(), expected, "native");
-        let mut fallback: Vec<u32> = row_vec.clone();
-        fallback.sort_unstable();
+        for use_codes in [true, false] {
+            let mut actual = row_vec.clone();
+            sort_source_rows(&mut actual, &keys(use_codes)).unwrap();
+            assert_eq!(actual, expected, "compact codes enabled: {use_codes}");
+        }
+        let mut fallback = row_vec.clone();
         sort_row_format(&mut fallback, &keys(false)).unwrap();
         assert_eq!(fallback, expected, "row format");
-        let mut fallback: Vec<u32> = row_vec;
-        fallback.sort_unstable();
+        let mut fallback = row_vec;
         sort_comparators(&mut fallback, &keys(false)).unwrap();
         assert_eq!(fallback, expected, "comparators");
     }
@@ -532,9 +526,9 @@ mod tests {
         let lists: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
             (0..len).map(|row| (row % 4 != 0).then(|| vec![Some((row % 7) as i32), None])),
         ));
-        // A sparse, reversed selection verifies comparisons use source IDs,
+        // A sparse selection verifies comparisons use source IDs,
         // rather than positions in the selected view.
-        let rows: Vec<_> = (0..len as u32).rev().filter(|row| row % 3 != 0).collect();
+        let rows: Vec<_> = (0..len as u32).filter(|row| row % 3 != 0).collect();
         for array in [
             &numbers,
             &floats,
@@ -586,7 +580,7 @@ mod tests {
                 }
             })));
             if pattern == 3 {
-                let rows: Vec<u32> = (0..len as u32).rev().filter(|row| row % 3 != 0).collect();
+                let rows: Vec<u32> = (0..len as u32).filter(|row| row % 3 != 0).collect();
                 agrees_with_arrow(RowSlice::Selected(&rows), &[(&array, false)]);
             } else {
                 agrees_with_arrow(RowSlice::All(len), &[(&array, false)]);
@@ -600,8 +594,8 @@ mod tests {
             (0..5_000).map(|row| (row % 17) as i64),
         ));
         for len in [0, 1, 2, 17, 5_000] {
-            let rev: Vec<u32> = (0..len as u32).rev().collect();
-            agrees_with_arrow(RowSlice::Selected(&rev), &[(&array, false)]);
+            let rows: Vec<u32> = (0..len as u32).collect();
+            agrees_with_arrow(RowSlice::Selected(&rows), &[(&array, false)]);
             agrees_with_arrow(RowSlice::All(len), &[(&array, false)]);
         }
     }
