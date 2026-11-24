@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gewu_core::{ColumnId, ColumnSort};
 use gpui_kit::{
     component::menu::{PopupMenu, PopupMenuItem},
@@ -55,19 +57,14 @@ impl TableView {
     fn sort_choice(
         &self,
         priority: Option<usize>,
+        options: Vec<Choice<ColumnId>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let replacing = priority
             .and_then(|i| self.requested_query().sorts.get(i))
             .map(|rule| rule.column);
-        let options = column_labels(self.data.columns.iter(), None)
-            .filter(|(id, _)| {
-                Some(*id) == replacing
-                    || !self.requested_query().sorts.iter().any(|s| s.column == *id)
-            })
-            .map(|(value, label)| Choice { value, label })
-            .collect();
+
         let pick = cx.listener(move |t, selected: &ColumnId, _, cx| {
             let selected = *selected;
             t.change_sorts(
@@ -142,6 +139,17 @@ impl TableView {
         let colors = gpui_kit::base::Theme::global(cx).tokens.colors;
         let mut panel = self.drawer("Sort", window, cx);
         let sorts = &self.requested_query().sorts;
+        let used: HashSet<_> = sorts.iter().map(|s| s.column).collect();
+        let columns: Vec<_> = column_labels(self.data.columns.iter(), None)
+            .map(|(value, label)| Choice { value, label })
+            .collect();
+        let options = |current: Option<ColumnId>| {
+            columns
+                .iter()
+                .filter(|c| Some(c.value) == current || !used.contains(&c.value))
+                .cloned()
+                .collect()
+        };
         let mut rows = div()
             .id("sort-list")
             .min_h_0()
@@ -235,12 +243,12 @@ impl TableView {
                         .text_color(colors.muted_foreground)
                         .child(format!("⠿ {}", index + 1)),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.sort_choice(Some(index), window, cx)),
-                )
+                .child(div().flex_1().min_w_0().child(self.sort_choice(
+                    Some(index),
+                    options(Some(id)),
+                    window,
+                    cx,
+                )))
                 .child(self.sort_direction(id, descending, cx))
                 .child(
                     super::icon_button(("earlier-sort", raw), "Move rule earlier", "↑", cx)
@@ -262,7 +270,7 @@ impl TableView {
             rows = rows.child(row);
         }
         panel = panel.child(rows);
-        panel = panel.child(self.sort_choice(None, window, cx));
+        panel = panel.child(self.sort_choice(None, options(None), window, cx));
         let mut footer = super::footer();
         if !sorts.is_empty() {
             footer = footer.child(
