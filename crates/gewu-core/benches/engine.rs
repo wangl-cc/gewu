@@ -337,19 +337,11 @@ fn facet_open(c: &mut Criterion) {
     });
     let filtered = doc.filter(&filters).unwrap();
     g.bench_function("choices_label", |b| {
-        b.iter(|| {
-            filtered
-                .facet(label)
-                .unwrap()
-                .filter_choices(label)
-                .unwrap()
-        })
+        b.iter(|| filtered.filter_choices(label).unwrap())
     });
     g.bench_function("distribution_price", |b| {
         b.iter(|| {
             filtered
-                .facet(price)
-                .unwrap()
                 .filter_distribution(price, 60, gewu_core::AxisScale::Linear)
                 .unwrap()
         })

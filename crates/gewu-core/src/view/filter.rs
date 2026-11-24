@@ -49,7 +49,17 @@ impl FilteredView {
     /// passing every filter except `column`'s own, so its alternatives stay
     /// visible. See [`Self::facet`].
     pub fn filter_choices(self: &Arc<Self>, column: ColumnId) -> Result<FilterChoices> {
-        self.facet(column)?.choices(column)
+        let data = self.column(column)?;
+        let mask = self.selection.facet_mask(column);
+        if predicate::supports_equals(data.array().data_type()) {
+            if let Some(dictionary) = data.dictionary()? {
+                return dictionary_choices(dictionary, mask.as_ref());
+            }
+        }
+        Ok(FilterChoices {
+            values: None,
+            null_count: stats::count_nulls(ColView::from_mask(data, mask.as_ref())),
+        })
     }
 
     /// A range editor's histogram for `column`, over the same rows as
@@ -60,28 +70,7 @@ impl FilteredView {
         bins: u32,
         scale: crate::AxisScale,
     ) -> Result<Option<RangeHistogram>> {
-        self.facet(column)?.range_histogram(column, bins, scale)
-    }
-
-    fn choices(&self, column: ColumnId) -> Result<FilterChoices> {
-        let view = self.col(column)?;
-        if predicate::supports_equals(view.data_type()) {
-            if let Some(dictionary) = view.column().dictionary()? {
-                return dictionary_choices(view, dictionary, self.selection_mask());
-            }
-        }
-        Ok(FilterChoices {
-            values: None,
-            null_count: stats::count_nulls(view),
-        })
-    }
-
-    fn range_histogram(
-        &self,
-        column: ColumnId,
-        bins: u32,
-        scale: crate::AxisScale,
-    ) -> Result<Option<RangeHistogram>> {
+        let data = self.column(column)?;
         if !(1..=60).contains(&bins) {
             return Err(crate::AnalysisError::InvalidBinCount {
                 operation: crate::AnalysisOperation::FilterDistribution,
@@ -91,19 +80,20 @@ impl FilteredView {
             }
             .into());
         }
-        Ok(stats::build_scaled(self.col(column)?, bins, scale)?)
+        let mask = self.selection.facet_mask(column);
+        Ok(stats::build_scaled(
+            ColView::from_mask(data, mask.as_ref()),
+            bins,
+            scale,
+        )?)
     }
 }
 
 fn dictionary_choices(
-    view: ColView<'_>,
     dictionary: &Dictionary,
-    selection: Option<&BooleanBuffer>,
+    mask: Option<&BooleanBuffer>,
 ) -> Result<FilterChoices> {
-    let tally = match selection {
-        Some(mask) if !view.is_complete() => tally_rows(mask.set_indices(), dictionary),
-        _ => tally_candidates(view, dictionary),
-    };
+    let tally = tally_candidates(dictionary, mask);
     let values = dictionary
         .labels()
         .iter()
@@ -123,14 +113,14 @@ fn dictionary_choices(
     })
 }
 
-fn tally_candidates(view: ColView<'_>, dictionary: &Dictionary) -> Tally {
-    if view.is_complete() {
-        return Tally {
-            counts: dictionary.all_counts().to_vec(),
-            null_count: dictionary.null_count(),
-        };
+fn tally_candidates(dictionary: &Dictionary, mask: Option<&BooleanBuffer>) -> Tally {
+    if let Some(mask) = mask.filter(|mask| mask.count_set_bits() < mask.len()) {
+        return tally_rows(mask.set_indices(), dictionary);
     }
-    tally_rows(view.rows().iter(), dictionary)
+    Tally {
+        counts: dictionary.all_counts().to_vec(),
+        null_count: dictionary.null_count(),
+    }
 }
 
 /// Count the dictionary codes of the given source rows.
@@ -160,7 +150,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::col_view::test::Fixture;
 
     #[test]
     fn cell_filter_uses_display_order_and_lossless_temporal_values() {
@@ -206,14 +195,13 @@ mod tests {
         let dictionary = Dictionary::build(&array).unwrap().unwrap();
         let code_b = dictionary.code_at(0);
         let code_a = dictionary.code_at(1);
-        let selected = Fixture::new(&array, vec![0, 3]);
-        let tally = tally_candidates(selected.view(), &dictionary);
+        let mask = BooleanBuffer::from(vec![true, false, false, true]);
+        let tally = tally_candidates(&dictionary, Some(&mask));
         assert_eq!(tally.null_count, 0);
         assert_eq!(tally.counts[code_a as usize], 0);
         assert_eq!(tally.counts[code_b as usize], 2);
 
-        let all = Fixture::all(&array);
-        let all = tally_candidates(all.view(), &dictionary);
+        let all = tally_candidates(&dictionary, None);
         assert_eq!(all.null_count, 1);
         assert_eq!(all.counts[code_a as usize], 1);
         assert_eq!(all.counts[code_b as usize], 2);
@@ -223,22 +211,19 @@ mod tests {
     fn tally_handles_empty_and_all_null_columns() {
         let empty: ArrayRef = Arc::new(Int64Array::from(Vec::<i64>::new()));
         let dictionary = Dictionary::build(&empty).unwrap().unwrap();
-        let all = Fixture::all(&empty);
-        let tally = tally_candidates(all.view(), &dictionary);
+        let tally = tally_candidates(&dictionary, None);
         assert_eq!(tally.null_count, 0);
         assert!(tally.counts.is_empty());
 
         let nulls: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
         let dictionary = Dictionary::build(&nulls).unwrap().unwrap();
-        let all = Fixture::all(&nulls);
-        let tally = tally_candidates(all.view(), &dictionary);
+        let tally = tally_candidates(&dictionary, None);
         assert_eq!(tally.null_count, 2);
         assert!(tally.counts.is_empty());
 
         let nulls: ArrayRef = Arc::new(NullArray::new(3));
         let dictionary = Dictionary::build(&nulls).unwrap().unwrap();
-        let all = Fixture::all(&nulls);
-        let tally = tally_candidates(all.view(), &dictionary);
+        let tally = tally_candidates(&dictionary, None);
         assert_eq!(tally.null_count, 3);
         assert!(tally.counts.is_empty());
     }
@@ -258,10 +243,8 @@ mod tests {
             Arc::new(DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap());
         let plain = Dictionary::build(&plain_array).unwrap().unwrap();
         let native = Dictionary::build(&native_array).unwrap().unwrap();
-        let plain_view = Fixture::all(&plain_array);
-        let native_view = Fixture::all(&native_array);
-        let plain_tally = tally_candidates(plain_view.view(), &plain);
-        let native_tally = tally_candidates(native_view.view(), &native);
+        let plain_tally = tally_candidates(&plain, None);
+        let native_tally = tally_candidates(&native, None);
         assert_eq!(plain_tally, native_tally);
     }
 }

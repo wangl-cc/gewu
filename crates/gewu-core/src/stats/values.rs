@@ -1,10 +1,10 @@
-//! Fixed-capacity inspector estimates. Only representative row IDs, never owned values,
-//! are retained.
+//! Fixed-capacity frequency sketch over native values. Arrow dictionary input additionally
+//! uses one temporary hash per dictionary entry, reused across both scans.
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 use arrow::{
-    array::{downcast_dictionary_array, downcast_primitive_array, Array, AsArray, PrimitiveArray},
+    array::{downcast_integer_array, downcast_primitive_array, Array, AsArray, PrimitiveArray},
     datatypes::*,
 };
 use rapidhash::{v3::rapidhash_v3, RapidHashMap};
@@ -26,7 +26,7 @@ pub struct ValueFrequency {
     pub count: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValueSummary {
     /// Non-null distinct values, estimated with a fixed-capacity sketch.
     pub distinct_count: u64,
@@ -92,17 +92,55 @@ fn normalize_float_bits(value: f64) -> u64 {
     }
 }
 
-/// Hash every dictionary entry once; rows then follow their keys.
-fn entry_hashes(values: &dyn Array) -> Result<Vec<Option<u64>>> {
-    let mut hashes = vec![None; values.len()];
-    let all = Selection::Range(0..values.len());
-    for_each_hash(values, &all, |index, key| hashes[index] = Some(key))?;
-    Ok(hashes)
+/// Both passes read the same hashes for dictionary entries. Native arrays hash selected values
+/// directly, keeping memory independent of the number of rows.
+enum ValueHashes<'a> {
+    Native(&'a dyn Array),
+    Dictionary {
+        keys: &'a dyn Array,
+        entries: Vec<Option<u64>>,
+    },
 }
 
-/// Call `f(row, hash)` for every selected non-null value. Dispatch happens
-/// once; each arm is a monomorphic loop over native values and the validity bitmap.
-fn for_each_hash(
+impl<'a> ValueHashes<'a> {
+    fn prepare(array: &'a dyn Array) -> Result<Self> {
+        let Some(dictionary) = array.as_any_dictionary_opt() else {
+            return Ok(Self::Native(array));
+        };
+        let values = dictionary.values();
+        let mut entries = vec![None; values.len()];
+        Self::prepare(values.as_ref())?.visit(
+            &Selection::Range(0..values.len()),
+            |row, hash| {
+                entries[row] = Some(hash);
+            },
+        )?;
+        Ok(Self::Dictionary {
+            keys: dictionary.keys(),
+            entries,
+        })
+    }
+
+    fn visit(&self, selection: &Selection<'_>, mut f: impl FnMut(usize, u64)) -> Result<()> {
+        match self {
+            Self::Native(array) => for_each_native_hash(*array, selection, f),
+            Self::Dictionary { keys, entries } => {
+                let keys = *keys;
+                downcast_integer_array!(keys => {
+                    for_each_valid(keys, selection, |row, key| {
+                        if let Some(hash) = entries[key.as_usize()] {
+                            f(row, hash);
+                        }
+                    });
+                }, _ => unreachable!("Arrow dictionary keys are integers"));
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Dispatch once per native scan, then visit each selected non-null value.
+fn for_each_native_hash(
     array: &dyn Array,
     selection: &Selection<'_>,
     mut f: impl FnMut(usize, u64),
@@ -138,14 +176,6 @@ fn for_each_hash(
         }};
     }
     match array.data_type() {
-        Dictionary(..) => downcast_dictionary_array!(array => {
-            let entries = entry_hashes(array.values().as_ref())?;
-            for_each_valid(array.keys(), selection, |index, key| {
-                if let Some(Some(hash)) = entries.get(key.as_usize()) {
-                    f(index, *hash);
-                }
-            });
-        }, _ => unreachable!()),
         Float16 => real(array.as_primitive::<Float16Type>(), selection, &mut f),
         Float32 => real(array.as_primitive::<Float32Type>(), selection, &mut f),
         Float64 => real(array.as_primitive::<Float64Type>(), selection, &mut f),
@@ -256,14 +286,15 @@ pub(crate) fn analyze(view: ColView<'_>) -> Result<ValueSummary> {
     // Low-cardinality columns already have (or cheaply build) a shared code
     // per row: count codes exactly instead of hashing values.
     if let Ok(Some(dictionary)) = view.column().dictionary() {
-        return encoded(view, dictionary);
+        return encoded(&view, dictionary);
     }
     let array = view.array().as_ref();
     let selection = view.selection();
+    let hashes = ValueHashes::prepare(array)?;
     let mut sketch = Sketch::default();
-    for_each_hash(array, &selection, |row, key| sketch.add(key, row))?;
+    hashes.visit(selection, |row, key| sketch.add(key, row))?;
     let mut counts = sketch.nominees();
-    for_each_hash(array, &selection, |_, key| {
+    hashes.visit(selection, |_, key| {
         if let Some(count) = counts.get_mut(&key) {
             count.0 += 1;
         }
@@ -280,7 +311,7 @@ pub(crate) fn analyze(view: ColView<'_>) -> Result<ValueSummary> {
 
 /// Exact counts from the column's value codes. Representative rows are the
 /// first occurrence in scan order, as in the sketch path.
-fn encoded(view: ColView<'_>, dictionary: &Dictionary) -> Result<ValueSummary> {
+fn encoded(view: &ColView<'_>, dictionary: &Dictionary) -> Result<ValueSummary> {
     let n = dictionary.all_counts().len();
     let codes = dictionary.codes();
     let nulls = dictionary.nulls();
@@ -305,7 +336,7 @@ fn encoded(view: ColView<'_>, dictionary: &Dictionary) -> Result<ValueSummary> {
         }
         selection => {
             let mut counts = vec![0_u64; n];
-            crate::stats::scan::for_each_valid_row(nulls, &selection, |row| {
+            crate::stats::scan::for_each_valid_row(nulls, selection, |row| {
                 let code = codes[row] as usize;
                 if counts[code] == 0 {
                     first[code] = row as u32;
@@ -427,6 +458,44 @@ mod tests {
             (summary.values[0].label.as_str(), summary.values[0].count),
             ("same", 2)
         );
+    }
+
+    #[test]
+    fn nested_dictionary_hashes_value_identity_and_skips_nulls_at_each_level() {
+        let values = Arc::new(StringArray::from(vec![
+            Some("one"),
+            None,
+            Some("one"),
+            Some("two"),
+        ]));
+        // More entries than the compact code space force the hash-based analysis.
+        let entries = Int32Array::from_iter((0..300).map(|key| match key {
+            0..=2 => Some(key),
+            3 => None,
+            _ => Some(3),
+        }));
+        let inner = Arc::new(DictionaryArray::<Int32Type>::new(entries, values));
+        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(299)]);
+        let nested: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(keys, inner));
+
+        let all = crate::col_view::test::Fixture::all(&nested);
+        let selected = crate::col_view::test::Fixture::masked(&nested, vec![0, 1, 2, 3, 4]);
+        let one = ValueFrequency {
+            label: "one".into(),
+            count: 2,
+        };
+        let two = ValueFrequency {
+            label: "two".into(),
+            count: 1,
+        };
+        assert_eq!(analyze(all.view()).unwrap(), ValueSummary {
+            distinct_count: 2,
+            values: vec![one.clone(), two],
+        });
+        assert_eq!(analyze(selected.view()).unwrap(), ValueSummary {
+            distinct_count: 1,
+            values: vec![one],
+        });
     }
 
     /// Columns above the code-space limit take the hashing path. With fewer

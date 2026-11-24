@@ -124,7 +124,7 @@ pub(crate) fn build_scaled(
 ) -> Result<Option<RangeHistogram>> {
     match scale {
         AxisScale::Linear => Ok(
-            match build_bins(view.array(), &view.selection(), bins.min(MAX_BINS))? {
+            match build_bins(view.array(), view.selection(), bins.min(MAX_BINS))? {
                 Domain::Bins(histogram) => Some(histogram),
                 Domain::Empty | Domain::InfiniteOnly | Domain::Unsupported => None,
             },
@@ -135,7 +135,7 @@ pub(crate) fn build_scaled(
 
 #[cfg(test)]
 fn counts(view: ColView<'_>, bins: u32) -> Result<Histogram> {
-    statistics(view.array(), &view.selection(), bins)
+    statistics(view.array(), view.selection(), bins)
 }
 
 pub(crate) fn counts_scaled<H: Output>(
@@ -144,7 +144,7 @@ pub(crate) fn counts_scaled<H: Output>(
     scale: AxisScale,
 ) -> Result<H> {
     match scale {
-        AxisScale::Linear => statistics(view.array(), &view.selection(), bins),
+        AxisScale::Linear => statistics(view.array(), view.selection(), bins),
         AxisScale::Log10 => logarithmic::build(view, bins),
     }
 }
@@ -618,13 +618,13 @@ mod tests {
 
     fn verify_bins(fixture: Fixture, bins: u32) -> RangeHistogram {
         let view = fixture.view();
-        let result = build_scaled(view, bins, AxisScale::Linear)
+        let result = build_scaled(fixture.view(), bins, AxisScale::Linear)
             .unwrap()
             .unwrap();
-        let statistics = counts(view, bins.min(MAX_BINS)).unwrap();
+        let statistics = counts(fixture.view(), bins.min(MAX_BINS)).unwrap();
         assert_eq!(statistics, result.histogram);
         let inspector: RangeHistogram =
-            counts_scaled(view, bins.min(MAX_BINS), AxisScale::Linear).unwrap();
+            counts_scaled(fixture.view(), bins.min(MAX_BINS), AxisScale::Linear).unwrap();
         assert_eq!(inspector, result);
         assert_eq!(result.ranges.len(), result.histogram.counts.len());
         assert!(result.ranges.first().unwrap().min.is_none());
@@ -642,7 +642,7 @@ mod tests {
             let mut matched = vec![false; view.array().len()];
             predicate.evaluate(0..view.array().len(), &mut matched);
             assert_eq!(
-                view.rows().iter().filter(|&row| matched[row]).count() as u64,
+                fixture.rows().iter().filter(|&row| matched[row]).count() as u64,
                 expected
             );
             for (selected, matched) in selected.iter_mut().zip(matched) {
@@ -655,9 +655,11 @@ mod tests {
         );
         assert_eq!(
             result.histogram.counts.iter().sum::<u64>()
-                + crate::stats::count_nulls(view)
-                + crate::stats::analyze_statistics(view).unwrap().nan_count,
-            view.len() as u64
+                + crate::stats::count_nulls(fixture.view())
+                + crate::stats::analyze_statistics(fixture.view())
+                    .unwrap()
+                    .nan_count,
+            fixture.rows().len() as u64
         );
         result
     }
@@ -727,7 +729,7 @@ mod tests {
                     + crate::stats::analyze_statistics(all.view())
                         .unwrap()
                         .nan_count,
-                all.view().len() as u64
+                all.rows().len() as u64
             );
             assert!(build_scaled(all.view(), 3, AxisScale::Linear)
                 .unwrap()
@@ -746,7 +748,7 @@ mod tests {
             let h = counts(selected.view(), 40).unwrap();
             assert_eq!(
                 (
-                    selected.view().len(),
+                    selected.rows().len(),
                     crate::stats::count_nulls(selected.view()),
                     crate::stats::analyze_statistics(selected.view())
                         .unwrap()

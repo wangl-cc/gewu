@@ -204,7 +204,7 @@ mod tests {
     use super::*;
 
     fn view_label(view: crate::col_view::ColView<'_>) -> Option<String> {
-        label(Numeric::new(view.array()).unwrap(), &view.selection()).unwrap()
+        label(Numeric::new(view.array()).unwrap(), view.selection()).unwrap()
     }
 
     fn median(array: ArrayRef) -> Option<String> {

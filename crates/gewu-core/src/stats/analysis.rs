@@ -5,7 +5,7 @@ use arrow::{array::Array, datatypes::DataType};
 use crate::{col_view::ColView, stats::Result, types, types::display_type};
 
 pub(crate) fn count_nulls(view: ColView<'_>) -> u64 {
-    super::scan::null_count(view.array().logical_nulls().as_ref(), &view.selection())
+    super::scan::null_count(view.array().logical_nulls().as_ref(), view.selection())
 }
 
 /// Type-level analysis support. Presentation order and expansion state belong to the UI.
@@ -168,12 +168,34 @@ mod tests {
         let number = view(&(Arc::new(arrow::array::Int32Array::from(vec![1])) as ArrayRef));
         let binary = view(&(Arc::new(arrow::array::BinaryArray::from_vec(vec![b"x"])) as ArrayRef));
         let c0 = ColumnId::new(0);
-        assert!(matches!(text.statistics(c0), Err(Error::Analysis(_))));
-        assert!(matches!(number.lengths(c0, 10), Err(Error::Analysis(_))));
-        assert!(matches!(binary.values(c0), Err(Error::Analysis(_))));
+        use crate::{AnalysisError::UnsupportedOperation, AnalysisOperation};
+        assert!(matches!(
+            text.statistics(c0),
+            Err(Error::Analysis(UnsupportedOperation {
+                operation: AnalysisOperation::Statistics,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            number.lengths(c0, 10),
+            Err(Error::Analysis(UnsupportedOperation {
+                operation: AnalysisOperation::Lengths,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            binary.values(c0),
+            Err(Error::Analysis(UnsupportedOperation {
+                operation: AnalysisOperation::Values,
+                ..
+            }))
+        ));
         assert!(matches!(
             dataset(&array).column_structure(c0),
-            Err(Error::Analysis(_))
+            Err(Error::Analysis(UnsupportedOperation {
+                operation: AnalysisOperation::Structure,
+                ..
+            }))
         ));
         assert_eq!(text.count_nulls(c0).unwrap(), 0);
         assert_eq!(number.statistics(c0).unwrap().mean, Some(1.0));
@@ -329,10 +351,9 @@ mod tests {
         }
     }
 
-    /// A filtered view scans its bitmap; every analysis must match the same
-    /// rows scanned as explicit row IDs.
+    /// Kernels that accept a selection agree for equivalent bitmap and row-ID inputs.
     #[test]
-    fn bitmap_selections_match_row_selections_for_every_analysis() {
+    fn bitmap_scans_match_explicit_rows_for_supported_analyses() {
         use crate::col_view::test::Fixture;
         let n = 1000_usize;
         let value = |i: usize| (i * 7919 % 613) as f64 - 100.0;
@@ -353,35 +374,38 @@ mod tests {
             let by_mask = Fixture::masked(&array, rows.clone());
             let (r, m) = (by_rows.view(), by_mask.view());
             assert!(matches!(m.selection(), crate::col_view::Selection::Mask(_)));
-            let debug = |view| {
-                format!(
-                    "{:?} {:?} {:?} {:?} {:?} {:?} {:?}",
-                    super::count_nulls(view),
-                    crate::stats::analyze_statistics(view)
-                        .map(|s| format!("{s:?}"))
-                        .ok(),
-                    crate::stats::counts_scaled::<crate::Histogram>(view, 7, AxisScale::Linear)
-                        .ok(),
-                    crate::stats::counts_scaled::<crate::Histogram>(view, 7, AxisScale::Log10).ok(),
-                    crate::stats::build_scaled(view, 7, AxisScale::Linear).ok(),
-                    crate::stats::analyze_values(view).ok(),
-                    crate::stats::analyze_lengths(view, 7).ok(),
-                )
-            };
-            assert_eq!(debug(r), debug(m), "{}", array.data_type());
-            let scatter = |view: crate::col_view::ColView<'_>| {
-                crate::stats::scatter::analyze(
-                    None,
-                    (ColumnId::new(0), view.array()),
-                    view.rows(),
-                    64,
-                    AxisScale::Linear,
-                    AxisScale::Linear,
-                )
-                .map(|s| format!("{s:?}"))
-                .ok()
-            };
-            assert_eq!(scatter(r), scatter(m));
+            assert!(matches!(r.selection(), crate::col_view::Selection::Rows(_)));
+            assert_eq!(
+                super::count_nulls(by_rows.view()),
+                super::count_nulls(by_mask.view())
+            );
+            assert_eq!(
+                crate::stats::analyze_values(by_rows.view()).unwrap(),
+                crate::stats::analyze_values(by_mask.view()).unwrap(),
+            );
+            if *array.data_type() == DataType::Utf8 {
+                assert_eq!(
+                    crate::stats::analyze_lengths(by_rows.view(), 7).unwrap(),
+                    crate::stats::analyze_lengths(by_mask.view(), 7).unwrap(),
+                );
+            } else {
+                assert_eq!(
+                    crate::stats::analyze_statistics(by_rows.view()).unwrap(),
+                    crate::stats::analyze_statistics(by_mask.view()).unwrap(),
+                );
+                for scale in [AxisScale::Linear, AxisScale::Log10] {
+                    let counts = |view| {
+                        crate::stats::counts_scaled::<crate::Histogram>(view, 7, scale).unwrap()
+                    };
+                    let ranges = |view| {
+                        crate::stats::build_scaled(view, 7, scale)
+                            .unwrap()
+                            .expect("sample has finite positive values")
+                    };
+                    assert_eq!(counts(by_rows.view()), counts(by_mask.view()));
+                    assert_eq!(ranges(by_rows.view()), ranges(by_mask.view()));
+                }
+            }
         }
     }
 }

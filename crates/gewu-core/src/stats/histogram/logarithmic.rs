@@ -32,7 +32,7 @@ pub(super) fn build<H: Output>(view: ColView<'_>, bins: u32) -> Result<H> {
         });
     }
     let bins = bins as usize;
-    let selection = &view.selection();
+    let selection = view.selection();
     match array.data_type() {
         t if t.is_integer() => {
             downcast_integer_array!(array => integer(array, selection, bins), _ => unreachable!("integer dispatch"))
@@ -425,8 +425,8 @@ mod tests {
 
     fn verify(fixture: Fixture, bins: u32) -> Histogram {
         let view = fixture.view();
-        let result: RangeHistogram = build(view, bins).unwrap();
-        let histogram: Histogram = build(view, bins).unwrap();
+        let result: RangeHistogram = build(fixture.view(), bins).unwrap();
+        let histogram: Histogram = build(fixture.view(), bins).unwrap();
         assert_eq!(histogram, result.histogram);
         assert_eq!(histogram.scale, AxisScale::Log10);
         assert_eq!(result.ranges.len(), histogram.counts.len());
@@ -456,7 +456,7 @@ mod tests {
             let mut matched = vec![false; view.array().len()];
             predicate.evaluate(0..view.array().len(), &mut matched);
             assert_eq!(
-                view.rows().iter().filter(|&row| matched[row]).count() as u64,
+                fixture.rows().iter().filter(|&row| matched[row]).count() as u64,
                 expected
             );
             for (membership, matched) in memberships.iter_mut().zip(matched) {
@@ -469,11 +469,13 @@ mod tests {
         );
         assert_eq!(
             histogram.counts.iter().sum::<u64>()
-                + crate::stats::count_nulls(view)
-                + crate::stats::analyze_statistics(view).unwrap().nan_count
+                + crate::stats::count_nulls(fixture.view())
+                + crate::stats::analyze_statistics(fixture.view())
+                    .unwrap()
+                    .nan_count
                 + histogram.non_positive_count
                 + histogram.infinite_count,
-            view.len() as u64
+            fixture.rows().len() as u64
         );
         histogram
     }

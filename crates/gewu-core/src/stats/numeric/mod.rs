@@ -14,7 +14,7 @@ use crate::{
     stats::{scan::for_each_valid, Result},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NumericStatistics {
     pub min_label: Option<String>,
     pub max_label: Option<String>,
@@ -216,7 +216,7 @@ pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStati
     }
     let selection = view.selection();
     let numeric = Numeric::new(view.array()).expect("supported numeric type");
-    let summary = numeric.summarize(&selection);
+    let summary = numeric.summarize(selection);
     let formatter = crate::format::formatter(view.array().as_ref())?;
     let label = |row: Option<usize>| {
         row.and_then(|row| crate::format::cell(view.array().as_ref(), &formatter, row))
@@ -224,7 +224,7 @@ pub(crate) fn analyze(view: crate::col_view::ColView<'_>) -> Result<NumericStati
     Ok(NumericStatistics {
         min_label: label(summary.min_row),
         max_label: label(summary.max_row),
-        median_label: super::median::label(numeric, &selection)?,
+        median_label: super::median::label(numeric, selection)?,
         mean: summary.mean.filter(|v| v.is_finite()),
         mean_label: temporal_mean_label(view.data_type(), summary.mean)?,
         std_dev: summary

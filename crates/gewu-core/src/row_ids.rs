@@ -55,13 +55,6 @@ impl<'a> RowSlice<'a> {
         }
     }
 
-    pub(crate) fn iter(self) -> RowIter<'a> {
-        match self {
-            Self::All(n) => RowIter::Range(0..n),
-            Self::Selected(rows) => RowIter::Slice(rows.iter()),
-        }
-    }
-
     pub(crate) fn iter_u32(self) -> RowU32Iter<'a> {
         match self {
             Self::All(n) => RowU32Iter::Range(0..n as u32),
@@ -207,7 +200,6 @@ mod tests {
         let slice = all.as_slice();
         assert_eq!(slice.len(), 5);
         assert_eq!(RowSlice::All(0).len(), 0);
-        assert_eq!(slice.iter().collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
         assert_eq!(slice.iter_u32().collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
 
         let win = slice.window(1, 4);

@@ -11,7 +11,7 @@ use crate::{
     Histogram,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LengthSummary {
     pub unit: LengthUnit,
     pub empty_count: u64,
@@ -68,7 +68,7 @@ pub(crate) fn analyze(view: ColView<'_>, bins: u32) -> Result<LengthSummary> {
     macro_rules! scan {
         ($native:expr, | $column:ident, $row:ident | $length:expr) => {{
             let $column = $native;
-            Ok(summarize(array.as_ref(), &selection, unit, bins, |$row| {
+            Ok(summarize(array.as_ref(), selection, unit, bins, |$row| {
                 $length as u64
             }))
         }};
@@ -270,7 +270,7 @@ mod tests {
             (
                 result.empty_count,
                 crate::stats::count_nulls(selected.view()),
-                selected.view().len()
+                selected.rows().len()
             ),
             (1, 1, 3)
         );

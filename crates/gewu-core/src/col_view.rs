@@ -4,33 +4,20 @@ use std::ops::Range;
 
 use arrow::{array::ArrayRef, buffer::BooleanBuffer, datatypes::DataType};
 
-use crate::{
-    column::Column,
-    row_ids::{RowSlice, RowWindow},
-};
+use crate::{column::Column, row_ids::RowWindow};
 
-#[derive(Clone, Copy)]
 pub(crate) struct ColView<'a> {
     column: &'a Column,
-    rows: RowSlice<'a>,
-    /// Filter bitmap selecting exactly the rows of `rows`, when one exists.
-    mask: Option<&'a BooleanBuffer>,
+    selection: Selection<'a>,
 }
 
 impl<'a> ColView<'a> {
-    pub(crate) fn new(column: &'a Column, rows: RowSlice<'a>) -> Self {
-        Self {
-            column,
-            rows,
-            mask: None,
-        }
-    }
-
-    /// Attach the filter bitmap whose set bits are exactly this view's rows,
-    /// so order-independent scans can walk the bitmap instead of row IDs.
-    pub(crate) fn with_mask(mut self, mask: Option<&'a BooleanBuffer>) -> Self {
-        self.mask = mask;
-        self
+    pub(crate) fn from_mask(column: &'a Column, mask: Option<&'a BooleanBuffer>) -> Self {
+        let selection = match mask {
+            Some(mask) => Selection::Mask(mask),
+            None => Selection::Range(0..column.array().len()),
+        };
+        Self { column, selection }
     }
 
     pub(crate) fn column(&self) -> &Column {
@@ -41,34 +28,12 @@ impl<'a> ColView<'a> {
         self.column.array()
     }
 
-    pub(crate) fn rows(&self) -> RowSlice<'a> {
-        self.rows
-    }
-
     pub(crate) fn data_type(&self) -> &DataType {
         self.array().data_type()
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        matches!(self.rows, RowSlice::All(_)) || self.rows.len() == self.array().len()
-    }
-
-    /// Source rows for order-independent scans. A complete view is the
-    /// contiguous range even when its display rows are sorted; a filtered
-    /// view scans its filter bitmap in source order.
-    pub(crate) fn selection(&self) -> Selection<'a> {
-        if self.is_complete() {
-            Selection::Range(0..self.array().len())
-        } else if let Some(mask) = self.mask {
-            Selection::Mask(mask)
-        } else {
-            Selection::from(self.rows)
-        }
+    pub(crate) fn selection(&self) -> &Selection<'a> {
+        &self.selection
     }
 }
 
@@ -108,21 +73,12 @@ impl<'a> From<RowWindow<'a>> for Selection<'a> {
     }
 }
 
-impl<'a> From<RowSlice<'a>> for Selection<'a> {
-    fn from(rows: RowSlice<'a>) -> Self {
-        match rows {
-            RowSlice::All(n) => Self::Range(0..n),
-            RowSlice::Selected(rows) => Self::Rows(rows),
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test {
     use std::sync::Arc;
 
     use super::*;
-    use crate::row_ids::RowIds;
+    use crate::row_ids::{RowIds, RowSlice};
 
     pub(crate) struct Fixture {
         column: Column,
@@ -159,7 +115,17 @@ pub(crate) mod test {
         }
 
         pub(crate) fn view(&self) -> ColView<'_> {
-            ColView::new(&self.column, self.rows.as_slice()).with_mask(self.mask.as_ref())
+            match (&self.mask, self.rows.as_slice()) {
+                (None, RowSlice::Selected(rows)) => ColView {
+                    column: &self.column,
+                    selection: Selection::Rows(rows),
+                },
+                (mask, _) => ColView::from_mask(&self.column, mask.as_ref()),
+            }
+        }
+
+        pub(crate) fn rows(&self) -> RowWindow<'_> {
+            self.rows.as_slice().window(0, self.rows.len())
         }
     }
 }

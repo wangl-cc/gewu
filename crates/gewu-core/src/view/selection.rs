@@ -50,6 +50,20 @@ impl FilterSelection {
         )
     }
 
+    /// Intersection used by a column editor, without constructing a row-addressable view.
+    pub(super) fn facet_mask(&self, column: ColumnId) -> Option<BooleanBuffer> {
+        if self.constrains(column) {
+            intersect(
+                self.conditions
+                    .iter()
+                    .filter(|(c, _)| *c != column)
+                    .map(|(_, mask)| mask),
+            )
+        } else {
+            self.mask.clone()
+        }
+    }
+
     /// Source row IDs of the selected rows, in source order.
     pub(crate) fn row_ids(mask: &BooleanBuffer) -> Vec<u32> {
         let mut rows = Vec::with_capacity(mask.count_set_bits());

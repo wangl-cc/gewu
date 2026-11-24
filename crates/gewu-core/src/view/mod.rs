@@ -78,11 +78,6 @@ impl FilteredView {
         ))
     }
 
-    /// Selection bitmap over all source rows, or `None` when every row is selected.
-    pub(crate) fn selection_mask(&self) -> Option<&arrow::buffer::BooleanBuffer> {
-        self.selection.mask()
-    }
-
     pub fn row_count(&self) -> u64 {
         self.rows.len() as u64
     }
@@ -143,8 +138,12 @@ impl FilteredView {
     }
 
     pub(crate) fn col(&self, column: ColumnId) -> Result<ColView<'_>, crate::ColumnError> {
-        Ok(ColView::new(self.column(column)?, self.rows.as_slice())
-            .with_mask(self.selection.mask()))
+        let mask = if self.rows.len() == self.dataset.n_rows() {
+            None
+        } else {
+            self.selection.mask()
+        };
+        Ok(ColView::from_mask(self.column(column)?, mask))
     }
 }
 
@@ -318,7 +317,7 @@ mod tests {
         let filtered = ds.filter(&[number.clone(), label.clone()]).unwrap();
         assert_eq!(filtered.row_count(), 4_450);
 
-        let source_rows = |view: &FilteredView| view.rows.as_slice().iter().collect::<Vec<_>>();
+        let source_rows = |view: &FilteredView| view.rows.as_slice().iter_u32().collect::<Vec<_>>();
         let number_facet = filtered.facet(c0).unwrap();
         assert_eq!(
             source_rows(&number_facet),
