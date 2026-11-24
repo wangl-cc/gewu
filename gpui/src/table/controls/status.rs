@@ -15,7 +15,7 @@ impl TableView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let rows = self.data.row_count();
         let columns = crate::counted(self.data.columns.len() as u64, "column");
         let row_count = if self.data.query().filters.is_empty() {
@@ -41,7 +41,8 @@ impl TableView {
             .border_color(colors.border)
             .bg(colors.surface)
             .text_color(colors.muted_foreground)
-            .text_size(px(11.));
+            .text_size(px(11.))
+            .font_features(crate::theme::tabular_digits());
         let mut status = div().min_w_0().flex().items_center().gap_2().child(
             div()
                 .min_w_0()
@@ -59,11 +60,9 @@ impl TableView {
         }
         if let Some(error) = self.data.queries().error() {
             status = status.child(
-                div()
-                    .min_w_0()
+                crate::errors::inline_warning(crate::errors::message(error))
                     .truncate()
-                    .text_color(colors.destructive)
-                    .child(crate::errors::message(error)),
+                    .text_color(colors.danger_text),
             );
         }
         match &self.notice {
@@ -77,14 +76,13 @@ impl TableView {
             }
             Some(Notice::CopyFailed(message) | Notice::FilterFailed(message)) => {
                 status = status.child(
-                    div()
+                    crate::errors::inline_warning(message.clone())
                         .id("operation-notice")
                         .role(Role::Alert)
                         .aria_label(message.clone())
-                        .text_color(colors.destructive)
+                        .text_color(colors.danger_text)
                         .min_w_0()
                         .truncate()
-                        .child(message.clone())
                         .test_support(),
                 );
             }
@@ -169,44 +167,48 @@ impl TableView {
                 continue;
             };
             let raw = id.into_raw() as usize;
-            panel = panel
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            StyledButton::new(("locate-filter", raw))
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(IconName::Locate))
-                                .label(crate::data::preview_with_limit(&column.name, 36))
-                                .accessibility_label(format!("Show column {}", column.name))
-                                .tooltip("Show column")
-                                .on_click(cx.listener(move |t, _, w, cx| {
-                                    t.commit_grid_layout(cx);
-                                    if let Some(column) = t.data.columns.position(id) {
-                                        let row = t.selection.map(|s| s.head.row).unwrap_or(0);
-                                        let cell = Cell {
-                                            column: column.index(),
-                                            row,
-                                        };
-                                        t.reveal(cell);
-                                        if row < t.data.row_count() {
-                                            t.set_selection(Some(Selection::single(cell)), cx);
-                                        }
+            let row =
+                div()
+                    .flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        StyledButton::new(("locate-filter", raw))
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(IconName::Locate))
+                            .label(crate::data::preview_with_limit(&column.name, 36))
+                            .accessibility_label(format!("Show column {}", column.name))
+                            .tooltip("Show column")
+                            .on_click(cx.listener(move |t, _, w, cx| {
+                                t.commit_grid_layout(cx);
+                                if let Some(column) = t.data.columns.position(id) {
+                                    let row = t.selection.map(|s| s.head.row).unwrap_or(0);
+                                    let cell = Cell {
+                                        column: column.index(),
+                                        row,
+                                    };
+                                    t.reveal(cell);
+                                    if row < t.data.row_count() {
+                                        t.set_selection(Some(Selection::single(cell)), cx);
                                     }
-                                    t.close_panel(w, cx);
-                                })),
-                        )
-                        .child(button(("clear-filter", raw), "Clear", false, cx).on_click(
-                            cx.listener(move |t, _, w, cx| {
+                                }
                                 t.close_panel(w, cx);
-                                t.set_filter(id, None, cx);
-                            }),
-                        )),
-                )
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(button(("clear-filter", raw), "Clear", false, cx).on_click(
+                        cx.listener(move |t, _, w, cx| {
+                            t.close_panel(w, cx);
+                            t.set_filter(id, None, cx);
+                        }),
+                    ));
+            let detail = div()
+                .pl(px(24.))
+                .text_size(px(11.))
+                .text_color(crate::theme::GewuPalette::get(cx).muted_foreground)
                 .child(crate::panels::filter_description(&entry.filter));
+            panel = panel.child(div().flex().flex_col().gap_0().child(row).child(detail));
         }
         panel
             .child(

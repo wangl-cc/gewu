@@ -56,7 +56,8 @@ impl Drop for MatchCounter {
 enum FindMessage {
     Idle,
     Searching,
-    Notice(String),
+    NoMatches,
+    Error(String),
     Location {
         source: gewu_core::SourceRow,
         name: SharedString,
@@ -109,8 +110,9 @@ impl FindController {
         self.navigation.is_some() || self.cursor.is_some()
     }
 
-    pub(crate) fn matched(&self, column: ColumnId, row: u64) -> bool {
-        self.open && self.highlights.matched(column, row)
+    /// None means the background search has not classified this cell yet.
+    pub(crate) fn cached_match(&self, column: ColumnId, row: u64) -> Option<bool> {
+        self.highlights.cached_match(column, row)
     }
 
     pub(crate) fn current_match(&self) -> Option<CellMatch> {
@@ -122,10 +124,10 @@ impl FindController {
     }
 }
 impl Highlights {
-    fn matched(&self, column: ColumnId, row: u64) -> bool {
+    fn cached_match(&self, column: ColumnId, row: u64) -> Option<bool> {
         self.0
             .get(&(column, row / BLOCK_ROWS))
-            .is_some_and(|(start, column)| column.matches((row - start) as usize))
+            .map(|(start, column)| column.matches((row - start) as usize))
     }
 
     fn store_highlights(&mut self, result: FindHighlight) {
@@ -208,7 +210,8 @@ impl FindController {
         match &self.message {
             FindMessage::Idle => String::new(),
             FindMessage::Searching => "Searching…".into(),
-            FindMessage::Notice(text) => text.clone(),
+            FindMessage::NoMatches => "No matches".into(),
+            FindMessage::Error(text) => text.clone(),
             FindMessage::Location {
                 source,
                 name,
@@ -292,7 +295,7 @@ impl FindController {
         match view.find(&text, &ids) {
             Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
             Err(err) => {
-                self.message = FindMessage::Notice(crate::errors::message(&err));
+                self.message = FindMessage::Error(crate::errors::message(&err));
                 self.highlight_failed = true;
                 None
             }
@@ -366,7 +369,7 @@ impl FindController {
                     }
                     Err(error) => {
                         table.highlight_failed = true;
-                        table.message = FindMessage::Notice(crate::errors::message(&error.into()));
+                        table.message = FindMessage::Error(crate::errors::message(&error.into()));
                     }
                 }
                 cx.notify();
@@ -398,7 +401,7 @@ impl FindController {
                     Ok(None) => return,
                     Err(error) => {
                         find.counter = None;
-                        find.message = FindMessage::Notice(crate::errors::message(&error.into()));
+                        find.message = FindMessage::Error(crate::errors::message(&error.into()));
                     }
                 }
                 cx.notify();
@@ -447,11 +450,11 @@ impl FindController {
                             cx.emit(hit);
                         } else {
                             table.cursor = None;
-                            table.message = FindMessage::Notice("No matches".into());
+                            table.message = FindMessage::NoMatches;
                         }
                     }
                     Err(error) => {
-                        table.message = FindMessage::Notice(crate::errors::message(&error))
+                        table.message = FindMessage::Error(crate::errors::message(&error))
                     }
                 }
                 let queued = std::mem::take(&mut table.queued);
@@ -467,7 +470,7 @@ impl FindController {
 impl Render for FindController {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let input = &self.input;
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let searching = self.open && !self.text(cx).is_empty();
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let icon = canvas(
@@ -489,7 +492,8 @@ impl Render for FindController {
         .size(px(14.))
         .flex_none();
         let notice = match &self.message {
-            FindMessage::Notice(text) => Some(text.as_str()),
+            FindMessage::Error(text) => Some(text.as_str()),
+            FindMessage::NoMatches => Some("No matches"),
             FindMessage::Location { wrapped: true, .. } => Some("Wrapped"),
             _ => None,
         };
@@ -514,24 +518,36 @@ impl Render for FindController {
             .items_center()
             .gap_1()
             .min_w_0()
-            .h(px(27.))
+            .h(px(28.))
             .px_2()
-            .bg(colors.background)
+            .bg(colors.canvas)
             .border_1()
-            .border_color(if focused { colors.ring } else { colors.border })
-            .rounded_md()
+            .border_color(colors.border)
+            .hover(move |s| s.border_color(colors.input_hover()))
+            .when(focused && window.is_window_active(), |field| {
+                field.shadow(colors.focus_shadows())
+            })
+            .rounded(px(6.))
             .child(icon)
             .child(div().flex_1().min_w_0().child(Input::new(input)))
             .children(notice.filter(|_| searching).map(|text| {
+                let error = matches!(self.message, FindMessage::Error(_));
                 div()
                     .id("find-notice")
-                    .role(Role::Status)
+                    .role(if error { Role::Alert } else { Role::Status })
                     .aria_label(text.to_owned())
                     .max_w(relative(0.55))
-                    .truncate()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .text_size(px(11.))
-                    .text_color(colors.muted_foreground)
-                    .child(text.to_owned())
+                    .text_color(if error {
+                        colors.danger_text
+                    } else {
+                        colors.muted_foreground
+                    })
+                    .when(error, |notice| notice.child(crate::errors::warning_icon()))
+                    .child(div().min_w_0().truncate().child(text.to_owned()))
                     .test_support()
             }))
             .children(count.map(|(text, label)| {
@@ -573,20 +589,23 @@ impl Render for FindController {
             let arrow = |id, label: &'static str, symbol: &'static str| {
                 base::Button::new(id)
                     .accessibility_label(label)
-                    .w(px(24.))
-                    .h(px(24.))
+                    .size(px(22.))
                     .flex_none()
                     .flex()
                     .justify_center()
                     .items_center()
-                    .rounded_md()
+                    .rounded(px(6.))
                     .when(enabled, |button| {
                         button
-                            .hover(move |style| style.bg(colors.accent))
+                            .hover(move |style| style.bg(colors.button_secondary_hover))
+                            .active(move |style| style.bg(colors.secondary_pressed()))
+                            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
                             .cursor_pointer()
                     })
                     .when(!enabled, |button| {
-                        button.text_color(colors.muted_foreground.opacity(0.55))
+                        button
+                            .opacity(crate::theme::DISABLED_OPACITY)
+                            .cursor_default()
                     })
                     .disabled(!enabled)
                     .child(symbol)

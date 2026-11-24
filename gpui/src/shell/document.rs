@@ -291,6 +291,7 @@ impl Document {
                 .px_3()
                 .py_1()
                 .text_sm()
+                .child(crate::errors::warning_icon())
                 .child(button("retry-open", "Retry", false, cx).on_click(retry))
                 .child(
                     div()
@@ -301,13 +302,8 @@ impl Document {
                 .into_any_element();
         }
         let reason = crate::errors::open_reason(error);
-        let recovery_button = |id, label, primary| {
-            button(id, label, primary, cx)
-                .h(px(32.))
-                .px_3()
-                .flex()
-                .items_center()
-        };
+        let recovery_button =
+            |id, label, primary| button(id, label, primary, cx).px_3().flex().items_center();
         let mut content = div()
             .flex()
             .flex_col()
@@ -320,6 +316,10 @@ impl Document {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(crate::errors::warning_icon())
                     .child("Could not open this file"),
             )
             .child(
@@ -366,7 +366,13 @@ impl Document {
                     .max_h(px(135.))
                     .w_full()
                     .overflow_y_scroll()
-                    .text_sm()
+                    .p(px(12.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(colors.border)
+                    .bg(colors.surface)
+                    .font_family(Theme::global(cx).tokens.typography.mono.clone())
+                    .text_size(px(12.))
                     .test_support()
                     .child(details),
             );
@@ -448,7 +454,7 @@ struct WorksheetTabs {
 }
 
 impl Render for WorksheetTabs {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut scroller = div()
             .id("worksheet-options")
             .flex()
@@ -456,12 +462,12 @@ impl Render for WorksheetTabs {
             .py(px(2.))
             .test_support();
         if let Some(document) = self.document.upgrade() {
-            let doc = document.read(cx);
-            let mut tabs = segmented_tabs("worksheet-tabs", "Worksheets", cx)
+            let mut tabs = segmented_tabs("worksheet-tabs", "Worksheets", window, cx)
                 .flex_shrink_1()
                 .min_w_0()
                 .overflow_x_scroll()
                 .track_scroll(&self.scroll);
+            let doc = document.read(cx);
             for (index, name) in doc.sheets.iter().enumerate() {
                 let sheet = name.clone();
                 let parent = self.document.clone();

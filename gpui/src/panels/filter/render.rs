@@ -6,28 +6,28 @@ impl FilterEditor {
     pub(super) fn input(
         label: &'static str,
         input: &Entity<InputState>,
+        window: &Window,
         cx: &App,
     ) -> impl IntoElement + use<> {
-        let colors = base::Theme::global(cx).tokens.colors;
-        div()
-            .id(label)
-            .min_w_0()
+        crate::panels::input_frame(div().id(label), true, &input.focus_handle(cx), window, cx)
             .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(colors.background)
-            .border_1()
-            .border_color(colors.border)
-            .child(Input::new(input))
+            .flex()
+            .items_center()
+            .child(div().flex_1().min_w_0().child(Input::new(input)))
             .test_support()
     }
 
-    pub(super) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
-        Self::labeled(label, Self::input(label, input, cx), cx)
+    pub(super) fn field(
+        label: &'static str,
+        input: &Entity<InputState>,
+        window: &Window,
+        cx: &App,
+    ) -> Div {
+        Self::labeled(label, Self::input(label, input, window, cx), cx)
     }
 
     pub(super) fn labeled(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         div()
             .flex()
             .flex_col()
@@ -58,9 +58,8 @@ impl FilterEditor {
 
 impl Render for FilterEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = base::Theme::global(cx).tokens.colors;
-        let mut panel = div()
-            .id("filter-editor")
+        let colors = crate::theme::GewuPalette::get(cx);
+        let mut panel = crate::panels::elevated(div().id("filter-editor"), window, cx)
             .overflow_y_scroll()
             .max_h_full()
             .w(px(368.).min(window.viewport_size().width))
@@ -68,12 +67,6 @@ impl Render for FilterEditor {
             .flex_col()
             .gap_3()
             .p_3()
-            .rounded_lg()
-            .shadow_lg()
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.surface)
-            .text_color(colors.surface_foreground)
             .text_sm()
             .child(section(format!("Filter · {}", self.column.name)));
         if self.draft.mode == Mode::Values
@@ -94,9 +87,8 @@ impl Render for FilterEditor {
         }
         if let Some(error) = &self.error {
             panel = panel.child(
-                div()
-                    .text_color(colors.destructive)
-                    .child(crate::errors::message(error)),
+                crate::errors::inline_warning(crate::errors::message(error))
+                    .text_color(colors.danger_text),
             );
         }
         if let Some(facet) = self.draft.facet() {
@@ -106,9 +98,7 @@ impl Render for FilterEditor {
                 has_choices || self.draft.has_exact_condition(),
             );
             if modes.len() > 1 {
-                let mut tabs = segmented_tabs("filter-tabs", "Filter mode", cx)
-                    .border_1()
-                    .border_color(colors.border);
+                let mut tabs = segmented_tabs("filter-tabs", "Filter mode", window, cx);
                 for mode in modes {
                     let name = match mode {
                         Mode::Values if has_choices => "Values",
@@ -129,11 +119,11 @@ impl Render for FilterEditor {
                 panel = panel.child(tabs);
             }
             panel = match self.draft.mode {
-                Mode::Values if has_choices => panel.child(self.choices(facet, cx)),
+                Mode::Values if has_choices => panel.child(self.choices(facet, window, cx)),
                 Mode::Values => panel,
                 Mode::Range => panel.child(self.range(window, cx)),
                 Mode::Text => panel
-                    .child(Self::field("Match text", &self.text, cx))
+                    .child(Self::field("Match text", &self.text, window, cx))
                     .child(
                         row()
                             .gap_3()
@@ -164,13 +154,8 @@ impl Render for FilterEditor {
                 Mode::Missing => panel,
             };
             if self.draft.mode != Mode::Values || !has_choices {
-                let mut choices = base::RadioGroup::new("missing-policy")
-                    .aria_label("Missing values")
-                    .axis(Axis::Horizontal)
-                    .flex()
-                    .p(px(2.))
-                    .rounded_md()
-                    .bg(colors.muted);
+                let mut choices =
+                    crate::panels::segmented_radios("missing-policy", "Missing values", window, cx);
                 for (id, label, policy) in [
                     ("exclude-missing", "Exclude", MissingPolicy::Exclude),
                     ("include-missing", "Include", MissingPolicy::Include),

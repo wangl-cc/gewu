@@ -71,6 +71,8 @@ pub(crate) fn run(arguments: impl Iterator<Item = PathBuf>) {
             initial.extend(paths);
         }
         crate::preferences::init(cx);
+        #[cfg(target_os = "macos")]
+        platform::observe_display_options(cx);
         install_file_actions(platform::RecentDocuments::system(), receive, cx);
         cx.activate(true);
         if initial.is_empty() {

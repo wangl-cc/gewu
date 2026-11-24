@@ -190,10 +190,10 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
     let column = w.read(|t| t.data.columns[0].id);
     let matched = |w: &TableWindow, row| {
         w.app
-            .read(|cx| w.table.read(cx).find.read(cx).matched(column, row))
+            .read(|cx| w.table.read(cx).find.read(cx).cached_match(column, row))
     };
-    assert!(matched(&w, 0));
-    assert!(!matched(&w, 128));
+    assert_eq!(matched(&w, 0), Some(true));
+    assert_eq!(matched(&w, 128), None);
     let changes = Rc::new(Counter::new(0));
     let _subscription = w.app.update(|cx| {
         let changes = Rc::clone(&changes);
@@ -202,15 +202,21 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
         })
     });
     for (row, expected_changes) in [(1, 0), (128, 1), (130, 1)] {
-        w.app.update(|cx| {
+        w.ui.update(|window, cx| {
             w.table.update(cx, |t, cx| {
                 t.scroll_to_row(row);
+                let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+                let frame = t.build_frame(geometry.layout, cx);
+                assert!(
+                    frame.columns[0].cells.iter().all(|c| !c.spans.is_empty()),
+                    "visible text hits should be painted on the first frame at row {row}"
+                );
                 cx.notify();
             })
         });
         w.settle();
         assert_eq!(changes.get(), expected_changes);
-        assert!(matched(&w, row));
+        assert_eq!(matched(&w, row), Some(true));
     }
 }
 
@@ -277,6 +283,69 @@ fn select_copy_and_reveal_through_the_window() {
         w.selection().map(|s| (s.rows(), s.columns())),
         Some((0..ROWS, 0..COLUMNS))
     );
+}
+
+#[test]
+fn selected_columns_keep_their_header_and_filter_affordance_when_rows_scroll_offscreen() {
+    let (_files, mut w) = open();
+    w.click(w.cell(0, 0), Modifiers::default());
+    w.click(w.cell(1, 1), Modifiers {
+        shift: true,
+        ..Default::default()
+    });
+    wheel(&mut w, 0., -640.);
+    w.settle();
+    w.ui.update(|window, cx| {
+        w.table.update(cx, |table, cx| {
+            let geometry = table.prepare_grid_layout(table.layout.bounds, window);
+            let frame = table.build_frame(geometry.layout, cx);
+            assert!(frame.selection.is_none());
+            assert!(frame.rows.iter().all(|row| !row.selected));
+            for header in &frame.header[..2] {
+                assert!(header.selected);
+                assert_eq!(header.funnel, Some(false));
+            }
+            assert!(!frame.header[2].selected);
+            assert!(frame.header[2].funnel.is_none());
+        })
+    });
+}
+
+#[test]
+fn overlay_tracks_share_the_cells_viewport_and_visible_tracks_receive_the_click() {
+    let (_files, mut w) = open();
+    w.click(w.cell(0, 0), Modifiers::default());
+    let (vertical, horizontal) = w.read(|t| {
+        use gpui_kit::Axis;
+        let l = &t.layout;
+        assert_eq!(
+            l.vertical.viewport(),
+            f64::from(l.bounds.size.height.as_f32() - HEADER_HEIGHT)
+        );
+        let v = l.scrollbar(Axis::Vertical).unwrap();
+        let h = l.scrollbar(Axis::Horizontal).unwrap();
+        assert_eq!(v.track.right(), l.bounds.size.width);
+        assert_eq!(v.track.bottom(), l.bounds.size.height);
+        assert_eq!(h.track.bottom(), l.bounds.size.height);
+        assert_eq!(h.track.right(), v.track.left());
+        let corner = point(v.track.right() - px(1.), v.track.bottom() - px(1.));
+        let bottom = point(h.track.right() - px(1.), h.track.bottom() - px(1.));
+        for (point, axis) in [(corner, Axis::Vertical), (bottom, Axis::Horizontal)] {
+            assert!(l.cell_at(point.x.as_f32(), point.y.as_f32()).is_some());
+            assert!(t.scrollbar_at(point, false).is_none());
+            assert_eq!(t.scrollbar_at(point, true).unwrap().0, axis);
+        }
+        (l.bounds.origin + corner, l.bounds.origin + bottom)
+    });
+    let selected = w.selection();
+    w.click(vertical, Modifiers::default());
+    assert_eq!(w.read(|t| t.scroll.fraction()), 1.);
+    w.click(horizontal, Modifiers::default());
+    assert_eq!(
+        w.read(|t| t.layout.scroll_x),
+        w.read(|t| t.layout.horizontal_overflow())
+    );
+    assert_eq!(w.selection(), selected);
 }
 
 #[test]

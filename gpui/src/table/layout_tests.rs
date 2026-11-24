@@ -32,7 +32,8 @@ fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
     });
     layout.columns[1].2 = 180.;
     assert_eq!(layout.cell_at(70., 52.), Some(Cell { row: 46, column: 3 }));
-    assert_eq!(layout.cell_at(188., 52.), None);
+    assert_eq!(layout.cell_at(199., 52.), Some(Cell { row: 46, column: 3 }));
+    assert_eq!(layout.cell_at(200., 52.), None);
     assert_eq!(layout.cell_at(70., 200.), None);
     assert_eq!(
         layout.drag_cell_at(300., 300.),

@@ -1,16 +1,16 @@
-use gpui_kit::{TextRun, base, font};
+use gpui_kit::{TextRun, base::ThemeAppearance, font};
 
 use super::matched_runs;
+use crate::theme::GewuPalette;
 
 #[test]
-fn visible_parts_of_matches_use_the_theme_pair_and_leave_the_ellipsis_plain() {
-    // Source: "αA2…B5". Fitted line: "αA2…". The ellipsis was inserted by
-    // the layout engine even though the next source character is also an ellipsis.
-    let visible = "αA2".len();
+fn fitted_hits_preserve_ink_and_only_mark_the_ellipsis_when_every_hit_is_hidden() {
+    // A real ellipsis follows the visible prefix in the source. The fitted
+    // ellipsis represents hidden bytes, regardless of their spelling.
     let line = "αA2…";
-    for appearance in [base::ThemeAppearance::Light, base::ThemeAppearance::Dark] {
-        let colors = crate::theme::document_colors(appearance, None);
-        let find = crate::theme::FindColors::new(appearance);
+    let visible = "αA2".len();
+    for appearance in [ThemeAppearance::Light, ThemeAppearance::Dark] {
+        let colors = GewuPalette::default_for(appearance);
         let normal = TextRun {
             len: line.len(),
             font: font("System UI"),
@@ -19,25 +19,30 @@ fn visible_parts_of_matches_use_the_theme_pair_and_leave_the_ellipsis_plain() {
             underline: None,
             strikethrough: None,
         };
-        let spans = [0..2, 3..7, 7..9].into_iter();
-        let runs = matched_runs(line.len(), visible, spans, &normal, find);
-        let mut start = 0;
-        let actual: Vec<_> = runs
-            .into_iter()
-            .map(|run| {
-                let text = &line[start..start + run.len];
-                start += run.len;
-                (text, run.color, run.background_color)
-            })
-            .collect();
-        assert_eq!(actual, [
-            ("α", find.ink, Some(find.marker)),
-            ("A", colors.foreground, None),
-            ("2", find.ink, Some(find.marker)),
-            ("…", colors.foreground, None),
-        ]);
-        assert!(
-            matched_runs(line.len(), visible, [4..7, 7..9].into_iter(), &normal, find).is_empty()
-        );
+        for marker in [colors.find_span, colors.find_span_current] {
+            let segments = |visible, ranges: &[std::ops::Range<usize>]| {
+                let runs = matched_runs(line.len(), visible, ranges, &normal, marker);
+                let mut start = 0;
+                runs.into_iter()
+                    .map(|run| {
+                        assert_eq!(run.color, normal.color);
+                        let text = &line[start..start + run.len];
+                        start += run.len;
+                        (text, run.background_color)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(segments(visible, &[0..2, 3..7, 7..9]), [
+                ("α", Some(marker)),
+                ("A", None),
+                ("2", Some(marker)),
+                ("…", None)
+            ]);
+            assert_eq!(segments(visible, &[4..7, 7..9]), [
+                ("αA2", None),
+                ("…", Some(marker))
+            ]);
+            assert_eq!(segments(visible, &[]), [(line, None)]);
+        }
     }
 }

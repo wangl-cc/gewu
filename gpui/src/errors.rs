@@ -4,6 +4,25 @@ use gewu_core::{
     ValueParseError,
 };
 
+pub(crate) fn warning_icon() -> gpui_kit::component::Icon {
+    use gpui_kit::{
+        component::{Icon, Sizable, Size},
+        px,
+    };
+    Icon::new(gpui_kit::assets::IconName::TriangleAlert).with_size(Size::Size(px(14.)))
+}
+
+pub(crate) fn inline_warning(text: impl Into<gpui_kit::SharedString>) -> gpui_kit::Div {
+    use gpui_kit::{ParentElement, Styled, div};
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .min_w_0()
+        .child(warning_icon())
+        .child(div().min_w_0().child(text.into()))
+}
+
 pub(crate) const SELECT_CELL_TO_FILTER: &str = "Select a cell to filter by its value";
 
 pub(crate) fn open_reason(error: &Error) -> String {

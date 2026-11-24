@@ -82,16 +82,10 @@ impl Inspector {
             .child(div().min_w_0().flex_1().h(px(28.)).child(field))
     }
 
-    pub(super) fn chart_options(&self, cx: &mut Context<Self>) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
-        let mut choices = base::RadioGroup::new("scatter-limits")
-            .axis(Axis::Horizontal)
-            .aria_label("Maximum points")
-            .flex()
-            .items_center()
-            .p(px(2.))
-            .rounded_md()
-            .bg(colors.muted);
+    pub(super) fn chart_options(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let colors = crate::theme::GewuPalette::get(cx);
+        let mut choices =
+            crate::panels::segmented_radios("scatter-limits", "Maximum points", window, cx);
         for limit in [512, 1024, 2048, 4096] {
             let label = limit.to_string();
             let selected = self.settings.limit == limit;
@@ -143,10 +137,13 @@ impl Inspector {
                 panel.load(cx);
                 cx.notify();
             });
+            let active = window.is_window_active();
             let switch = base::Switch::new(id)
                 .checked(checked)
                 .accessibility_label(label)
                 .on_change(move |_, e, w, cx| click(e, w, cx))
+                .group("axis-switch")
+                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
                 .cursor_pointer()
                 .flex()
                 .items_center()
@@ -155,23 +152,34 @@ impl Inspector {
                 .child(label)
                 .child(
                     div()
+                        .id("switch-track")
                         .w(px(27.))
                         .h(px(16.))
                         .rounded_full()
                         .flex()
                         .items_center()
                         .px(px(2.))
-                        .bg(if checked {
-                            colors.primary
+                        .bg(if checked && active {
+                            colors.accent
                         } else {
-                            colors.muted_foreground
+                            colors.switch_track_off
+                        })
+                        .group_hover("axis-switch", move |s| {
+                            s.bg(if checked && active {
+                                colors.accent_hover
+                            } else {
+                                colors.input_hover()
+                            })
+                        })
+                        .group_active("axis-switch", move |s| {
+                            s.bg(if checked && active {
+                                colors.accent_pressed()
+                            } else {
+                                colors.muted_foreground
+                            })
                         })
                         .when(checked, |s| s.justify_end())
-                        .child(div().size(px(12.)).rounded_full().bg(if checked {
-                            colors.primary_foreground
-                        } else {
-                            colors.background
-                        })),
+                        .child(div().size(px(12.)).rounded_full().bg(colors.switch_thumb)),
                 );
             controls = controls.child(switch);
         }

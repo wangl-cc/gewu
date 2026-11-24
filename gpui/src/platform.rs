@@ -2,10 +2,7 @@
 mod recent;
 pub(crate) mod update;
 
-use gpui_kit::{
-    base::{Theme, ThemeAppearance},
-    *,
-};
+use gpui_kit::{base::ThemeAppearance, *};
 pub(crate) use recent::RecentDocuments;
 
 pub(crate) fn window_options(cx: &mut App) -> WindowOptions {
@@ -48,48 +45,55 @@ fn apply_appearance(window: &Window, cx: &mut App) {
         WindowAppearance::Light | WindowAppearance::VibrantLight => ThemeAppearance::Light,
         WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeAppearance::Dark,
     };
+    install_theme(appearance, cx);
+}
+
+pub(crate) fn refresh_contrast(cx: &mut App) {
+    install_theme(base::Theme::global(cx).appearance, cx);
+}
+
+fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
+    use crate::{
+        preferences::Preferences,
+        theme::{GewuPalette, VisualCues},
+    };
     #[cfg(target_os = "macos")]
-    let accent = {
-        use objc2_app_kit::{NSColor, NSColorSpace};
-        NSColor::controlAccentColor()
-            .colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
-            .map(|color| {
-                Rgba {
-                    r: color.redComponent() as f32,
-                    g: color.greenComponent() as f32,
-                    b: color.blueComponent() as f32,
-                    a: 1.,
-                }
-                .into()
-            })
-    };
+    let (system_contrast, differentiate) = gewu_macos::accessibility_display_options();
     #[cfg(not(target_os = "macos"))]
-    let accent = None;
-    let component_mode = match appearance {
-        ThemeAppearance::Light => gpui_kit::component::ThemeMode::Light,
-        ThemeAppearance::Dark => gpui_kit::component::ThemeMode::Dark,
-    };
-    if gpui_kit::component::Theme::global(cx).mode != component_mode {
-        gpui_kit::component::Theme::change(component_mode, None, cx);
-    }
-    let colors = crate::theme::document_colors(appearance, accent);
-    let components = gpui_kit::component::Theme::global(cx);
-    if (
-        components.primary,
-        components.primary_foreground,
-        components.ring,
-    ) != (colors.primary, colors.primary_foreground, colors.ring)
-    {
-        gpui_kit::component::Theme::update(cx, |theme| {
-            theme.primary = colors.primary;
-            theme.primary_foreground = colors.primary_foreground;
-            theme.ring = colors.ring;
-        });
-    }
-    let theme = Theme::global_mut(cx);
-    if theme.appearance != appearance || theme.tokens.colors != colors {
-        theme.appearance = appearance;
-        theme.tokens.colors = colors;
+    let (system_contrast, differentiate) = (false, false);
+    let contrast = Preferences::get(cx).high_contrast.enabled(system_contrast);
+    let cues = VisualCues::for_enhancement(contrast || differentiate);
+    if cx.try_global::<VisualCues>() != Some(&cues) {
+        cx.set_global(cues);
         cx.refresh_windows();
     }
+    let palette = if contrast {
+        GewuPalette::high_contrast_for(appearance)
+    } else {
+        GewuPalette::default_for(appearance)
+    };
+    palette.install(cx);
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn observe_display_options(cx: &mut App) {
+    struct DisplayUpdates {
+        _observation: gewu_macos::DisplayObservation,
+        _updates: Task<()>,
+    }
+    impl Global for DisplayUpdates {}
+    // Each wake reads the latest system settings, so a pending wake covers further notifications.
+    let (send, recv) = async_channel::bounded(1);
+    let observation = gewu_macos::DisplayObservation::new(move || {
+        let _ = send.try_send(());
+    });
+    let updates = cx.spawn(async move |cx| {
+        while recv.recv().await.is_ok() {
+            cx.update(refresh_contrast);
+        }
+    });
+    cx.set_global(DisplayUpdates {
+        _observation: observation,
+        _updates: updates,
+    });
 }

@@ -1,10 +1,7 @@
 use std::collections::HashSet;
 
 use gewu_core::{ColumnId, ColumnSort};
-use gpui_kit::{
-    component::menu::{PopupMenu, PopupMenuItem},
-    *,
-};
+use gpui_kit::{component::menu::PopupMenu, *};
 
 use super::{ColumnDrag, Drawer, Order, TableView, button};
 use crate::panels::choice::{Choice, ChoiceField, column_labels};
@@ -107,19 +104,13 @@ impl TableView {
         &self,
         id: ColumnId,
         descending: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> base::RadioGroup {
         let raw = id.into_raw() as usize;
-        let mut group = base::RadioGroup::new(("sort-direction", raw))
-            .axis(Axis::Horizontal)
-            .aria_label("Sort direction")
-            .flex()
-            .flex_none()
-            .items_center()
-            .w(px(76.))
-            .p(px(2.))
-            .rounded_md()
-            .bg(base::Theme::global(cx).tokens.colors.muted);
+        let mut group =
+            crate::panels::segmented_radios(("sort-direction", raw), "Sort direction", window, cx)
+                .w(px(76.));
         for (value, key, label, short) in [
             (false, "ascending", "Ascending", "Asc"),
             (true, "descending", "Descending", "Desc"),
@@ -136,7 +127,7 @@ impl TableView {
     }
 
     pub(super) fn sort_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let colors = gpui_kit::base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut panel = self.drawer("Sort", window, cx);
         let sorts = &self.requested_query().sorts;
         let used: HashSet<_> = sorts.iter().map(|s| s.column).collect();
@@ -202,7 +193,7 @@ impl TableView {
                             {
                                 let table = weak.clone();
                                 menu = menu.item(
-                                    PopupMenuItem::new(label).disabled(!enabled).on_click(
+                                    super::menus::menu_item(label, enabled, None).on_click(
                                         move |_, _, cx| {
                                             let _ =
                                                 table.update(cx, |t, cx| t.move_sort(id, step, cx));
@@ -218,7 +209,7 @@ impl TableView {
                 )
                 .on_drag(payload.clone(), |drag, _, _, cx| cx.new(|_| drag.clone()))
                 .drag_over::<ColumnDrag>(move |style, drag, _, _| {
-                    payload.insertion_indicator(style, drag, colors.primary)
+                    payload.insertion_indicator(style, drag, colors.accent)
                 })
                 .on_drop(cx.listener(move |t, drag: &ColumnDrag, _, cx| {
                     if drag.document != cx.entity_id() || drag.order != Order::Sorting {
@@ -249,7 +240,7 @@ impl TableView {
                     window,
                     cx,
                 )))
-                .child(self.sort_direction(id, descending, cx))
+                .child(self.sort_direction(id, descending, window, cx))
                 .child(
                     super::icon_button(("earlier-sort", raw), "Move rule earlier", "↑", cx)
                         .disabled(index == 0)

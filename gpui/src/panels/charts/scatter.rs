@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use gewu_core::{AxisScale, ScatterResult, SourceRow};
-use gpui_kit::{
-    base::{self, TestSupportExt},
-    *,
-};
+use gpui_kit::{base::TestSupportExt, *};
 
 use super::axis::{Axis, seconds};
 use crate::{actions::RevealScatterPoint, preferences::Preferences};
@@ -170,9 +167,10 @@ impl Plot {
 
 impl Render for ScatterChart {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
+        let ring_width = crate::theme::VisualCues::get(cx).cell_outline;
         let ring_color = if window.is_window_active() {
-            colors.ring
+            colors.focus_ring
         } else {
             colors.muted_foreground
         };
@@ -223,7 +221,7 @@ impl Render for ScatterChart {
                     };
                     let line = window
                         .text_system()
-                        .shape_line(label.into(), px(10.), &[run], None);
+                        .shape_line(label.into(), px(11.), &[run], None);
                     let left = if vertical {
                         x - px(3.) - line.width
                     } else {
@@ -245,7 +243,7 @@ impl Render for ScatterChart {
                     let x = drawing.left() + drawing.size.width * tick.fraction;
                     window.paint_quad(fill(
                         Bounds::new(point(x, drawing.top()), size(rule, drawing.size.height)),
-                        colors.border,
+                        colors.chart_grid,
                     ));
                     draw_tick(
                         tick.label.text(base),
@@ -260,7 +258,7 @@ impl Render for ScatterChart {
                     let y = drawing.bottom() - drawing.size.height * tick.fraction;
                     window.paint_quad(fill(
                         Bounds::new(point(drawing.left(), y), size(drawing.size.width, rule)),
-                        colors.border,
+                        colors.chart_grid,
                     ));
                     draw_tick(tick.label.text(base), drawing.left(), y, true, window, cx);
                 }
@@ -272,9 +270,9 @@ impl Render for ScatterChart {
                         fill(
                             Bounds::new(point(p.x - r, p.y - r), size(r * 2., r * 2.)),
                             if active {
-                                colors.primary
+                                colors.chart_primary_hover
                             } else {
-                                colors.primary.opacity(0.86)
+                                colors.chart_primary
                             },
                         )
                         .corner_radii(r),
@@ -284,13 +282,13 @@ impl Render for ScatterChart {
                     let center = Plot::point(drawing, plot.points[i]);
                     let ring = Bounds::new(center - point(px(5.), px(5.)), size(px(10.), px(10.)));
                     window.paint_quad(
-                        outline(ring, colors.background, BorderStyle::Solid)
-                            .border_widths(px(3.))
+                        outline(ring, colors.canvas, BorderStyle::Solid)
+                            .border_widths(ring_width + px(1.5))
                             .corner_radii(px(5.)),
                     );
                     window.paint_quad(
                         outline(ring, ring_color, BorderStyle::Solid)
-                            .border_widths(px(1.5))
+                            .border_widths(ring_width)
                             .corner_radii(px(5.)),
                     );
                 }
@@ -310,7 +308,7 @@ impl Render for ScatterChart {
                 .id("scatter-plot")
                 .w_full().flex_none()
                 .track_focus(&self.focus)
-                .focus_visible(move |style| style.border_1().border_color(colors.ring))
+                .focus_visible(move |style| style.shadow(colors.focus_shadows()))
                 .role(Role::Image)
                 .aria_label(label)
                 .aria_description("Use Left and Right to inspect points. Press Return to reveal the point in the table.")

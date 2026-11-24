@@ -1,7 +1,11 @@
 use gewu_core::ColumnId;
 use gpui_kit::{
-    base,
-    component::menu::{PopupMenu, PopupMenuItem},
+    base::{self, TestSupportExt},
+    component::{
+        kbd::Kbd,
+        menu::{PopupMenu, PopupMenuItem},
+    },
+    prelude::FluentBuilder,
     *,
 };
 
@@ -17,20 +21,64 @@ struct MenuTarget {
 pub(super) struct OpenMenu {
     position: Point<Pixels>,
     popup: Entity<PopupMenu>,
+    return_focus: FocusHandle,
     _dismiss: Subscription,
 }
 
 impl OpenMenu {
-    pub(super) fn element(&self) -> AnyElement {
+    pub(super) fn element(&self, window: &Window, cx: &App) -> AnyElement {
         deferred(
-            anchored()
-                .position(self.position)
-                .snap_to_window()
-                .child(self.popup.clone()),
+            anchored().position(self.position).snap_to_window().child(
+                crate::panels::elevated(div(), window, cx)
+                    .overflow_hidden()
+                    .child(self.popup.clone()),
+            ),
         )
         .with_priority(base::POPUP_PRIORITY + 1)
         .into_any_element()
     }
+}
+
+/// PopupMenu owns keyboard selection, dismissal and click dispatch. AccessKit names a
+/// MenuItem from its Label child's value.
+pub(super) fn menu_item(
+    label: &'static str,
+    enabled: bool,
+    shortcut: Option<Kbd>,
+) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, cx| {
+        let palette = crate::theme::GewuPalette::get(cx);
+        // ElementItem inserts 0.5rem of horizontal padding around custom content.
+        // Extend the press target across that padding, keeping the label's normal inset.
+        div()
+            .id("menu-content")
+            .role(Role::Label)
+            .aria_value(label)
+            .test_support()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .mx_neg_2()
+            .px_2()
+            .h(px(26.))
+            .rounded(px(6.))
+            // GPUI registers the row's hitbox for its cursor; active styling alone
+            // does not register one. Native menus keep the arrow over their items.
+            .cursor_default()
+            .when(enabled, |row| {
+                row.active(move |s| s.bg(palette.menu_pressed()))
+            })
+            .when(!enabled, |row| row.opacity(crate::theme::DISABLED_OPACITY))
+            .child(label)
+            .children(
+                shortcut
+                    .clone()
+                    .map(|key| key.p_0().flex_nowrap().border_0().bg(Background::default())),
+            )
+    })
+    .disabled(!enabled)
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +106,9 @@ impl TableView {
     ) {
         self.commit_grid_layout(cx);
         let local = event.position - self.layout.bounds.origin;
+        if self.scrollbar_at(local, self.show_scrollbars(cx)).is_some() {
+            return;
+        }
         let x = local.x.as_f32();
         let y = local.y.as_f32();
         let Some(column) = self.layout.column_at(x) else {
@@ -89,21 +140,33 @@ impl TableView {
             .iter()
             .any(|f| f.column == target.column);
         let table = cx.weak_entity();
-        let item = move |label: &'static str, command| {
-            let table = table.clone();
-            let item = PopupMenuItem::new(label).on_click(move |_, w, cx| {
-                let _ = table.update(cx, |t, cx| t.menu_command(command, target, w, cx));
-            });
-            match command {
-                Command::CopyRows => item.action(Box::new(base::input::Copy)),
-                Command::Filter => item.action(Box::new(crate::actions::EditFilter)),
-                Command::Analyze => item.action(Box::new(crate::actions::AnalyzeSelectedColumn)),
-                _ => item,
-            }
-        };
-        let popup = PopupMenu::build(window, cx, |menu, _, _| {
+        let popup = PopupMenu::build(window, cx, |menu, window, _| {
             use Command::*;
-            let menu = menu.min_w(px(194.)).action_context(focus);
+            let item = |label: &'static str, command| {
+                let table = table.clone();
+                let enabled = match command {
+                    ClearFilter => filtered,
+                    ClearSort => has_sort,
+                    ClearSorting => sorted,
+                    _ => true,
+                };
+                let action: Option<Box<dyn Action>> = match command {
+                    CopyRows => Some(Box::new(base::input::Copy)),
+                    Filter => Some(Box::new(crate::actions::EditFilter)),
+                    Analyze => Some(Box::new(crate::actions::AnalyzeSelectedColumn)),
+                    _ => None,
+                };
+                let shortcut = action.as_deref().and_then(|action| {
+                    Kbd::binding_for_action_in(action, &focus, window)
+                        .or_else(|| Kbd::global_binding_for_action(action, window))
+                });
+                menu_item(label, enabled, shortcut)
+                    .when_some(action, |item, action| item.action(action))
+                    .on_click(move |_, w, cx| {
+                        let _ = table.update(cx, |t, cx| t.menu_command(command, target, w, cx));
+                    })
+            };
+            let menu = menu.min_w(px(194.)).action_context(focus.clone());
             let menu = if target.cell.is_some() {
                 menu.item(item("Copy Cell", CopyCell))
                     .item(item("Copy Selected Rows", CopyRows))
@@ -112,13 +175,13 @@ impl TableView {
             } else {
                 menu.item(item("Sort Ascending", Ascending))
                     .item(item("Sort Descending", Descending))
-                    .item(item("Clear Column Sort", ClearSort).disabled(!has_sort))
-                    .item(item("Clear Sorting", ClearSorting).disabled(!sorted))
+                    .item(item("Clear Column Sort", ClearSort))
+                    .item(item("Clear Sorting", ClearSorting))
             };
             let menu = menu
                 .separator()
                 .item(item("Filter Column…", Filter))
-                .item(item("Clear Column Filter", ClearFilter).disabled(!filtered))
+                .item(item("Clear Column Filter", ClearFilter))
                 .item(item("Analyze Column", Analyze));
             if target.cell.is_none() {
                 menu.separator()
@@ -132,6 +195,19 @@ impl TableView {
         cx.stop_propagation();
     }
 
+    pub(in crate::table) fn window_activation_changed(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !window.is_window_active()
+            && let Some(menu) = self.controls.menu.take()
+        {
+            window.focus(&menu.return_focus, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn present_menu(
         &mut self,
         popup: Entity<PopupMenu>,
@@ -143,10 +219,12 @@ impl TableView {
             t.controls.menu = None;
             cx.notify();
         });
+        let return_focus = window.focused(cx).unwrap_or_else(|| self.focus.clone());
         window.focus(&popup.focus_handle(cx), cx);
         self.controls.menu = Some(OpenMenu {
             position,
             popup,
+            return_focus,
             _dismiss: dismiss,
         });
         cx.notify();
@@ -205,41 +283,45 @@ impl TableView {
                 px(self.column_left(cell.column).unwrap_or(self.layout.gutter)),
                 px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32),
             );
+        self.set_selection(Some(Selection::single(cell)), cx);
         self.focus_panel(window, cx);
-        self.controls.drawer = Some(Drawer::Cell {
-            anchor,
-            name: self.data.columns[cell.column].name.clone(),
-            value,
-        });
+        self.controls.drawer = Some(Drawer::Cell { anchor, value });
         cx.notify();
     }
 
     pub(super) fn cell_panel(
         &self,
-        name: &str,
         value: Option<&SharedString>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let copy = value.cloned().unwrap_or_default();
-        self.drawer("Cell details", window, cx)
-            .overflow_hidden()
-            .child(div().flex_none().child(name.to_owned()))
+        let colors = crate::theme::GewuPalette::get(cx);
+        let viewport = window.viewport_size();
+        crate::panels::elevated(div().id("cell-preview"), window, cx)
+            .test_support()
+            .max_w(px(420.).min(viewport.width - px(12.)))
+            .max_h(px(280.).min(viewport.height - px(12.)))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
             .child(
                 div()
                     .id("cell-detail-text")
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(
-                        value
-                            .cloned()
-                            .unwrap_or_else(|| SharedString::new_static("null")),
-                    ),
+                    .text_size(px(crate::preferences::Preferences::get(cx).font_size))
+                    .font_features(crate::theme::tabular_digits())
+                    .when(value.is_none(), |s| {
+                        s.italic().text_color(colors.muted_foreground)
+                    })
+                    .child(value.cloned().unwrap_or_else(|| "null".into())),
             )
             .child(
-                super::footer().child(self.close_button("Close", cx)).child(
-                    button("copy-cell", "Copy Cell", false, cx)
-                        .flex_none()
+                super::footer().child(
+                    button("copy-cell", "Copy", false, cx)
+                        .accessibility_label("Copy cell value")
                         .on_click(cx.listener(move |table, _, _, cx| {
                             table.copy_cell_text(copy.to_string(), cx)
                         })),

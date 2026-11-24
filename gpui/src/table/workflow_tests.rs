@@ -97,10 +97,10 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
             let t = w.table.read(cx);
             let id = t.data.columns[2].id;
             (0..3)
-                .map(|r| t.find.read(cx).matched(id, r))
+                .map(|r| t.find.read(cx).cached_match(id, r))
                 .collect::<Vec<_>>()
         }),
-        [true, true, false]
+        [Some(true), Some(true), Some(false)]
     );
     w.keys("cmd-g");
     assert_eq!(w.selection(), single(1, 2));

@@ -310,7 +310,7 @@ struct ResizeInspector;
 
 impl Render for Inspector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let resize = base::resize_handle("inspector-resize", Axis::Horizontal)
             .inside(base::HandleEdge::Leading)
             .on_drag(ResizeInspector, |_, _, _, cx| cx.new(|_| Empty));
@@ -338,7 +338,7 @@ impl Render for Inspector {
 
 impl Inspector {
     fn contents(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut pane = div()
             .id("inspector-scroll")
             .size_full()
@@ -347,9 +347,9 @@ impl Inspector {
             .flex_col()
             .gap_4()
             .p_3()
-            .text_color(colors.surface_foreground)
+            .text_color(colors.foreground)
             .text_size(px(13.));
-        let mut tabs = segmented_tabs("inspector-tabs", "Inspector", cx);
+        let mut tabs = segmented_tabs("inspector-tabs", "Inspector", window, cx);
         for (page, label) in [(Page::Column, "Column"), (Page::Chart, "Chart")] {
             let selected = self.settings.page == page;
             let tab = base::Tab::new(label)
@@ -376,7 +376,7 @@ impl Inspector {
                 pane = pane
                     .child(self.picker(Picker::X, "X axis", self.x, window, cx))
                     .child(self.picker(Picker::Y, "Y axis", self.y, window, cx))
-                    .child(self.chart_options(cx))
+                    .child(self.chart_options(window, cx))
             }
         }
         match &self.showing {
@@ -384,9 +384,8 @@ impl Inspector {
             Showing::Loading => pane.child("Loading analysis…"),
             Showing::Failed(error) => pane
                 .child(
-                    div()
-                        .text_color(colors.destructive)
-                        .child(crate::errors::message(error)),
+                    crate::errors::inline_warning(crate::errors::message(error))
+                        .text_color(colors.danger_text),
                 )
                 .child(
                     button("retry-analysis", "Retry", false, cx).on_click(cx.listener(
@@ -396,7 +395,7 @@ impl Inspector {
                         },
                     )),
                 ),
-            Showing::Column(results) => pane.child(self.column_view(results, cx)),
+            Showing::Column(results) => pane.child(self.column_view(results, window, cx)),
             Showing::Chart(chart) => pane.child(chart.clone()),
         }
     }

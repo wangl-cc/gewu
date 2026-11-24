@@ -7,8 +7,27 @@ mod storage;
 mod window;
 pub(crate) use window::open;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum HighContrast {
+    #[default]
+    System,
+    Off,
+    On,
+}
+
+impl HighContrast {
+    pub fn enabled(self, system: bool) -> bool {
+        match self {
+            Self::System => system,
+            Self::Off => false,
+            Self::On => true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Preferences {
+    pub high_contrast: HighContrast,
     pub font_size: f32,
     pub row_height: f32,
     pub show_row_numbers: bool,
@@ -25,6 +44,7 @@ pub(crate) struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            high_contrast: HighContrast::System,
             font_size: 13.,
             row_height: 28.,
             show_row_numbers: true,
@@ -79,6 +99,9 @@ impl Preferences {
             });
         }
         cx.set_global(after);
+        if before.high_contrast != after.high_contrast {
+            crate::platform::refresh_contrast(cx);
+        }
         cx.refresh_windows();
     }
 }

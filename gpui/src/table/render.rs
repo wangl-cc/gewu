@@ -4,7 +4,7 @@ use super::*;
 
 impl TableView {
     pub(crate) fn document_titlebar(name: SharedString, window: &mut Window, cx: &mut App) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let title = div()
             .id("document-title")
             .flex_1()
@@ -71,7 +71,7 @@ impl TableView {
 }
 
 fn formatting_alert(message: SharedString, cx: &App) -> AnyElement {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     div()
         .relative()
         .size_full()
@@ -87,14 +87,15 @@ fn formatting_alert(message: SharedString, cx: &App) -> AnyElement {
                 .px_2()
                 .py_1()
                 .bg(colors.surface)
-                .text_color(colors.destructive)
-                .child(message),
+                .text_color(colors.danger_text)
+                .child(crate::errors::inline_warning(message)),
         )
         .into_any_element()
 }
 
 impl Render for TableView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dragging = !matches!(self.drag, Drag::None);
         let entity = cx.entity();
         let publish = entity.downgrade();
         let pending_layout = Rc::clone(&self.pending_layout);
@@ -162,7 +163,21 @@ impl Render for TableView {
                         }
                         (frame, overlays, pending)
                     },
-                    move |_, (frame, overlays, pending), window, cx| {
+                    move |bounds, (frame, overlays, pending), window, cx| {
+                        if dragging {
+                            // The grid owns a drag until mouse-up, including motion over the
+                            // toolbar or status bar.
+                            let table = publish.clone();
+                            window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
+                                if phase == DispatchPhase::Capture
+                                    && ev.pressed_button == Some(MouseButton::Left)
+                                    && !bounds.contains(&ev.position)
+                                {
+                                    _ = table
+                                        .update(cx, |table, cx| table.mouse_move(ev, window, cx));
+                                }
+                            });
+                        }
                         paint::paint(frame, window, cx);
                         for mut overlay in overlays.into_iter().flatten() {
                             overlay.paint(window, cx);
@@ -181,7 +196,7 @@ impl Render for TableView {
                 )
                 .size_full(),
             );
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let table = if self.data.row_count() == 0
             && let Some(filter) = self.data.query().filters.first()
         {
@@ -265,15 +280,19 @@ impl Render for TableView {
             base::Button::new("show-inspector")
                 .accessibility_label("Inspector")
                 .aria_expanded(inspector_visible)
-                .when(inspector_visible, |button| button.bg(colors.secondary))
+                .when(inspector_visible, |button| {
+                    button.bg(colors.button_secondary)
+                })
                 .flex_none()
-                .size(px(30.))
+                .size(px(28.))
                 .flex()
                 .justify_center()
                 .items_center()
-                .rounded_md()
+                .rounded(px(6.))
                 .cursor_pointer()
-                .hover(move |style| style.bg(colors.accent))
+                .hover(move |style| style.bg(colors.button_secondary_hover))
+                .active(move |style| style.bg(colors.secondary_pressed()))
+                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
                 .child(
                     div()
                         .w(px(18.))

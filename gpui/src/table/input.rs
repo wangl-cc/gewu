@@ -20,33 +20,16 @@ impl TableView {
         let local = ev.position - self.layout.bounds.origin;
         let (x, y) = (local.x.as_f32(), local.y.as_f32());
         let l = &self.layout;
-        if l.has_horizontal_scroll() && y >= l.body_bottom() && x >= l.gutter && x < l.body_right()
-        {
-            let thumb = l.horizontal_thumb();
-            let grab = if thumb.contains(&local) {
-                x - thumb.origin.x.as_f32()
+        if let Some((axis, bar)) = self.scrollbar_at(local, self.show_scrollbars(cx)) {
+            let at = local.along(axis);
+            let grab = if bar.thumb.contains(&local) {
+                at - bar.thumb.origin.along(axis)
             } else {
-                thumb.size.width.as_f32() / 2.
+                let half = bar.thumb.size.along(axis) / 2.;
+                self.move_scrollbar(axis, &bar, at - half);
+                half
             };
-            self.drag_horizontal_thumb(x - grab);
-            self.drag = Drag::HorizontalThumb { grab };
-        } else if y >= HEADER_HEIGHT
-            && y <= l.body_bottom()
-            && x >= l.body_right()
-            && self.scroll.max_position_rows() > 0.
-        {
-            let thumb = l.vertical_thumb();
-            if thumb.contains(&local) {
-                self.drag = Drag::Thumb {
-                    grab: y - thumb.origin.y.as_f32(),
-                };
-            } else {
-                // Track click: jump there, centered on the thumb.
-                self.drag_thumb(y - thumb.size.height.as_f32() / 2.);
-                self.drag = Drag::Thumb {
-                    grab: thumb.size.height.as_f32() / 2.,
-                };
-            }
+            self.drag = Drag::Scrollbar { axis, grab };
         } else if (0.0..HEADER_HEIGHT).contains(&y) && (l.gutter..l.body_right()).contains(&x) {
             if let Some(column) = self.divider_at(x) {
                 if ev.click_count == 2 {
@@ -86,23 +69,39 @@ impl TableView {
         cx.notify();
     }
 
-    pub(super) fn drag_horizontal_thumb(&mut self, left: f32) {
-        let l = &self.layout;
-        let track = (l.body_right() - l.gutter).max(0.);
-        let travel = track - l.horizontal_thumb().size.width.as_f32();
-        if travel > 0. {
-            self.horizontal = HorizontalScroll::Offset(
-                ((left - l.gutter) / travel).clamp(0., 1.) * (l.content_width - track).max(0.),
-            );
-        }
+    pub(super) fn show_scrollbars(&self, cx: &App) -> bool {
+        !cx.should_auto_hide_scrollbars() || self.scrollbar_timer.is_some()
     }
 
-    pub(super) fn drag_thumb(&mut self, top: f32) {
-        let l = &self.layout;
-        let track = l.body_bottom() - HEADER_HEIGHT;
-        let size = l.vertical_thumb().size.height.as_f32();
-        let fraction = ((top - HEADER_HEIGHT) / (track - size).max(1.)) as f64;
-        self.scroll.set_fraction(fraction);
+    /// Hidden overlay tracks pass pointer input through to the cell underneath.
+    pub(super) fn scrollbar_at(
+        &self,
+        point: Point<Pixels>,
+        show_all: bool,
+    ) -> Option<(Axis, layout::Scrollbar)> {
+        [Axis::Vertical, Axis::Horizontal]
+            .into_iter()
+            .find_map(|axis| {
+                if !show_all && self.thumb_hover != Some(axis) {
+                    return None;
+                }
+                let bar = self.layout.scrollbar(axis)?;
+                bar.track.contains(&point).then_some((axis, bar))
+            })
+    }
+
+    fn move_scrollbar(&mut self, axis: Axis, bar: &layout::Scrollbar, start: Pixels) {
+        let travel = bar.track.size.along(axis) - bar.thumb.size.along(axis);
+        if travel > px(0.) {
+            let fraction = ((start - bar.track.origin.along(axis)) / travel).clamp(0., 1.);
+            match axis {
+                Axis::Vertical => self.scroll.set_fraction(f64::from(fraction)),
+                Axis::Horizontal => {
+                    self.horizontal =
+                        HorizontalScroll::Offset(fraction * self.layout.horizontal_overflow())
+                }
+            }
+        }
     }
 
     pub(super) fn mouse_move(
@@ -114,29 +113,28 @@ impl TableView {
         self.commit_grid_layout(cx);
         let local = ev.position - self.layout.bounds.origin;
         if ev.pressed_button != Some(MouseButton::Left) {
-            let hover = (0.0..HEADER_HEIGHT)
-                .contains(&local.y.as_f32())
-                .then(|| self.layout.column_at(local.x.as_f32()))
-                .flatten();
             let (x, y) = (local.x.as_f32(), local.y.as_f32());
-            let body = self.layout.cell_at(x, y);
+            let hover = if (0.0..HEADER_HEIGHT).contains(&y)
+                && (self.layout.gutter..self.layout.body_right()).contains(&x)
+            {
+                self.divider_at(x)
+                    .map(HeaderHover::Divider)
+                    .or_else(|| self.layout.column_at(x).map(HeaderHover::Column))
+            } else {
+                None
+            };
+            let thumb = self
+                .scrollbar_at(local, self.show_scrollbars(cx))
+                .map(|(axis, _)| axis);
+            let body = if thumb.is_none() {
+                self.layout.cell_at(x, y)
+            } else {
+                None
+            };
             let previous = self
                 .body_pointer
                 .and_then(|point| self.layout.cell_at(point.x.as_f32(), point.y.as_f32()));
             self.body_pointer = body.map(|_| local);
-            let thumb = if self.layout.has_horizontal_scroll()
-                && (self.layout.gutter..self.layout.body_right()).contains(&x)
-                && y >= self.layout.body_bottom()
-            {
-                Some(Thumb::Horizontal)
-            } else if self.layout.vertical.max_position_rows() > 0.
-                && x >= self.layout.body_right()
-                && (HEADER_HEIGHT..self.layout.body_bottom()).contains(&y)
-            {
-                Some(Thumb::Vertical)
-            } else {
-                None
-            };
             if self.header_hover != hover
                 || self.thumb_hover != thumb
                 || previous.map(|c| c.row) != body.map(|c| c.row)
@@ -147,11 +145,14 @@ impl TableView {
             }
             return;
         }
-        let (x, y) = (local.x.as_f32(), local.y.as_f32());
+        let x = local.x.as_f32();
         match self.drag {
             Drag::None => return,
-            Drag::HorizontalThumb { grab } => self.drag_horizontal_thumb(x - grab),
-            Drag::Thumb { grab } => self.drag_thumb(y - grab),
+            Drag::Scrollbar { axis, grab } => {
+                if let Some(bar) = self.layout.scrollbar(axis) {
+                    self.move_scrollbar(axis, &bar, local.along(axis) - grab);
+                }
+            }
             Drag::Resize {
                 column,
                 start_x,

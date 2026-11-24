@@ -5,7 +5,7 @@ const SAMPLE_ROWS: u64 = 128;
 const INITIAL_MAX: f32 = 320.;
 const FIT_MAX: f32 = 800.;
 pub(super) const NAME_SIZE: f32 = 12.;
-pub(super) const TYPE_SIZE: f32 = 10.;
+pub(super) const TYPE_SIZE: f32 = 10.5;
 pub(super) const SORT_SIZE: f32 = 10.;
 pub(super) const SORT_GAP: f32 = 3.;
 pub(super) const HEADER_INSET: f32 = 2. * PAD + 16.;
@@ -13,16 +13,17 @@ pub(super) const HEADER_INSET: f32 = 2. * PAD + 16.;
 struct HeaderTip(SharedString);
 impl Render for HeaderTip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         div()
             .max_w(px(400.))
             .px_2()
             .py_1()
-            .rounded_md()
-            .bg(colors.surface)
+            .rounded(px(10.))
+            .bg(colors.elevated)
+            .shadow(colors.elevated_shadows())
             .text_color(colors.foreground)
             .border_1()
-            .border_color(colors.border)
+            .border_color(colors.elevated_border)
             .text_sm()
             .child(self.0.clone())
     }
@@ -30,8 +31,28 @@ impl Render for HeaderTip {
 
 impl TableView {
     pub(super) fn hover_target(&self, l: &Layout) -> Option<AnyElement> {
-        let index = self.header_hover?;
+        let hover = self.header_hover?;
+        let (HeaderHover::Column(index) | HeaderHover::Divider(index)) = hover;
         let &(_, left, width) = l.columns.iter().find(|c| c.0 == index)?;
+        if matches!(hover, HeaderHover::Divider(_)) {
+            let edge = left + width;
+            let start = (edge - RESIZE_SLOP).max(l.gutter);
+            let end = (edge + RESIZE_SLOP).min(l.body_right());
+            return (end > start).then(|| {
+                div()
+                    .relative()
+                    .size_full()
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(start))
+                            .w(px(end - start))
+                            .h(px(HEADER_HEIGHT))
+                            .cursor(CursorStyle::ResizeColumn),
+                    )
+                    .into_any_element()
+            });
+        }
         let column = &self.data.columns[index];
         let start = left.max(l.gutter);
         let end = (left + width).min(l.body_right());
@@ -70,23 +91,13 @@ impl TableView {
             }
         }
         let tip: SharedString = tip.into();
-        let mut area = div()
+        let area = div()
             .id(("header-tip", index))
             .absolute()
             .left(px(start))
             .w(px(end - start))
             .h(px(HEADER_HEIGHT))
             .tooltip(move |_, cx| cx.new(|_| HeaderTip(tip.clone())).into());
-        if end >= left + width - RESIZE_SLOP {
-            area = area.child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .w(px(RESIZE_SLOP * 2.))
-                    .h_full()
-                    .cursor(CursorStyle::ResizeColumn),
-            );
-        }
         Some(div().relative().size_full().child(area).into_any_element())
     }
 
@@ -104,12 +115,15 @@ impl TableView {
     fn measure_width(&mut self, column: usize, start: u64, max: f32, window: &Window) -> f32 {
         let mut font = window.text_style().font();
         font.features = crate::theme::tabular_digits();
-        let measure = |text: &str, font_size: f32| {
+        let measure = |text: &str, font_size: f32, weight| {
             // A very long first value can determine the cap without shaping the entire cell.
             let preview = crate::data::single_line_prefix(text, crate::data::GRID_PREVIEW_BYTES);
             let run = TextRun {
                 len: preview.len(),
-                font: font.clone(),
+                font: Font {
+                    weight,
+                    ..font.clone()
+                },
                 color: window.text_style().color,
                 background_color: None,
                 underline: None,
@@ -131,15 +145,24 @@ impl TableView {
             } else {
                 arrow.into()
             };
-            width.max(measure(&marker, SORT_SIZE))
+            width.max(measure(&marker, SORT_SIZE, FontWeight::NORMAL))
         });
-        let mut width =
-            (measure(&self.data.columns.entry(column).label, NAME_SIZE) + sort + SORT_GAP)
-                .max(measure(&self.data.columns[column].display_type, TYPE_SIZE))
-                + HEADER_INSET;
+        let mut width = (measure(
+            &self.data.columns.entry(column).label,
+            NAME_SIZE,
+            FontWeight::MEDIUM,
+        ) + sort
+            + SORT_GAP)
+            .max(measure(
+                &self.data.columns[column].display_type,
+                TYPE_SIZE,
+                FontWeight::NORMAL,
+            ))
+            + HEADER_INSET;
         for row in rows {
             if let Some(Some(text)) = self.data.cell_preview(column, row) {
-                width = width.max(measure(&text, self.prefs.font_size) + 2. * PAD);
+                width =
+                    width.max(measure(&text, self.prefs.font_size, FontWeight::NORMAL) + 2. * PAD);
             }
             if width >= max {
                 break;

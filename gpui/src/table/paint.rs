@@ -4,27 +4,21 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     let l = &frame.layout;
     let origin = l.bounds.origin;
     let (w, h) = (l.bounds.size.width.as_f32(), l.bounds.size.height.as_f32());
-    let theme = base::Theme::global(cx);
-    let colors = theme.tokens.colors;
-    let find = crate::theme::FindColors::new(theme.appearance);
+    let colors = crate::theme::GewuPalette::get(cx);
+    let cues = crate::theme::VisualCues::get(cx);
     let active = window.is_window_active();
     let selection = if active {
-        colors.selection
+        colors.selection_active
     } else {
-        colors.muted_foreground.alpha(0.14)
+        colors.selection_inactive
     };
     let focus = if active {
-        colors.ring
+        colors.focus_ring
     } else {
         colors.muted_foreground
     };
     let hairline = 1. / window.scale_factor();
-    let (bg, stripe, grid, header_bg) = (
-        colors.background,
-        colors.foreground.alpha(0.035),
-        colors.border,
-        colors.surface,
-    );
+    let (bg, stripe, grid, header_bg) = (colors.canvas, colors.stripe, colors.grid, colors.surface);
     let (text_color, muted) = (colors.foreground, colors.muted_foreground);
     let font_size = frame.style.font_size;
     let row_height = frame.style.row_height;
@@ -58,39 +52,12 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
         if let Some(y) = frame.hovered_row_y {
             window.paint_quad(fill(
                 rect(l.gutter, y, w - l.gutter, row_height),
-                colors.foreground.alpha(0.035),
+                colors.stripe,
             ));
         }
         if let Some(bounds) = frame.selection {
             window.paint_quad(fill(bounds + origin, selection));
         }
-        for bounds in frame.matches {
-            let bounds = bounds + origin;
-            let opacity = if frame
-                .current_match
-                .is_some_and(|hit| hit + origin == bounds)
-            {
-                0.6
-            } else {
-                0.25
-            };
-            window.paint_quad(fill(bounds, find.marker.alpha(opacity)));
-            let underline = Bounds::new(
-                point(bounds.origin.x + px(PAD), bounds.bottom() - px(2.)),
-                size(bounds.size.width - px(2. * PAD), px(1.)),
-            );
-            window.paint_quad(fill(underline, find.edge));
-        }
-        if let Some(head) = frame.head {
-            window.paint_quad(
-                outline(head + origin, focus, BorderStyle::Solid).border_widths(px(1.5)),
-            );
-        }
-        if let Some(hit) = frame.current_match {
-            let bounds = (hit + origin).inset(px(2.));
-            window.paint_quad(outline(bounds, find.edge, BorderStyle::Solid).border_widths(px(2.)));
-        }
-
         for PaintColumn {
             x,
             width,
@@ -98,16 +65,14 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
             cells,
         } in &frame.columns
         {
-            window.paint_quad(fill(
-                row_area(x + width - hairline, hairline),
-                grid.opacity(0.6),
-            ));
+            window.paint_quad(fill(row_area(x + width - hairline, hairline), grid));
             let mask = row_area(x + PAD, width - 2. * PAD);
             window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
                 for PaintCell {
                     y,
                     text,
                     missing,
+                    current_match,
                     spans,
                 } in cells
                 {
@@ -124,7 +89,11 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                             &frame.text_matches[spans.clone()],
                             &text_run,
                             window,
-                            find,
+                            if *current_match {
+                                colors.find_span_current
+                            } else {
+                                colors.find_span
+                            },
                         );
                     }
                     let tx = if *right_aligned {
@@ -148,6 +117,18 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                 }
             });
         }
+        if let Some(hit) = frame.current_match {
+            let bounds = (hit + origin).inset(cues.cell_outline);
+            window.paint_quad(
+                outline(bounds, colors.find_current_border, BorderStyle::Solid)
+                    .border_widths(cues.find_outline),
+            );
+        }
+        if let Some(head) = frame.head {
+            window.paint_quad(
+                outline(head + origin, focus, BorderStyle::Solid).border_widths(cues.cell_outline),
+            );
+        }
     });
 
     // Row number gutter with source rows.
@@ -167,14 +148,14 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
             }
             let line = window.text_system().shape_line(
                 label.clone(),
-                px(font_size),
+                px(ROW_NUMBER_SIZE),
                 &[run(label.len(), muted)],
                 None,
             );
             let tx = l.gutter - PAD - line.width.as_f32();
             line.paint(
-                origin + point(px(tx), px(text_y(*y))),
-                line_height,
+                origin + point(px(tx), px(*y + (row_height - 15.) / 2.)),
+                px(15.),
                 TextAlign::Left,
                 None,
                 window,
@@ -195,20 +176,26 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
         |window| {
             for ((column, x, width), header) in l.columns.iter().zip(&frame.header) {
                 let right = x + width;
-                if frame
-                    .selection
-                    .is_some_and(|bounds| px(*x) < bounds.right() && px(right) > bounds.left())
-                {
+                if header.selected {
                     window.paint_quad(fill(
                         rect(*x, 0., *width, HEADER_HEIGHT - hairline),
                         selection,
                     ));
-                } else if frame.header_hover == Some(*column) {
-                    window.paint_quad(fill(rect(*x, 0., *width, HEADER_HEIGHT - 1.), colors.muted));
+                } else if frame.header_hover == Some(HeaderHover::Column(*column)) {
+                    window.paint_quad(fill(
+                        rect(*x, 0., *width, HEADER_HEIGHT - hairline),
+                        colors.button_secondary_hover,
+                    ));
                 }
+                let (thickness, color) =
+                    if frame.header_hover == Some(HeaderHover::Divider(*column)) {
+                        (1.5, colors.muted_foreground)
+                    } else {
+                        (hairline, grid)
+                    };
                 window.paint_quad(fill(
-                    rect(right - hairline, 0., hairline, HEADER_HEIGHT),
-                    grid,
+                    rect(right - thickness, 0., thickness, HEADER_HEIGHT),
+                    color,
                 ));
                 let available = px((width - header::HEADER_INSET).max(0.));
                 let indicator = header.sort.as_ref().map(|label| {
@@ -222,11 +209,13 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                 let name_width = indicator.as_ref().map_or(available, |line| {
                     (available - line.width - px(header::SORT_GAP)).max(px(0.))
                 });
+                let mut name_run = run(header.name.len(), text_color);
+                name_run.font.weight = FontWeight::MEDIUM;
                 let (label, _) = fit_line(
                     &header.name,
                     name_width,
                     px(header::NAME_SIZE),
-                    &run(header.name.len(), text_color),
+                    &name_run,
                     window,
                 );
                 let (kind, _) = fit_line(
@@ -269,7 +258,7 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                             );
                         }
                         if let Some(active) = header.funnel {
-                            let color = if active { colors.primary } else { muted };
+                            let color = if active { colors.accent } else { muted };
                             let left = right - PAD - 9.;
                             for (dy, line_width) in [(0., 10.), (2., 7.), (4., 4.), (6., 2.)] {
                                 window.paint_quad(fill(
@@ -285,35 +274,27 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     );
 
     // Keep the hit target independent of the visible thumb's thickness.
-    for (axis, thumb) in [
-        (
-            Thumb::Horizontal,
-            l.has_horizontal_scroll().then(|| l.horizontal_thumb()),
-        ),
-        (
-            Thumb::Vertical,
-            (l.vertical.max_position_rows() > 0.).then_some(frame.thumb),
-        ),
-    ] {
-        let Some(thumb) = thumb else { continue };
+    for axis in [Axis::Horizontal, Axis::Vertical] {
+        let Some(bar) = l.scrollbar(axis) else {
+            continue;
+        };
         let active = frame.active_thumb == Some(axis);
         if !frame.show_scrollbars && !active {
             continue;
         }
-        let thickness = if active { 11. } else { 7. };
-        let inset = (SCROLLBAR - thickness) / 2.;
-        let bounds = match axis {
-            Thumb::Horizontal => Bounds::new(
-                origin + thumb.origin + point(px(0.), px(inset)),
-                size(thumb.size.width, px(thickness)),
-            ),
-            Thumb::Vertical => Bounds::new(
-                origin + thumb.origin + point(px(inset), px(0.)),
-                size(px(thickness), thumb.size.height),
-            ),
-        };
+        let cross = axis.invert();
+        let target = bar.thumb.size.along(cross);
+        let thickness = px(if active { 11. } else { 7. }).min(target);
+        let bounds = Bounds::new(
+            origin
+                + bar
+                    .thumb
+                    .origin
+                    .apply_along(cross, |start| start + (target - thickness) / 2.),
+            bar.thumb.size.apply_along(cross, |_| thickness),
+        );
         let alpha = if active { 0.8 } else { 0.55 };
-        window.paint_quad(fill(bounds, muted.alpha(alpha)).corner_radii(px(thickness / 2.)));
+        window.paint_quad(fill(bounds, muted.alpha(alpha)).corner_radii(thickness / 2.));
     }
 }
 

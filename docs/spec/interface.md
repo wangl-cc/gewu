@@ -36,7 +36,7 @@ View > Columns… and the header menu open column management as a sheet. It can 
 
 Find uses a native search field in the toolbar. Command-F focuses it. Return and Shift-Return move to the next and previous match. The right side of the field shows an ellipsis while the total is being counted and the current match and total once known, such as `3/12`. Matches are counted by cell. Navigation is available while the count is running. The field reports no matches or errors inline. The Find group’s accessibility description includes the source row and column of a match. Previous and next buttons appear beside the field while a query is present and are disabled when there are no matches. Escape clears the query and returns focus to the table. Find keeps the displayed rows and Inspector page in view.
 
-The grid marks matching cells and text substrings in amber. The active selection and its row and column headers use the accent color, changing to neutral when the window loses focus. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
+Find highlights the matching part of each displayed value. If truncation hides the entire match, the ellipsis carries the highlight. The active selection and its row and column headers use the accent color, changing to neutral when the window loses focus. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
 
 ## Filter editors
 
@@ -50,9 +50,11 @@ Chart display options are separate from the range being edited. The Text, Range 
 
 ## Cells, copying and export
 
+High contrast in Settings defaults to Follow System and can be switched On or Off. Stronger outlines also follow the macOS Differentiate Without Color setting independently.
+
 Row height defaults to 28 points, with 24- and 32-point choices in Settings. Previously saved custom heights are retained until another size is chosen. Initial column widths sample up to 128 rows and range from 76 to 320 points. The initial width also accounts for column names and header indicators. Double-click a header divider to fit values around the current scroll position. Manually resized columns keep their width when reordered or hidden.
 
-Missing values appear as italic `null`; an empty string leaves the cell blank. Double-clicking a loaded cell opens its complete formatted text. Long values scroll inside the detail panel while Copy Cell and Close stay in view. The context menu can copy the clicked cell or the selected rows.
+Missing values appear as italic `null`; an empty string leaves the cell blank. Double-clicking a loaded cell opens its complete formatted text. The preview shows only the value and a Copy action. Long values scroll within the preview. Escape or a click outside dismisses it. The context menu can copy the clicked cell or the selected rows.
 
 Copy puts the selected rows and visible columns on the pasteboard as plain text and TSV, exactly as a TSV export of those rows would write them, with nested values as display text. If the selection exceeds the copy size limit, Gewu suggests using File > Export… instead. A newer copy in any Gewu window supersedes an unfinished table copy.
 

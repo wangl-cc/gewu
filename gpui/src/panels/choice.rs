@@ -69,6 +69,7 @@ struct ChoiceControl<T: Clone + PartialEq + 'static> {
     options: Vec<Choice<T>>,
     select: Entity<SelectState<SearchableVec<Choice<T>>>>,
     _changes: Subscription,
+    _activation: Subscription,
 }
 
 impl<T: Clone + PartialEq + 'static> ChoiceField<T> {
@@ -100,10 +101,26 @@ impl<T: Clone + PartialEq + 'static> ChoiceField<T> {
                     choose(value, window, cx);
                 }
             });
+            let trigger_focus = select.focus_handle(cx);
+            let activation = cx.observe_window_activation(
+                window,
+                move |control: &mut ChoiceControl<T>, window, cx| {
+                    if !window.is_window_active() {
+                        // The selector exposes its list's focus handle while open and the trigger's
+                        // while closed. Route Cancel to the list so it also discards its search
+                        // query.
+                        let current = control.select.focus_handle(cx);
+                        if current != trigger_focus {
+                            current.dispatch_action(&base::actions::Cancel, window, cx);
+                        }
+                    }
+                },
+            );
             ChoiceControl {
                 options: self.options.clone(),
                 select,
                 _changes: changes,
+                _activation: activation,
             }
         });
         let select = control.read(cx).select.clone();
@@ -118,15 +135,23 @@ impl<T: Clone + PartialEq + 'static> ChoiceField<T> {
                 None => s.set_selected_index(None, window, cx),
             });
         }
-        Select::new(&select)
+        // The product owns the trigger frame. Select retains the popup, keyboard handling
+        // and accessibility relationship between the trigger and the list.
+        let frame = super::input_frame(div(), !empty, &select.focus_handle(cx), window, cx);
+        let trigger = Select::new(&select)
+            .appearance(false)
             .id(self.id)
             .accessibility_label(self.label)
             .placeholder(self.label)
             .search_placeholder("Find column")
             .disabled(empty)
             .small()
+            .border_0()
+            .h(px(28. - 2. / window.scale_factor()))
+            .text_size(px(13.))
+            .rounded(px(6.))
             .w_full()
-            .menu_max_h(px(220.))
-            .into_any_element()
+            .menu_max_h(px(220.));
+        frame.w_full().child(trigger).into_any_element()
     }
 }

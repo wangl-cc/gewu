@@ -103,3 +103,17 @@ On macOS, an AppKit probe read the row title and value together for three access
 Two paired release replays used the M4 Mac mini and 1× display described above. The `547899b` and working-tree builds ran in A/B/B/A order with a 1280×800 grid on the same 2-million-row, 28-column Parquet dataset. Each build checked 466,560 nonempty cells and 38,880 row-number regions across 1,440 frames. Both had zero unexpected blanks. Random-jump forced-draw p95 was 0.81/0.81 ms at the baseline and 0.80/0.80 ms in the working tree. Fast scrolling measured 0.77/0.78 ms and 0.76/0.78 ms respectively. Slow scrolling varied from 0.34 to 0.86 ms across the four runs.
 
 Both display-paced attempts reported an inactive, invisible window. Foreground FPS remains unmeasured for this revision.
+
+## Semantic palette and Find rendering · 2026-11-24
+
+The [screenshot index](../../ui-review/visual-design/README.md) contains the Default and high-contrast comparisons, the hidden-match ellipsis and the native window references. The controlled captures render directly at each backing scale. The native desktop was locked during this run.
+
+On the M4 Mac mini, release Metal replay used a 1×, 1280×800-point grid with 28-point rows and the 2-million-row, 28-column Parquet sample. With Find set to `city-`, every value in the city column matched. Pixel readback checked the position and width of the substring background on each visible row immediately after scrolling.
+
+| First frame after scrolling | Slow | Fast (+37 rows) | Random jump |
+| --- | ---: | ---: | ---: |
+| Visible substrings before the first-frame fix, out of 810 | 810 | 516 | 0 |
+| Visible substrings after the fix, out of 810 | 810 | 810 | 810 |
+| Forced-draw p95 with Find, 30 frames per workload | 0.46 ms | 0.99 ms | 1.02 ms |
+
+All 29,160 inspected data cells in the Find run painted as expected. A separate 180-frame run without Find checked 58,320 cells with zero unexpected blanks. Display-paced foreground FPS requires an unlocked desktop.

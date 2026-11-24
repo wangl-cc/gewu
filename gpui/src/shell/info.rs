@@ -126,7 +126,7 @@ impl Render for FileDetails {
                 .gap_3()
                 .child(
                     div()
-                        .w(px(100.))
+                        .w(px(84.))
                         .flex_none()
                         .text_color(colors.muted_foreground)
                         .child(key),

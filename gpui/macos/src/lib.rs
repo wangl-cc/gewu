@@ -6,7 +6,9 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSDocumentController;
 use objc2_foundation::{NSString, NSUserDefaults};
 
+mod display;
 mod picker;
+pub use display::{accessibility_display_options, DisplayObservation};
 pub use picker::open_files;
 
 /// Clear this application's system recent documents, as in AppKit's Clear Menu action.

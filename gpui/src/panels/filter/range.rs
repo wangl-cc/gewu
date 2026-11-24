@@ -10,7 +10,9 @@ impl FilterEditor {
             ("Maximum", &self.high)
         };
         let focus = input.read(cx).focus_handle(cx);
-        let mut control = div().relative().child(Self::input(label, input, cx));
+        let mut control = div()
+            .relative()
+            .child(Self::input(label, input, window, cx));
         if self.column.floating_point
             && !focus.is_focused(window)
             && let Some(exact) = &self.brushed_bounds[index]
@@ -22,7 +24,7 @@ impl FilterEditor {
                 crate::preferences::Preferences::get(cx).statistics_digits,
             );
             if short.len() + 2 < exact.len() {
-                let colors = base::Theme::global(cx).tokens.colors;
+                let colors = crate::theme::GewuPalette::get(cx);
                 let hint = exact.clone();
                 control = control.child(
                     div()
@@ -37,7 +39,7 @@ impl FilterEditor {
                         .items_center()
                         .px_2()
                         .rounded_md()
-                        .bg(colors.background)
+                        .bg(colors.canvas)
                         .cursor_text()
                         .child(div().truncate().child(format!("≈ {short}")))
                         .tooltip(move |w, cx| {
@@ -53,7 +55,7 @@ impl FilterEditor {
     pub(super) fn range(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let mut content = div().flex().flex_col().gap_2();
         if let Some(preview) = self.preview.as_deref().and_then(Option::as_ref) {
-            content = content.child(self.range_plot(preview, cx));
+            content = content.child(self.range_plot(preview, window, cx));
         }
         content = content.child(
             div()
@@ -101,8 +103,10 @@ impl FilterEditor {
         content.child(options)
     }
 
-    fn range_plot(&self, h: &RangeHistogram, cx: &mut Context<Self>) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
+    fn range_plot(&self, h: &RangeHistogram, window: &Window, cx: &mut Context<Self>) -> Div {
+        let colors = crate::theme::GewuPalette::get(cx);
+        let cues = crate::theme::VisualCues::get(cx);
+        let hairline = px(1. / window.scale_factor());
         let mut chart = div()
             .flex()
             .flex_col()
@@ -110,10 +114,10 @@ impl FilterEditor {
             .rounded_md()
             .border_1()
             .border_color(colors.border)
-            .bg(colors.background)
+            .bg(colors.canvas)
             .p_2()
             .font_features(crate::theme::tabular_digits())
-            .text_xs()
+            .text_size(px(11.))
             .text_color(colors.muted_foreground);
         if h.histogram.lo.is_some() && h.histogram.hi.is_some() {
             let mut bars = div()
@@ -122,15 +126,15 @@ impl FilterEditor {
                 .h(px(72.))
                 .flex()
                 .items_end()
-                .border_b_1()
-                .border_color(colors.border)
+                .border_b(hairline)
+                .border_color(colors.chart_grid)
                 .child(
                     div()
                         .absolute()
                         .top(relative(0.5))
                         .w_full()
-                        .h(px(1.))
-                        .bg(colors.border.opacity(0.55)),
+                        .h(hairline)
+                        .bg(colors.chart_grid),
                 );
             let peak = h.histogram.counts.iter().copied().max().unwrap_or(0);
             let selected = self.selected_bins(cx);
@@ -140,52 +144,78 @@ impl FilterEditor {
                 let active = selected.is_some_and(|(lo, hi)| (lo..=hi).contains(&i));
                 let interval = charts::bin_interval(&h.ranges, i, self.column.floating_point);
                 let hint = format!("{interval} · {}", crate::counted(*count, "row"));
-                bars =
-                    bars.child(
-                        base::Button::new(("range-bin", i))
-                            .flex_none()
-                            .w(relative(b - a))
-                            .h_full()
-                            .flex()
-                            .items_end()
-                            .pr(px(1.))
-                            .when(active, |bin| bin.bg(colors.selection))
-                            .hover(move |bin| bin.bg(colors.selection))
-                            .cursor_pointer()
-                            .accessibility_label(hint.clone())
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(hint.clone())
-                                    .build(window, cx)
-                            })
-                            .child(div().w_full().h(relative(height)).rounded_t(px(1.)).bg(
-                                if active {
-                                    colors.primary
+                bars = bars.child(
+                    base::Button::new(("range-bin", i))
+                        .flex_none()
+                        .w(relative(b - a))
+                        .h_full()
+                        .flex()
+                        .items_end()
+                        .group("range-bin")
+                        .when(active, |bin| bin.bg(colors.brush_fill))
+                        .pr(hairline)
+                        .cursor_pointer()
+                        .accessibility_label(hint.clone())
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(hint.clone())
+                                .build(window, cx)
+                        })
+                        .child(
+                            div()
+                                .w_full()
+                                .h(relative(height))
+                                .rounded_t(px(1.))
+                                .bg(if active {
+                                    colors.chart_primary
                                 } else {
-                                    colors.muted_foreground.opacity(0.68)
-                                },
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |editor, event: &MouseDownEvent, window, cx| {
-                                    editor.start_brush(i, event.modifiers.shift, window, cx);
+                                    colors.chart_muted
+                                })
+                                .when(!active && *count > 0, |bar| {
+                                    bar.border(cues.unselected_bin_outline)
+                                        .border_color(colors.muted_foreground)
+                                })
+                                .group_hover("range-bin", move |s| {
+                                    s.bg(colors.chart_primary_hover)
                                 }),
-                            )
-                            .on_mouse_move(cx.listener(
-                                move |editor, event: &MouseMoveEvent, window, cx| {
-                                    if editor.drag.is_some()
-                                        && event.pressed_button == Some(MouseButton::Left)
-                                    {
-                                        editor.brush(i, window, cx);
-                                    }
-                                },
-                            ))
-                            .on_click(cx.listener(move |editor, ev: &ClickEvent, window, cx| {
-                                if matches!(ev, ClickEvent::Keyboard(_)) {
-                                    editor.start_brush(i, ev.modifiers().shift, window, cx);
-                                    editor.drag = None;
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |editor, event: &MouseDownEvent, window, cx| {
+                                editor.start_brush(i, event.modifiers.shift, window, cx);
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(
+                            move |editor, event: &MouseMoveEvent, window, cx| {
+                                if editor.drag.is_some()
+                                    && event.pressed_button == Some(MouseButton::Left)
+                                {
+                                    editor.brush(i, window, cx);
                                 }
-                            })),
-                    );
+                            },
+                        ))
+                        .on_click(cx.listener(move |editor, ev: &ClickEvent, window, cx| {
+                            if matches!(ev, ClickEvent::Keyboard(_)) {
+                                editor.start_brush(i, ev.modifiers().shift, window, cx);
+                                editor.drag = None;
+                            }
+                        })),
+                );
+            }
+            if let Some((first, last)) = selected {
+                let (left, _) = charts::bin_fraction(&h.histogram, first);
+                let (_, right) = charts::bin_fraction(&h.histogram, last);
+                bars = bars.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(relative(left))
+                        .w(relative(right - left))
+                        .h_full()
+                        .border_l(cues.brush_outline)
+                        .border_t(cues.brush_outline)
+                        .border_r(cues.brush_outline)
+                        .border_color(colors.accent),
+                );
             }
             bars = bars
                 .on_mouse_up(

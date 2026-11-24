@@ -1,7 +1,7 @@
 use super::*;
 
 fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &App) -> Div {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     div()
         .w_full()
         .flex()
@@ -24,8 +24,13 @@ fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &A
 }
 
 impl Inspector {
-    pub(super) fn column_view(&self, results: &ColumnResults, cx: &mut Context<Self>) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
+    pub(super) fn column_view(
+        &self,
+        results: &ColumnResults,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut content = div().flex().flex_col().gap_4().flex_none();
         for (section, result) in &results.sections {
             let section = *section;
@@ -53,15 +58,19 @@ impl Inspector {
             );
             if let Some(result) = result {
                 group = match result {
-                    Ok(data) => group.child(self.section_data(data, &results.column, cx)),
-                    Err(error) => group.child(crate::errors::message(error)).child(
-                        button(("retry-section", section as usize), "Retry", false, cx).on_click(
-                            cx.listener(|p, _, _, cx| {
-                                p.load(cx);
-                                cx.notify();
-                            }),
+                    Ok(data) => group.child(self.section_data(data, &results.column, window, cx)),
+                    Err(error) => group
+                        .child(
+                            crate::errors::inline_warning(crate::errors::message(error))
+                                .text_color(colors.danger_text),
+                        )
+                        .child(
+                            button(("retry-section", section as usize), "Retry", false, cx)
+                                .on_click(cx.listener(|p, _, _, cx| {
+                                    p.load(cx);
+                                    cx.notify();
+                                })),
                         ),
-                    ),
                 };
             }
             content = content.child(group);
@@ -69,7 +78,13 @@ impl Inspector {
         content
     }
 
-    fn section_data(&self, data: &SectionData, col: &ColumnInfo, cx: &mut Context<Self>) -> Div {
+    fn section_data(
+        &self,
+        data: &SectionData,
+        col: &ColumnInfo,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         use crate::messages::format_count;
 
         let digits = crate::preferences::Preferences::get(cx).statistics_digits;
@@ -153,6 +168,7 @@ impl Inspector {
                     &h.histogram,
                     self.settings.log_counts,
                     |i| charts::bin_interval(&h.ranges, i, col.floating_point),
+                    window,
                     cx,
                 )),
             SectionData::Lengths(s) => {
@@ -188,10 +204,12 @@ impl Inspector {
                             }
                             None => "No lengths".into(),
                         },
+                        window,
                         cx,
                     ))
             }
             SectionData::Values { distinct, rows } => {
+                let colors = crate::theme::GewuPalette::get(cx);
                 body = body.child(metric("Estimated distinct", format_count(*distinct), cx));
                 if !rows.is_empty() {
                     body = body.child("Common values · estimated");
@@ -218,9 +236,17 @@ impl Inspector {
                         )
                         .child(
                             div()
-                                .h(px(3.))
-                                .w(relative(part.clamp(0., 1.) as f32))
-                                .bg(base::Theme::global(cx).tokens.colors.primary.opacity(0.55)),
+                                .h(px(4.))
+                                .w_full()
+                                .rounded_full()
+                                .bg(colors.bar_track)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .w(relative(part.clamp(0., 1.) as f32))
+                                        .bg(colors.chart_primary),
+                                ),
                         );
                 }
                 body

@@ -74,7 +74,7 @@ impl ColumnDrag {
 
 impl Render for ColumnDrag {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         div()
             .px_2()
             .py_1()
@@ -107,7 +107,6 @@ enum Drawer {
     Filters,
     Cell {
         anchor: Point<Pixels>,
-        name: String,
         value: Option<SharedString>,
     },
     Export(export::ExportDraft),
@@ -379,7 +378,7 @@ impl TableView {
     ) -> Vec<AnyElement> {
         let mut elements = Vec::new();
         if let Some(menu) = &self.controls.menu {
-            elements.push(menu.element());
+            elements.push(menu.element(window, cx));
         }
         if let Some(panel) = &self.controls.inspector
             && panel.read(cx).is_visible()
@@ -395,9 +394,7 @@ impl TableView {
                 ..
             }) => self.columns_panel(search, confirm.as_ref(), list, window, cx),
             Some(Drawer::Sort { summary: false }) => self.sort_panel(window, cx),
-            Some(Drawer::Cell { name, value, .. }) => {
-                self.cell_panel(name, value.as_ref(), window, cx)
-            }
+            Some(Drawer::Cell { value, .. }) => self.cell_panel(value.as_ref(), window, cx),
             Some(Drawer::Export(draft)) => self.export_panel(draft, window, cx),
             // The status-bar triggers own the geometry of their popups.
             Some(Drawer::Filters | Drawer::Sort { summary: true }) | None => return elements,
@@ -457,7 +454,11 @@ impl TableView {
                 .when_some(self.controls.panel_focus.clone(), |dialog, handle| {
                     dialog.focus_handle(handle)
                 })
-                .backdrop(div().size_full().bg(crate::theme::modal_backdrop()))
+                .backdrop(
+                    div()
+                        .size_full()
+                        .bg(crate::theme::GewuPalette::get(cx).backdrop),
+                )
                 .popup(div().occlude().child(panel))
                 .on_ok({
                     let table = entity.clone();
@@ -520,10 +521,8 @@ impl TableView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> base::ObservedElement<Stateful<Div>> {
-        let colors = base::Theme::global(cx).tokens.colors;
         let title = title.into();
-        div()
-            .id("table-drawer")
+        crate::panels::elevated(div().id("table-drawer"), window, cx)
             .test_support()
             .flex_none()
             .w(px(368.).min((window.viewport_size().width - px(12.)).max(px(0.))))
@@ -533,12 +532,6 @@ impl TableView {
             .flex_col()
             .gap_3()
             .p_3()
-            .rounded(px(10.))
-            .border_1()
-            .border_color(colors.border)
-            .shadow_md()
-            .bg(colors.surface)
-            .text_color(colors.surface_foreground)
             .text_sm()
             .child(
                 div()
@@ -567,7 +560,7 @@ fn icon_button(
     glyph: &'static str,
     cx: &App,
 ) -> base::Button {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     crate::panels::button_base(id)
         .accessibility_label(label)
         .size(px(ICON_BUTTON_SIZE))
@@ -578,7 +571,9 @@ fn icon_button(
         .rounded_md()
         .cursor_pointer()
         .text_color(colors.muted_foreground)
-        .hover(move |s| s.bg(colors.accent))
+        .hover(move |s| s.bg(colors.button_secondary_hover))
+        .active(move |s| s.bg(colors.secondary_pressed()))
+        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
         .child(glyph)
 }
 

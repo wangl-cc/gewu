@@ -280,6 +280,8 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
             plot.bottom() < low.top(),
             "bounds belong below the histogram"
         );
+        assert_eq!(low.size.height, gpui_kit::px(28.));
+        assert_eq!(low.size.height, high.size.height);
         assert_eq!(low.top(), high.top());
         assert!(low.right() < high.left());
         w.drag_to(("range-bin", 1usize), ("range-bin", 3usize), cx);

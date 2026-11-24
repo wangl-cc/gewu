@@ -1,13 +1,7 @@
 use gewu_core::ColumnId;
 use gpui_kit::{
-    base::{
-        Disableable,
-        input::{Input, InputAccessibility, InputEvent, InputState},
-    },
-    component::{
-        Icon, IconName, Sizable,
-        button::{Button as StyledButton, ButtonVariants},
-    },
+    base::input::{Input, InputAccessibility, InputEvent, InputState},
+    component::{Icon, IconName},
     *,
 };
 
@@ -64,7 +58,7 @@ impl TableView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let colors = gpui_kit::base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         if let Some(confirmation) = confirm {
             return self.hide_confirmation(confirmation, window, cx);
         }
@@ -82,17 +76,12 @@ impl TableView {
         let to_show = matching.clone();
         panel = panel
             .child(
-                div()
-                    .h(px(28.))
+                crate::panels::input_frame(div(), true, &search.focus_handle(cx), window, cx)
                     .flex_none()
                     .flex()
                     .items_center()
                     .gap_2()
                     .px_2()
-                    .bg(colors.background)
-                    .border_1()
-                    .border_color(colors.border)
-                    .rounded_md()
                     .child(
                         Icon::new(IconName::Search)
                             .size(px(14.))
@@ -107,22 +96,14 @@ impl TableView {
                     .items_center()
                     .gap_1()
                     .child(
-                        StyledButton::new("show-matching")
-                            .label("Show matching")
-                            .secondary()
-                            .outline()
-                            .small()
+                        button("show-matching", "Show matching", false, cx)
                             .disabled(to_show.is_empty())
                             .on_click(
                                 cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx)),
                             ),
                     )
                     .child(
-                        StyledButton::new("hide-matching")
-                            .label("Hide matching")
-                            .secondary()
-                            .outline()
-                            .small()
+                        button("hide-matching", "Hide matching", false, cx)
                             .disabled(matching.is_empty())
                             .on_click(
                                 cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx)),
@@ -156,7 +137,7 @@ impl TableView {
                 .h(px(29.))
                 .flex_none()
                 .gap_2()
-                .hover(move |r| r.bg(colors.accent))
+                .hover(move |r| r.bg(colors.button_secondary_hover))
                 .child(
                     div()
                         .id(("column-grip", raw))
@@ -204,7 +185,7 @@ impl TableView {
                 row = row
                     .on_drag(payload.clone(), |drag, _, _, cx| cx.new(|_| drag.clone()))
                     .drag_over::<ColumnDrag>(move |style, drag, _, _| {
-                        payload.insertion_indicator(style, drag, colors.primary)
+                        payload.insertion_indicator(style, drag, colors.accent)
                     })
                     .on_drop(cx.listener(move |t, drag: &ColumnDrag, _, cx| {
                         if drag.document != cx.entity_id() || drag.order != Order::Columns {
@@ -269,7 +250,6 @@ impl TableView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let colors = gpui_kit::base::Theme::global(cx).tokens.colors;
         let names = self
             .data
             .columns
@@ -304,12 +284,11 @@ impl TableView {
         };
         self.drawer(title, window, cx)
             .child(
-                div()
+                crate::errors::inline_warning(message.clone())
                     .id("hide-explanation")
                     .role(Role::Label)
-                    .aria_label(message.clone())
-                    .test_support()
-                    .child(message),
+                    .aria_label(message)
+                    .test_support(),
             )
             .child(crate::panels::checkbox(
                 "skip-hide-warning",
@@ -334,15 +313,7 @@ impl TableView {
                             .on_click(cx.listener(|t, _, w, cx| t.cancel_hide(w, cx))),
                     )
                     .child(
-                        button("confirm-hide", "Hide", false, cx)
-                            .bg(colors.destructive)
-                            .text_color(colors.destructive_foreground)
-                            .hover(move |s| {
-                                s.bg(crate::theme::hover_fill(
-                                    colors.destructive,
-                                    colors.destructive_foreground,
-                                ))
-                            })
+                        crate::panels::danger_button("confirm-hide", "Hide", cx)
                             .on_click(cx.listener(|t, _, w, cx| t.confirm_hide(w, cx))),
                     ),
             )

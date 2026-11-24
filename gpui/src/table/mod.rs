@@ -21,6 +21,7 @@ const ROW_HEIGHT: f32 = 32.;
 pub const HEADER_HEIGHT: f32 = 32.;
 const SCROLLBAR: f32 = 12.;
 const MIN_THUMB: f32 = 24.;
+const ROW_NUMBER_SIZE: f32 = 11.;
 const PAD: f32 = 8.;
 const RESIZE_SLOP: f32 = 4.;
 const MIN_COLUMN: f32 = 76.;
@@ -28,12 +29,6 @@ const MIN_COLUMN: f32 = 76.;
 use layout::HorizontalScroll;
 
 use crate::columns::ColumnWidth;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Thumb {
-    Horizontal,
-    Vertical,
-}
 
 enum Drag {
     None,
@@ -45,11 +40,9 @@ enum Drag {
         start_x: f32,
         start_width: f32,
     },
-    Thumb {
-        grab: f32,
-    },
-    HorizontalThumb {
-        grab: f32,
+    Scrollbar {
+        axis: Axis,
+        grab: Pixels,
     },
 }
 
@@ -65,8 +58,8 @@ pub struct TableView {
     selection: Option<Selection>,
     drag: Drag,
     edge_frame_pending: bool,
-    header_hover: Option<usize>,
-    thumb_hover: Option<Thumb>,
+    header_hover: Option<HeaderHover>,
+    thumb_hover: Option<Axis>,
     body_pointer: Option<Point<Pixels>>,
     scrollbar_timer: Option<Task<()>>,
     pub focus: FocusHandle,
@@ -94,8 +87,15 @@ struct PaintCell {
     y: f32,
     text: SharedString,
     missing: bool,
+    current_match: bool,
     /// Slice of the frame's text matches belonging to this cell.
     spans: Range<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderHover {
+    Column(usize),
+    Divider(usize),
 }
 
 struct PaintHeader {
@@ -103,6 +103,7 @@ struct PaintHeader {
     kind: SharedString,
     sort: Option<SharedString>,
     funnel: Option<bool>,
+    selected: bool,
 }
 
 struct FrameRow {
@@ -121,16 +122,14 @@ struct Frame {
     style: Preferences,
     rows: Vec<FrameRow>,
     columns: Vec<PaintColumn>,
-    matches: Vec<Bounds<Pixels>>,
     current_match: Option<Bounds<Pixels>>,
     text_matches: Vec<Range<usize>>,
     selection: Option<Bounds<Pixels>>,
     head: Option<Bounds<Pixels>>,
-    thumb: Bounds<Pixels>,
-    active_thumb: Option<Thumb>,
+    active_thumb: Option<Axis>,
     show_scrollbars: bool,
     hovered_row_y: Option<f32>,
-    header_hover: Option<usize>,
+    header_hover: Option<HeaderHover>,
 }
 
 impl TableView {
@@ -183,7 +182,8 @@ impl TableView {
             document_title: None,
             worksheet_tabs: None,
             _style_changes: style_changes,
-            _window_activation: cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            _window_activation: cx
+                .observe_window_activation(window, Self::window_activation_changed),
             data,
             layout: Rc::new(Layout {
                 bounds: Bounds::default(),
@@ -259,7 +259,7 @@ impl TableView {
         let source_rows = self.data.source_row_count();
         let digits = source_rows.max(1).ilog10() + 1;
         let gutter = if self.prefs.show_row_numbers {
-            (digits as f32 * self.prefs.font_size * 0.65 + 2. * PAD).ceil()
+            (digits as f32 * ROW_NUMBER_SIZE * 0.65 + 2. * PAD).ceil()
         } else {
             0.
         };
@@ -292,7 +292,7 @@ impl TableView {
 
     #[cfg(test)]
     fn thumb_bounds(&self) -> Bounds<Pixels> {
-        self.layout.vertical_thumb()
+        self.layout.scrollbar(Axis::Vertical).unwrap().thumb
     }
 
     pub fn scroll_to_row(&mut self, row: u64) {

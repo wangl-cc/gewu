@@ -76,8 +76,13 @@ impl FilterEditor {
         }));
     }
 
-    pub(super) fn choices(&self, facet: &Arc<FilterChoices>, cx: &mut Context<Self>) -> Div {
-        let colors = base::Theme::global(cx).tokens.colors;
+    pub(super) fn choices(
+        &self,
+        facet: &Arc<FilterChoices>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut list = div()
             .id("facet-list")
             .max_h(px(210.))
@@ -104,7 +109,7 @@ impl FilterEditor {
                 .flex_none()
                 .px_2()
                 .h(px(27.))
-                .hover(move |s| s.bg(colors.accent))
+                .hover(move |s| s.bg(colors.button_secondary_hover))
                 .child(
                     div()
                         .ml_auto()
@@ -142,7 +147,7 @@ impl FilterEditor {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Self::input("Search values", &self.search, cx))
+            .child(Self::input("Search values", &self.search, window, cx))
             .child(
                 div()
                     .id("value-selection")
@@ -154,7 +159,7 @@ impl FilterEditor {
                     .rounded_md()
                     .border_1()
                     .border_color(colors.border)
-                    .bg(colors.background)
+                    .bg(colors.canvas)
                     .child(actions.border_b_1().border_color(colors.border))
                     .child(list)
                     .child(

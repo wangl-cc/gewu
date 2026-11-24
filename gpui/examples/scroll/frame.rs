@@ -21,7 +21,7 @@ impl Grid {
     pub fn read(window: &Window) -> Result<Self> {
         let quads = window.painted_quads();
         let scale = window.scale_factor();
-        // The body draws thin vertical dividers under a shared mask that excludes both scrollbars.
+        // The data columns share a body mask; the gutter and headers have their own masks.
         let dividers = quads
             .iter()
             .filter(|q| {

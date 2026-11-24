@@ -17,12 +17,30 @@ pub(crate) fn button(
 ) -> base::Button {
     let label = label.into();
     let control = button_base(id).accessibility_label(label.clone());
-    style_control(control, label, accented, cx)
+    style_control(control, label, ButtonTone::for_selection(accented), cx)
+}
+
+pub(crate) fn danger_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    cx: &App,
+) -> base::Button {
+    style_control(
+        button_base(id).accessibility_label(label),
+        label.into(),
+        ButtonTone::Danger,
+        cx,
+    )
 }
 
 pub(crate) fn button_base(id: impl Into<ElementId>) -> base::Button {
-    base::Button::new(id)
-        .styles(|styles| styles.disabled(|style| style.opacity(0.45).cursor_default()))
+    base::Button::new(id).styles(|styles| {
+        styles.disabled(|style| {
+            style
+                .opacity(crate::theme::DISABLED_OPACITY)
+                .cursor_default()
+        })
+    })
 }
 
 fn display_options(id: &'static str, expanded: bool, cx: &App) -> base::Button {
@@ -35,7 +53,7 @@ pub(crate) fn disclosure(
     expanded: bool,
     cx: &App,
 ) -> base::Button {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     base::Button::new(id)
         .accessibility_label(label)
         .aria_expanded(expanded)
@@ -53,16 +71,89 @@ pub(crate) fn disclosure(
         .child(label)
 }
 
-pub(crate) fn segmented_tabs(id: &'static str, label: &'static str, cx: &App) -> base::Tabs {
-    let colors = base::Theme::global(cx).tokens.colors;
-    base::Tabs::new(id)
-        .aria_label(label)
+pub(crate) fn input_frame<T: Styled + InteractiveElement + FluentBuilder>(
+    frame: T,
+    enabled: bool,
+    focus: &FocusHandle,
+    window: &Window,
+    cx: &App,
+) -> T {
+    let colors = crate::theme::GewuPalette::get(cx);
+    let focused = enabled && window.is_window_active() && focus.is_focused(window);
+    frame
+        .h(px(28.))
+        .min_w_0()
+        .rounded(px(6.))
+        .bg(colors.canvas)
+        .border(px(1. / window.scale_factor()))
+        .border_color(colors.border)
+        .text_size(px(13.))
+        .text_color(colors.foreground)
+        .when(enabled, |s| {
+            s.hover(move |s| s.border_color(colors.input_hover()))
+        })
+        .when(!enabled, |s| {
+            s.opacity(crate::theme::DISABLED_OPACITY).cursor_default()
+        })
+        .when(focused, |s| s.shadow(colors.focus_shadows()))
+}
+
+pub(crate) fn elevated<T: Styled>(surface: T, window: &Window, cx: &App) -> T {
+    let colors = crate::theme::GewuPalette::get(cx);
+    surface
+        .rounded(px(10.))
+        .border(px(1. / window.scale_factor()))
+        .border_color(colors.elevated_border)
+        .bg(colors.elevated)
+        .text_color(colors.foreground)
+        .shadow(colors.elevated_shadows())
+}
+
+pub(crate) fn segmented_tabs(
+    id: &'static str,
+    label: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> base::Tabs {
+    segment_track(id.into(), base::Tabs::new(id).aria_label(label), window, cx)
+}
+
+pub(crate) fn segmented_radios(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> base::RadioGroup {
+    let id = id.into();
+    let radios = base::RadioGroup::new(id.clone())
+        .axis(Axis::Horizontal)
+        .aria_label(label);
+    segment_track(id, radios, window, cx)
+}
+
+fn segment_track<T: Styled + InteractiveElement + FluentBuilder>(
+    id: ElementId,
+    track: T,
+    window: &mut Window,
+    cx: &mut App,
+) -> T {
+    let colors = crate::theme::GewuPalette::get(cx);
+    // The tab or radio owns keyboard focus. The group paints a single ring around its children.
+    let focus = window.use_keyed_state(id, cx, |_, cx| cx.focus_handle().tab_stop(false));
+    let focus = focus.read(cx);
+    let focused = window.is_window_active()
+        && window.last_input_was_keyboard()
+        && focus.contains_focused(window, cx);
+    track
         .flex()
         .items_center()
         .flex_none()
+        .h(px(28.))
         .p(px(2.))
-        .rounded_md()
-        .bg(colors.muted)
+        .rounded(px(6.))
+        .bg(colors.segment_track)
+        .track_focus(focus)
+        .when(focused, |s| s.shadow(colors.focus_shadows()))
 }
 
 pub(crate) fn segment<T: Styled + StatefulInteractiveElement + ParentElement + FluentBuilder>(
@@ -71,24 +162,27 @@ pub(crate) fn segment<T: Styled + StatefulInteractiveElement + ParentElement + F
     selected: bool,
     cx: &App,
 ) -> T {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     control
         .flex_1()
         .min_w_0()
         .flex()
         .justify_center()
         .items_center()
-        .h(px(23.))
+        .h_full()
         .rounded(px(4.))
         .cursor_pointer()
         .text_size(px(12.))
         .text_color(colors.foreground)
         .when(selected, |c| {
-            c.bg(colors.background)
+            c.bg(colors.segment_thumb)
                 .shadow_xs()
                 .font_weight(FontWeight::SEMIBOLD)
         })
-        .when(!selected, |c| c.hover(move |s| s.bg(colors.accent)))
+        .when(!selected, |c| {
+            c.hover(move |s| s.bg(colors.button_secondary_hover))
+                .active(move |s| s.bg(colors.secondary_pressed()))
+        })
         .child(label.into())
 }
 
@@ -99,19 +193,22 @@ pub(crate) fn checkbox(
     cx: &App,
     activate: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> base::Checkbox {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     let label = label.into();
     base::Checkbox::new(id)
         .accessibility_label(label.clone())
         .checked(checked)
+        .group("checkbox")
+        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
         .on_change(move |_, ev, w, cx| activate(ev, w, cx))
         .flex()
         .items_center()
         .gap_2()
         .cursor_pointer()
-        .text_size(px(12.))
+        .text_size(px(13.))
         .child(
             div()
+                .id("checkbox-mark")
                 .flex_none()
                 .size(px(14.))
                 .flex()
@@ -120,14 +217,28 @@ pub(crate) fn checkbox(
                 .rounded(px(3.))
                 .border_1()
                 .border_color(if checked {
-                    colors.primary
+                    colors.accent
                 } else {
                     colors.muted_foreground
                 })
                 .bg(if checked {
-                    colors.primary
+                    colors.accent
                 } else {
-                    colors.background
+                    colors.canvas
+                })
+                .group_hover("checkbox", move |s| {
+                    if checked {
+                        s.bg(colors.accent_hover).border_color(colors.accent_hover)
+                    } else {
+                        s.border_color(colors.foreground)
+                    }
+                })
+                .group_active("checkbox", move |s| {
+                    if checked {
+                        s.bg(colors.accent_pressed())
+                    } else {
+                        s.bg(colors.button_secondary_hover)
+                    }
                 })
                 .when(checked, |box_| {
                     box_.child(
@@ -140,7 +251,7 @@ pub(crate) fn checkbox(
                                 mark.line_to(p(4., 8.));
                                 mark.line_to(p(10., 1.5));
                                 if let Ok(path) = mark.build() {
-                                    window.paint_path(path, colors.primary_foreground);
+                                    window.paint_path(path, colors.accent_foreground);
                                 }
                             },
                         )
@@ -178,7 +289,7 @@ pub(crate) fn radio(
         .items_center()
         .justify_center()
         .line_height(relative(1.));
-    style_control(control, label, checked, cx)
+    style_control(control, label, ButtonTone::for_selection(checked), cx)
 }
 
 pub(crate) fn toggle(
@@ -193,39 +304,68 @@ pub(crate) fn toggle(
         .pressed(pressed)
         .accessibility_label(label.clone())
         .on_change(move |_, ev, w, cx| activate(ev, w, cx));
-    style_control(control, label, pressed, cx)
+    style_control(control, label, ButtonTone::for_selection(pressed), cx)
+}
+
+enum ButtonTone {
+    Secondary,
+    Primary,
+    Danger,
+}
+
+impl ButtonTone {
+    fn for_selection(selected: bool) -> Self {
+        if selected {
+            Self::Primary
+        } else {
+            Self::Secondary
+        }
+    }
 }
 
 fn style_control<T: Styled + StatefulInteractiveElement + ParentElement>(
     control: T,
     label: SharedString,
-    accented: bool,
+    tone: ButtonTone,
     cx: &App,
 ) -> T {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
+    let (fill, ink, hover, pressed) = match tone {
+        ButtonTone::Secondary => (
+            colors.button_secondary,
+            colors.foreground,
+            colors.button_secondary_hover,
+            colors.secondary_pressed(),
+        ),
+        ButtonTone::Primary => (
+            colors.accent,
+            colors.accent_foreground,
+            colors.accent_hover,
+            colors.accent_pressed(),
+        ),
+        ButtonTone::Danger => (
+            colors.danger_fill,
+            colors.danger_fill_foreground,
+            colors.danger_hover(),
+            colors.danger_pressed(),
+        ),
+    };
     control
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .h(px(28.))
         .px_2()
-        .py_1()
-        .rounded_md()
+        .rounded(px(6.))
         .cursor_pointer()
-        .text_sm()
-        .bg(if accented {
-            colors.primary
-        } else {
-            colors.secondary
-        })
-        .text_color(if accented {
-            colors.primary_foreground
-        } else {
-            colors.secondary_foreground
-        })
-        .hover(move |style| {
-            style.bg(if accented {
-                crate::theme::hover_fill(colors.primary, colors.primary_foreground)
-            } else {
-                colors.accent
-            })
-        })
+        .text_size(px(13.))
+        .whitespace_nowrap()
+        .bg(fill)
+        .text_color(ink)
+        .hover(move |s| s.bg(hover))
+        .active(move |s| s.bg(pressed))
+        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
         .child(label)
 }
 

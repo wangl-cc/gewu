@@ -79,18 +79,11 @@ impl Layout {
         horizontal: HorizontalScroll,
     ) -> Self {
         let size = bounds.size;
-        let body_width = (size.width.as_f32() - SCROLLBAR - gutter).max(0.);
+        let body_width = (size.width.as_f32() - gutter).max(0.);
         let widths = (0..grid_columns.len()).map(&width);
         let content_width = widths.clone().sum::<f32>();
-        let scrollbar_height = if content_width > body_width {
-            SCROLLBAR
-        } else {
-            0.
-        };
         let mut vertical = scroll.clone();
-        vertical.set_viewport(f64::from(
-            (size.height.as_f32() - HEADER_HEIGHT - scrollbar_height).max(0.),
-        ));
+        vertical.set_viewport(f64::from((size.height.as_f32() - HEADER_HEIGHT).max(0.)));
         let scroll_x = horizontal
             .offset_with_widths(grid_columns, &width, body_width)
             .clamp(0., (content_width - body_width).max(0.));
@@ -115,49 +108,69 @@ impl Layout {
         }
     }
 
-    pub(super) fn vertical_thumb(&self) -> Bounds<Pixels> {
-        let track = (self.body_bottom() - HEADER_HEIGHT).max(0.);
-        let content = self.vertical.rows() as f64 * self.vertical.row_height();
-        let height = ((self.vertical.viewport() / content.max(1.)) as f32 * track)
-            .clamp(MIN_THUMB.min(track), track);
-        let y = HEADER_HEIGHT + self.vertical.fraction() as f32 * (track - height);
-        Bounds::new(
-            point(px(self.body_right()), px(y)),
-            size_(SCROLLBAR, height),
-        )
-    }
-
     pub(super) fn body_right(&self) -> f32 {
-        (self.bounds.size.width.as_f32() - SCROLLBAR).max(0.)
+        self.bounds.size.width.as_f32()
     }
 
     pub(super) fn body_bottom(&self) -> f32 {
-        (self.bounds.size.height.as_f32()
-            - if self.has_horizontal_scroll() {
-                SCROLLBAR
-            } else {
-                0.
-            })
-        .max(0.)
+        self.bounds.size.height.as_f32()
     }
 
-    pub(super) fn has_horizontal_scroll(&self) -> bool {
-        self.content_width > (self.body_right() - self.gutter).max(0.)
+    pub(super) fn horizontal_overflow(&self) -> f32 {
+        (self.content_width - (self.body_right() - self.gutter).max(0.)).max(0.)
     }
 
-    pub(super) fn horizontal_thumb(&self) -> Bounds<Pixels> {
-        let track = (self.body_right() - self.gutter).max(0.);
-        let width = (track * track / self.content_width.max(1.)).clamp(MIN_THUMB.min(track), track);
-        let max_scroll = (self.content_width - track).max(1.);
-        let left = self.gutter + self.scroll_x / max_scroll * (track - width);
-        Bounds::new(
-            point(px(left), px(self.body_bottom())),
-            size_(width, SCROLLBAR),
-        )
+    /// Tracks overlay the body. The vertical track owns the shared bottom-right corner.
+    pub(super) fn scrollbar(&self, axis: Axis) -> Option<Scrollbar> {
+        let width = (self.body_right() - self.gutter).max(0.);
+        let height = (self.body_bottom() - HEADER_HEIGHT).max(0.);
+        let vertical = self.vertical.max_position_rows() > 0.;
+        if width == 0. || height == 0. {
+            return None;
+        }
+        let (track, visible, fraction) = match axis {
+            Axis::Vertical if vertical => {
+                let w = SCROLLBAR.min(width);
+                let content = self.vertical.rows() as f64 * self.vertical.row_height();
+                (
+                    Bounds::new(
+                        point(px(self.body_right() - w), px(HEADER_HEIGHT)),
+                        size_(w, height),
+                    ),
+                    (self.vertical.viewport() / content) as f32,
+                    self.vertical.fraction() as f32,
+                )
+            }
+            Axis::Horizontal if self.horizontal_overflow() > 0. => {
+                let w = if vertical {
+                    (width - SCROLLBAR).max(0.)
+                } else {
+                    width
+                };
+                let h = SCROLLBAR.min(height);
+                (
+                    Bounds::new(
+                        point(px(self.gutter), px(self.body_bottom() - h)),
+                        size_(w, h),
+                    ),
+                    width / self.content_width,
+                    self.scroll_x / self.horizontal_overflow(),
+                )
+            }
+            _ => return None,
+        };
+        let length = track.size.along(axis);
+        let thumb_len = (length * visible).clamp(px(MIN_THUMB).min(length), length);
+        let thumb = Bounds::new(
+            track
+                .origin
+                .apply_along(axis, |v| v + (length - thumb_len) * fraction),
+            track.size.apply_along(axis, |_| thumb_len),
+        );
+        Some(Scrollbar { track, thumb })
     }
 
-    /// Absolute layout bounds already account for scrolling. Clip partially visible cells to
-    /// the same gutter and scrollbar boundaries as the painted body.
+    /// Clip partially visible cells to the same gutter and viewport as the painted body.
     pub(super) fn clipped_columns(&self) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
         self.columns.iter().filter_map(|&(index, x, width)| {
             let left = x.max(self.gutter);
@@ -214,6 +227,11 @@ impl Layout {
             y.clamp(HEADER_HEIGHT, bottom.next_down()),
         )
     }
+}
+
+pub(super) struct Scrollbar {
+    pub track: Bounds<Pixels>,
+    pub thumb: Bounds<Pixels>,
 }
 
 struct MeasuredColumn {

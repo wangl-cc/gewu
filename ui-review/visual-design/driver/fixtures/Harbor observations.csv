@@ -1,0 +1,97 @@
+Station,Source,Reach,Water temperature,Salinity,Oxygen,Remarks
+Greenwich,Buoy,Upper tidal,11.4,31.45,,Morning transect
+Woolwich,Field survey,Mid-estuary,12.2,31.11,8.98,Routine survey
+Blackwall,Field survey,Lower tidal,12.9,30.14,8.80,High tide
+Limehouse,Field survey,Upper tidal,13.4,28.67,8.64,Control sample
+Deptford,Buoy,Mid-estuary,13.7,26.90,8.50,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.6,25.07,8.39,Evening survey
+Greenwich,Field survey,Upper tidal,13.2,23.43,8.31,Morning transect
+Woolwich,Field survey,Mid-estuary,12.7,22.19,8.27,Routine survey
+Blackwall,Buoy,Lower tidal,12.0,21.53,8.28,High tide
+Limehouse,Field survey,Upper tidal,11.3,21.54,8.32,Control sample
+Deptford,Field survey,Mid-estuary,10.7,22.21,8.39,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,10.3,23.45,8.50,Evening survey
+Greenwich,Buoy,Upper tidal,10.2,25.10,8.65,Morning transect
+Woolwich,Field survey,Mid-estuary,10.4,26.94,,Routine survey
+Blackwall,Field survey,Lower tidal,10.9,28.70,8.99,High tide
+Limehouse,Field survey,Upper tidal,11.6,30.17,9.18,Control sample
+Deptford,Buoy,Mid-estuary,12.4,31.12,9.37,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.2,31.45,9.54,Evening survey
+Greenwich,Field survey,Upper tidal,14.0,31.10,9.71,Morning transect
+Woolwich,Field survey,Mid-estuary,14.5,30.12,9.85,Routine survey
+Blackwall,Buoy,Lower tidal,14.8,28.64,9.95,High tide
+Limehouse,Field survey,Upper tidal,14.7,26.87,10.03,Control sample
+Deptford,Field survey,Mid-estuary,14.4,25.04,10.07,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.8,23.40,10.06,Evening survey
+Greenwich,Buoy,Upper tidal,13.2,22.17,10.02,Morning transect
+Woolwich,Field survey,Mid-estuary,12.5,21.53,9.94,Routine survey
+Blackwall,Field survey,Lower tidal,11.9,21.54,,High tide
+Limehouse,Field survey,Upper tidal,11.4,22.23,9.69,Control sample
+Deptford,Buoy,Mid-estuary,11.3,23.48,9.52,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,11.5,25.14,9.34,Evening survey
+Greenwich,Field survey,Upper tidal,11.9,26.97,9.15,Morning transect
+Woolwich,Field survey,Mid-estuary,12.6,28.73,8.97,Routine survey
+Blackwall,Buoy,Lower tidal,13.4,30.19,8.79,High tide
+Limehouse,Field survey,Upper tidal,14.2,31.14,8.63,Control sample
+Deptford,Field survey,Mid-estuary,15.0,31.45,8.49,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,15.5,31.09,8.38,Evening survey
+Greenwich,Buoy,Upper tidal,15.8,30.10,8.31,Morning transect
+Woolwich,Field survey,Mid-estuary,15.8,28.61,8.27,Routine survey
+Blackwall,Field survey,Lower tidal,15.5,26.84,8.28,High tide
+Limehouse,Field survey,Upper tidal,15.0,25.01,,Control sample
+Deptford,Buoy,Mid-estuary,14.3,23.37,8.40,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.6,22.16,8.52,Evening survey
+Greenwich,Field survey,Upper tidal,13.0,21.52,8.66,Morning transect
+Woolwich,Field survey,Mid-estuary,12.6,21.55,8.82,Routine survey
+Blackwall,Buoy,Lower tidal,12.4,22.25,9.00,High tide
+Limehouse,Field survey,Upper tidal,12.5,23.51,9.19,Control sample
+Deptford,Field survey,Mid-estuary,12.9,25.17,9.38,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.6,27.01,9.56,Evening survey
+Greenwich,Buoy,Upper tidal,14.4,28.76,9.72,Morning transect
+Woolwich,Field survey,Mid-estuary,15.2,30.21,9.86,Routine survey
+Blackwall,Field survey,Lower tidal,16.0,31.15,9.96,High tide
+Limehouse,Field survey,Upper tidal,16.6,31.45,10.03,Control sample
+Deptford,Buoy,Mid-estuary,16.9,31.07,,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,16.9,30.07,10.06,Evening survey
+Greenwich,Field survey,Upper tidal,16.7,28.58,10.02,Morning transect
+Woolwich,Field survey,Mid-estuary,16.2,26.80,9.94,Routine survey
+Blackwall,Buoy,Lower tidal,15.5,24.97,9.82,High tide
+Limehouse,Field survey,Upper tidal,14.8,23.35,9.68,Control sample
+Deptford,Field survey,Mid-estuary,14.2,22.14,9.51,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,13.7,21.51,9.33,Evening survey
+Greenwich,Buoy,Upper tidal,13.5,21.56,9.14,Morning transect
+Woolwich,Field survey,Mid-estuary,13.6,22.26,8.95,Routine survey
+Blackwall,Field survey,Lower tidal,14.0,23.54,8.78,High tide
+Limehouse,Field survey,Upper tidal,14.6,25.20,8.62,Control sample
+Deptford,Buoy,Mid-estuary,15.4,27.04,8.48,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,16.3,28.79,,Evening survey
+Greenwich,Field survey,Upper tidal,17.0,30.23,8.30,Morning transect
+Woolwich,Field survey,Mid-estuary,17.6,31.16,8.27,Routine survey
+Blackwall,Buoy,Lower tidal,18.0,31.45,8.28,High tide
+Limehouse,Field survey,Upper tidal,18.0,31.06,8.33,Control sample
+Deptford,Field survey,Mid-estuary,17.8,30.05,8.41,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,17.3,28.55,8.53,Evening survey
+Greenwich,Buoy,Upper tidal,16.7,26.77,8.67,Morning transect
+Woolwich,Field survey,Mid-estuary,16.0,24.94,8.84,Routine survey
+Blackwall,Field survey,Lower tidal,15.3,23.32,9.02,High tide
+Limehouse,Field survey,Upper tidal,14.8,22.12,9.21,Control sample
+Deptford,Buoy,Mid-estuary,14.6,21.51,9.39,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,14.7,21.57,9.57,Evening survey
+Greenwich,Field survey,Upper tidal,15.0,22.28,,Morning transect
+Woolwich,Field survey,Mid-estuary,15.6,23.56,9.86,Routine survey
+Blackwall,Buoy,Lower tidal,16.4,25.24,9.97,High tide
+Limehouse,Field survey,Upper tidal,17.3,27.07,10.04,Control sample
+Deptford,Field survey,Mid-estuary,18.0,28.82,10.07,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,18.7,30.26,10.06,Evening survey
+Greenwich,Buoy,Upper tidal,19.1,31.17,10.01,Morning transect
+Woolwich,Field survey,Mid-estuary,19.2,31.45,9.93,Routine survey
+Blackwall,Field survey,Lower tidal,18.9,31.05,9.81,High tide
+Limehouse,Field survey,Upper tidal,18.5,30.03,9.66,Control sample
+Deptford,Buoy,Mid-estuary,17.9,28.52,9.50,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,17.1,26.73,9.31,Evening survey
+Greenwich,Field survey,Upper tidal,16.5,24.91,9.12,Morning transect
+Woolwich,Field survey,Mid-estuary,16.0,23.29,,Routine survey
+Blackwall,Buoy,Lower tidal,15.7,22.10,8.76,High tide
+Limehouse,Field survey,Upper tidal,15.7,21.50,8.60,Control sample
+Deptford,Field survey,Mid-estuary,16.1,21.57,8.47,Rainfall recorded
+Rotherhithe,Field survey,Lower tidal,16.7,22.30,8.37,Evening survey

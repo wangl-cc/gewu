@@ -11,9 +11,11 @@ fn batched_highlight_uses_relative_rows_across_cache_blocks() {
         n_rows: 67,
         columns: vec![ColumnHighlight {
             column,
-            matched: vec![0, 0, 0, 0, 0, 0, 0, 0x80, 0x05],
+            matched: vec![0, 0, 0, 0, 0, 0, 0, 0b1000_0000, 0b0000_0101],
         }],
     });
-    let hits: Vec<_> = (0..192).filter(|&row| find.matched(column, row)).collect();
+    let hits: Vec<_> = (0..192)
+        .filter(|&row| find.cached_match(column, row) == Some(true))
+        .collect();
     assert_eq!(hits, [127, 128, 130]);
 }

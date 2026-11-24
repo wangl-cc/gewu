@@ -145,10 +145,16 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     };
     open_menu(&mut w);
     w.ui.update(|window, _| {
+        let first = window.within("popup-menu").find(0usize);
         assert_eq!(
-            window.within("popup-menu").find(0usize).label(),
+            window
+                .within("popup-menu")
+                .within(0usize)
+                .find("menu-content")
+                .value(),
             Some("Copy Cell")
-        )
+        );
+        assert!((gpui_kit::px(24.)..=gpui_kit::px(26.)).contains(&first.bounds().size.height));
     });
     w.keys("down enter");
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
@@ -158,16 +164,178 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     w.settle();
     assert!(w.read(|table| matches!(
         &table.controls.drawer,
-        Some(super::Drawer::Cell { name, value: Some(value), .. })
-            if name == "note" && value.as_ref() == text
+        Some(super::Drawer::Cell { value: Some(value), .. }) if value.as_ref() == text
     )));
-    w.ui.update(|window, cx| {
+    assert_eq!(w.selection().unwrap().head.column, 1);
+    let long = w.ui.update(|window, cx| {
         let copy = window.find("copy-cell");
         assert!(copy.visible() && copy.bounds().center().y < window.viewport_size().height);
+        assert!(window.try_find("close-table-drawer").is_none());
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("previous".into()));
+        window.find("cell-preview").bounds().size
     });
     click(&mut w, "copy-cell");
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
+    w.keys("escape");
+    assert!(w.read(|table| table.controls.drawer.is_none()));
+
+    w.ui.simulate_event(gpui_kit::MouseDownEvent {
+        button: gpui_kit::MouseButton::Left,
+        position: w.cell(0, 0),
+        modifiers: Modifiers::default(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    w.settle();
+    let short =
+        w.ui.update(|window, _| window.find("cell-preview").bounds().size);
+    assert!(
+        short.width < long.width && short.height < long.height,
+        "short {short:?}, long {long:?}"
+    );
+    w.click(w.header(0), Modifiers::default());
+    assert!(w.read(|table| table.controls.drawer.is_none()));
+}
+
+fn open_header_menu(w: &mut TableWindow) {
+    let point = w.header(0);
+    w.ui.simulate_event(gpui_kit::MouseDownEvent {
+        button: gpui_kit::MouseButton::Right,
+        position: point,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    w.settle();
+}
+
+#[test]
+fn pressing_anywhere_in_a_menu_row_paints_the_full_row() {
+    use std::{cell::Cell, rc::Rc};
+
+    use gpui_kit::{
+        MouseButton, MouseMoveEvent, TestAppContext, VisualTestContext, WindowOptions,
+        component::menu::PopupMenu, point, px,
+    };
+
+    // Mount the production PopupMenu without the document's rounded clipping layer.
+    // Fast's painted_quads() exposes the top-level scene only.
+    let app = TestAppContext::single();
+    let activations = Rc::new(Cell::new(0));
+    let (handle, _) = app.update(|cx| {
+        gpui_kit::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            let activations = activations.clone();
+            PopupMenu::build(window, cx, |menu, _, _| {
+                menu.max_w(px(194.)).item(
+                    super::menus::menu_item("Sort Ascending", true, None)
+                        .on_click(move |_, _, _| activations.set(activations.get() + 1)),
+                )
+            })
+        })
+        .unwrap()
+    });
+    let mut ui = VisualTestContext::from_window(handle, &app);
+    for (i, inset) in [2., 18.].into_iter().enumerate() {
+        let bounds = ui.update(|window, cx| {
+            window.render_frame(cx);
+            window.within("popup-menu").find(0usize).bounds()
+        });
+        let press = point(bounds.left() + px(inset), bounds.center().y);
+        ui.simulate_event(MouseMoveEvent {
+            position: press,
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        });
+        ui.run_until_parked();
+        ui.simulate_mouse_down(press, MouseButton::Left, Modifiers::default());
+        ui.update(|window, cx| {
+            window.render_frame(cx);
+            let fill = crate::theme::GewuPalette::get(cx).menu_pressed();
+            let row = bounds.scale(window.scale_factor());
+            assert!(
+                window
+                    .painted_quads()
+                    .iter()
+                    .any(|q| q.bounds == row && q.background.as_solid() == Some(fill)),
+                "press {inset}pt from the row's left edge"
+            );
+        });
+        ui.simulate_mouse_up(press, MouseButton::Left, Modifiers::default());
+        ui.run_until_parked();
+        assert_eq!(activations.get(), i + 1);
+    }
+    app.quit();
+}
+
+#[test]
+fn unavailable_menu_commands_keep_their_names_and_are_skipped_by_keyboard_navigation() {
+    let mut w = window();
+    open_header_menu(&mut w);
+    w.ui.update(|window, _| {
+        let binding = gpui_kit::component::kbd::Kbd::format(
+            &gpui_kit::Keystroke::parse("cmd-alt-f").unwrap(),
+        );
+        let hints = gpui_kit::base::test_support::texts(window);
+        let filter = window.within("popup-menu").find(5usize).bounds();
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.text() == binding && filter.contains(&hint.bounds().center())),
+            "Filter Column must display its document shortcut"
+        );
+        let label = window
+            .within("popup-menu")
+            .within(2usize)
+            .find("menu-content");
+        assert_eq!(label.role(), Some(gpui_kit::Role::Label));
+        assert_eq!(label.value(), Some("Clear Column Sort"));
+    });
+    // The first two rows offer sorting. The next available command is Filter Column,
+    // beyond both unavailable clear commands and the separator.
+    w.keys("down down down enter");
+    assert!(w.read(|table| matches!(table.controls.drawer, Some(super::Drawer::Filter { .. }))));
+    assert!(w.read(|table| table.requested_query().sorts.is_empty()));
+}
+
+#[test]
+fn leaving_the_window_dismisses_a_context_menu_and_restores_its_action_context() {
+    let mut w = window();
+    w.ui.update(|window, _| window.activate_window());
+    w.settle();
+    w.ui.update(|window, _| assert!(window.is_window_active()));
+    open_header_menu(&mut w);
+    assert!(w.read(|t| t.controls.menu.is_some()));
+    w.ui.deactivate_window();
+    w.settle();
+    w.ui.update(|window, _| assert!(!window.is_window_active()));
+    assert!(w.read(|t| t.controls.menu.is_none()));
+    w.ui.update(|window, _| window.activate_window());
+    w.settle();
+    let grid = w.read(|t| t.focus.clone());
+    w.ui.update(|window, _| assert!(grid.is_focused(window)));
+}
+
+#[test]
+fn leaving_the_window_closes_the_sort_picker_without_changing_its_draft() {
+    let mut w = window();
+    w.ui.update(|window, _| window.activate_window());
+    w.settle();
+    w.ui.update(|window, _| assert!(window.is_window_active()));
+    action(&mut w, EditSort);
+    click(&mut w, "add-sort");
+    w.ui.update(|window, cx| window.input("score", cx));
+    w.settle();
+    w.ui.update(|window, _| assert_eq!(window.find("add-sort").expanded(), Some(true)));
+    w.ui.deactivate_window();
+    w.settle();
+    w.ui.update(|window, _| assert!(!window.is_window_active()));
+    w.ui.update(|window, _| assert_eq!(window.find("add-sort").expanded(), Some(false)));
+    assert!(w.read(|t| t.requested_query().sorts.is_empty()));
+    w.ui.update(|window, _| window.activate_window());
+    w.settle();
+    click(&mut w, "add-sort");
+    w.ui.update(|window, _| assert!(window.find("group").visible()));
 }
 
 #[test]
@@ -444,7 +612,7 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("columns.csv");
-    std::fs::write(&path, "a,b,c,d,e,f,g,h\n1,2,3,4,5,6,7,8\n").unwrap();
+    std::fs::write(&path, "a,b,c,d,e,f,g,h,i,j\n1,2,3,4,5,6,7,8,9,10\n").unwrap();
     let mut w = TableWindow::open(&path);
     w.ui.simulate_resize(size(px(640.), px(720.)));
     w.settle();
@@ -530,11 +698,28 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
         w.ui.update(|window, _| assert_eq!(window.find(name).label(), Some(name)));
         w.keys("enter");
     }
+    w.ui.update(|window, _| {
+        let select = window
+            .within(("sort-column", 0usize))
+            .find("input")
+            .bounds();
+        let direction = window
+            .find(("ascending", ids[0].into_raw() as usize))
+            .bounds();
+        let select_height = select.size.height + gpui_kit::px(2. / window.scale_factor());
+        assert_eq!(select_height, gpui_kit::px(28.));
+        assert_eq!(direction.size.height + gpui_kit::px(4.), select_height);
+        assert_eq!(select.center().y, direction.center().y);
+    });
     w.ui.update(|window, cx| window.right_click(("sort-column", 1usize), cx));
     w.settle();
     w.ui.update(|window, _| {
         assert_eq!(
-            window.within("popup-menu").find(0usize).label(),
+            window
+                .within("popup-menu")
+                .within(0usize)
+                .find("menu-content")
+                .value(),
             Some("Move Up")
         )
     });

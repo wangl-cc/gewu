@@ -124,12 +124,7 @@ impl TableView {
             .drawer("Export", window, cx)
             .child(
                 div()
-                    .text_color(
-                        gpui_kit::base::Theme::global(cx)
-                            .tokens
-                            .colors
-                            .muted_foreground,
-                    )
+                    .text_color(crate::theme::GewuPalette::get(cx).muted_foreground)
                     .child(format!(
                         "{} · {}",
                         crate::counted(draft.view.row_count(), "row"),
@@ -302,7 +297,8 @@ impl Render for ExportController {
             }
             ExportController::Finished(message) => bar.child(status(message.clone().into())),
             ExportController::Failed(message) => bar
-                .text_color(base::Theme::global(cx).tokens.colors.destructive)
+                .text_color(crate::theme::GewuPalette::get(cx).danger_text)
+                .child(crate::errors::warning_icon())
                 .child(status(message.clone().into())),
             ExportController::Writing(active) => {
                 let progress = active.job.progress();

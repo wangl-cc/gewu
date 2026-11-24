@@ -444,39 +444,66 @@ fn reversing_a_pending_sort_restores_find_on_the_original_view() {
     assert_eq!(w.selection().unwrap().head.row, 2);
 }
 
+fn grid_frame(w: &mut TableWindow) -> super::Frame {
+    w.ui.update(|window, cx| {
+        w.table.update(cx, |t, cx| {
+            let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+            t.build_frame(geometry.layout, cx)
+        })
+    })
+}
+
+#[test]
+fn find_marks_the_preview_ellipsis_for_hits_after_a_newline_or_the_byte_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hidden.csv");
+    let long = "α".repeat(crate::data::GRID_PREVIEW_BYTES);
+    std::fs::write(
+        &path,
+        format!("note\n{long}needle\n\"prefix\nneedle\"\nplain\n"),
+    )
+    .unwrap();
+    let mut w = TableWindow::open(&path);
+    w.keys("cmd-f");
+    w.type_in_find("needle");
+    let frame = grid_frame(&mut w);
+    let cells = &frame.columns[0].cells;
+    assert_eq!(cells.len(), 3);
+    for cell in &cells[..2] {
+        let spans = &frame.text_matches[cell.spans.clone()];
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&cell.text[spans[0].clone()], "…");
+    }
+    assert!(cells[0].current_match);
+    assert!(!cells[1].current_match);
+    assert!(cells[2].spans.is_empty());
+}
+
 #[test]
 fn find_outline_tracks_the_current_result_independently_of_the_grid_selection() {
     let mut w = open();
-    let frame = |w: &mut TableWindow| {
-        w.ui.update(|window, cx| {
-            w.table.update(cx, |t, cx| {
-                let geometry = t.prepare_grid_layout(t.layout.bounds, window);
-                t.build_frame(geometry.layout, cx)
-            })
-        })
-    };
-
     w.keys("cmd-f");
     w.type_in_find("marker");
-    let initial = frame(&mut w);
-    assert_eq!(initial.matches.len(), 3);
+    let initial = grid_frame(&mut w);
+    assert_eq!(initial.text_matches.len(), 3);
     let first = initial.current_match.unwrap();
     assert_eq!(initial.head, Some(first));
 
     w.click(w.cell(0, 0), Modifiers::default());
-    let after_click = frame(&mut w);
+    let after_click = grid_frame(&mut w);
     assert_eq!(after_click.current_match, Some(first));
     assert_ne!(after_click.head, after_click.current_match);
-    assert_eq!(after_click.matches, initial.matches);
+    assert_eq!(after_click.text_matches, initial.text_matches);
 
     w.keys("cmd-g");
-    let next = frame(&mut w);
-    assert_eq!(next.current_match, Some(initial.matches[1]));
+    let next = grid_frame(&mut w);
+    let second_y = initial.columns[2].cells[2].y;
+    assert_eq!(next.current_match.unwrap().origin.y, px(second_y));
     assert_eq!(next.head, next.current_match);
     w.keys("escape");
-    let closed = frame(&mut w);
+    let closed = grid_frame(&mut w);
     assert!(closed.current_match.is_none());
-    assert!(closed.matches.is_empty());
+    assert!(closed.text_matches.is_empty());
 }
 
 #[test]
@@ -527,8 +554,12 @@ fn hiding_columns_rebuilds_live_find_and_zero_columns_have_no_selection() {
     w.settle();
     w.ui.update(|window, cx| window.click(("toggle-column", group), cx));
     w.settle();
-    w.app
-        .read(|cx| assert!(w.table.read(cx).find.read(cx).matched(note, 1)));
+    w.app.read(|cx| {
+        assert_eq!(
+            w.table.read(cx).find.read(cx).cached_match(note, 1),
+            Some(true)
+        )
+    });
     w.ui.update(|window, cx| window.click("hide-matching", cx));
     w.settle();
     assert_eq!(w.read(|t| t.data.columns.len()), 0);

@@ -27,7 +27,6 @@ impl TableView {
                     .is_some_and(|selected| selected.contains(&row)),
             })
             .collect();
-        let mut matches = vec![];
         let mut text_matches = Vec::new();
         let mut current_match = None;
         let mut columns = Vec::with_capacity(layout.columns.len());
@@ -46,15 +45,19 @@ impl TableView {
                     .current_match()
                     .is_some_and(|hit| hit.column == info.id && hit.display_row == row.display);
                 let first_span = text_matches.len();
-                if current || find.matched(info.id, row.display.0) {
-                    let bounds =
-                        Bounds::new(point(px(x), px(row.y)), size_(width, self.prefs.row_height));
-                    if current {
-                        current_match = Some(bounds);
-                    }
-                    matches.push(bounds);
-                    if info.capabilities.text_match
-                        && let Some(session) = find.session()
+                if current {
+                    current_match = Some(Bounds::new(
+                        point(px(x), px(row.y)),
+                        size_(width, self.prefs.row_height),
+                    ));
+                }
+                if let Some(session) = find.session() {
+                    let hit = if current {
+                        Some(true)
+                    } else {
+                        find.cached_match(info.id, row.display.0)
+                    };
+                    if hit.unwrap_or(info.capabilities.text_match)
                         && let Some(Some(source)) =
                             self.data.cached_cell_text(column, row.display.0)
                     {
@@ -62,13 +65,26 @@ impl TableView {
                             source,
                             crate::data::GRID_PREVIEW_BYTES,
                         );
-                        text_matches.extend(session.text_match_ranges(source, prefix.len()));
+                        // A cold viewport can immediately prove literal matches within its
+                        // bounded preview. Hidden and typed hits wait for the engine bitmap.
+                        let confirmed = hit == Some(true);
+                        let search_text = if confirmed { source } else { prefix };
+                        text_matches.extend(session.text_match_ranges(search_text, prefix.len()));
+                        if confirmed && text_matches.len() == first_span {
+                            if prefix.len() < source.len() {
+                                text_matches.push(prefix.len()..text.len());
+                            } else if !info.capabilities.text_match && !text.is_empty() {
+                                // Typed equality can match a differently formatted value.
+                                text_matches.push(0..text.len());
+                            }
+                        }
                     }
                 }
                 cells.push(PaintCell {
                     y: row.y,
                     text,
                     missing: null,
+                    current_match: current,
                     spans: first_span..text_matches.len(),
                 });
             }
@@ -102,14 +118,17 @@ impl TableView {
                     }
                 });
                 let filtered = self.data.query().filters.iter().any(|f| f.column == id);
-                let show = filtered
-                    || self.header_hover == Some(column)
-                    || self.selection.is_some_and(|s| s.head.column == column);
+                let selected = self
+                    .selection
+                    .is_some_and(|s| s.columns().contains(&column));
+                let show =
+                    filtered || self.header_hover == Some(HeaderHover::Column(column)) || selected;
                 PaintHeader {
                     name,
                     kind: self.data.columns[column].display_type.clone().into(),
                     sort,
                     funnel: show.then_some(filtered),
+                    selected,
                 }
             })
             .collect();
@@ -130,23 +149,20 @@ impl TableView {
             formatting_error,
             style: self.prefs,
             active_thumb: match self.drag {
-                Drag::Thumb { .. } => Some(Thumb::Vertical),
-                Drag::HorizontalThumb { .. } => Some(Thumb::Horizontal),
+                Drag::Scrollbar { axis, .. } => Some(axis),
                 _ => self.thumb_hover,
             },
             header_hover: self.header_hover,
-            show_scrollbars: !cx.should_auto_hide_scrollbars() || self.scrollbar_timer.is_some(),
+            show_scrollbars: self.show_scrollbars(cx),
             hovered_row_y: self.body_pointer.and_then(|point| {
                 layout
                     .cell_at(point.x.as_f32(), point.y.as_f32())
                     .map(|cell| row_y(cell.row))
             }),
-            thumb: layout.vertical_thumb(),
             layout,
             header,
             rows,
             columns,
-            matches,
             current_match,
             text_matches,
             selection,

@@ -1,6 +1,8 @@
 # Design documents
 
-Documents written for large design changes, before or during the work. Each starts with its status (implemented, superseded or abandoned) and date. They are history: kept as written and not updated when the code changes, so they may describe names and plans that no longer exist. Current rules live in the [architecture](../architecture.md) and the [development guide](../guide.md), which link here where the history explains a rule.
+The [visual design specification](visual-design.md) defines the current document palette and control states.
+
+The following documents were written for large design changes, before or during the work. Each starts with its status (implemented, superseded or abandoned) and date. They are history: kept as written and not updated when the code changes, so they may describe names and plans that no longer exist. Current rules live in the [architecture](../architecture.md) and the [development guide](../guide.md), which link here where the history explains a rule.
 
 Write one when a change reshapes a layer or the boundary between layers. Smaller trade-offs go into the guide as a sentence. Discussions, including issues, are where design happens, not where it is recorded: once a discussion reaches a conclusion, write it back into the guide or into a design document here.
 

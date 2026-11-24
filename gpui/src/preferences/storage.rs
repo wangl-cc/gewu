@@ -9,6 +9,11 @@ const FORMATS: &[(&str, FileType)] = &[
     ("tsv", FileType::Tsv),
     ("xlsx", FileType::Xlsx),
 ];
+const CONTRAST: &[(&str, HighContrast)] = &[
+    ("system", HighContrast::System),
+    ("off", HighContrast::Off),
+    ("on", HighContrast::On),
+];
 const CODECS: &[(&str, ParquetCompression)] = &[
     ("zstd", ParquetCompression::Zstd),
     ("snappy", ParquetCompression::Snappy),
@@ -60,6 +65,7 @@ fn read_from(defaults: &NSUserDefaults) -> Preferences {
     };
     let p = Preferences::default();
     Preferences {
+        high_contrast: choice(string("HighContrast"), CONTRAST, p.high_contrast),
         font_size: dimension("TableFontSize", p.font_size, 10., 20.),
         row_height: dimension("TableRowHeight", p.row_height, 24., 36.),
         show_row_numbers: bool_value("ShowRowNumbers", p.show_row_numbers),
@@ -139,6 +145,13 @@ fn write_changes(
             defaults.setBool_forKey(new, &NSString::from_str(key));
         }
     }
+    write_choice(
+        defaults,
+        "HighContrast",
+        CONTRAST,
+        before.high_contrast,
+        after.high_contrast,
+    )?;
     write_choice(
         defaults,
         "LastExportFormat",

@@ -2,7 +2,7 @@ mod axis;
 mod labels;
 mod scatter;
 use gewu_core::{AxisScale, Histogram, RangeBounds};
-use gpui_kit::{base, *};
+use gpui_kit::*;
 pub(super) use labels::significant_digits;
 pub(super) use scatter::ScatterChart;
 
@@ -52,9 +52,10 @@ pub(super) fn histogram(
     histogram: &Histogram,
     log_counts: bool,
     interval: impl Fn(usize) -> String,
+    window: &Window,
     cx: &App,
 ) -> Div {
-    let colors = base::Theme::global(cx).tokens.colors;
+    let colors = crate::theme::GewuPalette::get(cx);
     if histogram.lo.is_none() || histogram.hi.is_none() {
         return div()
             .child(if histogram.scale == AxisScale::Log10 {
@@ -67,20 +68,21 @@ pub(super) fn histogram(
                 histogram.infinite_count,
             ));
     }
+    let hairline = px(1. / window.scale_factor());
     let mut plot = div()
         .relative()
         .w_full()
         .aspect_ratio(4. / 3.)
-        .border_b_1()
-        .border_color(colors.border);
+        .border_b(hairline)
+        .border_color(colors.chart_grid);
     for fraction in [0.25, 0.5, 0.75] {
         plot = plot.child(
             div()
                 .absolute()
                 .top(relative(fraction))
                 .w_full()
-                .h(px(1.))
-                .bg(colors.border.opacity(0.5)),
+                .h(hairline)
+                .bg(colors.chart_grid),
         );
     }
     let peak = histogram.counts.iter().copied().max().unwrap_or(0);
@@ -99,7 +101,7 @@ pub(super) fn histogram(
                 .h_full()
                 .flex()
                 .items_end()
-                .pr(px(1.))
+                .pr(hairline)
                 .role(Role::Image)
                 .aria_label(hint.clone())
                 .tooltip(move |window, cx| {
@@ -109,8 +111,8 @@ pub(super) fn histogram(
                     div()
                         .w_full()
                         .h(relative(height))
-                        .bg(colors.primary.opacity(0.5))
-                        .group_hover(group, move |style| style.bg(colors.primary)),
+                        .bg(colors.chart_primary)
+                        .group_hover(group, move |style| style.bg(colors.chart_primary_hover)),
                 )
                 .test_support(),
         );

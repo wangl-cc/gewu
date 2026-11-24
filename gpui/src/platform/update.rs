@@ -299,7 +299,11 @@ impl Render for Updater {
             .gap_3()
             .bg(colors.background)
             .text_color(colors.foreground)
-            .child(message);
+            .child(if matches!(self.status, Status::Failed(_)) {
+                crate::errors::inline_warning(message).into_any_element()
+            } else {
+                div().child(message).into_any_element()
+            });
         if matches!(self.status, Status::Available(_)) {
             view = view.child(
                 button("install-update", "Install Update", true, cx)

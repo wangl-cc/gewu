@@ -13,7 +13,7 @@ pub(crate) fn open(cx: &mut App) {
     {
         return;
     }
-    let options = crate::platform::sized_window(430., 350., cx);
+    let options = crate::platform::sized_window(430., 390., cx);
     match gpui_kit::open_window(options, cx, |w, cx| {
         crate::platform::follow_appearance(w, cx);
         w.set_window_title("Gewu Settings");
@@ -30,9 +30,9 @@ pub(crate) fn open(cx: &mut App) {
 }
 
 impl Render for Settings {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Preferences::get(cx);
-        let colors = base::Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let section = |title: &'static str| {
             div()
                 .text_size(px(11.))
@@ -48,7 +48,7 @@ impl Render for Settings {
             .flex_col()
             .gap_2()
             .p_4()
-            .bg(colors.background)
+            .bg(colors.canvas)
             .text_color(colors.foreground)
             .text_size(px(12.))
             .child(section("Display"));
@@ -89,11 +89,7 @@ impl Render for Settings {
                     ),
             );
         }
-        let mut density = crate::panels::radio_group("row-heights", "Row height")
-            .gap_0()
-            .p(px(2.))
-            .rounded_md()
-            .bg(colors.muted);
+        let mut density = crate::panels::segmented_radios("row-heights", "Row height", window, cx);
         for height in [24_u32, 28, 32] {
             let label = height.to_string();
             let selected = p.row_height == height as f32;
@@ -116,6 +112,30 @@ impl Render for Settings {
                 .items_center()
                 .child(div().flex_1().child(label))
                 .child(density),
+        );
+        let mut contrast =
+            crate::panels::segmented_radios("contrast-options", "High contrast", window, cx);
+        for (i, (label, mode)) in [
+            ("Follow System", HighContrast::System),
+            ("Off", HighContrast::Off),
+            ("On", HighContrast::On),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let selected = p.high_contrast == mode;
+            let radio = base::Radio::new(("high-contrast", i))
+                .checked(selected)
+                .accessibility_label(label)
+                .on_change(move |_, _, _, cx| Preferences::update(cx, |p| p.high_contrast = mode));
+            contrast = contrast.child(segment(radio, label, selected, cx).flex_none().px_2());
+        }
+        view = view.child(
+            div()
+                .flex()
+                .items_center()
+                .child(div().flex_1().child("High contrast"))
+                .child(contrast),
         );
         let choice = |index: usize, label, checked, toggle: fn(&mut Preferences)| {
             crate::panels::checkbox(("pref", index), label, checked, cx, move |_, _, cx| {

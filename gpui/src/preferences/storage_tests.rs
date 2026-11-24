@@ -126,3 +126,25 @@ fn early_gpui_integer_choices_remain_readable_and_new_writes_use_names() {
     suite.expect_string("LastExportFormat", "tsv");
     suite.expect_string("ParquetCompression", "gzip");
 }
+
+#[test]
+fn contrast_defaults_to_system_and_each_explicit_choice_round_trips() {
+    use super::HighContrast::{Off, On, System};
+    let suite = Suite::new();
+    let mut prefs = read_from(&suite.defaults);
+    assert_eq!(prefs.high_contrast, System);
+    for (choice, name) in [(Off, "off"), (On, "on"), (System, "system")] {
+        let after = Preferences {
+            high_contrast: choice,
+            ..prefs
+        };
+        write_changes(&suite.defaults, &prefs, &after).unwrap();
+        suite.expect_string("HighContrast", name);
+        prefs = read_from(&suite.defaults);
+        assert_eq!(prefs.high_contrast, choice);
+    }
+    assert!(!Off.enabled(true));
+    assert!(On.enabled(false));
+    assert!(!System.enabled(false));
+    assert!(System.enabled(true));
+}
