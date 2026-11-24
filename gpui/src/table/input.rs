@@ -185,7 +185,7 @@ impl TableView {
         let before = (self.scroll.anchor(), self.scroll_x());
         self.scroll.scroll_by(f64::from(dy));
         self.horizontal = HorizontalScroll::Offset((before.1 + dx).max(0.));
-        let layout = self.compute_layout(self.layout.bounds);
+        let layout = self.compute_layout(self.layout.bounds, cx.should_auto_hide_scrollbars());
         self.horizontal = HorizontalScroll::Offset(layout.scroll_x);
         self.scroll = layout.vertical.clone();
         if let (Some(selection), Some(head)) = (self.selection, layout.drag_cell_at(x, y)) {

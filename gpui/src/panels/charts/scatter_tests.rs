@@ -6,7 +6,18 @@ use gpui_kit::{
     WindowOptions, point, px, size, test::TestWindowExt,
 };
 
-use super::ScatterChart;
+use super::{ScatterChart, TICK_LINE_HEIGHT, plot_bounds, tick_label_top};
+
+#[test]
+fn corner_tick_labels_have_clearance_and_fit_in_the_canvas() {
+    let canvas = Bounds::new(point(px(30.), px(60.)), size(px(264.), px(198.)));
+    let baseline = plot_bounds(canvas).bottom();
+    let y_label_bottom = tick_label_top(baseline, true) + TICK_LINE_HEIGHT;
+    let x_label_top = tick_label_top(baseline, false);
+
+    assert!(x_label_top - y_label_bottom >= px(4.));
+    assert!(x_label_top + TICK_LINE_HEIGHT <= canvas.bottom());
+}
 
 #[test]
 fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
@@ -66,7 +77,8 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
         assert_eq!(plot.label(), Some("Scatter plot, 2 points"));
         plot.bounds()
     });
-    let first = point(bounds.left() + px(51.), bounds.bottom() - px(23.));
+    let plot = plot_bounds(bounds);
+    let first = point(plot.left() + px(1.), plot.bottom() - px(1.));
     ui.simulate_mouse_move(first, None, Modifiers::default());
     ui.run_until_parked();
     app.read(|cx| {
@@ -75,13 +87,7 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
         assert_eq!(c.sample.points[0].source_row, gewu_core::SourceRow(4));
         assert_eq!(c.sample.points[0].y_label, "2.000000000000001");
     });
-    ui.update(|w, cx| {
-        w.drag(
-            first,
-            point(bounds.right() - px(9.), bounds.top() + px(9.)),
-            cx,
-        )
-    });
+    ui.update(|w, cx| w.drag(first, point(plot.right() - px(1.), plot.top() + px(1.)), cx));
     ui.run_until_parked();
     app.read(|cx| assert!(Arc::ptr_eq(&chart.read(cx).sample, &sample)));
     ui.simulate_mouse_move(point(px(1.), bounds.bottom()), None, Modifiers::default());

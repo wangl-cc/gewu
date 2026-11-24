@@ -73,7 +73,7 @@ fn jumped_frames_show_the_ordered_values_and_source_row_numbers_immediately() {
         w.ui.update(|window, cx| {
             w.table.update(cx, |t, cx| {
                 t.scroll_to_row(row);
-                let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+                let geometry = t.prepare_grid_layout(t.layout.bounds, window, cx);
                 let rows = geometry.layout.vertical.visible_rows();
                 let view = t.data.view().clone();
                 let count = (rows.end - rows.start) as u32;
@@ -111,7 +111,7 @@ fn selection_uses_the_column_widths_measured_for_this_frame() {
             let cell = Cell { row: 0, column: 2 };
             table.set_selection(Some(Selection::single(cell)), cx);
             table.data.columns.invalidate_measurements();
-            let geometry = table.prepare_grid_layout(table.layout.bounds, window);
+            let geometry = table.prepare_grid_layout(table.layout.bounds, window, cx);
             let (_, left, width) = geometry.layout.columns[cell.column];
             let frame = table.build_frame(geometry.layout, cx);
             let bounds = frame.head.unwrap();
@@ -205,7 +205,7 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
         w.ui.update(|window, cx| {
             w.table.update(cx, |t, cx| {
                 t.scroll_to_row(row);
-                let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+                let geometry = t.prepare_grid_layout(t.layout.bounds, window, cx);
                 let frame = t.build_frame(geometry.layout, cx);
                 assert!(
                     frame.columns[0].cells.iter().all(|c| !c.spans.is_empty()),
@@ -297,7 +297,7 @@ fn selected_columns_keep_their_header_and_filter_affordance_when_rows_scroll_off
     w.settle();
     w.ui.update(|window, cx| {
         w.table.update(cx, |table, cx| {
-            let geometry = table.prepare_grid_layout(table.layout.bounds, window);
+            let geometry = table.prepare_grid_layout(table.layout.bounds, window, cx);
             let frame = table.build_frame(geometry.layout, cx);
             assert!(frame.selection.is_none());
             assert!(frame.rows.iter().all(|row| !row.selected));
@@ -312,7 +312,39 @@ fn selected_columns_keep_their_header_and_filter_affordance_when_rows_scroll_off
 }
 
 #[test]
-fn overlay_tracks_share_the_cells_viewport_and_visible_tracks_receive_the_click() {
+fn scrollbar_lanes_appear_only_for_overflow_including_overflow_induced_by_the_other_axis() {
+    use gpui_kit::{Axis, Bounds};
+    let (_files, w) = open();
+    w.read(|t| {
+        let fit_w = t.layout.content_width + t.layout.gutter;
+        let fit_h = HEADER_HEIGHT + ROWS as f32 * ROW_HEIGHT;
+        for (dw, dh, horizontal, vertical) in [
+            (0., 0., false, false),
+            (16., -1., false, true),
+            (-1., 16., true, false),
+            (6., -1., true, true),
+            (-1., 6., true, true),
+        ] {
+            let outer = super::size_(fit_w + dw, fit_h + dh);
+            let bounds = Bounds::new(Point::default(), outer);
+            let always = t.compute_layout(bounds, false);
+            assert_eq!(always.scrollbar(Axis::Horizontal).is_some(), horizontal);
+            assert_eq!(always.scrollbar(Axis::Vertical).is_some(), vertical);
+            let reserved = super::size_(
+                if vertical { super::SCROLLBAR } else { 0. },
+                if horizontal { super::SCROLLBAR } else { 0. },
+            );
+            assert_eq!(always.viewport, outer - reserved);
+            let overlay = t.compute_layout(bounds, true);
+            assert_eq!(overlay.viewport, outer);
+            assert_eq!(overlay.scrollbar(Axis::Horizontal).is_some(), dw < 0.);
+            assert_eq!(overlay.scrollbar(Axis::Vertical).is_some(), dh < 0.);
+        }
+    });
+}
+
+#[test]
+fn always_visible_tracks_reserve_their_space_and_receive_the_click() {
     let (_files, mut w) = open();
     w.click(w.cell(0, 0), Modifiers::default());
     let (vertical, horizontal) = w.read(|t| {
@@ -320,7 +352,7 @@ fn overlay_tracks_share_the_cells_viewport_and_visible_tracks_receive_the_click(
         let l = &t.layout;
         assert_eq!(
             l.vertical.viewport(),
-            f64::from(l.bounds.size.height.as_f32() - HEADER_HEIGHT)
+            f64::from(l.bounds.size.height.as_f32() - HEADER_HEIGHT - super::SCROLLBAR)
         );
         let v = l.scrollbar(Axis::Vertical).unwrap();
         let h = l.scrollbar(Axis::Horizontal).unwrap();
@@ -330,10 +362,19 @@ fn overlay_tracks_share_the_cells_viewport_and_visible_tracks_receive_the_click(
         assert_eq!(h.track.right(), v.track.left());
         let corner = point(v.track.right() - px(1.), v.track.bottom() - px(1.));
         let bottom = point(h.track.right() - px(1.), h.track.bottom() - px(1.));
+        let overlay = t.compute_layout(l.bounds, true);
         for (point, axis) in [(corner, Axis::Vertical), (bottom, Axis::Horizontal)] {
-            assert!(l.cell_at(point.x.as_f32(), point.y.as_f32()).is_some());
-            assert!(t.scrollbar_at(point, false).is_none());
+            assert!(l.cell_at(point.x.as_f32(), point.y.as_f32()).is_none());
             assert_eq!(t.scrollbar_at(point, true).unwrap().0, axis);
+            assert!(
+                overlay
+                    .cell_at(point.x.as_f32(), point.y.as_f32())
+                    .is_some()
+            );
+            assert_eq!(
+                overlay.scrollbar(axis).unwrap().track,
+                l.scrollbar(axis).unwrap().track
+            );
         }
         (l.bounds.origin + corner, l.bounds.origin + bottom)
     });
@@ -346,6 +387,19 @@ fn overlay_tracks_share_the_cells_viewport_and_visible_tracks_receive_the_click(
         w.read(|t| t.layout.horizontal_overflow())
     );
     assert_eq!(w.selection(), selected);
+    w.read(|t| {
+        let l = &t.layout;
+        assert_eq!(
+            l.cell_at(l.body_right() - 1., l.body_bottom() - 1.),
+            Some(Cell {
+                row: ROWS - 1,
+                column: COLUMNS - 1,
+            })
+        );
+        let (_, x, width) = l.clipped_columns().last().unwrap();
+        assert_eq!(x + width, l.body_right());
+        assert!((l.vertical.row_top(ROWS) - l.vertical.viewport()).abs() < 1e-6);
+    });
 }
 
 #[test]
@@ -391,7 +445,12 @@ fn resize_scroll_and_sort_through_the_window() {
 
     let (thumb, bottom, middle) = w.read(|t| {
         let thumb = t.layout.bounds.origin + t.thumb_bounds().center();
-        let bottom = t.layout.bounds.origin.y + px(t.layout.body_bottom());
+        let bottom = t.layout.bounds.origin.y
+            + t.layout
+                .scrollbar(gpui_kit::Axis::Vertical)
+                .unwrap()
+                .track
+                .bottom();
         (
             thumb,
             point(thumb.x, bottom),

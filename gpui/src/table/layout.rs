@@ -44,6 +44,8 @@ impl HorizontalScroll {
 #[derive(PartialEq)]
 pub(super) struct Layout {
     pub(super) bounds: Bounds<Pixels>,
+    /// Canvas available to the header, gutter, and data after reserving permanent tracks.
+    pub(super) viewport: Size<Pixels>,
     pub(super) gutter: f32,
     /// Visible columns: (index, x in window, width).
     pub(super) columns: Vec<(usize, f32, f32)>,
@@ -59,6 +61,7 @@ impl Layout {
         grid_columns: &TableColumns,
         scroll: &VerticalScroll,
         horizontal: HorizontalScroll,
+        auto_hide_scrollbars: bool,
     ) -> Self {
         Self::with_widths(
             bounds,
@@ -67,6 +70,7 @@ impl Layout {
             |index| grid_columns.width(index),
             scroll,
             horizontal,
+            auto_hide_scrollbars,
         )
     }
 
@@ -77,13 +81,22 @@ impl Layout {
         width: impl Fn(usize) -> f32,
         scroll: &VerticalScroll,
         horizontal: HorizontalScroll,
+        auto_hide_scrollbars: bool,
     ) -> Self {
-        let size = bounds.size;
-        let body_width = (size.width.as_f32() - gutter).max(0.);
         let widths = (0..grid_columns.len()).map(&width);
         let content_width = widths.clone().sum::<f32>();
+        let viewport = viewport_size(
+            bounds.size,
+            gutter,
+            content_width,
+            scroll.rows() as f64 * scroll.row_height(),
+            auto_hide_scrollbars,
+        );
+        let body_width = (viewport.width.as_f32() - gutter).max(0.);
         let mut vertical = scroll.clone();
-        vertical.set_viewport(f64::from((size.height.as_f32() - HEADER_HEIGHT).max(0.)));
+        vertical.set_viewport(f64::from(
+            (viewport.height.as_f32() - HEADER_HEIGHT).max(0.),
+        ));
         let scroll_x = horizontal
             .offset_with_widths(grid_columns, &width, body_width)
             .clamp(0., (content_width - body_width).max(0.));
@@ -100,6 +113,7 @@ impl Layout {
         }
         Self {
             bounds,
+            viewport,
             gutter,
             columns,
             vertical,
@@ -109,21 +123,22 @@ impl Layout {
     }
 
     pub(super) fn body_right(&self) -> f32 {
-        self.bounds.size.width.as_f32()
+        self.viewport.width.as_f32()
     }
 
     pub(super) fn body_bottom(&self) -> f32 {
-        self.bounds.size.height.as_f32()
+        self.viewport.height.as_f32()
     }
 
     pub(super) fn horizontal_overflow(&self) -> f32 {
         (self.content_width - (self.body_right() - self.gutter).max(0.)).max(0.)
     }
 
-    /// Tracks overlay the body. The vertical track owns the shared bottom-right corner.
+    /// Tracks hug the outer grid edges. The vertical track owns their shared corner.
     pub(super) fn scrollbar(&self, axis: Axis) -> Option<Scrollbar> {
-        let width = (self.body_right() - self.gutter).max(0.);
-        let height = (self.body_bottom() - HEADER_HEIGHT).max(0.);
+        let outer = self.bounds.size;
+        let width = (outer.width.as_f32() - self.gutter).max(0.);
+        let height = (outer.height.as_f32() - HEADER_HEIGHT).max(0.);
         let vertical = self.vertical.max_position_rows() > 0.;
         if width == 0. || height == 0. {
             return None;
@@ -134,7 +149,7 @@ impl Layout {
                 let content = self.vertical.rows() as f64 * self.vertical.row_height();
                 (
                     Bounds::new(
-                        point(px(self.body_right() - w), px(HEADER_HEIGHT)),
+                        point(outer.width - px(w), px(HEADER_HEIGHT)),
                         size_(w, height),
                     ),
                     (self.vertical.viewport() / content) as f32,
@@ -149,11 +164,8 @@ impl Layout {
                 };
                 let h = SCROLLBAR.min(height);
                 (
-                    Bounds::new(
-                        point(px(self.gutter), px(self.body_bottom() - h)),
-                        size_(w, h),
-                    ),
-                    width / self.content_width,
+                    Bounds::new(point(px(self.gutter), outer.height - px(h)), size_(w, h)),
+                    (self.body_right() - self.gutter).max(0.) / self.content_width,
                     self.scroll_x / self.horizontal_overflow(),
                 )
             }
@@ -229,6 +241,35 @@ impl Layout {
     }
 }
 
+/// Always-visible tracks take space only where the data overflows. Either track
+/// can reduce the other axis enough to require a second track.
+fn viewport_size(
+    outer: Size<Pixels>,
+    gutter: f32,
+    content_width: f32,
+    content_height: f64,
+    auto_hide_scrollbars: bool,
+) -> Size<Pixels> {
+    let width = (outer.width.as_f32() - gutter).max(0.);
+    let height = (outer.height.as_f32() - HEADER_HEIGHT).max(0.);
+    if auto_hide_scrollbars || width == 0. || height == 0. {
+        return outer;
+    }
+    let wide = content_width > width;
+    let tall = content_height > f64::from(height);
+    let vertical = tall || (wide && content_height > f64::from((height - SCROLLBAR).max(0.)));
+    let horizontal = wide || (tall && content_width > (width - SCROLLBAR).max(0.));
+    outer
+        - size_(
+            if vertical { SCROLLBAR.min(width) } else { 0. },
+            if horizontal {
+                SCROLLBAR.min(height)
+            } else {
+                0.
+            },
+        )
+}
+
 pub(super) struct Scrollbar {
     pub track: Bounds<Pixels>,
     pub thumb: Bounds<Pixels>,
@@ -257,8 +298,10 @@ impl TableView {
         &mut self,
         bounds: Bounds<Pixels>,
         window: &Window,
+        cx: &App,
     ) -> GridFrameLayout {
-        let mut layout = self.compute_layout(bounds);
+        let auto_hide = cx.should_auto_hide_scrollbars();
+        let mut layout = self.compute_layout(bounds, auto_hide);
         let mut measured = BTreeMap::<usize, MeasuredColumn>::new();
         loop {
             let mut changed = false;
@@ -287,6 +330,7 @@ impl TableView {
                 },
                 &self.scroll,
                 self.horizontal,
+                auto_hide,
             );
         }
         GridFrameLayout {

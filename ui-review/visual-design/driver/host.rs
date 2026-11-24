@@ -149,6 +149,7 @@ fn evidence(window: &Window, cx: &App) -> Value {
                     "label": node.label(),
                     "role": format!("{:?}", node.role()),
                     "description": node.description(),
+                    "value": node.value(),
                     "toggled": node.toggled().map(|v| format!("{v:?}")),
                 },
                 "rect": [bounds.x0, bounds.y0, bounds.x1, bounds.y1],

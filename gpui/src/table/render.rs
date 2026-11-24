@@ -142,7 +142,7 @@ impl Render for TableView {
                 canvas(
                     move |bounds, window, cx| {
                         let (frame, mut overlays, pending) = entity.update(cx, |table, cx| {
-                            let geometry = table.prepare_grid_layout(bounds, window);
+                            let geometry = table.prepare_grid_layout(bounds, window, cx);
                             if let Some((column, anchor)) = &grid_anchor {
                                 anchor.set(table.filter_anchor(*column, &geometry.layout));
                             }

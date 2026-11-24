@@ -13,9 +13,9 @@ use super::{Driver, frame};
 fn retina_grid_fits_inside_a_whole_point_window() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("table.csv");
-    let mut csv = String::from("first,second,third\n");
+    let mut csv = String::from("a,b,c,d,e,f,g,h,i,j\n");
     for _ in 0..150 {
-        csv.push_str("1,2,3\n");
+        csv.push_str("1,2,3,4,5,6,7,8,9,10\n");
     }
     std::fs::write(&path, csv).unwrap();
     let data = Arc::new(Dataset::open(path).unwrap());
@@ -57,6 +57,17 @@ fn retina_grid_fits_inside_a_whole_point_window() {
         assert_eq!(w.scale_factor(), 2.);
         assert_eq!(w.viewport_size(), native);
         assert_eq!(frame::Grid::read(w).unwrap().size, target);
+    });
+    // Now the fixture also needs a horizontal track. The benchmark's requested
+    // grid height still includes the space occupied by that track.
+    ui.simulate_resize(size(px(600.), native.height));
+    ui.run_until_parked();
+    ui.update(|w, cx| {
+        w.render_frame(cx);
+        assert_eq!(
+            frame::Grid::read(w).unwrap().size,
+            size(px(600.), target.height)
+        );
     });
     app.quit();
 }

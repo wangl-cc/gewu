@@ -187,6 +187,7 @@ impl TableView {
             data,
             layout: Rc::new(Layout {
                 bounds: Bounds::default(),
+                viewport: Size::default(),
                 gutter: 0.,
                 columns: vec![],
                 scroll_x: 0.,
@@ -255,7 +256,7 @@ impl TableView {
         self.refresh_highlights(cx);
     }
 
-    fn compute_layout(&self, bounds: Bounds<Pixels>) -> Layout {
+    fn compute_layout(&self, bounds: Bounds<Pixels>, auto_hide_scrollbars: bool) -> Layout {
         let source_rows = self.data.source_row_count();
         let digits = source_rows.max(1).ilog10() + 1;
         let gutter = if self.prefs.show_row_numbers {
@@ -269,6 +270,7 @@ impl TableView {
             &self.data.columns,
             &self.scroll,
             self.horizontal,
+            auto_hide_scrollbars,
         )
     }
 

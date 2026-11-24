@@ -51,6 +51,16 @@ impl Grid {
                     && q.bounds.left() < body.left()
             })
             .ok_or("missing header background")?;
+        // A permanently visible horizontal track can extend below the last data row.
+        // Fit the benchmark window to the whole painted grid, then inspect its body only.
+        let canvas = quads
+            .iter()
+            .find(|q| {
+                q.bounds.origin == background.bounds.origin
+                    && q.bounds.size.width == background.bounds.size.width
+                    && q.bounds.bottom() >= body.bottom()
+            })
+            .ok_or("missing grid canvas")?;
         let stripe = quads
             .iter()
             .find(|q| {
@@ -83,8 +93,8 @@ impl Grid {
         }
         let grid = Self {
             size: size(
-                px(background.bounds.size.width.0 / scale),
-                px((divider.bounds.bottom() - header.bounds.top()).0 / scale),
+                px(canvas.bounds.size.width.0 / scale),
+                px(canvas.bounds.size.height.0 / scale),
             ),
             columns,
             top: body.top().0.round() as u32,

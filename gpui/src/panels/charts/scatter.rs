@@ -6,6 +6,9 @@ use gpui_kit::{base::TestSupportExt, *};
 use super::axis::{Axis, seconds};
 use crate::{actions::RevealScatterPoint, preferences::Preferences};
 
+const TICK_LINE_HEIGHT: Pixels = px(14.);
+const TICK_LABEL_GAP: Pixels = px(4.);
+
 struct Plot {
     x: Axis,
     y: Axis,
@@ -24,14 +27,24 @@ pub(in crate::panels) struct ScatterChart {
     focus: FocusHandle,
 }
 
+fn tick_label_top(tick: Pixels, vertical: bool) -> Pixels {
+    if vertical {
+        tick - TICK_LINE_HEIGHT * 0.5
+    } else {
+        tick + TICK_LINE_HEIGHT * 0.5 + TICK_LABEL_GAP
+    }
+}
+
 fn plot_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
     let left = px(50.).min(bounds.size.width);
     let top = px(8.).min(bounds.size.height);
+    // The lowest Y label straddles its tick; the X labels sit below it.
+    let bottom = tick_label_top(px(0.), false) + TICK_LINE_HEIGHT;
     Bounds::new(
         bounds.origin + point(left, top),
         size(
             (bounds.size.width - left - px(8.)).max(px(0.)),
-            (bounds.size.height - top - px(22.)).max(px(0.)),
+            (bounds.size.height - top - bottom).max(px(0.)),
         ),
     )
 }
@@ -231,13 +244,20 @@ impl Render for ScatterChart {
                         .max(bounds.left())
                         .min((bounds.right() - line.width).max(bounds.left()));
                     if !vertical {
-                        if previous_x_label.is_some_and(|previous| tx < previous + px(4.)) {
+                        if previous_x_label.is_some_and(|previous| tx < previous + TICK_LABEL_GAP) {
                             return;
                         }
                         previous_x_label = Some(tx + line.width);
                     }
-                    let ty = if vertical { y - px(7.) } else { y + px(2.) };
-                    let _ = line.paint(point(tx, ty), px(14.), TextAlign::Left, None, window, cx);
+                    let ty = tick_label_top(y, vertical);
+                    let _ = line.paint(
+                        point(tx, ty),
+                        TICK_LINE_HEIGHT,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                 };
                 for tick in &plot.x.ticks {
                     let x = drawing.left() + drawing.size.width * tick.fraction;

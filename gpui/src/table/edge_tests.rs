@@ -447,7 +447,7 @@ fn reversing_a_pending_sort_restores_find_on_the_original_view() {
 fn grid_frame(w: &mut TableWindow) -> super::Frame {
     w.ui.update(|window, cx| {
         w.table.update(cx, |t, cx| {
-            let geometry = t.prepare_grid_layout(t.layout.bounds, window);
+            let geometry = t.prepare_grid_layout(t.layout.bounds, window, cx);
             t.build_frame(geometry.layout, cx)
         })
     })

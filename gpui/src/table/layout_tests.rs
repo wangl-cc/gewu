@@ -5,6 +5,7 @@ use crate::scroll::Anchor;
 fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
     let mut layout = Layout {
         bounds: gpui_kit::Bounds::new(Default::default(), size_(200., 200.)),
+        viewport: size_(200., 200.),
         gutter: 24.,
         scroll_x: 194.,
         content_width: 100.,

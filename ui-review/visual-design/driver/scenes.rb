@@ -148,7 +148,7 @@ class Scene
         Math.log(16.4 / 10.2) / Math.log(19.2 / 10.2)
       end
       x = x0 + 50 + (x1 - x0 - 58) * 80 / 95.0
-      y = y0 + 8 + (y1 - y0 - 30) * (1 - fraction)
+      y = y0 + 8 + (y1 - y0 - 33) * (1 - fraction)
       command("left #{x} #{y}")
       capture("log-y-#{state}", "Log Y") do
         require_node("Scatter plot, 96 points, row 81 selected")
@@ -178,8 +178,12 @@ class Scene
     click("Add sort column…")
     click("Find column")
     command("input Water")
-    click("Water temperature")
-    capture("21-sort", "Sort column")
+    click("Water temperature", "Label")
+    capture("21-sort", "2 sorted", "Button") do
+      rules = @state.fetch("nodes").select { |n| n["a"]["role"] == "ComboBox" && n["a"]["label"] == "Sort column" }
+      columns = rules.sort_by { |n| n["rect"][1] }.map { |n| n["a"]["value"] }
+      raise "unexpected sort rule priority: #{columns.inspect}" unless columns == ["Source", "Water temperature"]
+    end
   end
 
   def cell
