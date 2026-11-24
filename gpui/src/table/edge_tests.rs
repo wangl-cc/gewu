@@ -302,6 +302,33 @@ fn copying_a_cell_supersedes_an_unfinished_row_copy() {
 }
 
 #[test]
+fn the_newest_copy_wins_across_document_windows() {
+    use gpui_kit::AppContext;
+
+    let mut w = open();
+    w.click(w.cell(1, 2), Modifiers::default());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv");
+    let (_, other) = w.app.update(|cx| {
+        let data = crate::data::TableData::open(path.to_str().unwrap()).unwrap();
+        gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| super::TableView::new(data, window, cx))
+        })
+        .unwrap()
+    });
+    w.ui.update(|window, cx| {
+        window.press("cmd-c", cx);
+        assert!(w.table.read(cx).copy_task.is_some());
+        other.update(cx, |t, cx| {
+            t.copy_cell_text("newer cell".to_string(), cx);
+        });
+    });
+    w.settle();
+    assert_eq!(w.clipboard().as_deref(), Some("newer cell"));
+    w.keys("cmd-c");
+    assert_eq!(w.clipboard().as_deref(), Some("drop\t99\tmarker-hidden\r\n"));
+}
+
+#[test]
 fn empty_filtered_grid_recovers_only_when_the_reset_draft_is_applied() {
     let mut w = open();
     let edit = |w: &mut TableWindow| {

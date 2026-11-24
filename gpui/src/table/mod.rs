@@ -314,7 +314,7 @@ impl TableView {
 
     fn copy_cell_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.copy_task = None;
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        crate::clipboard::write_text(text, cx);
         self.copy_finished(None, cx);
     }
 
@@ -336,11 +336,15 @@ impl TableView {
         let columns = self.data.column_ids(0..self.data.columns.len());
         let rows = selection.rows();
         let header = self.prefs.copy_includes_headers;
+        let request = crate::clipboard::CopyRequest::begin(cx);
         self.copy_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { copy_tsv(&view, rows, &columns, header) })
                 .await;
             this.update(cx, |table, cx| {
+                if !request.is_current(cx) {
+                    return;
+                }
                 let failure = match result {
                     Ok(text) => crate::clipboard::write_tsv(text, cx)
                         .err()

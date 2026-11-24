@@ -153,9 +153,10 @@ impl Render for FileDetails {
                     .child(
                         button("copy-path", "Copy Path", false, cx).on_click(cx.listener(
                             |this, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                crate::clipboard::write_text(
                                     this.path.display().to_string(),
-                                ));
+                                    cx,
+                                );
                             },
                         )),
                     )

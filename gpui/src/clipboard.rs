@@ -1,5 +1,28 @@
 //! Write one pasteboard item so spreadsheets can select TSV and editors can select plain text.
-use gpui_kit::{App, ClipboardItem};
+use gpui_kit::{App, ClipboardItem, Global};
+
+/// All document windows write to one clipboard. Only the latest request may publish its result.
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct CopyRequest(u64);
+
+impl Global for CopyRequest {}
+
+impl CopyRequest {
+    pub fn begin(cx: &mut App) -> Self {
+        let latest = cx.default_global::<Self>();
+        latest.0 = latest.0.wrapping_add(1);
+        *latest
+    }
+
+    pub fn is_current(self, cx: &App) -> bool {
+        cx.try_global::<Self>() == Some(&self)
+    }
+}
+
+pub(crate) fn write_text(value: String, cx: &mut App) {
+    CopyRequest::begin(cx);
+    cx.write_to_clipboard(ClipboardItem::new_string(value));
+}
 
 pub(crate) fn write_tsv(value: String, cx: &mut App) -> Result<(), &'static str> {
     #[cfg(target_os = "macos")]

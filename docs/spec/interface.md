@@ -54,6 +54,6 @@ Row height defaults to 28 points, with 24- and 32-point choices in Settings. Pre
 
 Missing values appear as italic `null`; an empty string leaves the cell blank. Double-clicking a loaded cell opens its complete formatted text. Long values scroll inside the detail panel while Copy Cell and Close stay in view. The context menu can copy the clicked cell or the selected rows.
 
-Copy puts the selected rows and visible columns on the pasteboard as plain text and TSV, exactly as a TSV export of those rows would write them, with nested values as display text. Copies above a size limit are refused with a suggestion to use File > Export…; a newer copy cancels an unfinished one.
+Copy puts the selected rows and visible columns on the pasteboard as plain text and TSV, exactly as a TSV export of those rows would write them, with nested values as display text. If the selection exceeds the copy size limit, Gewu suggests using File > Export… instead. A newer copy in any Gewu window supersedes an unfinished table copy.
 
 File > Export… (Shift-Command-E) saves the displayed rows and visible columns. Progress appears in the status bar, and the export continues after the table changes. See [file formats](file-formats.md) for what each format preserves.
