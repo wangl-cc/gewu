@@ -46,7 +46,7 @@ impl FilterEditor {
         crate::panels::checkbox(
             "include-missing",
             format!("Include missing ({count})"),
-            self.draft.include_missing_checked(),
+            self.draft.missing != MissingPolicy::Exclude,
             cx,
             cx.listener(|editor, _, _, cx| {
                 editor.draft.toggle_include_missing();
@@ -166,7 +166,7 @@ impl Render for FilterEditor {
                     ),
                 Mode::Missing => panel,
             };
-            if self.draft.mode != Mode::Values {
+            if self.draft.mode != Mode::Values || !has_choices {
                 let mut choices = base::RadioGroup::new("missing-policy")
                     .aria_label("Missing values")
                     .axis(Axis::Horizontal)
@@ -174,15 +174,14 @@ impl Render for FilterEditor {
                     .p(px(2.))
                     .rounded_md()
                     .bg(colors.muted);
-                use crate::panels::draft::MissingPolicy;
                 for (id, label, policy) in [
                     ("exclude-missing", "Exclude", MissingPolicy::Exclude),
                     ("include-missing", "Include", MissingPolicy::Include),
                     ("only-missing", "Only missing", MissingPolicy::Only),
                 ] {
-                    let selected = self.draft.missing_policy() == policy;
+                    let selected = self.draft.missing == policy;
                     let select = cx.listener(move |editor, _: &ClickEvent, _, cx| {
-                        editor.draft.set_missing_policy(policy);
+                        editor.draft.missing = policy;
                         cx.notify();
                     });
                     let radio = base::Radio::new(id)
@@ -204,8 +203,6 @@ impl Render for FilterEditor {
                         )
                         .child(choices),
                 );
-            } else if !has_choices {
-                panel = panel.child(self.include_missing(facet.null_count, cx));
             }
         } else if self.error.is_none() {
             panel = panel.child("Loading filter choices…");

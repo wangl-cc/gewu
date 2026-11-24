@@ -72,6 +72,27 @@ fn resetting_a_numeric_exact_filter_loads_its_range_preview() {
 }
 
 #[test]
+fn only_missing_survives_a_round_trip_through_the_values_checklist() {
+    let file = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+    std::fs::write(file.path(), "number,id\n10,0\n,1\n20,2\n").unwrap();
+    let mut w = TableWindow::open(file.path());
+    w.ui.simulate_resize(size(px(980.), px(860.)));
+    w.keys("cmd-alt-f");
+    w.ui.update(|window, cx| {
+        window.click("Range", cx);
+        window.click("only-missing", cx);
+        window.click("Values", cx);
+        assert_eq!(window.find(("facet", 0usize)).checked(), Some(false));
+        assert_eq!(window.find("include-missing").checked(), Some(true));
+        window.click("Range", cx);
+        assert_eq!(window.find("only-missing").checked(), Some(true));
+        window.click("apply-filter", cx);
+    });
+    w.settle();
+    assert_eq!(w.source_rows(), [1]);
+}
+
+#[test]
 fn clicking_include_missing_after_only_missing_includes_rows_of_both_kinds() {
     use std::io::Write;
 

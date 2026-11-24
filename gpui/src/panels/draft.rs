@@ -17,12 +17,17 @@ pub(super) enum MissingPolicy {
     Only,
 }
 
+impl MissingPolicy {
+    fn include(include: bool) -> Self {
+        if include { Self::Include } else { Self::Exclude }
+    }
+}
+
 /// Exact selections may contain values currently absent from the facet.
 #[derive(Clone)]
 pub(super) struct Draft {
     pub mode: Mode,
-    include_missing: bool,
-    pub only_missing: bool,
+    pub missing: MissingPolicy,
     pub excluded: bool,
     pub values: BTreeSet<String>,
     pub comparison: TextMatch,
@@ -36,8 +41,7 @@ impl Default for Draft {
     fn default() -> Self {
         Self {
             mode: Mode::Missing,
-            include_missing: true,
-            only_missing: false,
+            missing: MissingPolicy::Include,
             excluded: true,
             values: BTreeSet::new(),
             comparison: TextMatch::Contains,
@@ -54,13 +58,13 @@ impl Draft {
         let mut draft = Self::default();
         match filter {
             None => {}
-            Some(Filter::OnlyNulls) => draft.only_missing = true,
-            Some(Filter::NotNull) => draft.include_missing = false,
+            Some(Filter::OnlyNulls) => draft.missing = MissingPolicy::Only,
+            Some(Filter::NotNull) => draft.missing = MissingPolicy::Exclude,
             Some(Filter::Condition {
                 condition,
                 include_nulls,
             }) => {
-                draft.include_missing = *include_nulls;
+                draft.missing = MissingPolicy::include(*include_nulls);
                 match condition {
                     FilterCondition::Exact { values, exclude } => {
                         draft.mode = Mode::Values;
@@ -109,58 +113,40 @@ impl Draft {
         modes
     }
 
-    pub fn include_missing_checked(&self) -> bool {
-        self.include_missing && !self.only_missing
-    }
-
-    pub fn missing_policy(&self) -> MissingPolicy {
-        match (self.only_missing, self.include_missing) {
-            (true, _) => MissingPolicy::Only,
-            (false, true) => MissingPolicy::Include,
-            (false, false) => MissingPolicy::Exclude,
-        }
-    }
-
-    pub fn set_missing_policy(&mut self, policy: MissingPolicy) {
-        self.only_missing = policy == MissingPolicy::Only;
-        if !self.only_missing {
-            self.include_missing = policy == MissingPolicy::Include;
-        }
+    pub fn value_checked(&self, value: &str) -> bool {
+        self.missing != MissingPolicy::Only && (self.values.contains(value) != self.excluded)
     }
 
     pub fn toggle_include_missing(&mut self) {
-        self.include_missing = !self.include_missing_checked();
-        self.only_missing = false;
+        self.begin_value_edit();
+        self.missing = MissingPolicy::include(self.missing == MissingPolicy::Exclude);
     }
 
     pub fn select_all(&mut self, selected: bool) {
         self.values.clear();
         self.excluded = selected;
-        self.include_missing = selected;
-        self.only_missing = false;
+        self.missing = MissingPolicy::include(selected);
     }
 
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
-        if mode == Mode::Values && self.only_missing {
-            self.only_missing = false;
-            if !self.has_exact_condition() {
-                // Represent Only missing in the value list as an empty selection plus nulls.
-                self.excluded = false;
-                self.include_missing = true;
-            }
+    /// The Only policy shows all present values unchecked. An edit starts from that selection.
+    fn begin_value_edit(&mut self) {
+        if self.missing == MissingPolicy::Only {
+            self.values.clear();
+            self.excluded = false;
+            self.missing = MissingPolicy::Include;
         }
     }
 
     pub fn toggle(&mut self, value: String) {
-        self.set_mode(Mode::Values);
+        self.mode = Mode::Values;
+        self.begin_value_edit();
         if !self.values.remove(&value) {
             self.values.insert(value);
         }
     }
 
     pub fn filter(&self) -> Option<Filter> {
-        if self.only_missing {
+        if self.missing == MissingPolicy::Only {
             return Some(Filter::OnlyNulls);
         }
         let condition = match self.mode {
@@ -185,9 +171,9 @@ impl Draft {
         condition
             .map(|condition| Filter::Condition {
                 condition,
-                include_nulls: self.include_missing,
+                include_nulls: self.missing == MissingPolicy::Include,
             })
-            .or((!self.include_missing).then_some(Filter::NotNull))
+            .or((self.missing == MissingPolicy::Exclude).then_some(Filter::NotNull))
     }
 }
 

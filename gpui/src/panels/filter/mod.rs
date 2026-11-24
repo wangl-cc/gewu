@@ -15,7 +15,7 @@ use gpui_kit::{
 
 use super::{
     button, charts,
-    draft::{Draft, Mode},
+    draft::{Draft, MissingPolicy, Mode},
     row, section, segment, segmented_tabs,
 };
 
@@ -212,7 +212,7 @@ impl FilterEditor {
                 match result {
                     Ok((facet, modes, preview)) => {
                         if !modes.contains(&editor.draft.mode) {
-                            editor.draft.set_mode(modes[0]);
+                            editor.draft.mode = modes[0];
                         }
                         editor.install_choices(facet, cx);
                         editor.preview = preview;
@@ -309,7 +309,7 @@ impl FilterEditor {
     }
 
     fn select_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        self.draft.set_mode(mode);
+        self.draft.mode = mode;
         self.sync_checks();
         if mode == Mode::Range && self.preview.is_none() {
             self.load(cx);

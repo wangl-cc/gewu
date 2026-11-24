@@ -41,7 +41,7 @@ impl FilterEditor {
     pub(super) fn sync_checks(&mut self) {
         if let Some(choices) = self.facet.as_ref().and_then(|facet| facet.values.as_ref()) {
             for (row, choice) in self.rows.iter_mut().zip(choices) {
-                row.checked = self.draft.values.contains(&choice.value) != self.draft.excluded;
+                row.checked = self.draft.value_checked(&choice.value);
             }
         }
     }
