@@ -1,6 +1,7 @@
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;
+use crate::ui::{button, segment};
 
 fn show_storage(col: &ColumnInfo) -> bool {
     if col.technical_type.eq_ignore_ascii_case(&col.display_type) {
@@ -10,56 +11,6 @@ fn show_storage(col: &ColumnInfo) -> bool {
         (col.display_type.as_str(), col.technical_type.as_str()),
         ("bool", "Boolean") | ("string", "Utf8")
     )
-}
-
-fn format_integer_statistic(text: &str) -> String {
-    let (sign, digits) = text
-        .strip_prefix('-')
-        .map_or(("", text), |rest| ("-", rest));
-    let (whole, fraction) = digits
-        .find('.')
-        .map_or((digits, ""), |dot| digits.split_at(dot));
-    if whole.len() > 3
-        && whole.bytes().all(|b| b.is_ascii_digit())
-        && (fraction.is_empty()
-            || (fraction.len() > 1 && fraction[1..].bytes().all(|b| b.is_ascii_digit())))
-    {
-        let mut formatted = String::with_capacity(text.len() + whole.len() / 3);
-        formatted.push_str(sign);
-        for (offset, byte) in whole.bytes().enumerate() {
-            if offset > 0 && (whole.len() - offset).is_multiple_of(3) {
-                formatted.push(',');
-            }
-            formatted.push(byte as char);
-        }
-        formatted.push_str(fraction);
-        return formatted;
-    }
-    text.to_owned()
-}
-
-fn format_numeric_statistic(value: f64, digits: usize) -> String {
-    if !value.is_finite() || value == 0. {
-        return value.to_string();
-    }
-    let exp = value.abs().log10().floor() as i32;
-    let digits = digits.clamp(1, 17);
-    if (-4..9).contains(&exp) {
-        if exp >= digits as i32 - 1 {
-            let scale = 10f64.powi(exp - digits as i32 + 1);
-            let rounded = (value / scale).round() * scale;
-            return format_integer_statistic(&format!("{rounded:.0}"));
-        }
-        let decimals = (digits as i32 - exp - 1) as usize;
-        let text = format!("{value:.decimals$}");
-        let trimmed = if decimals == 0 {
-            text.as_str()
-        } else {
-            text.trim_end_matches('0').trim_end_matches('.')
-        };
-        return format_integer_statistic(trimmed);
-    }
-    charts::significant_digits(value, digits)
 }
 
 fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &App) -> Div {
@@ -109,7 +60,14 @@ impl Inspector {
                 .text_color(colors.foreground)
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(controls::chevron(expanded, colors.muted_foreground))
+                .child(crate::ui::chevron(
+                    if expanded {
+                        crate::ui::ChevronDirection::Down
+                    } else {
+                        crate::ui::ChevronDirection::Right
+                    },
+                    colors.muted_foreground,
+                ))
                 .child(section.title())
                 .aria_expanded(expanded)
                 .on_click(cx.listener(move |panel, _, _, cx| {
@@ -217,20 +175,19 @@ impl Inspector {
                             value
                                 .parse::<f64>()
                                 .ok()
-                                .map(|v| format_numeric_statistic(v, digits))
+                                .map(|v| crate::messages::format_numeric_statistic(v, digits))
                                 .unwrap_or_else(|| value.clone())
                         } else if col.value_category == gewu_core::ValueCategory::Number {
-                            format_integer_statistic(value)
+                            crate::messages::format_grouped_number(value)
                         } else {
                             value.clone()
                         };
                         let exact = value.clone();
-                        body = body.child(metric(name, displayed, cx).id(name).tooltip(
-                            move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(exact.clone())
-                                    .build(window, cx)
-                            },
-                        ));
+                        body = body.child(
+                            metric(name, displayed, cx)
+                                .id(name)
+                                .tooltip(crate::ui::tooltip(exact)),
+                        );
                     }
                 }
                 if s.min_label.is_none() && s.max_label.is_none() {
@@ -244,14 +201,16 @@ impl Inspector {
                     .mean_label
                     .as_ref()
                     .map(|label| format!("≈ {label}"))
-                    .or_else(|| s.mean.map(|v| format_numeric_statistic(v, digits)));
+                    .or_else(|| {
+                        s.mean
+                            .map(|v| crate::messages::format_numeric_statistic(v, digits))
+                    });
                 if let (Some(mean), Some(exact)) = (mean, exact_mean) {
-                    body = body.child(metric("Mean", mean, cx).id("Mean").tooltip(
-                        move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(exact.clone())
-                                .build(window, cx)
-                        },
-                    ));
+                    body = body.child(
+                        metric("Mean", mean, cx)
+                            .id("Mean")
+                            .tooltip(crate::ui::tooltip(exact)),
+                    );
                 }
                 if col.value_category == gewu_core::ValueCategory::Number
                     && let Some(sd) = s.std_dev
@@ -260,14 +219,11 @@ impl Inspector {
                     body = body.child(
                         metric(
                             "Standard deviation",
-                            format_numeric_statistic(sd, digits),
+                            crate::messages::format_numeric_statistic(sd, digits),
                             cx,
                         )
                         .id("Standard deviation")
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(exact.clone())
-                                .build(window, cx)
-                        }),
+                        .tooltip(crate::ui::tooltip(exact)),
                     );
                 }
                 if s.nan_count + s.infinite_count > 0 {
@@ -302,7 +258,11 @@ impl Inspector {
                     body = body.child(metric("Maximum", format_count(v), cx));
                 }
                 if let Some(v) = s.mean {
-                    body = body.child(metric("Mean", format_numeric_statistic(v, digits), cx));
+                    body = body.child(metric(
+                        "Mean",
+                        crate::messages::format_numeric_statistic(v, digits),
+                        cx,
+                    ));
                 }
                 body.child(charts::histogram(
                     &s.histogram,
@@ -385,15 +345,11 @@ impl Inspector {
         let custom = self.settings.bins != 40
             || self.settings.log_counts
             || (supports_log && self.settings.bin_scale == AxisScale::Log10);
-        let trigger = crate::panels::options_trigger(
-            "histogram-options",
-            custom,
-            self.chart_options_open,
-            cx,
-        );
+        let trigger =
+            crate::ui::options_trigger("histogram-options", custom, self.chart_options_open, cx);
         let content = self.chart_options_open.then(|| {
             let mut choices =
-                crate::panels::segmented_radios("histogram-bins", "Number of bins", window, cx);
+                crate::ui::segmented_radios("histogram-bins", "Number of bins", window, cx);
             for bins in [10u32, 20, 40, 60, 100] {
                 let selected = self.settings.bins == bins;
                 let pick = cx.listener(move |panel, _, _, cx| {
@@ -407,7 +363,7 @@ impl Inspector {
                     .on_change(move |_, ev, w, cx| pick(ev, w, cx));
                 choices = choices.child(segment(radio, bins.to_string(), selected, cx));
             }
-            let mut body = crate::panels::elevated(div(), window, cx)
+            let mut body = crate::ui::elevated(div(), window, cx)
                 .w(px(236.))
                 .p_3()
                 .flex()
@@ -429,7 +385,7 @@ impl Inspector {
                 );
             let mut flags = div().flex().flex_col().gap_2();
             if supports_log {
-                flags = flags.child(crate::panels::checkbox(
+                flags = flags.child(crate::ui::checkbox(
                     "inspector-log-bins",
                     "Log bins",
                     self.settings.bin_scale == AxisScale::Log10,
@@ -441,7 +397,7 @@ impl Inspector {
                     }),
                 ));
             }
-            flags = flags.child(crate::panels::checkbox(
+            flags = flags.child(crate::ui::checkbox(
                 "inspector-log-counts",
                 "Log frequency",
                 self.settings.log_counts,
@@ -464,30 +420,5 @@ impl Inspector {
                 cx.notify();
             }))
             .content(move |_, _, _| div().children(content))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{format_integer_statistic, format_numeric_statistic};
-
-    #[test]
-    fn groups_integer_statistics_including_half_step_medians() {
-        assert_eq!(format_integer_statistic("999999.5"), "999,999.5");
-        assert_eq!(format_integer_statistic("-12345.5"), "-12,345.5");
-        assert_eq!(format_integer_statistic("1999999"), "1,999,999");
-        assert_eq!(format_integer_statistic("999.5"), "999.5");
-        assert_eq!(format_integer_statistic("2024-01-01"), "2024-01-01");
-    }
-
-    #[test]
-    fn formats_numeric_statistics_with_thousands_separators_before_scientific_notation() {
-        assert_eq!(format_numeric_statistic(999_999.5, 5), "1,000,000");
-        assert_eq!(format_numeric_statistic(577_350.413, 5), "577,350");
-        assert_eq!(format_numeric_statistic(12_345.6, 6), "12,345.6");
-        assert_eq!(format_numeric_statistic(-12_345.5, 6), "-12,345.5");
-        assert_eq!(format_numeric_statistic(1.2345e-9, 4), "1.235e-9");
-        assert_eq!(format_numeric_statistic(1.2345e12, 4), "1.234e12");
-        assert_eq!(format_numeric_statistic(1.2346e12, 4), "1.235e12");
     }
 }

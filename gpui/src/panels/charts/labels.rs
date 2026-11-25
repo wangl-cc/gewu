@@ -159,32 +159,7 @@ pub(super) fn utc(seconds: f64) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(secs, nanos)
 }
 
-pub(crate) fn significant_digits(value: f64, digits: usize) -> String {
-    if !value.is_finite() || value == 0. {
-        return value.to_string();
-    }
-    let exp = value.abs().log10().floor() as i32;
-    let digits = digits.clamp(1, 17);
-    if exp < -4 || exp >= digits as i32 {
-        let text = format!("{:.*e}", digits - 1, value);
-        if let Some((coefficient, power)) = text.split_once('e') {
-            let short = if coefficient.contains('.') {
-                coefficient.trim_end_matches('0').trim_end_matches('.')
-            } else {
-                coefficient
-            };
-            return format!("{short}e{power}");
-        }
-        return text;
-    }
-    let decimals = (digits as i32 - exp - 1) as usize;
-    let text = format!("{value:.decimals$}");
-    if decimals == 0 {
-        text
-    } else {
-        text.trim_end_matches('0').trim_end_matches('.').to_owned()
-    }
-}
+pub(crate) use crate::messages::significant_digits;
 
 #[cfg(test)]
 #[path = "labels_tests.rs"]

@@ -1,6 +1,7 @@
 use base::TestSupportExt;
 
 use super::*;
+use crate::ui::{button, checkbox, segment, segmented_radios, segmented_tabs};
 
 impl FilterEditor {
     pub(super) fn applied_has_missing_rule(&self) -> bool {
@@ -28,7 +29,7 @@ impl FilterEditor {
         window: &Window,
         cx: &App,
     ) -> impl IntoElement + use<> {
-        crate::panels::input_frame(div().id(label), true, &input.focus_handle(cx), window, cx)
+        crate::ui::input_frame(div().id(label), true, &input.focus_handle(cx), window, cx)
             .px_2()
             .flex()
             .items_center()
@@ -62,7 +63,7 @@ impl FilterEditor {
     }
 
     pub(super) fn include_missing(&self, count: u64, cx: &mut Context<Self>) -> base::Checkbox {
-        crate::panels::checkbox(
+        crate::ui::checkbox(
             "include-missing",
             format!("Include missing ({})", crate::messages::format_count(count)),
             self.draft.missing != MissingPolicy::Exclude,
@@ -78,7 +79,7 @@ impl FilterEditor {
 impl Render for FilterEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = crate::theme::GewuPalette::get(cx);
-        let mut panel = crate::panels::elevated(div().id("filter-editor"), window, cx)
+        let mut panel = crate::ui::elevated(div().id("filter-editor"), window, cx)
             .overflow_y_scroll()
             .max_h_full()
             .w(px(368.).min(window.viewport_size().width))
@@ -146,7 +147,7 @@ impl Render for FilterEditor {
                     .child(
                         row()
                             .gap_3()
-                            .child(crate::panels::checkbox(
+                            .child(checkbox(
                                 "whole",
                                 "Whole value",
                                 self.draft.comparison == TextMatch::Equals,
@@ -159,7 +160,7 @@ impl Render for FilterEditor {
                                     cx.notify();
                                 }),
                             ))
-                            .child(crate::panels::checkbox(
+                            .child(checkbox(
                                 "case",
                                 "Match case",
                                 self.draft.case_sensitive,
@@ -178,8 +179,7 @@ impl Render for FilterEditor {
                     || self.draft.missing != MissingPolicy::Include
                     || self.applied_has_missing_rule());
             if show_missing_policy {
-                let mut choices =
-                    crate::panels::segmented_radios("missing-policy", "Missing values", window, cx);
+                let mut choices = segmented_radios("missing-policy", "Missing values", window, cx);
                 for (id, label, policy) in [
                     ("exclude-missing", "Exclude", MissingPolicy::Exclude),
                     ("include-missing", "Include", MissingPolicy::Include),

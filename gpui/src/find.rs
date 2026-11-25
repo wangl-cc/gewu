@@ -476,24 +476,9 @@ impl Render for FindController {
         let colors = crate::theme::GewuPalette::get(cx);
         let searching = self.open && !self.text(cx).is_empty();
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        let icon = canvas(
-            |_, _, _| (),
-            move |bounds, _, w, _| {
-                let p = |x, y| bounds.origin + point(px(x), px(y));
-                let radius = point(px(4.), px(4.));
-                let mut path = PathBuilder::stroke(px(1.35));
-                path.move_to(p(1.5, 5.5));
-                path.arc_to(radius, px(0.), false, true, p(9.5, 5.5));
-                path.arc_to(radius, px(0.), false, true, p(1.5, 5.5));
-                path.move_to(p(8.5, 8.5));
-                path.line_to(p(12.5, 12.5));
-                if let Ok(path) = path.build() {
-                    w.paint_path(path, colors.muted_foreground);
-                }
-            },
-        )
-        .size(px(14.))
-        .flex_none();
+        let icon = gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Search)
+            .size(px(14.))
+            .text_color(colors.muted_foreground);
         let notice = match &self.message {
             FindMessage::Error(text) => Some(text.as_str()),
             FindMessage::NoMatches => Some("No matches"),
@@ -585,23 +570,15 @@ impl Render for FindController {
             .child(trigger);
         if searching {
             field = field.child(
-                base::Button::new("close-find")
-                    .accessibility_label("Clear search")
+                crate::ui::ghost_button("close-find", "Clear search", false, false, cx)
                     .size(px(20.))
-                    .flex_none()
-                    .flex()
-                    .justify_center()
-                    .items_center()
                     .rounded(px(4.))
-                    .cursor_pointer()
                     .text_color(colors.muted_foreground)
                     .hover(move |style| {
                         style
                             .bg(colors.button_secondary_hover)
                             .text_color(colors.foreground)
                     })
-                    .active(move |style| style.bg(colors.secondary_pressed()))
-                    .focus_visible(move |s| s.shadow(colors.focus_shadows()))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(base::input::Escape), cx)
                     })
@@ -623,59 +600,24 @@ impl Render for FindController {
             .child(field);
         if searching {
             let enabled = self.can_navigate();
-            let arrow = |id, label: &'static str, previous: bool| {
-                let chevron = canvas(
-                    |_, _, _| (),
-                    move |bounds, _, w, _| {
-                        let center = bounds.center();
-                        let mut path = PathBuilder::stroke(px(1.35));
-                        let vertices = if previous {
-                            [(2., -3.5), (-1.5, 0.), (2., 3.5)]
-                        } else {
-                            [(-2., -3.5), (1.5, 0.), (-2., 3.5)]
-                        };
-                        let [a, b, c] = vertices.map(|(x, y)| center + point(px(x), px(y)));
-                        path.move_to(a);
-                        path.line_to(b);
-                        path.line_to(c);
-                        if let Ok(path) = path.build() {
-                            w.paint_path(path, colors.foreground);
-                        }
-                    },
-                )
-                .size(px(12.))
-                .flex_none();
-                base::Button::new(id)
-                    .accessibility_label(label)
+            let arrow = |id, label: &'static str, direction| {
+                crate::ui::ghost_button(id, label, false, !enabled, cx)
                     .h(px(28.))
                     .w(px(24.))
-                    .flex_none()
-                    .flex()
-                    .justify_center()
-                    .items_center()
                     .rounded(px(6.))
-                    .when(enabled, |button| {
-                        button
-                            .hover(move |style| style.bg(colors.button_secondary_hover))
-                            .active(move |style| style.bg(colors.secondary_pressed()))
-                            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
-                            .cursor_pointer()
-                    })
-                    .when(!enabled, |button| {
-                        button
-                            .opacity(crate::theme::DISABLED_OPACITY)
-                            .cursor_default()
-                    })
-                    .disabled(!enabled)
-                    .child(chevron)
+                    .child(crate::ui::chevron(direction, colors.foreground))
             };
             bar = bar
                 .child(
-                    arrow("previous", "Previous match", true)
-                        .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
+                    arrow(
+                        "previous",
+                        "Previous match",
+                        crate::ui::ChevronDirection::Left,
+                    )
+                    .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
                 )
                 .child(
-                    arrow("next", "Next match", false)
+                    arrow("next", "Next match", crate::ui::ChevronDirection::Right)
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
                 );
         }

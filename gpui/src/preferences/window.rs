@@ -1,7 +1,7 @@
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;
-use crate::panels::{button, segment};
+use crate::ui::{button, checkbox, segment, segmented_radios};
 
 struct Settings;
 struct SettingsWindow(AnyWindowHandle);
@@ -106,7 +106,7 @@ impl Render for Settings {
                     ),
             );
         }
-        let mut density = crate::panels::segmented_radios("row-heights", "Row height", window, cx);
+        let mut density = segmented_radios("row-heights", "Row height", window, cx);
         for height in [24_u32, 28, 32] {
             let label = height.to_string();
             let selected = p.row_height == height as f32;
@@ -130,8 +130,7 @@ impl Render for Settings {
                 .child(div().flex_1().child(label))
                 .child(density),
         );
-        let mut contrast =
-            crate::panels::segmented_radios("contrast-options", "High contrast", window, cx);
+        let mut contrast = segmented_radios("contrast-options", "High contrast", window, cx);
         for (i, (label, mode)) in [
             ("Follow System", HighContrast::System),
             ("Off", HighContrast::Off),
@@ -155,7 +154,7 @@ impl Render for Settings {
                 .child(contrast),
         );
         let choice = |index: usize, label, checked, toggle: fn(&mut Preferences)| {
-            crate::panels::checkbox(("pref", index), label, checked, cx, move |_, _, cx| {
+            checkbox(("pref", index), label, checked, cx, move |_, _, cx| {
                 Preferences::update(cx, toggle);
             })
         };

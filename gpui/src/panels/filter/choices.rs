@@ -1,6 +1,5 @@
 //! Bounded display labels are independent of the full values used for searching and selection.
 use base::TestSupportExt;
-use gpui_kit::component::{Icon, IconName};
 
 use super::*;
 
@@ -99,27 +98,21 @@ impl FilterEditor {
                 cx.notify();
             });
             list = list.child(
-                crate::panels::checkbox(
-                    ("facet", index),
-                    choice.label.clone(),
-                    checked,
-                    cx,
-                    toggle,
-                )
-                .accessibility_label(choice.accessible.clone())
-                .flex_none()
-                .px_2()
-                .h(px(27.))
-                .hover(move |s| s.bg(colors.button_secondary_hover))
-                .child(
-                    div()
-                        .ml_auto()
-                        .flex_none()
-                        .text_xs()
-                        .font_features(crate::theme::tabular_digits())
-                        .text_color(colors.muted_foreground)
-                        .child(choice.count.clone()),
-                ),
+                crate::ui::checkbox(("facet", index), choice.label.clone(), checked, cx, toggle)
+                    .accessibility_label(choice.accessible.clone())
+                    .flex_none()
+                    .px_2()
+                    .h(px(27.))
+                    .hover(move |s| s.bg(colors.button_secondary_hover))
+                    .child(
+                        div()
+                            .ml_auto()
+                            .flex_none()
+                            .text_xs()
+                            .font_features(crate::theme::tabular_digits())
+                            .text_color(colors.muted_foreground)
+                            .child(choice.count.clone()),
+                    ),
             );
         }
         let show_missing = facet.null_count > 0
@@ -129,44 +122,19 @@ impl FilterEditor {
             && (!show_missing || self.draft.missing != MissingPolicy::Exclude);
         let none_selected = (0..self.rows.len()).all(|i| !self.draft.value_checked(i))
             && (!show_missing || self.draft.missing == MissingPolicy::Exclude);
-        let mut actions = row()
-            .gap(px(6.))
-            .px_2()
-            .py(px(5.))
-            .bg(colors.surface)
-            .border_b_1()
-            .border_color(colors.border);
+        let mut actions = crate::ui::list_action_bar(cx);
         for (id, label, all, disabled) in [
             ("all-values", "Select all", true, all_selected),
             ("no-values", "Deselect all", false, none_selected),
         ] {
-            actions = actions.child(
-                crate::panels::compact_button(id, label, disabled, cx).on_click(cx.listener(
-                    move |editor, _, _, cx| {
-                        editor.draft.select_all(all);
-                        cx.notify();
-                    },
-                )),
-            );
+            actions = actions.child(crate::ui::compact_button(id, label, disabled, cx).on_click(
+                cx.listener(move |editor, _, _, cx| {
+                    editor.draft.select_all(all);
+                    cx.notify();
+                }),
+            ));
         }
-        let search_field = crate::panels::input_frame(
-            div().id("Search values"),
-            true,
-            &self.search.focus_handle(cx),
-            window,
-            cx,
-        )
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .child(
-            Icon::new(IconName::Search)
-                .size(px(14.))
-                .text_color(colors.muted_foreground),
-        )
-        .child(div().min_w_0().flex_1().child(Input::new(&self.search)))
-        .test_support();
+        let search_field = crate::ui::search_input("Search values", &self.search, window, cx);
         div().flex().flex_col().gap_2().child(search_field).child(
             div()
                 .id("value-selection")

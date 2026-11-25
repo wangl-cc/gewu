@@ -137,7 +137,7 @@ impl<T: Clone + PartialEq + 'static> ChoiceField<T> {
         }
         // The product owns the trigger frame. Select retains the popup, keyboard handling
         // and accessibility relationship between the trigger and the list.
-        let frame = super::input_frame(div(), !empty, &select.focus_handle(cx), window, cx);
+        let frame = crate::ui::input_frame(div(), !empty, &select.focus_handle(cx), window, cx);
         let trigger = Select::new(&select)
             .appearance(false)
             .id(self.id)

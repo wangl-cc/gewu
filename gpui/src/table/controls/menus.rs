@@ -29,7 +29,7 @@ impl OpenMenu {
     pub(super) fn element(&self, window: &Window, cx: &App) -> AnyElement {
         deferred(
             anchored().position(self.position).snap_to_window().child(
-                crate::panels::elevated(div(), window, cx)
+                crate::ui::elevated(div(), window, cx)
                     .overflow_hidden()
                     .child(self.popup.clone()),
             ),
@@ -309,7 +309,7 @@ impl TableView {
         let copy = value.cloned().unwrap_or_default();
         let colors = crate::theme::GewuPalette::get(cx);
         let viewport = window.viewport_size();
-        crate::panels::elevated(div().id("cell-preview"), window, cx)
+        crate::ui::elevated(div().id("cell-preview"), window, cx)
             .test_support()
             .min_w(px(160.).min(viewport.width - px(12.)))
             .max_w(px(420.).min(viewport.width - px(12.)))

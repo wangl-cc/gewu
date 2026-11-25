@@ -9,7 +9,7 @@ use std::{
 use gpui_kit::{base::Theme, *};
 use semver::Version;
 
-use crate::{panels::button, shell::update_menus};
+use crate::{shell::update_menus, ui::button};
 
 gpui_kit::actions!(gewu, [
     CheckForUpdates,

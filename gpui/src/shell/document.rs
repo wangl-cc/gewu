@@ -10,9 +10,9 @@ use gpui_kit::{
 use super::{GetInfo, ImportOptions, info, open_paths, record_recent};
 use crate::{
     data::TableData,
-    panels::{button, disclosure, segment, segmented_tabs},
     platform,
     table::TableView,
+    ui::{button, disclosure, segment, segmented_tabs},
 };
 
 #[derive(Clone, PartialEq, Eq)]

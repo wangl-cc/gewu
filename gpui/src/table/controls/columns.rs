@@ -1,7 +1,6 @@
 use gewu_core::ColumnId;
 use gpui_kit::{
-    base::input::{Input, InputAccessibility, InputEvent, InputState},
-    component::{Icon, IconName},
+    base::input::{InputAccessibility, InputEvent, InputState},
     prelude::FluentBuilder,
     *,
 };
@@ -87,35 +86,14 @@ impl TableView {
         };
         let show_disabled = to_show.is_empty() || all_shown;
         let hide_disabled = matching.is_empty() || all_hidden;
-        panel = panel.child(
-            crate::panels::input_frame(div(), true, &search.focus_handle(cx), window, cx)
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .child(
-                    Icon::new(IconName::Search)
-                        .size(px(14.))
-                        .text_color(colors.muted_foreground),
-                )
-                .child(div().min_w_0().flex_1().child(Input::new(search))),
-        );
-        let actions = div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .px_2()
-            .py(px(5.))
-            .bg(colors.surface)
-            .border_b_1()
-            .border_color(colors.border)
+        panel = panel.child(crate::ui::search_input("find-column", search, window, cx));
+        let actions = crate::ui::list_action_bar(cx)
             .child(
-                crate::panels::compact_button(show_id, show_label, show_disabled, cx)
+                crate::ui::compact_button(show_id, show_label, show_disabled, cx)
                     .on_click(cx.listener(move |t, _, _, cx| t.set_visible(&to_show, true, cx))),
             )
             .child(
-                crate::panels::compact_button("hide-matching", hide_label, hide_disabled, cx)
+                crate::ui::compact_button("hide-matching", hide_label, hide_disabled, cx)
                     .on_click(cx.listener(move |t, _, w, cx| t.request_hide(&matching, w, cx))),
             );
         let mut rows = div()
@@ -157,7 +135,7 @@ impl TableView {
                         .child(if position.is_some() { "⠿" } else { "" }),
                 )
                 .child(
-                    crate::panels::checkbox(
+                    crate::ui::checkbox(
                         ("toggle-column", raw),
                         column.name.clone(),
                         position.is_some(),
@@ -308,7 +286,7 @@ impl TableView {
                     .aria_label(message)
                     .test_support(),
             )
-            .child(crate::panels::checkbox(
+            .child(crate::ui::checkbox(
                 "skip-hide-warning",
                 "Don’t ask again",
                 confirmation.skip_future,
@@ -331,7 +309,7 @@ impl TableView {
                             .on_click(cx.listener(|t, _, w, cx| t.cancel_hide(w, cx))),
                     )
                     .child(
-                        crate::panels::danger_button("confirm-hide", "Hide", cx)
+                        crate::ui::danger_button("confirm-hide", "Hide", cx)
                             .on_click(cx.listener(|t, _, w, cx| t.confirm_hide(w, cx))),
                     ),
             )

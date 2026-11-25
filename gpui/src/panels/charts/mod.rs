@@ -112,9 +112,7 @@ pub(super) fn histogram(
                 .pr(hairline)
                 .role(Role::Image)
                 .aria_label(hint.clone())
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)
-                })
+                .tooltip(crate::ui::tooltip(hint))
                 .child(
                     div()
                         .w_full()
@@ -226,18 +224,11 @@ fn middle_tick(h: &Histogram, minimum: &str, maximum: &str) -> Option<(f32, Stri
 }
 
 fn histogram_label(text: &str) -> String {
-    let (sign, digits) = text
-        .strip_prefix('-')
-        .map_or(("", text), |rest| ("-", rest));
-    let (whole, fraction) = digits
-        .find('.')
-        .map_or((digits, ""), |dot| digits.split_at(dot));
-    if text.len() <= 12
-        && let Ok(whole) = whole.parse::<u64>()
-    {
-        return format!("{sign}{}{fraction}", crate::messages::format_count(whole));
+    if text.len() <= 12 {
+        crate::messages::format_grouped_number(text)
+    } else {
+        labels::compact(text)
     }
-    labels::compact(text)
 }
 
 #[cfg(test)]

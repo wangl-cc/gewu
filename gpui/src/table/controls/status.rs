@@ -111,7 +111,7 @@ impl TableView {
                 None
             };
             let label: SharedString = format!("{} {noun}", format_count(count as u64)).into();
-            let trigger = crate::panels::status_button(id, label, open, cx).aria_expanded(open);
+            let trigger = crate::ui::status_button(id, label, open, cx).aria_expanded(open);
             status = status.child(
                 base::Popover::new(("status-summary", filters as usize))
                     .anchor(Anchor::BottomRight)
@@ -161,53 +161,48 @@ impl TableView {
                     .gap_2()
                     .items_center()
                     .child(
-                        crate::panels::button_base(("locate-filter", raw))
-                            .accessibility_label(format!("Show column {}", column.name))
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Show column")
-                                    .build(window, cx)
-                            })
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .mx(px(-4.))
-                            .px(px(4.))
-                            .h(px(24.))
-                            .rounded(px(5.))
-                            .cursor_pointer()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors.foreground)
-                            .hover(move |s| s.bg(colors.button_secondary_hover))
-                            .active(move |s| s.bg(colors.secondary_pressed()))
-                            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
-                            .child(
-                                Icon::new(IconName::Locate)
-                                    .size(px(13.))
-                                    .text_color(colors.muted_foreground),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(crate::data::preview_with_limit(&column.name, 36)),
-                            )
-                            .on_click(cx.listener(move |t, _, w, cx| {
-                                t.commit_grid_layout(cx);
-                                if let Some(column) = t.data.columns.position(id) {
-                                    let row = t.selection.map(|s| s.head.row).unwrap_or(0);
-                                    let cell = Cell {
-                                        column: column.index(),
-                                        row,
-                                    };
-                                    t.reveal(cell);
-                                    if row < t.data.row_count() {
-                                        t.set_selection(Some(Selection::single(cell)), cx);
-                                    }
+                        crate::ui::ghost_button(
+                            ("locate-filter", raw),
+                            format!("Show column {}", column.name),
+                            false,
+                            false,
+                            cx,
+                        )
+                        .tooltip(crate::ui::tooltip("Show column"))
+                        .min_w_0()
+                        .gap(px(6.))
+                        .mx(px(-4.))
+                        .px(px(4.))
+                        .h(px(24.))
+                        .rounded(px(5.))
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(
+                            Icon::new(IconName::Locate)
+                                .size(px(13.))
+                                .text_color(colors.muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .child(crate::data::preview_with_limit(&column.name, 36)),
+                        )
+                        .on_click(cx.listener(move |t, _, w, cx| {
+                            t.commit_grid_layout(cx);
+                            if let Some(column) = t.data.columns.position(id) {
+                                let row = t.selection.map(|s| s.head.row).unwrap_or(0);
+                                let cell = Cell {
+                                    column: column.index(),
+                                    row,
+                                };
+                                t.reveal(cell);
+                                if row < t.data.row_count() {
+                                    t.set_selection(Some(Selection::single(cell)), cx);
                                 }
-                                t.close_panel(w, cx);
-                            })),
+                            }
+                            t.close_panel(w, cx);
+                        })),
                     )
                     .child(div().flex_1())
                     .child(button(("clear-filter", raw), "Clear", false, cx).on_click(

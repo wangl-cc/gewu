@@ -11,11 +11,8 @@ use gpui_kit::{
     *,
 };
 
-use super::{
-    button,
-    charts::{self, ScatterChart},
-    segment, segmented_tabs,
-};
+use super::charts::{self, ScatterChart};
+use crate::ui::{button, segment, segmented_tabs};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Page {

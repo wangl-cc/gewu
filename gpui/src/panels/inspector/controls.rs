@@ -1,57 +1,7 @@
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;
-
-pub(in crate::panels) fn chevron(down: bool, color: Hsla) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let center = bounds.center();
-            let mut path = PathBuilder::stroke(px(1.25));
-            let vertices = if down {
-                [(-3., -1.5), (0., 1.5), (3., -1.5)]
-            } else {
-                [(-1.5, -3.), (1.5, 0.), (-1.5, 3.)]
-            };
-            let [a, b, c] = vertices.map(|(x, y)| center + point(px(x), px(y)));
-            path.move_to(a);
-            path.line_to(b);
-            path.line_to(c);
-            if let Ok(path) = path.build() {
-                window.paint_path(path, color);
-            }
-        },
-    )
-    .size(px(12.))
-    .flex_none()
-}
-
-pub(in crate::panels) fn sliders_icon(color: Hsla) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let o = bounds.origin;
-            for (y, knob_x) in [(3.5, 2.75), (8.375, 6.75)] {
-                window.paint_quad(
-                    fill(
-                        Bounds::new(o + point(px(1.5), px(y)), size(px(10.), px(1.25))),
-                        color,
-                    )
-                    .corner_radii(px(0.625)),
-                );
-                window.paint_quad(
-                    fill(
-                        Bounds::new(o + point(px(knob_x), px(y - 1.125)), size(px(3.5), px(3.5))),
-                        color,
-                    )
-                    .corner_radii(px(1.75)),
-                );
-            }
-        },
-    )
-    .size(px(13.))
-    .flex_none()
-}
+use crate::ui::segment;
 
 impl Inspector {
     pub(super) fn picker(
@@ -199,36 +149,31 @@ impl Inspector {
         } else {
             colors.muted_foreground
         };
-        let trigger = base::Button::new("scatter-limits")
-            .accessibility_label("Maximum points")
-            .aria_value(formatted_limit.clone())
-            .aria_expanded(self.scatter_options_open)
-            .flex()
-            .items_center()
-            .gap_1()
-            .h(px(22.))
-            .px(px(6.))
-            .rounded(px(5.))
-            .cursor_pointer()
-            .text_size(px(11.))
-            .font_features(crate::theme::tabular_digits())
-            .text_color(ink)
-            .when(self.scatter_options_open, |b| b.bg(colors.button_secondary))
-            .hover(move |s| {
-                s.bg(colors.button_secondary_hover)
-                    .text_color(colors.foreground)
-            })
-            .active(move |s| s.bg(colors.secondary_pressed()))
-            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
-            .child(format!("Max {formatted_limit}"))
-            .child(chevron(true, ink));
+        let trigger = crate::ui::ghost_button(
+            "scatter-limits",
+            "Maximum points",
+            self.scatter_options_open,
+            false,
+            cx,
+        )
+        .aria_value(formatted_limit.clone())
+        .aria_expanded(self.scatter_options_open)
+        .gap_1()
+        .h(px(22.))
+        .px(px(6.))
+        .rounded(px(5.))
+        .text_size(px(11.))
+        .font_features(crate::theme::tabular_digits())
+        .text_color(ink)
+        .hover(move |s| {
+            s.bg(colors.button_secondary_hover)
+                .text_color(colors.foreground)
+        })
+        .child(format!("Max {formatted_limit}"))
+        .child(crate::ui::chevron(crate::ui::ChevronDirection::Down, ink));
         let content = self.scatter_options_open.then(|| {
-            let mut choices = crate::panels::segmented_radios(
-                "scatter-limit-choices",
-                "Maximum points",
-                window,
-                cx,
-            );
+            let mut choices =
+                crate::ui::segmented_radios("scatter-limit-choices", "Maximum points", window, cx);
             for limit in [512u32, 1024, 2048, 4096] {
                 let selected = self.settings.limit == limit;
                 let label = crate::messages::format_count(u64::from(limit));
@@ -244,7 +189,7 @@ impl Inspector {
                     .on_change(move |_, ev, w, cx| pick(ev, w, cx));
                 choices = choices.child(segment(radio, label, selected, cx));
             }
-            crate::panels::elevated(div(), window, cx)
+            crate::ui::elevated(div(), window, cx)
                 .w(px(228.))
                 .p_3()
                 .flex()

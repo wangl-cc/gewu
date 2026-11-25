@@ -14,9 +14,9 @@ use gpui_kit::{
 };
 
 use super::{
-    button, charts,
+    charts,
     draft::{Draft, MissingPolicy, Mode},
-    row, section, segment, segmented_tabs,
+    row, section,
 };
 
 const PREVIEW_BINS: u32 = 40;

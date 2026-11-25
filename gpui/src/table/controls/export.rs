@@ -311,12 +311,13 @@ impl Render for ExportController {
                     .into(),
                 ))
                 .child(
-                    crate::panels::status_button("cancel-export", "Cancel export", false, cx)
-                        .on_click(cx.listener(|t, _, _, _| {
+                    crate::ui::status_button("cancel-export", "Cancel export", false, cx).on_click(
+                        cx.listener(|t, _, _, _| {
                             if let ExportController::Writing(active) = t {
                                 active.job.cancel();
                             }
-                        })),
+                        }),
+                    ),
                 )
             }
         }

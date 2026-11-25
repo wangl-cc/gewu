@@ -30,28 +30,41 @@ fn settle(ui: &mut VisualTestContext) {
     ui.run_until_parked();
 }
 
-#[test]
-fn selecting_one_exact_value_submits_a_filter_and_retains_alternatives_when_reopened() {
-    let cx = TestAppContext::single();
-    let snapshot = dataset();
-    let col = snapshot.dataset().info().columns[0].clone();
+type AppliedFilter = Rc<RefCell<Option<(gewu_core::ColumnId, Option<Filter>)>>>;
+
+fn open_filter_editor(
+    app: &TestAppContext,
+    snapshot: AppliedView,
+    column: gewu_core::ColumnInfo,
+    applied: Option<Filter>,
+) -> (VisualTestContext, AppliedFilter, gpui_kit::Subscription) {
     let submitted = Rc::new(RefCell::new(None));
     let events = submitted.clone();
-    let (handle, _editor, _subscription) = cx.update(|cx| {
+    let (handle, _editor, subscription) = app.update(|cx| {
         gpui_kit::init(cx);
         let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
-            cx.new(|cx| FilterEditor::new(snapshot.clone(), col.clone(), None, w, cx))
+            cx.new(|cx| FilterEditor::new(snapshot, column, applied, w, cx))
         })
         .unwrap();
-        let subscription = cx.subscribe(&editor, move |_, event, _| {
-            if let FilterEvent::Apply(id, filter) = event {
+        let subscription = cx.subscribe(&editor, move |_, ev, _| {
+            if let FilterEvent::Apply(id, filter) = ev {
                 *events.borrow_mut() = Some((*id, filter.clone()));
             }
         });
         (handle, editor, subscription)
     });
-    let mut ui = VisualTestContext::from_window(handle, &cx);
+    let mut ui = VisualTestContext::from_window(handle, app);
     settle(&mut ui);
+    (ui, submitted, subscription)
+}
+
+#[test]
+fn selecting_one_exact_value_submits_a_filter_and_retains_alternatives_when_reopened() {
+    let cx = TestAppContext::single();
+    let snapshot = dataset();
+    let col = snapshot.dataset().info().columns[0].clone();
+    let (mut ui, submitted, _subscription) =
+        open_filter_editor(&cx, snapshot.clone(), col.clone(), None);
     ui.update(|w, cx| {
         assert_eq!(w.find("Values").role(), Some(gpui_kit::Role::Tab));
         assert_eq!(w.find("Values").selected(), Some(true));
@@ -441,24 +454,8 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
     let ranges = &distribution.as_ref().as_ref().unwrap().ranges;
     let lower = ranges[1].min.as_ref().unwrap().value.clone();
     let upper = ranges[3].max.as_ref().unwrap().value.clone();
-    let submitted = Rc::new(RefCell::new(None));
-    let events = submitted.clone();
     let app = TestAppContext::single();
-    let (handle, _editor, _events) = app.update(|cx| {
-        gpui_kit::init(cx);
-        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
-            cx.new(|cx| FilterEditor::new(snapshot, column, None, w, cx))
-        })
-        .unwrap();
-        let sub = cx.subscribe(&editor, move |_, ev, _| {
-            if let FilterEvent::Apply(_, filter) = ev {
-                *events.borrow_mut() = filter.clone();
-            }
-        });
-        (handle, editor, sub)
-    });
-    let mut ui = VisualTestContext::from_window(handle, &app);
-    settle(&mut ui);
+    let (mut ui, submitted, _events) = open_filter_editor(&app, snapshot, column, None);
     ui.update(|w, cx| w.click("Range", cx));
     settle(&mut ui);
     ui.update(|w, cx| {
@@ -493,8 +490,8 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
     ui.update(|w, cx| w.click("apply-filter", cx));
     settle(&mut ui);
     assert_eq!(
-        *submitted.borrow(),
-        Some(Filter::range(Some(lower), Some(upper), true))
+        submitted.borrow().as_ref().map(|(_, f)| f.clone()),
+        Some(Some(Filter::range(Some(lower), Some(upper), true)))
     );
 }
 
@@ -514,24 +511,8 @@ fn dragging_range_handles_adjusts_bounds_independently() {
     let last = ranges.len() - 1;
     let lower = ranges[2].min.as_ref().unwrap().value.clone();
     let upper = ranges[4].max.as_ref().unwrap().value.clone();
-    let submitted = Rc::new(RefCell::new(None));
-    let events = submitted.clone();
     let app = TestAppContext::single();
-    let (handle, _editor, _events) = app.update(|cx| {
-        gpui_kit::init(cx);
-        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
-            cx.new(|cx| FilterEditor::new(snapshot, column, None, w, cx))
-        })
-        .unwrap();
-        let sub = cx.subscribe(&editor, move |_, ev, _| {
-            if let FilterEvent::Apply(_, filter) = ev {
-                *events.borrow_mut() = filter.clone();
-            }
-        });
-        (handle, editor, sub)
-    });
-    let mut ui = VisualTestContext::from_window(handle, &app);
-    settle(&mut ui);
+    let (mut ui, submitted, _events) = open_filter_editor(&app, snapshot, column, None);
     ui.update(|w, cx| w.click("Range", cx));
     settle(&mut ui);
     ui.update(|w, cx| {
@@ -549,8 +530,8 @@ fn dragging_range_handles_adjusts_bounds_independently() {
     ui.update(|w, cx| w.click("apply-filter", cx));
     settle(&mut ui);
     assert_eq!(
-        *submitted.borrow(),
-        Some(Filter::range(Some(lower), Some(upper), true))
+        submitted.borrow().as_ref().map(|(_, f)| f.clone()),
+        Some(Some(Filter::range(Some(lower), Some(upper), true)))
     );
 }
 
@@ -575,24 +556,8 @@ fn brushed_float_preview_preserves_exact_bounds_and_yields_to_manual_edits() {
     let lower = ranges[index].min.as_ref().unwrap().value.clone();
     let upper = ranges[index].max.as_ref().unwrap().value.clone();
 
-    let submitted = Rc::new(RefCell::new(None));
-    let events = submitted.clone();
     let app = TestAppContext::single();
-    let (handle, _editor, _subscription) = app.update(|cx| {
-        gpui_kit::init(cx);
-        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
-            cx.new(|cx| FilterEditor::new(snapshot, column, None, w, cx))
-        })
-        .unwrap();
-        let subscription = cx.subscribe(&editor, move |_, event, _| {
-            if let FilterEvent::Apply(_, filter) = event {
-                *events.borrow_mut() = filter.clone();
-            }
-        });
-        (handle, editor, subscription)
-    });
-    let mut ui = VisualTestContext::from_window(handle, &app);
-    settle(&mut ui);
+    let (mut ui, submitted, _subscription) = open_filter_editor(&app, snapshot, column, None);
     ui.update(|w, cx| w.click("Range", cx));
     settle(&mut ui);
     ui.update(|w, cx| w.click(("range-bin", index), cx));
@@ -602,8 +567,8 @@ fn brushed_float_preview_preserves_exact_bounds_and_yields_to_manual_edits() {
         w.click("apply-filter", cx);
     });
     assert_eq!(
-        *submitted.borrow(),
-        Some(Filter::range(Some(lower.clone()), Some(upper), true))
+        submitted.borrow().as_ref().map(|(_, f)| f.clone()),
+        Some(Some(Filter::range(Some(lower.clone()), Some(upper), true)))
     );
     ui.update(|w, cx| w.click(("brush-preview", 1usize), cx));
     settle(&mut ui);
@@ -619,12 +584,12 @@ fn brushed_float_preview_preserves_exact_bounds_and_yields_to_manual_edits() {
         w.click("apply-filter", cx);
     });
     assert_eq!(
-        *submitted.borrow(),
-        Some(Filter::range(
+        submitted.borrow().as_ref().map(|(_, f)| f.clone()),
+        Some(Some(Filter::range(
             Some(lower),
             Some("19.212345678901234".into()),
             true
-        ))
+        )))
     );
 }
 
@@ -663,23 +628,7 @@ fn long_equal_previews_search_the_complete_label_and_submit_only_the_exact_selec
     let facet = snapshot.analyses().filter_choices(col.id).unwrap();
     let choices = facet.values.as_ref().unwrap();
     let target = choices.iter().position(|c| c.value == chosen).unwrap();
-    let submitted = Rc::new(RefCell::new(None));
-    let captured = submitted.clone();
-    let (handle, _editor, _events) = app.update(|cx| {
-        gpui_kit::init(cx);
-        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
-            cx.new(|cx| FilterEditor::new(snapshot.clone(), col, None, w, cx))
-        })
-        .unwrap();
-        let sub = cx.subscribe(&editor, move |_, ev, _| {
-            if let FilterEvent::Apply(_, filter) = ev {
-                *captured.borrow_mut() = filter.clone();
-            }
-        });
-        (handle, editor, sub)
-    });
-    let mut ui = VisualTestContext::from_window(handle, &app);
-    settle(&mut ui);
+    let (mut ui, submitted, _events) = open_filter_editor(&app, snapshot.clone(), col, None);
     let search = ui.update(|w, cx| {
         for (index, choice) in choices.iter().enumerate() {
             let control = w.find(("facet", index));
@@ -706,8 +655,8 @@ fn long_equal_previews_search_the_complete_label_and_submit_only_the_exact_selec
     });
     settle(&mut ui);
     assert_eq!(
-        *submitted.borrow(),
-        Some(Filter::exact(vec![chosen.clone()], false, false))
+        submitted.borrow().as_ref().map(|(_, f)| f.clone()),
+        Some(Some(Filter::exact(vec![chosen.clone()], false, false)))
     );
     for filter in [
         Filter::contains(chosen.clone(), true, false),

@@ -230,7 +230,7 @@ impl Render for TableView {
                                 .flex()
                                 .gap_2()
                                 .child(
-                                    crate::panels::button(
+                                    crate::ui::button(
                                         "empty-edit-filter",
                                         "Edit filter…",
                                         false,
@@ -243,7 +243,7 @@ impl Render for TableView {
                                     )),
                                 )
                                 .child(
-                                    crate::panels::button(
+                                    crate::ui::button(
                                         "empty-clear-filters",
                                         "Clear filters",
                                         false,
@@ -277,22 +277,10 @@ impl Render for TableView {
         };
         let inspector_visible = self.inspector_visible(cx);
         let toolbar = toolbar.child(self.find.clone()).child(
-            base::Button::new("show-inspector")
-                .accessibility_label("Inspector")
+            crate::ui::ghost_button("show-inspector", "Inspector", inspector_visible, false, cx)
                 .aria_expanded(inspector_visible)
-                .when(inspector_visible, |button| {
-                    button.bg(colors.button_secondary)
-                })
-                .flex_none()
                 .size(px(28.))
-                .flex()
-                .justify_center()
-                .items_center()
                 .rounded(px(6.))
-                .cursor_pointer()
-                .hover(move |style| style.bg(colors.button_secondary_hover))
-                .active(move |style| style.bg(colors.secondary_pressed()))
-                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
                 .child(
                     div()
                         .w(px(18.))

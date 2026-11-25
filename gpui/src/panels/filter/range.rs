@@ -42,9 +42,7 @@ impl FilterEditor {
                         .bg(colors.canvas)
                         .cursor_text()
                         .child(div().truncate().child(format!("≈ {short}")))
-                        .tooltip(move |w, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(w, cx)
-                        })
+                        .tooltip(crate::ui::tooltip(hint))
                         .on_mouse_down(MouseButton::Left, move |_, w, cx| w.focus(&focus, cx)),
                 );
             }
@@ -77,7 +75,7 @@ impl FilterEditor {
             .relative()
             .flex_none()
             .child(
-                crate::panels::options_trigger(
+                crate::ui::options_trigger(
                     "range-display-options",
                     custom,
                     self.display_options,
@@ -95,19 +93,18 @@ impl FilterEditor {
                 }
             }));
         if self.display_options {
-            let mut popover =
-                crate::panels::elevated(div().id("range-options-popover"), window, cx)
-                    .occlude()
-                    .absolute()
-                    .top(px(26.))
-                    .right_0()
-                    .w(px(176.))
-                    .p(px(10.))
-                    .flex()
-                    .flex_col()
-                    .gap_2();
+            let mut popover = crate::ui::elevated(div().id("range-options-popover"), window, cx)
+                .occlude()
+                .absolute()
+                .top(px(26.))
+                .right_0()
+                .w(px(176.))
+                .p(px(10.))
+                .flex()
+                .flex_col()
+                .gap_2();
             if self.column.capabilities.logarithmic {
-                popover = popover.child(crate::panels::checkbox(
+                popover = popover.child(crate::ui::checkbox(
                     "filter-log-bins",
                     "Log bins",
                     self.scale == AxisScale::Log10,
@@ -119,7 +116,7 @@ impl FilterEditor {
                     }),
                 ));
             }
-            popover = popover.child(crate::panels::checkbox(
+            popover = popover.child(crate::ui::checkbox(
                 "filter-log-counts",
                 "Log frequency",
                 self.log_counts,
@@ -189,10 +186,7 @@ impl FilterEditor {
                         .pr(hairline)
                         .cursor(cursor)
                         .accessibility_label(hint.clone())
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(hint.clone())
-                                .build(window, cx)
-                        })
+                        .tooltip(crate::ui::tooltip(hint))
                         .child(
                             div()
                                 .w_full()

@@ -10,8 +10,9 @@ use gpui_kit::{
 
 use super::{Cell, Layout, Selection, TableView};
 use crate::{
-    panels::{FilterEditor, FilterEvent, Inspector, button},
+    panels::{FilterEditor, FilterEvent, Inspector},
     preferences::Preferences,
+    ui::button,
 };
 
 mod columns;
@@ -522,7 +523,7 @@ impl TableView {
         cx: &mut Context<Self>,
     ) -> base::ObservedElement<Stateful<Div>> {
         let title = title.into();
-        crate::panels::elevated(div().id("table-drawer"), window, cx)
+        crate::ui::elevated(div().id("table-drawer"), window, cx)
             .test_support()
             .flex_none()
             .w(px(368.).min((window.viewport_size().width - px(12.)).max(px(0.))))
@@ -561,19 +562,10 @@ fn icon_button(
     cx: &App,
 ) -> base::Button {
     let colors = crate::theme::GewuPalette::get(cx);
-    crate::panels::button_base(id)
-        .accessibility_label(label)
+    crate::ui::ghost_button(id, label, false, false, cx)
         .size(px(ICON_BUTTON_SIZE))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
         .rounded_md()
-        .cursor_pointer()
         .text_color(colors.muted_foreground)
-        .hover(move |s| s.bg(colors.button_secondary_hover))
-        .active(move |s| s.bg(colors.secondary_pressed()))
-        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
         .child(glyph)
 }
 

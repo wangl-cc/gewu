@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use gewu_core::{Dataset, FileMetadata, FileType};
 use gpui_kit::{base::SelectableText, *};
 
-use crate::{messages::format_count, panels::button, platform};
+use crate::{messages::format_count, platform, ui::button};
 
 struct FileDetails {
     path: PathBuf,

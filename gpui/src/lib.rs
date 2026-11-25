@@ -16,6 +16,7 @@ mod selection;
 mod shell;
 mod table;
 mod theme;
+mod ui;
 
 pub(crate) use messages::counted;
 pub use table::TableView;
