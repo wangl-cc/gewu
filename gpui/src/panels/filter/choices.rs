@@ -1,5 +1,6 @@
 //! Bounded display labels are independent of the full values used for searching and selection.
 use base::TestSupportExt;
+use gpui_kit::component::{Icon, IconName};
 
 use super::*;
 
@@ -27,7 +28,7 @@ impl FilterEditor {
                 ChoiceRow {
                     accessible: format!("{label}, {}", crate::counted(choice.count, "row")).into(),
                     label,
-                    count: choice.count.to_string().into(),
+                    count: crate::messages::format_count(choice.count).into(),
                 }
             })
             .collect();
@@ -121,59 +122,74 @@ impl FilterEditor {
                 ),
             );
         }
-        let mut actions = row().gap_3().px_2();
-        for (id, label, all) in [
-            ("all-values", "Select all", true),
-            ("no-values", "Deselect all", false),
-        ] {
-            actions = actions.child(
-                base::Button::new(id)
-                    .accessibility_label(label)
-                    .flex()
-                    .items_center()
-                    .h(px(24.))
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .hover(move |s| s.underline().text_color(colors.foreground))
-                    .child(label)
-                    .on_click(cx.listener(move |editor, _, _, cx| {
-                        editor.draft.select_all(all);
-                        cx.notify();
-                    })),
-            );
-        }
         let show_missing = facet.null_count > 0
             || self.applied_has_missing_rule()
             || self.draft.missing == MissingPolicy::Only;
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Self::input("Search values", &self.search, window, cx))
-            .child(
-                div()
-                    .id("value-selection")
-                    .role(Role::Group)
-                    .aria_label("Value selection")
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(colors.border)
-                    .bg(colors.canvas)
-                    .child(actions.border_b_1().border_color(colors.border))
-                    .child(list)
-                    .children(show_missing.then(|| {
-                        div()
-                            .border_t_1()
-                            .border_color(colors.border)
-                            .px_2()
-                            .py_1()
-                            .child(self.include_missing(facet.null_count, cx))
-                    }))
-                    .test_support(),
-            )
+        let all_selected = (0..self.rows.len()).all(|i| self.draft.value_checked(i))
+            && (!show_missing || self.draft.missing != MissingPolicy::Exclude);
+        let none_selected = (0..self.rows.len()).all(|i| !self.draft.value_checked(i))
+            && (!show_missing || self.draft.missing == MissingPolicy::Exclude);
+        let mut actions = row()
+            .gap(px(6.))
+            .px_2()
+            .py(px(5.))
+            .bg(colors.surface)
+            .border_b_1()
+            .border_color(colors.border);
+        for (id, label, all, disabled) in [
+            ("all-values", "Select all", true, all_selected),
+            ("no-values", "Deselect all", false, none_selected),
+        ] {
+            actions = actions.child(
+                crate::panels::compact_button(id, label, disabled, cx).on_click(cx.listener(
+                    move |editor, _, _, cx| {
+                        editor.draft.select_all(all);
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+        let search_field = crate::panels::input_frame(
+            div().id("Search values"),
+            true,
+            &self.search.focus_handle(cx),
+            window,
+            cx,
+        )
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .child(
+            Icon::new(IconName::Search)
+                .size(px(14.))
+                .text_color(colors.muted_foreground),
+        )
+        .child(div().min_w_0().flex_1().child(Input::new(&self.search)))
+        .test_support();
+        div().flex().flex_col().gap_2().child(search_field).child(
+            div()
+                .id("value-selection")
+                .role(Role::Group)
+                .aria_label("Value selection")
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded_md()
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.canvas)
+                .child(actions)
+                .child(list)
+                .children(show_missing.then(|| {
+                    div()
+                        .border_t_1()
+                        .border_color(colors.border)
+                        .px_2()
+                        .py_1()
+                        .child(self.include_missing(facet.null_count, cx))
+                }))
+                .test_support(),
+        )
     }
 }

@@ -108,13 +108,13 @@ impl TableView {
     ) -> base::Button {
         let raw = id.into_raw() as usize;
         let (text, accessible) = if descending {
-            ("↓ Desc", "Sort descending")
+            ("▼ Desc", "Sort descending")
         } else {
-            ("↑ Asc", "Sort ascending")
+            ("▲ Asc", "Sort ascending")
         };
         button(("sort-direction", raw), text, false, cx)
             .accessibility_label(accessible)
-            .w(px(66.))
+            .w(px(68.))
             .on_click(cx.listener(move |t, _, _, cx| t.set_direction(id, !descending, cx)))
     }
 
@@ -222,8 +222,12 @@ impl TableView {
                 }))
                 .child(
                     div()
+                        .flex_none()
+                        .w(px(24.))
+                        .font_features(crate::theme::tabular_digits())
                         .text_xs()
                         .text_color(colors.muted_foreground)
+                        .cursor(CursorStyle::OpenHand)
                         .child(format!("⠿ {}", index + 1)),
                 )
                 .child(div().flex_1().min_w_0().child(self.sort_choice(
@@ -255,7 +259,18 @@ impl TableView {
             rows = rows.child(row);
         }
         panel = panel.child(rows);
-        panel = panel.child(self.sort_choice(None, options(None), window, cx));
+        let add_row = self.sort_choice(None, options(None), window, cx);
+        if sorts.is_empty() {
+            panel = panel.child(add_row);
+        } else {
+            panel = panel.child(
+                div()
+                    .pt_2()
+                    .border_t(px(1. / window.scale_factor()))
+                    .border_color(colors.border)
+                    .child(add_row),
+            );
+        }
         let mut footer = super::footer();
         if !sorts.is_empty() {
             footer = footer.child(

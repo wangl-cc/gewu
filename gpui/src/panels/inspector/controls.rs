@@ -153,15 +153,12 @@ impl Inspector {
             .when(!pressed, |toggle| {
                 toggle
                     .bg(colors.button_secondary)
-                    .text_color(colors.muted_foreground)
+                    .text_color(colors.foreground)
                     .font_weight(FontWeight::MEDIUM)
                     .when(supports_log, |toggle| {
                         toggle
                             .cursor_pointer()
-                            .hover(move |s| {
-                                s.bg(colors.button_secondary_hover)
-                                    .text_color(colors.foreground)
-                            })
+                            .hover(move |s| s.bg(colors.button_secondary_hover))
                             .active(move |s| s.bg(colors.secondary_pressed()))
                     })
             })

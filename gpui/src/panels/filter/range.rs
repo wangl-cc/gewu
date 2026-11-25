@@ -137,7 +137,7 @@ impl FilterEditor {
             .items_center()
             .justify_between()
             .gap_2()
-            .child(div().text_size(px(10.5)).children(
+            .child(div().children(
                 (has_bins && peak > 0).then(|| charts::histogram_peak_label(peak, self.log_counts)),
             ))
             .child(options_host);
@@ -166,6 +166,17 @@ impl FilterEditor {
                 let active = selected.is_some_and(|(lo, hi)| (lo..=hi).contains(&i));
                 let interval = charts::bin_interval(&h.ranges, i, self.column.floating_point);
                 let hint = format!("{interval} · {}", crate::counted(*count, "row"));
+                let cursor = match selected {
+                    Some((lo, hi)) if i == lo || i == hi => CursorStyle::ResizeLeftRight,
+                    Some((lo, hi)) if lo < i && i < hi => {
+                        if self.drag.is_some() {
+                            CursorStyle::ClosedHand
+                        } else {
+                            CursorStyle::OpenHand
+                        }
+                    }
+                    _ => CursorStyle::Crosshair,
+                };
                 bars = bars.child(
                     base::Button::new(("range-bin", i))
                         .flex_none()
@@ -176,7 +187,7 @@ impl FilterEditor {
                         .group("range-bin")
                         .when(active, |bin| bin.bg(colors.brush_fill))
                         .pr(hairline)
-                        .cursor_pointer()
+                        .cursor(cursor)
                         .accessibility_label(hint.clone())
                         .tooltip(move |window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(hint.clone())
@@ -223,9 +234,16 @@ impl FilterEditor {
                         })),
                 );
             }
-            if let Some((first, last)) = selected {
-                let (left, _) = charts::bin_fraction(&h.histogram, first);
-                let (_, right) = charts::bin_fraction(&h.histogram, last);
+            let (left, right, active_selection) = match selected {
+                Some((first, last)) => (
+                    charts::bin_fraction(&h.histogram, first).0,
+                    charts::bin_fraction(&h.histogram, last).1,
+                    true,
+                ),
+                None => (0., 1., false),
+            };
+            if active_selection {
+                let edge = cues.brush_outline.max(px(1.5));
                 bars = bars.child(
                     div()
                         .absolute()
@@ -233,11 +251,62 @@ impl FilterEditor {
                         .left(relative(left))
                         .w(relative(right - left))
                         .h_full()
-                        .border_l(cues.brush_outline)
+                        .border_l(edge)
                         .border_t(cues.brush_outline)
-                        .border_r(cues.brush_outline)
+                        .border_r(edge)
                         .border_color(colors.accent),
                 );
+            }
+            for (id, label, position, is_end) in [
+                ("range-handle-min", "Adjust minimum bound", left, false),
+                ("range-handle-max", "Adjust maximum bound", right, true),
+            ] {
+                let border_width = if active_selection { px(1.5) } else { hairline };
+                let edge_color = if active_selection {
+                    colors.accent
+                } else {
+                    colors.muted_foreground
+                };
+                let handle = div()
+                    .id(id)
+                    .role(Role::Slider)
+                    .aria_label(label)
+                    .group(id)
+                    .absolute()
+                    .top(relative(0.5))
+                    .mt(px(-12.))
+                    .left(relative(position))
+                    .when(!is_end, |h| {
+                        h.ml(px(-8.)).rounded_l(px(4.)).rounded_r(px(2.))
+                    })
+                    .when(is_end, |h| h.rounded_r(px(4.)).rounded_l(px(2.)))
+                    .w(px(8.))
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(colors.elevated)
+                    .border(border_width)
+                    .border_color(edge_color)
+                    .shadow_xs()
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .hover(move |s| s.border_color(colors.accent))
+                    .child(
+                        div()
+                            .w(px(if active_selection { 1.5 } else { 1. }))
+                            .h(px(10.))
+                            .rounded_full()
+                            .bg(edge_color)
+                            .group_hover(id, move |s| s.bg(colors.accent)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |editor, _, window, cx| {
+                            editor.start_handle_drag(is_end, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    );
+                bars = bars.child(handle.test_support());
             }
             bars = bars
                 .on_mouse_up(
@@ -248,7 +317,26 @@ impl FilterEditor {
                     MouseButton::Left,
                     cx.listener(|editor, _, _, _| editor.drag = None),
                 );
-            body = body.child(bars).child(charts::histogram_axis(&h.histogram));
+            let plot_well = div()
+                .w_full()
+                .rounded(px(6.))
+                .border(hairline)
+                .border_color(colors.border)
+                .bg(colors.canvas)
+                .px(px(10.))
+                .pt(px(6.))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|editor, _, _, _| editor.drag = None),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|editor, _, _, _| editor.drag = None),
+                )
+                .child(bars);
+            body = body
+                .child(plot_well)
+                .child(charts::histogram_axis(&h.histogram).px(px(10.)));
         } else {
             body = body.child(if self.scale == AxisScale::Log10 {
                 "No positive finite values to plot"
@@ -264,12 +352,12 @@ impl FilterEditor {
         div()
             .flex()
             .flex_col_reverse()
-            .gap_1()
-            .rounded_md()
-            .border_1()
+            .gap(px(6.))
+            .rounded(px(8.))
+            .border(hairline)
             .border_color(colors.border)
-            .bg(colors.canvas)
-            .p_2()
+            .bg(colors.surface)
+            .p(px(10.))
             .font_features(crate::theme::tabular_digits())
             .text_size(px(11.))
             .text_color(colors.muted_foreground)

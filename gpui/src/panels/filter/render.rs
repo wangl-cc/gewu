@@ -64,7 +64,7 @@ impl FilterEditor {
     pub(super) fn include_missing(&self, count: u64, cx: &mut Context<Self>) -> base::Checkbox {
         crate::panels::checkbox(
             "include-missing",
-            format!("Include missing ({count})"),
+            format!("Include missing ({})", crate::messages::format_count(count)),
             self.draft.missing != MissingPolicy::Exclude,
             cx,
             cx.listener(|editor, _, _, cx| {
@@ -196,19 +196,20 @@ impl Render for FilterEditor {
                         .on_change(move |_, ev, w, cx| select(ev, w, cx));
                     choices = choices.child(segment(radio, label, selected, cx));
                 }
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(colors.muted_foreground)
-                                .child(format!("Missing values ({})", facet.null_count)),
-                        )
-                        .child(choices),
-                );
+                panel =
+                    panel.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(colors.muted_foreground).child(
+                                format!(
+                                    "Missing values ({})",
+                                    crate::messages::format_count(facet.null_count)
+                                ),
+                            ))
+                            .child(choices),
+                    );
             }
         } else if self.error.is_none() {
             panel = panel.child("Loading filter choices…");

@@ -38,6 +38,30 @@ fn format_integer_statistic(text: &str) -> String {
     text.to_owned()
 }
 
+fn format_numeric_statistic(value: f64, digits: usize) -> String {
+    if !value.is_finite() || value == 0. {
+        return value.to_string();
+    }
+    let exp = value.abs().log10().floor() as i32;
+    let digits = digits.clamp(1, 17);
+    if (-4..9).contains(&exp) {
+        if exp >= digits as i32 - 1 {
+            let scale = 10f64.powi(exp - digits as i32 + 1);
+            let rounded = (value / scale).round() * scale;
+            return format_integer_statistic(&format!("{rounded:.0}"));
+        }
+        let decimals = (digits as i32 - exp - 1) as usize;
+        let text = format!("{value:.decimals$}");
+        let trimmed = if decimals == 0 {
+            text.as_str()
+        } else {
+            text.trim_end_matches('0').trim_end_matches('.')
+        };
+        return format_integer_statistic(trimmed);
+    }
+    charts::significant_digits(value, digits)
+}
+
 fn metric(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &App) -> Div {
     let colors = crate::theme::GewuPalette::get(cx);
     div()
@@ -193,7 +217,7 @@ impl Inspector {
                             value
                                 .parse::<f64>()
                                 .ok()
-                                .map(|v| charts::significant_digits(v, digits))
+                                .map(|v| format_numeric_statistic(v, digits))
                                 .unwrap_or_else(|| value.clone())
                         } else if col.value_category == gewu_core::ValueCategory::Number {
                             format_integer_statistic(value)
@@ -212,22 +236,39 @@ impl Inspector {
                 if s.min_label.is_none() && s.max_label.is_none() {
                     body = body.child("No numeric values");
                 }
+                let exact_mean = s
+                    .mean_label
+                    .clone()
+                    .or_else(|| s.mean.map(|v| v.to_string()));
                 let mean = s
                     .mean_label
                     .as_ref()
                     .map(|label| format!("≈ {label}"))
-                    .or_else(|| s.mean.map(|v| charts::significant_digits(v, digits)));
-                if let Some(mean) = mean {
-                    body = body.child(metric("Mean", mean, cx));
+                    .or_else(|| s.mean.map(|v| format_numeric_statistic(v, digits)));
+                if let (Some(mean), Some(exact)) = (mean, exact_mean) {
+                    body = body.child(metric("Mean", mean, cx).id("Mean").tooltip(
+                        move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(exact.clone())
+                                .build(window, cx)
+                        },
+                    ));
                 }
                 if col.value_category == gewu_core::ValueCategory::Number
                     && let Some(sd) = s.std_dev
                 {
-                    body = body.child(metric(
-                        "Standard deviation",
-                        charts::significant_digits(sd, digits),
-                        cx,
-                    ));
+                    let exact = sd.to_string();
+                    body = body.child(
+                        metric(
+                            "Standard deviation",
+                            format_numeric_statistic(sd, digits),
+                            cx,
+                        )
+                        .id("Standard deviation")
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(exact.clone())
+                                .build(window, cx)
+                        }),
+                    );
                 }
                 if s.nan_count + s.infinite_count > 0 {
                     body = body
@@ -261,7 +302,7 @@ impl Inspector {
                     body = body.child(metric("Maximum", format_count(v), cx));
                 }
                 if let Some(v) = s.mean {
-                    body = body.child(metric("Mean", charts::significant_digits(v, digits), cx));
+                    body = body.child(metric("Mean", format_numeric_statistic(v, digits), cx));
                 }
                 body.child(charts::histogram(
                     &s.histogram,
@@ -428,7 +469,7 @@ impl Inspector {
 
 #[cfg(test)]
 mod tests {
-    use super::format_integer_statistic;
+    use super::{format_integer_statistic, format_numeric_statistic};
 
     #[test]
     fn groups_integer_statistics_including_half_step_medians() {
@@ -437,5 +478,16 @@ mod tests {
         assert_eq!(format_integer_statistic("1999999"), "1,999,999");
         assert_eq!(format_integer_statistic("999.5"), "999.5");
         assert_eq!(format_integer_statistic("2024-01-01"), "2024-01-01");
+    }
+
+    #[test]
+    fn formats_numeric_statistics_with_thousands_separators_before_scientific_notation() {
+        assert_eq!(format_numeric_statistic(999_999.5, 5), "1,000,000");
+        assert_eq!(format_numeric_statistic(577_350.413, 5), "577,350");
+        assert_eq!(format_numeric_statistic(12_345.6, 6), "12,345.6");
+        assert_eq!(format_numeric_statistic(-12_345.5, 6), "-12,345.5");
+        assert_eq!(format_numeric_statistic(1.2345e-9, 4), "1.235e-9");
+        assert_eq!(format_numeric_statistic(1.2345e12, 4), "1.234e12");
+        assert_eq!(format_numeric_statistic(1.2346e12, 4), "1.235e12");
     }
 }

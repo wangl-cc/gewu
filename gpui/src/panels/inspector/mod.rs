@@ -330,6 +330,8 @@ impl Render for Inspector {
             .max_w(relative(0.60))
             .flex_none()
             .bg(colors.surface)
+            .border_l_1()
+            .border_color(colors.border)
             .on_drag_move::<ResizeInspector>(cx.listener(
                 |panel, event: &DragMoveEvent<ResizeInspector>, _, cx| {
                     panel.settings.width = (event.bounds.right() - event.event.position.x)

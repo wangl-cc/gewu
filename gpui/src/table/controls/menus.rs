@@ -64,6 +64,7 @@ pub(super) fn menu_item(
             .px_2()
             .h(px(26.))
             .rounded(px(6.))
+            .text_size(px(13.))
             // GPUI registers the row's hitbox for its cursor; active styling alone
             // does not register one. Native menus keep the arrow over their items.
             .cursor_default()
@@ -72,11 +73,14 @@ pub(super) fn menu_item(
             })
             .when(!enabled, |row| row.opacity(crate::theme::DISABLED_OPACITY))
             .child(label)
-            .children(
-                shortcut
-                    .clone()
-                    .map(|key| key.p_0().flex_nowrap().border_0().bg(Background::default())),
-            )
+            .children(shortcut.clone().map(|key| {
+                key.p_0()
+                    .flex_nowrap()
+                    .border_0()
+                    .bg(Background::default())
+                    .text_size(px(12.))
+                    .text_color(palette.muted_foreground)
+            }))
     })
     .disabled(!enabled)
 }
@@ -307,12 +311,13 @@ impl TableView {
         let viewport = window.viewport_size();
         crate::panels::elevated(div().id("cell-preview"), window, cx)
             .test_support()
+            .min_w(px(160.).min(viewport.width - px(12.)))
             .max_w(px(420.).min(viewport.width - px(12.)))
             .max_h(px(280.).min(viewport.height - px(12.)))
             .flex()
             .flex_col()
-            .gap_2()
-            .p_2()
+            .gap_3()
+            .p_3()
             .child(
                 div()
                     .id("cell-detail-text")

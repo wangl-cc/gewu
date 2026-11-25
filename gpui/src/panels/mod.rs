@@ -45,6 +45,71 @@ pub(crate) fn button_base(id: impl Into<ElementId>) -> base::Button {
     })
 }
 
+pub(crate) fn status_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    active: bool,
+    cx: &App,
+) -> base::Button {
+    let colors = crate::theme::GewuPalette::get(cx);
+    let label = label.into();
+    button_base(id)
+        .accessibility_label(label.clone())
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .h(px(19.))
+        .px(px(6.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_size(px(11.))
+        .font_features(crate::theme::tabular_digits())
+        .whitespace_nowrap()
+        .bg(if active {
+            colors.button_secondary_hover
+        } else {
+            colors.button_secondary
+        })
+        .text_color(colors.foreground)
+        .hover(move |s| s.bg(colors.button_secondary_hover))
+        .active(move |s| s.bg(colors.secondary_pressed()))
+        .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+        .child(label)
+}
+
+pub(crate) fn compact_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    disabled: bool,
+    cx: &App,
+) -> base::Button {
+    let colors = crate::theme::GewuPalette::get(cx);
+    button_base(id)
+        .accessibility_label(label)
+        .disabled(disabled)
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .h(px(22.))
+        .px(px(8.))
+        .rounded(px(5.))
+        .text_size(px(11.5))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .bg(colors.button_secondary)
+        .text_color(colors.foreground)
+        .when(!disabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |s| s.bg(colors.button_secondary_hover))
+                .active(move |s| s.bg(colors.secondary_pressed()))
+                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+        })
+        .child(label)
+}
+
 pub(in crate::panels) fn options_trigger(
     id: &'static str,
     active: bool,

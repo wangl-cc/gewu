@@ -117,7 +117,9 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                 }
             });
         }
-        if let Some(hit) = frame.current_match {
+        if let Some(hit) = frame.current_match
+            && frame.head != Some(hit)
+        {
             let bounds = (hit + origin).inset(cues.cell_outline);
             window.paint_quad(
                 outline(bounds, colors.find_current_border, BorderStyle::Solid)

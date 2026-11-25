@@ -66,7 +66,11 @@ fn selecting_one_exact_value_submits_a_filter_and_retains_alternatives_when_reop
             assert!(group.contains(&member.center()));
         }
         assert!(group.bottom() < w.find("apply-filter").bounds().top());
+        assert_eq!(w.find("all-values").disabled(), Some(true));
+        assert_ne!(w.find("no-values").disabled(), Some(true));
         w.click("no-values", cx);
+        assert_ne!(w.find("all-values").disabled(), Some(true));
+        assert_eq!(w.find("no-values").disabled(), Some(true));
         assert!(w.try_find("include-missing").is_none());
         w.click(("facet", 0usize), cx);
         w.click("apply-filter", cx);
@@ -484,6 +488,62 @@ fn brushing_range_bins_preserves_integer_bounds_beyond_f64_precision() {
         assert_eq!(low.top(), high.top());
         assert!(low.right() < high.left());
         w.drag_to(("range-bin", 1usize), ("range-bin", 3usize), cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| w.click("apply-filter", cx));
+    settle(&mut ui);
+    assert_eq!(
+        *submitted.borrow(),
+        Some(Filter::range(Some(lower), Some(upper), true))
+    );
+}
+
+#[test]
+fn dragging_range_handles_adjusts_bounds_independently() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("handles.csv");
+    let rows = (0..=10).map(|i| format!("{i}\n")).collect::<String>();
+    std::fs::write(&path, format!("value\n{rows}")).unwrap();
+    let snapshot = AppliedView::new(Arc::new(Dataset::open(path).unwrap()));
+    let column = snapshot.dataset().info().columns[0].clone();
+    let distribution = snapshot
+        .analyses()
+        .filter_distribution(column.id, 40, gewu_core::AxisScale::Linear)
+        .unwrap();
+    let ranges = &distribution.as_ref().as_ref().unwrap().ranges;
+    let last = ranges.len() - 1;
+    let lower = ranges[2].min.as_ref().unwrap().value.clone();
+    let upper = ranges[4].max.as_ref().unwrap().value.clone();
+    let submitted = Rc::new(RefCell::new(None));
+    let events = submitted.clone();
+    let app = TestAppContext::single();
+    let (handle, _editor, _events) = app.update(|cx| {
+        gpui_kit::init(cx);
+        let (handle, editor) = gpui_kit::open_window(options(), cx, |w, cx| {
+            cx.new(|cx| FilterEditor::new(snapshot, column, None, w, cx))
+        })
+        .unwrap();
+        let sub = cx.subscribe(&editor, move |_, ev, _| {
+            if let FilterEvent::Apply(_, filter) = ev {
+                *events.borrow_mut() = filter.clone();
+            }
+        });
+        (handle, editor, sub)
+    });
+    let mut ui = VisualTestContext::from_window(handle, &app);
+    settle(&mut ui);
+    ui.update(|w, cx| w.click("Range", cx));
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        let min_handle = w.find("range-handle-min").bounds();
+        let max_handle = w.find("range-handle-max").bounds();
+        assert!(min_handle.right() <= w.find(("range-bin", 0usize)).bounds().left());
+        assert!(max_handle.left() >= w.find(("range-bin", last)).bounds().right());
+        w.drag_to("range-handle-min", ("range-bin", 2usize), cx);
+    });
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        w.drag_to("range-handle-max", ("range-bin", 4usize), cx);
     });
     settle(&mut ui);
     ui.update(|w, cx| w.click("apply-filter", cx));

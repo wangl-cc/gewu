@@ -305,14 +305,13 @@ impl Render for ExportController {
                 bar.child(status(
                     format!(
                         "Exporting {} / {}",
-                        progress.rows_written,
+                        crate::messages::format_count(progress.rows_written),
                         crate::counted(progress.total_rows, "row")
                     )
                     .into(),
                 ))
                 .child(
-                    button("cancel-export", "Cancel export", false, cx)
-                        .flex_none()
+                    crate::panels::status_button("cancel-export", "Cancel export", false, cx)
                         .on_click(cx.listener(|t, _, _, _| {
                             if let ExportController::Writing(active) = t {
                                 active.job.cancel();

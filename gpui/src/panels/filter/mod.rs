@@ -266,6 +266,26 @@ impl FilterEditor {
         self.brush(at, window, cx);
     }
 
+    pub(super) fn start_handle_drag(
+        &mut self,
+        is_end: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let n = self
+            .preview
+            .as_deref()
+            .and_then(Option::as_ref)
+            .map_or(0, |h| h.ranges.len());
+        let Some(last_index) = n.checked_sub(1) else {
+            return;
+        };
+        let (first, last) = self.selected_bins(cx).unwrap_or((0, last_index));
+        let (anchor, at) = if is_end { (first, last) } else { (last, first) };
+        self.drag = Some(Brush::Extend { anchor });
+        self.brush(at, window, cx);
+    }
+
     fn brush(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(drag), Some(histogram)) =
             (self.drag, self.preview.as_deref().and_then(Option::as_ref))

@@ -1,10 +1,4 @@
-use gpui_kit::{
-    assets::IconName,
-    component::{
-        Icon, Sizable,
-        button::{Button as StyledButton, ButtonVariants},
-    },
-};
+use gpui_kit::{assets::IconName, component::Icon};
 
 use super::*;
 use crate::{messages::format_count, table::Notice};
@@ -117,30 +111,7 @@ impl TableView {
                 None
             };
             let label: SharedString = format!("{} {noun}", format_count(count as u64)).into();
-            let trigger = crate::panels::button_base(id)
-                .accessibility_label(label.clone())
-                .aria_expanded(open)
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_none()
-                .h(px(19.))
-                .px(px(6.))
-                .rounded(px(4.))
-                .cursor_pointer()
-                .text_size(px(11.))
-                .font_features(crate::theme::tabular_digits())
-                .whitespace_nowrap()
-                .bg(if open {
-                    colors.button_secondary_hover
-                } else {
-                    colors.button_secondary
-                })
-                .text_color(colors.foreground)
-                .hover(move |s| s.bg(colors.button_secondary_hover))
-                .active(move |s| s.bg(colors.secondary_pressed()))
-                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
-                .child(label);
+            let trigger = crate::panels::status_button(id, label, open, cx).aria_expanded(open);
             status = status.child(
                 base::Popover::new(("status-summary", filters as usize))
                     .anchor(Anchor::BottomRight)
@@ -176,6 +147,7 @@ impl TableView {
     }
 
     pub(super) fn filter_summary(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut panel = self.drawer("Active filters", window, cx);
         for entry in &self.data.query().filters {
             let id = entry.column;
@@ -186,16 +158,41 @@ impl TableView {
             let row =
                 div()
                     .flex()
-                    .gap_1()
+                    .gap_2()
                     .items_center()
                     .child(
-                        StyledButton::new(("locate-filter", raw))
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(IconName::Locate))
-                            .label(crate::data::preview_with_limit(&column.name, 36))
+                        crate::panels::button_base(("locate-filter", raw))
                             .accessibility_label(format!("Show column {}", column.name))
-                            .tooltip("Show column")
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Show column")
+                                    .build(window, cx)
+                            })
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .mx(px(-4.))
+                            .px(px(4.))
+                            .h(px(24.))
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(colors.foreground)
+                            .hover(move |s| s.bg(colors.button_secondary_hover))
+                            .active(move |s| s.bg(colors.secondary_pressed()))
+                            .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+                            .child(
+                                Icon::new(IconName::Locate)
+                                    .size(px(13.))
+                                    .text_color(colors.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(crate::data::preview_with_limit(&column.name, 36)),
+                            )
                             .on_click(cx.listener(move |t, _, w, cx| {
                                 t.commit_grid_layout(cx);
                                 if let Some(column) = t.data.columns.position(id) {
@@ -220,9 +217,9 @@ impl TableView {
                         }),
                     ));
             let detail = div()
-                .pl(px(24.))
+                .pl(px(19.))
                 .text_size(px(11.))
-                .text_color(crate::theme::GewuPalette::get(cx).muted_foreground)
+                .text_color(colors.muted_foreground)
                 .child(crate::panels::filter_description(&entry.filter));
             panel = panel.child(div().flex().flex_col().gap_0().child(row).child(detail));
         }

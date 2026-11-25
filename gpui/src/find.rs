@@ -623,10 +623,32 @@ impl Render for FindController {
             .child(field);
         if searching {
             let enabled = self.can_navigate();
-            let arrow = |id, label: &'static str, symbol: &'static str| {
+            let arrow = |id, label: &'static str, previous: bool| {
+                let chevron = canvas(
+                    |_, _, _| (),
+                    move |bounds, _, w, _| {
+                        let center = bounds.center();
+                        let mut path = PathBuilder::stroke(px(1.35));
+                        let vertices = if previous {
+                            [(2., -3.5), (-1.5, 0.), (2., 3.5)]
+                        } else {
+                            [(-2., -3.5), (1.5, 0.), (-2., 3.5)]
+                        };
+                        let [a, b, c] = vertices.map(|(x, y)| center + point(px(x), px(y)));
+                        path.move_to(a);
+                        path.line_to(b);
+                        path.line_to(c);
+                        if let Ok(path) = path.build() {
+                            w.paint_path(path, colors.foreground);
+                        }
+                    },
+                )
+                .size(px(12.))
+                .flex_none();
                 base::Button::new(id)
                     .accessibility_label(label)
-                    .size(px(22.))
+                    .h(px(28.))
+                    .w(px(24.))
                     .flex_none()
                     .flex()
                     .justify_center()
@@ -645,15 +667,15 @@ impl Render for FindController {
                             .cursor_default()
                     })
                     .disabled(!enabled)
-                    .child(symbol)
+                    .child(chevron)
             };
             bar = bar
                 .child(
-                    arrow("previous", "Previous match", "‹")
+                    arrow("previous", "Previous match", true)
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
                 )
                 .child(
-                    arrow("next", "Next match", "›")
+                    arrow("next", "Next match", false)
                         .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
                 );
         }

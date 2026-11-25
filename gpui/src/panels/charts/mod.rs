@@ -133,12 +133,7 @@ pub(super) fn histogram(
         .font_features(crate::theme::tabular_digits())
         .text_color(colors.muted_foreground)
         .text_size(px(11.))
-        .children((peak > 0).then(|| {
-            div()
-                .w_full()
-                .text_size(px(10.5))
-                .child(histogram_peak_label(peak, log_counts))
-        }))
+        .children((peak > 0).then(|| div().w_full().child(histogram_peak_label(peak, log_counts))))
         .child(plot)
         .child(histogram_axis(histogram))
         .children(crate::messages::omitted_values(
@@ -162,7 +157,7 @@ pub(super) fn bin_fraction(h: &Histogram, i: usize) -> (f32, f32) {
 }
 
 pub(super) fn histogram_axis(h: &Histogram) -> Div {
-    let mut axis = div().flex().flex_col().gap_1().text_xs();
+    let mut axis = div().flex().flex_col().gap_1().text_size(px(11.));
     if let (Some(a), Some(b)) = (&h.min_label, &h.max_label) {
         let endpoints = labels::endpoints(a, b);
         axis = axis.child(

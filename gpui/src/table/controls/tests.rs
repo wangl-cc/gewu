@@ -128,7 +128,10 @@ fn inspector_drag_clamps_width_and_keeps_the_table_usable_in_a_narrow_window() {
 fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     let files = tempfile::tempdir().unwrap();
     let path = files.path().join("notes.csv");
-    let text = format!("{}\nsecond line, end", "資料, one row\n".repeat(90));
+    let text = format!(
+        "{}\nsecond line, end",
+        "資料, one row with long preview text\n".repeat(90)
+    );
     std::fs::write(&path, format!("key,note\nother,\"{text}\"\n")).unwrap();
     let mut w = TableWindow::open(&path);
     w.click(w.cell(0, 0), Modifiers::default());
@@ -203,7 +206,7 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
     let short =
         w.ui.update(|window, _| window.find("cell-preview").bounds().size);
     assert!(
-        short.width < long.width && short.height < long.height,
+        short.width >= gpui_kit::px(160.) && short.width < long.width && short.height < long.height,
         "short {short:?}, long {long:?}"
     );
     w.click(w.header(0), Modifiers::default());
@@ -699,6 +702,11 @@ fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
     assert!(w.read(|t| t.data.row_count() < 5));
     click(&mut w, "filtered-count");
     w.ui.update(|window, _| {
+        let title = window.find("table-drawer-title").bounds();
+        let locate = window
+            .find(("locate-filter", ids[0].into_raw() as usize))
+            .bounds();
+        assert!((locate.left() - title.left()).abs() <= gpui_kit::px(5.));
         assert!(
             window.find("table-drawer").bounds().bottom()
                 <= window.find("filtered-count").bounds().top()
