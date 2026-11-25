@@ -85,6 +85,7 @@ pub(crate) struct Inspector {
     chart_options_open: bool,
     scatter_options_open: bool,
     showing: Showing,
+    _chart_observation: Option<Subscription>,
     task: Option<Task<()>>,
 }
 
@@ -167,6 +168,7 @@ impl Inspector {
             chart_options_open: false,
             scatter_options_open: false,
             showing: Showing::Empty,
+            _chart_observation: None,
             task: None,
         };
         inspector.repair_selection();
@@ -231,6 +233,7 @@ impl Inspector {
 
     fn load(&mut self, cx: &mut Context<Self>) {
         self.task = None;
+        self._chart_observation = None;
         self.showing = Showing::Empty;
         if !self.visible {
             return;
@@ -283,9 +286,13 @@ impl Inspector {
                 inspector.task = None;
                 inspector.showing = match result {
                     Ok(Loaded::Column(result)) => Showing::Column(result),
-                    Ok(Loaded::Chart(result)) => Showing::Chart(
-                        cx.new(|cx| ScatterChart::new(result, x_scale, y_scale, source_x, cx)),
-                    ),
+                    Ok(Loaded::Chart(result)) => {
+                        let chart =
+                            cx.new(|cx| ScatterChart::new(result, x_scale, y_scale, source_x, cx));
+                        inspector._chart_observation =
+                            Some(cx.observe(&chart, |_, _, cx| cx.notify()));
+                        Showing::Chart(chart)
+                    }
                     Err(error) => Showing::Failed(error),
                 };
                 cx.notify();
@@ -402,10 +409,15 @@ impl Inspector {
                 ),
             Showing::Column(results) => pane.child(self.column_view(results, window, cx)),
             Showing::Chart(chart) => {
-                let summary = chart
-                    .read(cx)
-                    .has_plot()
-                    .then(|| chart.read(cx).summary_text());
+                let has_plot = chart.read(cx).has_plot();
+                let summary = has_plot.then(|| chart.read(cx).summary_text());
+                let readout = has_plot
+                    .then(|| {
+                        chart
+                            .read(cx)
+                            .readout(crate::preferences::Preferences::get(cx).row_number_base)
+                    })
+                    .flatten();
                 pane.child(
                     div()
                         .flex_none()
@@ -425,7 +437,26 @@ impl Inspector {
                                 .font_features(crate::theme::tabular_digits())
                                 .child(div().min_w_0().truncate().children(summary))
                                 .child(self.scatter_limit_popover(window, cx)),
-                        ),
+                        )
+                        .children(has_plot.then(|| {
+                            div()
+                                .w_full()
+                                .h(px(16.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(11.))
+                                .font_features(crate::theme::tabular_digits())
+                                .children(readout.map(|readout| {
+                                    div()
+                                        .id("scatter-readout")
+                                        .w_full()
+                                        .truncate()
+                                        .text_color(colors.foreground)
+                                        .aria_label(readout.clone())
+                                        .child(readout)
+                                        .test_support()
+                                }))
+                        })),
                 )
             }
         };

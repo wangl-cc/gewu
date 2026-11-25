@@ -196,7 +196,7 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
     settle(&mut ui);
     ui.update(|w, cx| w.click("Chart", cx));
     settle(&mut ui);
-    ui.update(|w, cx| {
+    let (plot_bounds, limits_top_idle) = ui.update(|w, _| {
         assert_eq!(w.find("Chart").role(), Some(gpui_kit::Role::Tab));
         assert_eq!(w.find("Chart").selected(), Some(true));
         assert_eq!(w.find("Column").selected(), Some(false));
@@ -206,6 +206,24 @@ fn chart_picker_keeps_duplicate_column_names_distinct_from_the_source_row_axis()
         assert_eq!(w.find("log-y").checked(), Some(false));
         assert_eq!(w.find("scatter-limits").value(), Some("2,048"));
         assert!(w.try_find(("points", 2048usize)).is_none());
+        assert!(w.try_find("scatter-readout").is_none());
+        (
+            w.find("scatter-plot").bounds(),
+            w.find("scatter-limits").bounds().top(),
+        )
+    });
+    let data = crate::panels::scatter_data_bounds(plot_bounds);
+    ui.simulate_mouse_move(
+        gpui_kit::point(data.left(), data.bottom()),
+        None,
+        gpui_kit::Modifiers::default(),
+    );
+    settle(&mut ui);
+    ui.update(|w, cx| {
+        let readout = w.find("scatter-readout").bounds();
+        let limits = w.find("scatter-limits").bounds();
+        assert_eq!(limits.top(), limits_top_idle);
+        assert!(limits.bottom() <= readout.top());
         w.click("scatter-limits", cx);
     });
     settle(&mut ui);

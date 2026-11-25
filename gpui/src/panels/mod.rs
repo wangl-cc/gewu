@@ -224,6 +224,13 @@ pub(crate) fn checkbox(
     base::Checkbox::new(id)
         .accessibility_label(label.clone())
         .checked(checked)
+        .styles(|styles| {
+            styles.disabled(|style| {
+                style
+                    .opacity(crate::theme::DISABLED_OPACITY)
+                    .cursor_default()
+            })
+        })
         .group("checkbox")
         .cursor_pointer()
         .focus_visible(move |s| s.shadow(colors.focus_shadows()))

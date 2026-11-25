@@ -725,10 +725,22 @@ fn settings_menu_updates_the_open_documents_display_preferences() {
         let bottom = w.find(("pref", 4usize)).bounds().bottom();
         assert!(bottom <= w.viewport_size().height);
         assert!(w.viewport_size().height - bottom < px(60.));
+        assert_eq!(
+            w.find(("minus", 0usize)).bounds().left(),
+            w.find(("minus", 1usize)).bounds().left()
+        );
+        assert!(
+            w.find(("pref", 1usize)).bounds().left() > w.find(("pref", 0usize)).bounds().left()
+        );
+        assert_ne!(w.find(("pref", 1usize)).disabled(), Some(true));
         w.click(("row-height", 32usize), cx);
         w.click(("pref", 0usize), cx);
     });
     session.app.run_until_parked();
+    settings.update(|w, cx| {
+        w.render_frame(cx);
+        assert_eq!(w.find(("pref", 1usize)).disabled(), Some(true));
+    });
     session.app.read(|cx| {
         let after = Preferences::get(cx);
         assert_eq!(after.row_height, 32.);

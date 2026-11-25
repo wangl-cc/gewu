@@ -16,15 +16,23 @@ fn format_integer_statistic(text: &str) -> String {
     let (sign, digits) = text
         .strip_prefix('-')
         .map_or(("", text), |rest| ("-", rest));
-    if digits.len() > 3 && digits.bytes().all(|b| b.is_ascii_digit()) {
-        let mut formatted = String::with_capacity(text.len() + digits.len() / 3);
+    let (whole, fraction) = digits
+        .find('.')
+        .map_or((digits, ""), |dot| digits.split_at(dot));
+    if whole.len() > 3
+        && whole.bytes().all(|b| b.is_ascii_digit())
+        && (fraction.is_empty()
+            || (fraction.len() > 1 && fraction[1..].bytes().all(|b| b.is_ascii_digit())))
+    {
+        let mut formatted = String::with_capacity(text.len() + whole.len() / 3);
         formatted.push_str(sign);
-        for (offset, byte) in digits.bytes().enumerate() {
-            if offset > 0 && (digits.len() - offset).is_multiple_of(3) {
+        for (offset, byte) in whole.bytes().enumerate() {
+            if offset > 0 && (whole.len() - offset).is_multiple_of(3) {
                 formatted.push(',');
             }
             formatted.push(byte as char);
         }
+        formatted.push_str(fraction);
         return formatted;
     }
     text.to_owned()
@@ -415,5 +423,19 @@ impl Inspector {
                 cx.notify();
             }))
             .content(move |_, _, _| div().children(content))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_integer_statistic;
+
+    #[test]
+    fn groups_integer_statistics_including_half_step_medians() {
+        assert_eq!(format_integer_statistic("999999.5"), "999,999.5");
+        assert_eq!(format_integer_statistic("-12345.5"), "-12,345.5");
+        assert_eq!(format_integer_statistic("1999999"), "1,999,999");
+        assert_eq!(format_integer_statistic("999.5"), "999.5");
+        assert_eq!(format_integer_statistic("2024-01-01"), "2024-01-01");
     }
 }

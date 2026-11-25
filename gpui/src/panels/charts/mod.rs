@@ -136,8 +136,6 @@ pub(super) fn histogram(
         .children((peak > 0).then(|| {
             div()
                 .w_full()
-                .flex()
-                .justify_end()
                 .text_size(px(10.5))
                 .child(histogram_peak_label(peak, log_counts))
         }))

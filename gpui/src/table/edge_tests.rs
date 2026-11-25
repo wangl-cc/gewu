@@ -189,6 +189,8 @@ fn a_filter_that_keeps_every_row_stays_in_the_summary_until_its_replacement_appl
     use gewu_core::{ColumnFilter, Filter};
 
     let mut w = open();
+    let base_footer_height =
+        w.ui.update(|window, _| window.find("document-footer").bounds().size.height);
     let score = w.read(|t| t.data.columns[1].id);
     let raw = score.into_raw() as usize;
     w.app.update(|cx| {
@@ -204,6 +206,10 @@ fn a_filter_that_keeps_every_row_stays_in_the_summary_until_its_replacement_appl
     w.settle();
     assert_eq!(w.source_rows().len(), 5);
     w.ui.update(|window, cx| {
+        let footer = window.find("document-footer").bounds();
+        let pill = window.find("filtered-count").bounds();
+        assert_eq!(footer.size.height, base_footer_height);
+        assert!(pill.top() > footer.top() && pill.bottom() < footer.bottom());
         assert_eq!(window.find("filtered-count").label(), Some("1 filtered"));
         window.click("filtered-count", cx);
     });

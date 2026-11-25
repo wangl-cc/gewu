@@ -217,9 +217,6 @@ impl Render for FilterEditor {
             .child(
                 row()
                     .w_full()
-                    .pt_2()
-                    .border_t_1()
-                    .border_color(colors.border)
                     .child(
                         button("reset-filter", "Reset", false, cx).on_click(
                             cx.listener(|editor, _, window, cx| editor.reset(window, cx)),

@@ -2,10 +2,7 @@
 use std::path::PathBuf;
 
 use gewu_core::{Dataset, FileMetadata, FileType};
-use gpui_kit::{
-    base::{SelectableText, Theme},
-    *,
-};
+use gpui_kit::{base::SelectableText, *};
 
 use crate::{messages::format_count, panels::button, platform};
 
@@ -108,7 +105,7 @@ pub(super) fn open(dataset: &Dataset, cx: &mut App) {
 
 impl Render for FileDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut view = div()
             .id("file-info")
             .size_full()
@@ -117,7 +114,8 @@ impl Render for FileDetails {
             .flex()
             .flex_col()
             .gap_2()
-            .bg(colors.background)
+            .bg(colors.canvas)
+            .text_size(px(13.))
             .text_color(colors.foreground);
         let row = |key: SharedString, value: AnyElement| {
             div()
@@ -126,12 +124,18 @@ impl Render for FileDetails {
                 .gap_3()
                 .child(
                     div()
-                        .w(px(84.))
+                        .w(px(116.))
                         .flex_none()
                         .text_color(colors.muted_foreground)
                         .child(key),
                 )
-                .child(div().min_w_0().flex_1().child(value))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .font_features(crate::theme::tabular_digits())
+                        .child(value),
+                )
         };
         for (key, value) in &self.rows {
             view = view.child(row(key.clone().into(), value.clone().into_any_element()));

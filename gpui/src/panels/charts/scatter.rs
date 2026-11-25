@@ -161,6 +161,19 @@ impl ScatterChart {
         self.plot.is_some()
     }
 
+    pub(in crate::panels) fn readout(&self, base: u64) -> Option<SharedString> {
+        self.hover.map(|i| {
+            let point = &self.sample.points[i];
+            let row = point.source_row.0.saturating_add(base);
+            let x = if self.source_x {
+                row.to_string()
+            } else {
+                point.x_label.clone()
+            };
+            SharedString::from(format!("Row {row} · X {x} · Y {}", point.y_label))
+        })
+    }
+
     pub(in crate::panels) fn summary_text(&self) -> String {
         let plotted = self.sample.points.len() as u64;
         if plotted == self.sample.eligible_rows {
@@ -228,7 +241,7 @@ impl Render for ScatterChart {
             colors.muted_foreground
         };
         let base = Preferences::get(cx).row_number_base;
-        let mut content = div()
+        let content = div()
             .w_full()
             .flex()
             .flex_none()
@@ -400,20 +413,11 @@ impl Render for ScatterChart {
                 });
             });
         }
-        let readout = self.hover.map(|i| {
-            let point = &self.sample.points[i];
-            let row = point.source_row.0.saturating_add(base);
-            let x = if self.source_x {
-                row.to_string()
-            } else {
-                point.x_label.clone()
-            };
-            SharedString::from(format!("Row {row} · X {x} · Y {}", point.y_label))
-        });
+        let readout = self.readout(base);
         if let Some(text) = &readout {
             figure = figure.aria_value(text.clone());
         }
-        content = content
+        content
             .child(figure.child(chart).test_support())
             .children(
                 self.axis_context
@@ -423,24 +427,6 @@ impl Render for ScatterChart {
             .children(crate::messages::omitted_pairs(
                 self.sample.non_positive_rows,
             ))
-            .child(
-                div()
-                    .w_full()
-                    .h(px(16.))
-                    .flex()
-                    .items_center()
-                    .children(readout.map(|readout| {
-                        div()
-                            .id("scatter-readout")
-                            .w_full()
-                            .truncate()
-                            .text_color(colors.foreground)
-                            .aria_label(readout.clone())
-                            .child(readout)
-                            .test_support()
-                    })),
-            );
-        content
     }
 }
 

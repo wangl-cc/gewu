@@ -174,12 +174,18 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
         Some(super::Drawer::Cell { value: Some(value), .. }) if value.as_ref() == text
     )));
     assert_eq!(w.selection().unwrap().head.column, 1);
+    let row_bottom = w.read(|table| {
+        table.layout.bounds.top()
+            + gpui_kit::px(crate::table::HEADER_HEIGHT + table.layout.vertical.row_top(1) as f32)
+    });
     let long = w.ui.update(|window, cx| {
+        let preview = window.find("cell-preview").bounds();
+        assert!(preview.top() >= row_bottom + gpui_kit::px(3.));
         let copy = window.find("copy-cell");
         assert!(copy.visible() && copy.bounds().center().y < window.viewport_size().height);
         assert!(window.try_find("close-table-drawer").is_none());
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("previous".into()));
-        window.find("cell-preview").bounds().size
+        preview.size
     });
     click(&mut w, "copy-cell");
     assert_eq!(w.clipboard().as_deref(), Some(text.as_str()));
@@ -279,7 +285,10 @@ fn pressing_anywhere_in_a_menu_row_paints_the_full_row() {
 fn unavailable_menu_commands_keep_their_names_and_are_skipped_by_keyboard_navigation() {
     let mut w = window();
     open_header_menu(&mut w);
+    let header_bottom =
+        w.read(|table| table.layout.bounds.top() + gpui_kit::px(crate::table::HEADER_HEIGHT));
     w.ui.update(|window, _| {
+        assert!(window.find("popup-menu").bounds().top() >= header_bottom);
         let binding = gpui_kit::component::kbd::Kbd::format(
             &gpui_kit::Keystroke::parse("cmd-alt-f").unwrap(),
         );

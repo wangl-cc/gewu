@@ -1,3 +1,5 @@
+use gpui_kit::prelude::FluentBuilder;
+
 use super::*;
 use crate::panels::{button, segment};
 
@@ -13,7 +15,7 @@ pub(crate) fn open(cx: &mut App) {
     {
         return;
     }
-    let options = crate::platform::sized_window(430., 390., cx);
+    let options = crate::platform::sized_window(430., 424., cx);
     match gpui_kit::open_window(options, cx, |w, cx| {
         crate::platform::follow_appearance(w, cx);
         w.set_window_title("Gewu Settings");
@@ -33,8 +35,15 @@ impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Preferences::get(cx);
         let colors = crate::theme::GewuPalette::get(cx);
-        let section = |title: &'static str| {
+        let hairline = px(1. / window.scale_factor());
+        let section = |title: &'static str, first: bool| {
             div()
+                .when(!first, |s| {
+                    s.mt_1()
+                        .pt_3()
+                        .border_t(hairline)
+                        .border_color(colors.border)
+                })
                 .text_size(px(11.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors.muted_foreground)
@@ -50,8 +59,8 @@ impl Render for Settings {
             .p_4()
             .bg(colors.canvas)
             .text_color(colors.foreground)
-            .text_size(px(12.))
-            .child(section("Display"));
+            .text_size(px(13.))
+            .child(section("Display", true));
         type SetNumber = fn(&mut Preferences, f32);
         let numbers: [(&str, f32, f32, f32, SetNumber); 2] = [
             ("Text size", p.font_size, 10., 20., |p, n| p.font_size = n),
@@ -72,15 +81,23 @@ impl Render for Settings {
                     .child(div().flex_1().child(label))
                     .child(
                         button(("minus", index), "−", false, cx)
+                            .w(px(28.))
                             .accessibility_label(format!("Decrease {label}"))
                             .disabled(n <= min)
                             .on_click(move |_, _, cx| {
                                 Preferences::update(cx, |p| set(p, (n - 1.).max(min)))
                             }),
                     )
-                    .child(n.to_string())
+                    .child(
+                        div()
+                            .w(px(24.))
+                            .text_center()
+                            .font_features(crate::theme::tabular_digits())
+                            .child(n.to_string()),
+                    )
                     .child(
                         button(("plus", index), "+", false, cx)
+                            .w(px(28.))
                             .accessibility_label(format!("Increase {label}"))
                             .disabled(n >= max)
                             .on_click(move |_, _, cx| {
@@ -145,13 +162,17 @@ impl Render for Settings {
         view.child(choice(0, "Show row numbers", p.show_row_numbers, |p| {
             p.show_row_numbers = !p.show_row_numbers
         }))
-        .child(choice(
-            1,
-            "Start row numbering at 1",
-            p.row_number_base == 1,
-            |p| p.row_number_base = 1 - p.row_number_base,
-        ))
-        .child(section("Copy and export").mt_1())
+        .child(
+            div().pl(px(22.)).child(
+                choice(1, "Start row numbering at 1", p.row_number_base == 1, |p| {
+                    if p.show_row_numbers {
+                        p.row_number_base = 1 - p.row_number_base;
+                    }
+                })
+                .disabled(!p.show_row_numbers),
+            ),
+        )
+        .child(section("Copy and export", false))
         .child(choice(
             2,
             "Include column names when copying",
@@ -164,7 +185,7 @@ impl Render for Settings {
             p.remember_export_format,
             |p| p.remember_export_format = !p.remember_export_format,
         ))
-        .child(section("Confirmation").mt_1())
+        .child(section("Confirmation", false))
         .child(choice(
             4,
             "Confirm hiding sorted or filtered columns",

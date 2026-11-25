@@ -193,7 +193,10 @@ impl TableView {
         let anchor = if target.cell.is_some() {
             event.position + point(px(4.), px(12.))
         } else {
-            event.position
+            point(
+                event.position.x,
+                self.layout.bounds.top() + px(HEADER_HEIGHT + 2.),
+            )
         };
         self.present_menu(popup, anchor, window, cx);
         cx.stop_propagation();
@@ -285,7 +288,7 @@ impl TableView {
         let anchor = self.layout.bounds.origin
             + point(
                 px(self.column_left(cell.column).unwrap_or(self.layout.gutter)),
-                px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32),
+                px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32 + 4.),
             );
         self.set_selection(Some(Selection::single(cell)), cx);
         self.focus_panel(window, cx);

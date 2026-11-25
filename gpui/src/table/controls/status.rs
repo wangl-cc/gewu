@@ -116,22 +116,38 @@ impl TableView {
             } else {
                 None
             };
+            let label: SharedString = format!("{} {noun}", format_count(count as u64)).into();
+            let trigger = crate::panels::button_base(id)
+                .accessibility_label(label.clone())
+                .aria_expanded(open)
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_none()
+                .h(px(19.))
+                .px(px(6.))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_size(px(11.))
+                .font_features(crate::theme::tabular_digits())
+                .whitespace_nowrap()
+                .bg(if open {
+                    colors.button_secondary_hover
+                } else {
+                    colors.button_secondary
+                })
+                .text_color(colors.foreground)
+                .hover(move |s| s.bg(colors.button_secondary_hover))
+                .active(move |s| s.bg(colors.secondary_pressed()))
+                .focus_visible(move |s| s.shadow(colors.focus_shadows()))
+                .child(label);
             status = status.child(
                 base::Popover::new(("status-summary", filters as usize))
                     .anchor(Anchor::BottomRight)
                     .offset(px(4.))
                     .open(open)
                     .overlay_closable(self.controls.menu.is_none())
-                    .trigger(
-                        button(
-                            id,
-                            format!("{} {noun}", format_count(count as u64)),
-                            false,
-                            cx,
-                        )
-                        .flex_none()
-                        .aria_expanded(open),
-                    )
+                    .trigger(trigger)
                     .on_open_change(cx.listener(move |t, open: &bool, w, cx| {
                         if *open {
                             t.controls.drawer = Some(if filters {
