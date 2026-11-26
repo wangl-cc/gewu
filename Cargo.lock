@@ -2480,6 +2480,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gewu-ui-capture"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gewu-gpui",
+ "gpui-kit",
+ "image",
+]
+
+[[package]]
 name = "gewu-update"
 version = "0.1.0"
 dependencies = [

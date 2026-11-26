@@ -27,7 +27,7 @@ enum Load {
     Failed(Import, gewu_core::Error),
 }
 
-pub(super) struct Document {
+pub(crate) struct Document {
     path: PathBuf,
     focus: FocusHandle,
     title: SharedString,
@@ -81,6 +81,11 @@ impl Document {
         };
         document.request(initial, window, cx);
         document
+    }
+
+    #[cfg(feature = "ui-capture")]
+    pub(crate) fn table(&self) -> Option<Entity<TableView>> {
+        self.table.clone()
     }
 
     fn import_selection(&self) -> &Import {

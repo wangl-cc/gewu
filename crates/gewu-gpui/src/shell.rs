@@ -6,8 +6,8 @@ use gpui_kit::{base::input, *};
 
 use crate::{actions::*, platform};
 
-mod assets;
-mod document;
+pub(crate) mod assets;
+pub(crate) mod document;
 mod info;
 mod picker;
 
@@ -96,7 +96,7 @@ impl Documents {
     }
 }
 
-fn install_file_actions(
+pub(crate) fn install_file_actions(
     recent: platform::RecentDocuments,
     receive: async_channel::Receiver<Vec<PathBuf>>,
     cx: &mut App,
@@ -257,8 +257,30 @@ fn choose_files(cx: &mut App) {
     }
 }
 
-fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
-    open_with_header(paths, true, cx)
+pub(crate) fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
+    open_with_header(paths, true, cx);
+}
+
+#[cfg(feature = "ui-capture")]
+pub(crate) fn open_document_with_size(
+    path: PathBuf,
+    window_size: Option<Size<Pixels>>,
+    cx: &mut App,
+) -> Option<(AnyWindowHandle, Entity<Document>)> {
+    let mut options = platform::window_options(cx);
+    if let Some(size) = window_size {
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(Point::default(), size)));
+    }
+    let path = path
+        .canonicalize()
+        .or_else(|_| std::path::absolute(&path))
+        .unwrap_or(path);
+    let (handle, doc) = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| Document::new(path.clone(), true, window, cx))
+    })
+    .ok()?;
+    cx.global_mut::<Documents>().windows.push((path, handle));
+    Some((handle, doc))
 }
 
 fn supports_header(path: &Path) -> bool {

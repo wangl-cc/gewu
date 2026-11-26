@@ -25,6 +25,7 @@ gpui-kit = { version = "=0.10.0", default-features = false, features = ["compone
 [features]
 default = ["gpui-fast"]
 gpui-fast = ["gpui-kit/gpui-fast"]
+ui-capture = []
 
 [dev-dependencies]
 gpui-kit = { version = "=0.10.0", default-features = false, features = ["test-support"] }

@@ -1,0 +1,17 @@
+[package]
+name = "gewu-ui-capture"
+description = "Headless screenshot capture and visual verification driver for Gewu"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# This dev tool retains Cargo's default lints. The application crates opt into the workspace policy.
+[lints]
+
+[dependencies]
+anyhow = "1"
+gewu-gpui = { path = "../../crates/gewu-gpui", features = ["ui-capture"] }
+gpui-kit = { version = "=0.10.0", default-features = false, features = ["component", "assets", "gpui-fast", "test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

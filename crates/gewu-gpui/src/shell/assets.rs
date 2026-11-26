@@ -7,7 +7,7 @@ use gpui_kit::{
 
 icon_assets!(ExtraIcons, [Locate]);
 
-pub(super) struct AppAssets;
+pub(crate) struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {

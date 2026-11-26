@@ -18,6 +18,10 @@ mod table;
 mod theme;
 mod ui;
 
+#[cfg(feature = "ui-capture")]
+#[doc(hidden)]
+pub mod capture;
+
 pub(crate) use messages::counted;
 pub use table::TableView;
 

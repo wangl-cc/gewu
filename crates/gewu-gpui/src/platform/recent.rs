@@ -31,7 +31,7 @@ impl RecentDocuments {
         }
     }
 
-    #[allow(dead_code)] // Used by shell tests and the visual-design capture host.
+    #[cfg(any(test, feature = "ui-capture"))]
     pub(crate) fn session() -> Self {
         Self {
             paths: Vec::new(),

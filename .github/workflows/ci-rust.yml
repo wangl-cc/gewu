@@ -122,14 +122,14 @@ jobs:
       - name: Test models and tools on Linux
         if: runner.os == 'Linux'
         run: |
-          cargo test --locked --workspace --exclude gewu-gpui
+          cargo test --locked --workspace --exclude gewu-gpui --exclude gewu-ui-capture
           cargo test --locked -p gewu-core --no-default-features
           for codec in csv parquet xlsx; do
             cargo test --locked -p gewu-core --no-default-features --features "$codec"
           done
           sudo apt-get update
           sudo apt-get install -y libfontconfig1-dev libasound2-dev libxkbcommon-x11-dev libwayland-dev libxcb-xfixes0-dev libx11-xcb-dev libvulkan-dev
-          cargo check --locked -p gewu-gpui
+          cargo check --locked -p gewu-gpui -p gewu-ui-capture
       - name: Test native app on macOS
         if: runner.os == 'macOS'
         run: |

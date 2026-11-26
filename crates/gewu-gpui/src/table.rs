@@ -302,6 +302,38 @@ impl TableView {
             .set_anchor(crate::scroll::Anchor { row, offset: 0.0 });
     }
 
+    #[cfg(feature = "ui-capture")]
+    pub(crate) fn capture_cell_point(&self, column: &str, row: u64) -> Option<Point<Pixels>> {
+        let index =
+            (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
+        let left = self.column_left(index)?;
+        let row_height = self.layout.vertical.row_height() as f32;
+        Some(
+            self.layout.bounds.origin
+                + point(
+                    px(left + 10.),
+                    px(HEADER_HEIGHT + self.layout.vertical.row_top(row) as f32 + row_height / 2.),
+                ),
+        )
+    }
+
+    #[cfg(feature = "ui-capture")]
+    pub(crate) fn capture_header_bounds(&self, column: &str) -> Option<Bounds<Pixels>> {
+        let index =
+            (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
+        let left = self.column_left(index)?;
+        let width = self.data.columns.width(index);
+        Some(Bounds::new(
+            self.layout.bounds.origin + point(px(left), px(0.)),
+            size(px(width), px(HEADER_HEIGHT)),
+        ))
+    }
+
+    #[cfg(feature = "ui-capture")]
+    pub(crate) fn capture_dimensions(&self) -> (u64, usize) {
+        (self.data.row_count(), self.data.columns.len())
+    }
+
     fn scroll_x(&self) -> f32 {
         self.horizontal.offset(
             &self.data.columns,

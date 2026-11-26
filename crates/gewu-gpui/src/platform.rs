@@ -55,7 +55,7 @@ pub(crate) fn refresh_contrast(cx: &mut App) {
     install_theme(base::Theme::global(cx).appearance, cx);
 }
 
-fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
+pub(crate) fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
     use crate::{
         preferences::Preferences,
         theme::{GewuPalette, VisualCues},

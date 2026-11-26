@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gewu-app", "crates/gewu-core", "crates/gewu-gpui", "crates/gewu-update", "tools/data-gen"]
+members = ["crates/gewu-app", "crates/gewu-core", "crates/gewu-gpui", "crates/gewu-update", "tools/data-gen", "tools/ui-capture"]
 
 default-members = ["crates/gewu-gpui"]
 

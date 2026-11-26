@@ -106,7 +106,7 @@ Both display-paced attempts reported an inactive, invisible window. Foreground F
 
 ## Semantic palette and Find rendering · 2026-11-24
 
-The [screenshot index](../../ui-review/visual-design/README.md) contains the Default and high-contrast comparisons, the hidden-match ellipsis and the native window references. The controlled captures render directly at each backing scale. The native desktop was locked during this run.
+The [screenshot index](../../tools/ui-capture/README.md) contains the Default and high-contrast comparisons, the hidden-match ellipsis and the native window references. The controlled captures render directly at each backing scale. The native desktop was locked during this run.
 
 On the M4 Mac mini, release Metal replay used a 1×, 1280×800-point grid with 28-point rows and the 2-million-row, 28-column Parquet sample. With Find set to `city-`, every value in the city column matched. Pixel readback checked the position and width of the substring background on each visible row immediately after scrolling.
 
