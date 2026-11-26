@@ -2462,11 +2462,11 @@ name = "gewu-gpui"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "chrono",
  "dirs 6.0.0",
  "gewu-app",
  "gewu-core",
- "gewu-macos",
  "gpui-kit",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2477,16 +2477,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "url",
-]
-
-[[package]]
-name = "gewu-macos"
-version = "0.1.0"
-dependencies = [
- "block2 0.6.2",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
 ]
 
 [[package]]

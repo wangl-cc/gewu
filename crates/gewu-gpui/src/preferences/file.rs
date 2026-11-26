@@ -137,5 +137,5 @@ pub(super) fn save_to(path: &Path, prefs: &Preferences) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[path = "storage_tests.rs"]
+#[path = "file_tests.rs"]
 mod tests;

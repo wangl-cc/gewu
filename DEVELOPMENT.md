@@ -36,7 +36,7 @@ scripts/package-macos.sh target/release/gewu-gpui 0.1.0 1 build/native
 open build/native/Gewu.app
 ```
 
-Check release builds with the [signing and update guide](docs/app-updates.md). The [native acceptance checklist](docs/dev/native-acceptance.md) identifies which behaviors need a real window, VoiceOver, published update artifacts or physical display measurements. The test platform uses simulated drawing and input; measure rendering in a release application on the target display.
+Check release builds with the [signing and update guide](docs/dev/app-updates.md). The [native acceptance checklist](docs/dev/native-acceptance.md) identifies which behaviors need a real window, VoiceOver, published update artifacts or physical display measurements. The test platform uses simulated drawing and input; measure rendering in a release application on the target display.
 
 ## Measure scrolling
 

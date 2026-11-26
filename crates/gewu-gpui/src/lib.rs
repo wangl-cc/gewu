@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code, clippy::undocumented_unsafe_blocks)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod actions;

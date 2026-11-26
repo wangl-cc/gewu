@@ -2,7 +2,7 @@
 use gewu_core::{FileType, ParquetCompression};
 use gpui_kit::*;
 
-mod storage;
+mod file;
 mod window;
 pub(crate) use window::open;
 
@@ -69,7 +69,7 @@ struct SaveChanges;
 impl Global for SaveChanges {}
 
 pub(crate) fn init(cx: &mut App) {
-    let prefs = storage::load();
+    let prefs = file::load();
     cx.set_global(prefs);
     cx.set_global(SaveChanges);
 }
@@ -87,9 +87,9 @@ impl Preferences {
             return;
         }
         if cx.has_global::<SaveChanges>()
-            && let Err(error) = storage::save(&after)
+            && let Err(error) = file::save(&after)
         {
-            after = storage::load();
+            after = file::load();
             cx.show_system_notification(SystemNotification {
                 tag: "preferences".into(),
                 title: "Could not save settings".into(),

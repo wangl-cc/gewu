@@ -26,7 +26,7 @@ pub(crate) fn run() {
         gpui_kit::init(cx);
         crate::actions::init(cx);
         cx.set_global(crate::preferences::Preferences::default());
-        install_file_actions(platform::RecentDocuments::Session(Vec::new()), recv, cx);
+        install_file_actions(platform::RecentDocuments::session(), recv, cx);
         open_paths(vec![path], cx);
         *cx.windows()
             .first()

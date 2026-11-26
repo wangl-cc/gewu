@@ -28,11 +28,7 @@ impl Session {
         app.update(|cx| {
             gpui_kit::init(cx);
             crate::actions::init(cx);
-            install_file_actions(
-                crate::platform::RecentDocuments::Session(Vec::new()),
-                receive,
-                cx,
-            );
+            install_file_actions(crate::platform::RecentDocuments::session(), receive, cx);
         });
         Self { app, finder }
     }

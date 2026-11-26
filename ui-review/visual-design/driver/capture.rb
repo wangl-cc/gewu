@@ -50,31 +50,31 @@ end
 
 # Preserve the workspace dependency graph. Only the capture binary and the two
 # test-platform observations differ from the real application build.
-shell = repo.join("gpui/src/shell.rs")
-src = work.join("gpui/src")
+shell = repo.join("crates/gewu-gpui/src/shell.rs")
+src = work.join("crates/gewu-gpui/src")
+File.unlink(work.join("crates")) if File.symlink?(work.join("crates"))
 FileUtils.mkdir_p(src)
-%w[crates tools gpui/macos].each do |link|
+%w[crates/gewu-core crates/gewu-app crates/gewu-update tools].each do |link|
   dest = work.join(link)
   File.symlink(repo.join(link), dest) unless dest.symlink?
 end
 File.write(work.join("Cargo.toml"), repo.join("Cargo.toml").read + "\n[patch.crates-io]\ngpui-fast = { path = #{engine_copy.to_s.to_json} }\n")
 FileUtils.cp(repo.join("Cargo.lock"), work.join("Cargo.lock"))
-manifest = repo.join("gpui/Cargo.toml").read
+manifest = repo.join("crates/gewu-gpui/Cargo.toml").read
 manifest = manifest.sub('name = "gewu-gpui"', 'name = "gewu-design-capture"')
 manifest = manifest.sub('[dependencies]', <<~TOML.chomp)
   [dependencies]
   accesskit_consumer = "0.38"
-  serde_json = "1"
   image = { version = "0.25", default-features = false, features = ["png"] }
 TOML
 manifest = manifest.sub('default = ["gpui-fast"]', 'default = ["gpui-fast", "gpui-kit/test-support"]')
-File.write(work.join("gpui/Cargo.toml"), manifest)
-repo.join("gpui/src").children.each do |entry|
+File.write(work.join("crates/gewu-gpui/Cargo.toml"), manifest)
+repo.join("crates/gewu-gpui/src").children.each do |entry|
   next if %w[main.rs lib.rs shell.rs].include?(entry.basename.to_s)
   link = src.join(entry.basename)
   File.symlink(entry, link) unless link.symlink?
 end
-File.write(src.join("main.rs"), repo.join("gpui/src/lib.rs").read + "\nfn main() { shell::review::run(); }\n")
+File.write(src.join("main.rs"), repo.join("crates/gewu-gpui/src/lib.rs").read + "\nfn main() { shell::review::run(); }\n")
 File.write(src.join("shell.rs"), shell.read + "\n#[path = \"review.rs\"] pub(crate) mod review;\n")
 FileUtils.cp(driver.join("host.rs"), src.join("review.rs"))
 binary = target.join("debug/gewu-design-capture")

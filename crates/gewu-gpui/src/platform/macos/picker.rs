@@ -3,15 +3,14 @@ use std::path::{Path, PathBuf};
 
 use block2::RcBlock;
 use objc2::{
-    class, define_class, msg_send,
+    DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, ProtocolObject},
-    DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
     NSButton, NSControlStateValueOn, NSModalResponseOK, NSOpenPanel, NSOpenSavePanelDelegate,
 };
-use objc2_foundation::{ns_string, NSObject, NSObjectProtocol};
+use objc2_foundation::{NSObject, NSObjectProtocol, ns_string};
 
 struct Options {
     header: Retained<NSButton>,

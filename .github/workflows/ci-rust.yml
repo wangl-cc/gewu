@@ -6,7 +6,6 @@ on:
     paths:
       - 'crates/**'
       - 'tools/**'
-      - 'gpui/**'
       - 'assets/macos/**'
       - 'scripts/package-macos.sh'
       - 'Cargo.toml'
@@ -22,7 +21,6 @@ on:
     paths:
       - 'crates/**'
       - 'tools/**'
-      - 'gpui/**'
       - 'assets/macos/**'
       - 'scripts/package-macos.sh'
       - 'Cargo.toml'

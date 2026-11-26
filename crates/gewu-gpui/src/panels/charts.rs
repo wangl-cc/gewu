@@ -232,5 +232,4 @@ fn histogram_label(text: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "histogram_labels_tests.rs"]
 mod histogram_labels_tests;

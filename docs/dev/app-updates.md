@@ -1,6 +1,6 @@
 # macOS packaging and updates
 
-Local builds use an ad-hoc signature. Use the [development guide](../DEVELOPMENT.md#package-and-verify) to package one. Release builds use a single macOS code-signing layer: a persistent self-signed code-signing certificate by default, or an Apple Developer ID Application certificate with Apple notarization when configured. The application identifier is `cc.loongw.Gewu`.
+Local builds use an ad-hoc signature. Use the [development guide](../../DEVELOPMENT.md#package-and-verify) to package one. Release builds use a single macOS code-signing layer: a persistent self-signed code-signing certificate by default, or an Apple Developer ID Application certificate with Apple notarization when configured. The application identifier is `cc.loongw.Gewu`.
 
 ## Release configuration
 
@@ -43,10 +43,10 @@ A stable `vX.Y.Z` tag must match the application crate version. CI builds `gewu-
 
 ## Update authentication
 
-The application ships the [Rust helper](../tools/update/src/main.rs) at `Contents/Helpers/gewu-update`. It queries `update.json` and downloads the matching `Gewu-v<version>-macos-<arch>.zip` over HTTPS via `NSURLSession`, extracts it with `/usr/bin/ditto`, reads `Info.plist` and the running macOS version via Foundation APIs, checks 64-bit Mach-O architectures directly, and validates the staged bundle against the installed application's designated signing requirement via `Security.framework`. It rejects ad-hoc signed installations, checks `version`, `build`, and `minimum_macos`, and atomically exchanges the bundles in the installation directory. Installation requires write access beside the bundle; reopen Gewu to run the update.
+The application ships the [Rust helper](../../crates/gewu-update/src/main.rs) at `Contents/Helpers/gewu-update`. It queries `update.json` and downloads the matching `Gewu-v<version>-macos-<arch>.zip` over HTTPS via `NSURLSession`, extracts it with `/usr/bin/ditto`, reads `Info.plist` and the running macOS version via Foundation APIs, checks 64-bit Mach-O architectures directly, and validates the staged bundle against the installed application's designated signing requirement via `Security.framework`. It rejects ad-hoc signed installations, checks `version`, `build`, and `minimum_macos`, and atomically exchanges the bundles in the installation directory. Installation requires write access beside the bundle; reopen Gewu to run the update.
 
-When migrating later from a self-signed certificate to an Apple Developer ID certificate, publish a bridge release signed with the existing self-signed certificate whose `EXTRA_TRUSTED_REQUIREMENTS` in [security.rs](../tools/update/src/security.rs) includes the Apple Team requirement (`identifier "cc.loongw.Gewu" and anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`), then cut subsequent releases with the Developer ID certificate.
+When migrating later from a self-signed certificate to an Apple Developer ID certificate, publish a bridge release signed with the existing self-signed certificate whose `EXTRA_TRUSTED_REQUIREMENTS` in [security.rs](../../crates/gewu-update/src/security.rs) includes the Apple Team requirement (`identifier "cc.loongw.Gewu" and anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`), then cut subsequent releases with the Developer ID certificate.
 
 The Updates menu stores `automatic_update_checks` and `automatic_update_install` in `settings.json`, and `last_update_check` in `state.json`. Automatic checks run at most once every 24 hours after a successful check, and retry after one hour if a check fails while Gewu is running. Manual checks are available immediately. The app calls `gewu-update check APP` to find the available version and passes that version to `gewu-update install APP EXPECTED_VERSION`. An empty successful response means there is no compatible update. Installation prints the confirmed version only after the bundle exchange succeeds. A changed offer requires another check.
 
-Before shipping, exercise an update with the actual release identity and a clean installation. The [acceptance checklist](dev/native-acceptance.md) records those gates.
+Before shipping, exercise an update with the actual release identity and a clean installation. The [acceptance checklist](native-acceptance.md) records those gates.

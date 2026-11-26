@@ -1,6 +1,6 @@
 # Gewu 视觉设计规范
 
-本文档确立 Gewu 的视觉定位、排版间距与层级参数、固定语义颜色 Token 体系、控件状态矩阵、可选高对比度模式与非颜色提示规则，以及表格、查找、图表和浮层的专属细则。依据：[产品界面规格](../../spec/interface.md)、[查找与筛选规格](../../spec/search-and-filter.md) 与 [theme.rs](../../../gpui/src/theme.rs)。
+本文档确立 Gewu 的视觉定位、排版间距与层级参数、固定语义颜色 Token 体系、控件状态矩阵、可选高对比度模式与非颜色提示规则，以及表格、查找、图表和浮层的专属细则。依据：[产品界面规格](../../spec/interface.md)、[查找与筛选规格](../../spec/search-and-filter.md) 与 [theme.rs](../../../crates/gewu-gpui/src/theme.rs)。
 
 文档定位与范围说明：`docs/spec/` 只描述用户可见的功能与交互行为；本规范涵盖色值、Token、几何与控件状态等实现级约束，与产品交互规格配套使用。范围筛选上界显示方式（是否改开区间）与缺失值默认策略归属 [search-and-filter.md](../../spec/search-and-filter.md)，不在本规范内决定。
 
@@ -49,9 +49,9 @@ Gewu 不过分追求模仿系统原生控件的外观细节，但绝不能像十
 
 ## 三、语义颜色 Token 与 `Default` 默认主题色表
 
-- **强调色由主题固定，不跟随系统**：默认主题命名为 **`Default`**；移除 [platform.rs](../../../gpui/src/platform.rs) 中读取 `NSColor::controlAccentColor()` 的逻辑，`document_colors` 不再接收外部强调色参数，强调色固定为亮色 `#007AFF`、暗色 `#0A84FF`。
-- **前景色按角色成对写死，不在运行时计算**：每组实心填充色与其前景成对声明（`accent` / `accent_foreground`、`danger_fill` / `danger_fill_foreground`），组件只读取不计算；彻底移除 [theme.rs](../../../gpui/src/theme.rs) 中的 `contrasting_ink`。`Default` 主题中强调色与危险色的实心填充上一律使用纯白字、纯白勾；淡色叠底（选区、查找命中）和中性控件一律使用 `foreground`。
-- **不以对比度数值作为默认主题目标**：下表颜色基于 AppKit 语义色与桌面工具经验选定作为参考起点，最终以亮/暗实拍截图肉眼校准为准；全部颜色字面量仅允许出现在 [theme.rs](../../../gpui/src/theme.rs)（与主题单测）内。
+- **强调色由主题固定，不跟随系统**：默认主题命名为 **`Default`**；移除 [platform.rs](../../../crates/gewu-gpui/src/platform.rs) 中读取 `NSColor::controlAccentColor()` 的逻辑，`document_colors` 不再接收外部强调色参数，强调色固定为亮色 `#007AFF`、暗色 `#0A84FF`。
+- **前景色按角色成对写死，不在运行时计算**：每组实心填充色与其前景成对声明（`accent` / `accent_foreground`、`danger_fill` / `danger_fill_foreground`），组件只读取不计算；彻底移除 [theme.rs](../../../crates/gewu-gpui/src/theme.rs) 中的 `contrasting_ink`。`Default` 主题中强调色与危险色的实心填充上一律使用纯白字、纯白勾；淡色叠底（选区、查找命中）和中性控件一律使用 `foreground`。
+- **不以对比度数值作为默认主题目标**：下表颜色基于 AppKit 语义色与桌面工具经验选定作为参考起点，最终以亮/暗实拍截图肉眼校准为准；全部颜色字面量仅允许出现在 [theme.rs](../../../crates/gewu-gpui/src/theme.rs)（与主题单测）内。
 
 以下列出本轮先落地的实际使用的 **34 个语义颜色 Token**（`disabled_opacity` 归入第四节状态规则）：
 
@@ -92,7 +92,7 @@ Gewu 不过分追求模仿系统原生控件的外观细节，但绝不能像十
 | 图表数据 | `chart_grid` | `#000000@7%` | `#FFFFFF@8%` | 直方图与散点图参考网格线 |
 | 图表数据 | `bar_track` | `#000000@7%` | `#FFFFFF@10%` | `Common values` 100% 宽度圆角底轨 |
 
-框架兼容说明：在 [theme.rs](../../../gpui/src/theme.rs) 中将核心通用字段同步映射到 `gpui_kit::base::ColorTokens`（`background`、`surface`、`foreground`、`muted_foreground`、`border`、`primary`、`primary_foreground`、`secondary`、`destructive`、`ring`、`selection`），供内置基础组件消费；完整 34 项 `GewuPalette` 作为全局扩展供 Gewu 表格与面板直接读取。
+框架兼容说明：在 [theme.rs](../../../crates/gewu-gpui/src/theme.rs) 中将核心通用字段同步映射到 `gpui_kit::base::ColorTokens`（`background`、`surface`、`foreground`、`muted_foreground`、`border`、`primary`、`primary_foreground`、`secondary`、`destructive`、`ring`、`selection`），供内置基础组件消费；完整 34 项 `GewuPalette` 作为全局扩展供 Gewu 表格与面板直接读取。
 
 ---
 
@@ -117,7 +117,7 @@ Gewu 不过分追求模仿系统原生控件的外观细节，但绝不能像十
 
 ### 5.1 高对比度模式（可选，非默认）
 
-- **三档设置**：Preferences 中提供高对比度开关三档——**`跟随系统（默认）/ 关 / 开`**；当设为“跟随系统”时，在 [platform.rs](../../../gpui/src/platform.rs) 读取 macOS 系统的“提高对比度”（`NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast`）状态。
+- **三档设置**：Preferences 中提供高对比度开关三档——**`跟随系统（默认）/ 关 / 开`**；当设为“跟随系统”时，在 [platform.rs](../../../crates/gewu-gpui/src/platform.rs) 读取 macOS 系统的“提高对比度”（`NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast`）状态。
 - **实现架构**：高对比度模式是**同一套 `GewuPalette` Token 的另一组独立取值表**，组件渲染代码内部不写 `if high_contrast` 分支。开启后在色表中同步加深：`border`、`grid`、`elevated_border`、`muted_foreground`、`find_current_border`，并适当压深 `accent` 与 `danger_fill`。
 - **对比度测试归属**：`>= 4.5 : 1` 的 WCAG 对比度自动化断言**只针对高对比度模式运行**。
 
@@ -145,7 +145,7 @@ Gewu 不过分追求模仿系统原生控件的外观细节，但绝不能像十
 ### 6.2 查找高亮（单层设计 + 截断兜底 + 绘制层级）
 
 - **单层高亮规则**：仅对命中的文本子串铺 `find_span` 底色；**单元格整体不再铺底色，也不绘制底部通栏横线**。当前命中单元格将其子串加深一级为 `find_span_current`，并在单元格四周绘制 `1.5px` `find_current_border` 内框（文本维持原有 `foreground`，不另配刺眼高对比字色）。
-- **窄列截断兜底**：当某命中单元格的匹配子串全部落在列宽截断 `…` 之后（[find_style.rs](../../../gpui/src/table/find_style.rs) 可见区内无匹配切片）时，自动给末尾的 `…` 铺 `find_span`（当前命中时 `find_span_current`），避免截断命中在界面上静默隐身。
+- **窄列截断兜底**：当某命中单元格的匹配子串全部落在列宽截断 `…` 之后（[find_style.rs](../../../crates/gewu-gpui/src/table/find_style.rs) 可见区内无匹配切片）时，自动给末尾的 `…` 铺 `find_span`（当前命中时 `find_span_current`），避免截断命中在界面上静默隐身。
 - **重叠绘制层级（从底到顶）**：`选区底（selection）` → `命中子串（find_span / find_span_current）` → `当前命中框（find_current_border）` → `当前单元格框（focus_ring）`。
 - **验收标准**：200 万行大表快速滚动时命中清晰可读；`31b` 整列全命中时清爽透气，不糊成一整条黄色色带；多命中同屏时能一眼分辨当前命中项。
 
@@ -162,14 +162,14 @@ Gewu 不过分追求模仿系统原生控件的外观细节，但绝不能像十
 - **暗色右键菜单（修复 `dark/18`）**：上下文菜单容器统一采用 `elevated` + `elevated_border` + 柔和投影，菜单项行高收紧至 `24–26pt`。
 - **次级按钮全应用唯一化（修复 `19b`）**：`Visible columns` 顶部的 `Show matching` / `Hide matching` 与底部按钮统一使用标准 `button_secondary`，取消白底细边异形按钮。
 - **`Active filters` 筛选摘要规整（修复 `16b`）**：每条条件行左侧放置定位图标与列名，右侧将 `Clear` 按钮右对齐推至行尾；条件详情使用 `11pt` `muted_foreground` 紧贴列名下方对齐排列。
-- **`File Info` 顺手微调（低优先级，不强求）**：按 `12–16pt` 间距标尺适当收紧 [shell/info.rs](../../../gpui/src/shell/info.rs) 标签列与数值列之间的宽空白。
+- **`File Info` 顺手微调（低优先级，不强求）**：按 `12–16pt` 间距标尺适当收紧 [shell/info.rs](../../../crates/gewu-gpui/src/shell/info.rs) 标签列与数值列之间的宽空白。
 
 ---
 
 ## 七、自动化检查与验收清单
 
-- **源码颜色字面量静态检查**：执行 `grep` 确认除 [theme.rs](../../../gpui/src/theme.rs)（与 [theme_tests.rs](../../../gpui/src/theme_tests.rs)）外，整个 `gpui/src/` 不存在任何硬编码颜色值（`rgb(`、`rgba(`、`hsla(`、`white()`、`black()`、`0x...`）。
-- **主题单测重写（[theme_tests.rs](../../../gpui/src/theme_tests.rs)）**：
+- **源码颜色字面量静态检查**：执行 `grep` 确认除 [theme.rs](../../../crates/gewu-gpui/src/theme.rs)（与 [theme_tests.rs](../../../crates/gewu-gpui/src/theme_tests.rs)）外，整个 `crates/gewu-gpui/src/` 不存在任何硬编码颜色值（`rgb(`、`rgba(`、`hsla(`、`white()`、`black()`、`0x...`）。
+- **主题单测重写（[theme_tests.rs](../../../crates/gewu-gpui/src/theme_tests.rs)）**：
   - `Default` 默认主题**只测结构不变量**（不跑 `4.5 : 1` 断言）：暗色 `luminance(segment_thumb) > luminance(segment_track)`、`luminance(elevated) > luminance(surface) > luminance(canvas)`、`accent_foreground == white()`、`danger_fill_foreground == white()`、暗色 `danger_fill != danger_text`、`accent_hover` 保持不透明（`a == 1.0`）。
   - **高对比度模式**单独运行完整的阅读文本与控件 `>= 4.5 : 1` 对比度断言。
 - **完整验收截图清单**：

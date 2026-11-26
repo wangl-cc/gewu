@@ -19,10 +19,11 @@ impl FilePicker {
             let main =
                 objc2::MainThreadMarker::new().ok_or("The file picker needs the main thread.")?;
             let (sender, receiver) = async_channel::bounded(1);
-            let panel = gewu_macos::open_files(main, super::supports_header, move |choice| {
-                let _ = sender.try_send(choice);
-            })
-            .ok_or("macOS could not open the file picker.")?;
+            let panel =
+                crate::platform::macos::open_files(main, super::supports_header, move |choice| {
+                    let _ = sender.try_send(choice);
+                })
+                .ok_or("macOS could not open the file picker.")?;
             return Ok(Self {
                 panel: Some(panel),
                 _selection: Self::receive(

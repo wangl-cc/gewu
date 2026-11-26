@@ -1,4 +1,6 @@
 //! Native window defaults and persistent settings and state storage.
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 mod recent;
 pub(crate) mod storage;
 pub(crate) mod update;
@@ -59,7 +61,7 @@ fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
         theme::{GewuPalette, VisualCues},
     };
     #[cfg(target_os = "macos")]
-    let (system_contrast, differentiate) = gewu_macos::accessibility_display_options();
+    let (system_contrast, differentiate) = macos::accessibility_display_options();
     #[cfg(not(target_os = "macos"))]
     let (system_contrast, differentiate) = (false, false);
     let contrast = Preferences::get(cx).high_contrast.enabled(system_contrast);
@@ -79,13 +81,13 @@ fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
 #[cfg(target_os = "macos")]
 pub(crate) fn observe_display_options(cx: &mut App) {
     struct DisplayUpdates {
-        _observation: gewu_macos::DisplayObservation,
+        _observation: macos::DisplayObservation,
         _updates: Task<()>,
     }
     impl Global for DisplayUpdates {}
     // Each wake reads the latest system settings, so a pending wake covers further notifications.
     let (send, recv) = async_channel::bounded(1);
-    let observation = gewu_macos::DisplayObservation::new(move || {
+    let observation = macos::DisplayObservation::new(move || {
         let _ = send.try_send(());
     });
     let updates = cx.spawn(async move |cx| {

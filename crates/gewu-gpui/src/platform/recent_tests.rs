@@ -5,7 +5,7 @@ use super::*;
 fn persisted_at(state_path: &Path) -> RecentDocuments {
     let mut paths = storage::AppState::load_from(state_path).recent_files;
     paths.truncate(MAX_RECENT);
-    RecentDocuments::Persisted {
+    RecentDocuments {
         paths,
         state_path: Some(state_path.to_owned()),
         #[cfg(target_os = "macos")]

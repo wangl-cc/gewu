@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/gewu-app", "crates/gewu-core", "gpui", "gpui/macos", "tools/data-gen", "tools/update"]
+members = ["crates/gewu-app", "crates/gewu-core", "crates/gewu-gpui", "crates/gewu-update", "tools/data-gen"]
 
-default-members = ["gpui"]
+default-members = ["crates/gewu-gpui"]
 
 [workspace.package]
 version = "0.1.0"

@@ -47,7 +47,7 @@ For each immediate post-scroll frame the verifier renders the window's completed
 To sample process resources under the same workload, run the example through the macOS sampler. It records CPU time deltas for Gewu and WindowServer, mean and peak resident size in MiB, and per-process GPU busy time when the driver publishes a counter. Use at least five seconds per phase.
 
 ```sh
-python3 gpui/examples/scroll/resources.py target/aarch64-apple-darwin/release/examples/scroll sample.parquet 10 1280 800
+python3 crates/gewu-gpui/examples/scroll/resources.py target/aarch64-apple-darwin/release/examples/scroll sample.parquet 10 1280 800
 ```
 
-Use `--no-default-features` on the Cargo build command to repeat with the GPUI Pre backend. The [acceptance checklist](../docs/dev/native-acceptance.md) tracks machine-specific release measurements.
+Use `--no-default-features` on the Cargo build command to repeat with the GPUI Pre backend. The [acceptance checklist](../../docs/dev/native-acceptance.md) tracks machine-specific release measurements.
