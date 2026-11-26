@@ -8,10 +8,11 @@ use std::{
 use rustix::fs::{CWD, RenameFlags, renameat_with};
 use semver::Version;
 
-use crate::manifest::{Release, Result};
+use crate::manifest::{Release, Result, generate_keypair};
 
 const REPOSITORY: &str = "https://github.com/wangl-cc/gewu/releases";
-const IDENTIFIER: &str = "io.github.wangl-cc.gewu";
+const IDENTIFIER: &str = "cc.loongw.Gewu";
+const PUBLIC_KEY: &str = "GewuUpdatePublicKey";
 #[cfg(target_arch = "aarch64")]
 const ARCH: &str = "arm64";
 #[cfg(target_arch = "x86_64")]
@@ -68,27 +69,43 @@ fn download(url: &str, max_bytes: u64) -> Command {
     cmd
 }
 
-fn os_version() -> Result<Version> {
-    let mut value = text(Command::new("/usr/bin/sw_vers").arg("-productVersion"))?;
+fn parse_os_version(mut value: String) -> Result<Version> {
     while value.matches('.').count() < 2 {
         value.push_str(".0");
     }
     Ok(Version::parse(&value)?)
 }
 
+fn os_version() -> Result<Version> {
+    parse_os_version(text(
+        Command::new("/usr/bin/sw_vers").arg("-productVersion"),
+    )?)
+}
+
 pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
-    let action = args.next();
-    let path = args
-        .next()
-        .ok_or("Usage: gewu-update check APP or gewu-update install APP EXPECTED_VERSION")?;
+    let Some(action) = args.next() else {
+        return Err("Usage: gewu-update <check|install|sign|verify|keygen> ...".into());
+    };
+    if action.to_str() == Some("keygen") {
+        if args.next().is_some() {
+            return Err("Unexpected keygen arguments.".into());
+        }
+        let (private, public) = generate_keypair()?;
+        println!("UPDATE_PUBLIC_KEY={public}");
+        println!("UPDATE_PRIVATE_KEY={private}");
+        return Ok(());
+    }
+    let path = args.next().ok_or(
+        "Usage: gewu-update check APP | install APP EXPECTED_VERSION | sign APP ARCHIVE OUTPUT_JSON | verify APP MANIFEST ARCHIVE",
+    )?;
     let app = fs::canonicalize(path)?;
-    if action.as_deref().and_then(|s| s.to_str()) == Some("verify") {
+    if action.to_str() == Some("verify") {
         let manifest = args.next().ok_or("Expected the release manifest path.")?;
         let archive = args.next().ok_or("Expected the release archive path.")?;
         if args.next().is_some() {
             return Err("Unexpected verification arguments.".into());
         }
-        let release = Release::verify(&fs::read(manifest)?, &plist(&app, "SUPublicEDKey")?, ARCH)?;
+        let release = Release::verify(&fs::read(manifest)?, &plist(&app, PUBLIC_KEY)?, ARCH)?;
         if release.version != Version::parse(&plist(&app, "CFBundleShortVersionString")?)?
             || release.build != plist(&app, "CFBundleVersion")?.parse::<u64>()?
         {
@@ -96,7 +113,30 @@ pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
         }
         return release.verify_archive(File::open(archive)?);
     }
-    let expected = match action.as_deref().and_then(|s| s.to_str()) {
+    if action.to_str() == Some("sign") {
+        let archive = args.next().ok_or("Expected the release archive path.")?;
+        let output_path = args.next().ok_or("Expected the output manifest path.")?;
+        if args.next().is_some() {
+            return Err("Unexpected sign arguments.".into());
+        }
+        output(
+            Command::new("/usr/bin/lipo")
+                .arg(app.join("Contents/MacOS/Gewu"))
+                .args(["-verify_arch", ARCH]),
+        )?;
+        let public_key = plist(&app, PUBLIC_KEY)?;
+        let version = Version::parse(&plist(&app, "CFBundleShortVersionString")?)?;
+        let build = plist(&app, "CFBundleVersion")?.parse::<u64>()?;
+        let minimum_macos = parse_os_version(plist(&app, "LSMinimumSystemVersion")?)?;
+        let private_key = std::io::read_to_string(std::io::stdin().lock())?;
+        let release =
+            Release::from_archive(version, build, ARCH, minimum_macos, File::open(&archive)?)?;
+        let manifest = release.sign(&private_key, &public_key)?;
+        Release::verify(&manifest, &public_key, ARCH)?;
+        fs::write(output_path, &manifest)?;
+        return Ok(());
+    }
+    let expected = match action.to_str() {
         Some("check") => None,
         Some("install") => {
             let version = args
@@ -106,7 +146,7 @@ pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
                 version.to_str().ok_or("Invalid expected version.")?,
             )?)
         }
-        _ => return Err("Expected check or install.".into()),
+        _ => return Err("Expected check, install, sign, verify, or keygen.".into()),
     };
     if args.next().is_some() {
         return Err("Unexpected update arguments.".into());
@@ -129,7 +169,7 @@ pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
         )?;
     }
 
-    let key = plist(&app, "SUPublicEDKey")?;
+    let key = plist(&app, PUBLIC_KEY)?;
     let version = Version::parse(&plist(&app, "CFBundleShortVersionString")?)?;
     let build = plist(&app, "CFBundleVersion")?.parse()?;
     let endpoint = format!("{REPOSITORY}/latest/download/update-{ARCH}.json");
@@ -174,7 +214,7 @@ fn check_candidate(installed: &Path, candidate: &Path, release: &Release, key: &
     if plist(candidate, "CFBundleIdentifier")? != IDENTIFIER
         || plist(candidate, "CFBundleShortVersionString")? != release.version.to_string()
         || plist(candidate, "CFBundleVersion")? != release.build.to_string()
-        || plist(candidate, "SUPublicEDKey")? != key
+        || plist(candidate, PUBLIC_KEY)? != key
         || !candidate.join("Contents/Helpers/gewu-update").is_file()
     {
         return Err("The signed application metadata does not match the expected release.".into());

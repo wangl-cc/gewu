@@ -17,8 +17,8 @@ gpui_kit::actions!(gewu, [
     ToggleAutomaticUpdates
 ]);
 
-const AUTO_CHECK: &str = "SUEnableAutomaticChecks";
-const AUTO_INSTALL: &str = "SUAutomaticallyUpdate";
+const AUTO_CHECK: &str = "GewuUpdateAutomaticChecks";
+const AUTO_INSTALL: &str = "GewuUpdateAutomaticInstall";
 const CHECK_INTERVAL: f64 = 24. * 60. * 60.;
 const RETRY_INTERVAL: f64 = 60. * 60.;
 
@@ -333,14 +333,8 @@ fn set_option(key: &str, value: bool) {
 }
 #[cfg(target_os = "macos")]
 fn last_check() -> f64 {
-    use objc2_foundation::{NSDate, NSString, NSUserDefaults};
-    let prefs = NSUserDefaults::standardUserDefaults();
-    let last = prefs.doubleForKey(&NSString::from_str("GewuUpdateLastCheck"));
-    let sparkle = prefs
-        .objectForKey(&NSString::from_str("SULastCheckTime"))
-        .and_then(|value| value.downcast::<NSDate>().ok())
-        .map_or(0., |date| date.timeIntervalSince1970());
-    last.max(sparkle)
+    use objc2_foundation::{NSString, NSUserDefaults};
+    NSUserDefaults::standardUserDefaults().doubleForKey(&NSString::from_str("GewuUpdateLastCheck"))
 }
 #[cfg(target_os = "macos")]
 fn remember_check(now: f64) {

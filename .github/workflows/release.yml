@@ -34,7 +34,7 @@ jobs:
             jq -er '.packages[] | select(.name == "gewu-gpui") | .version')
           scripts/package-macos.sh target/release/gewu-gpui "$version" "$GITHUB_RUN_NUMBER" build/native
           app=build/native/Gewu.app
-          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = io.github.wangl-cc.gewu
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = cc.loongw.Gewu
           test -s "$app/Contents/Resources/Gewu.icns"
           test -s "$app/Contents/Resources/Assets.car"
 
@@ -47,11 +47,11 @@ jobs:
         uses: actions/checkout@v7
       - name: Check update signing configuration
         env:
-          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
         run: |
-          if [[ -z "$SPARKLE_PUBLIC_KEY" || -z "$SPARKLE_PRIVATE_KEY" ]]; then
-            echo '::error::Configure SPARKLE_PUBLIC_KEY (variable) and SPARKLE_PRIVATE_KEY (secret) before releasing.'
+          if [[ -z "$UPDATE_PUBLIC_KEY" || -z "$UPDATE_PRIVATE_KEY" ]]; then
+            echo '::error::Configure UPDATE_PUBLIC_KEY (variable) and UPDATE_PRIVATE_KEY (secret) before releasing.'
             exit 1
           fi
       - name: Install stable Rust toolchain
@@ -86,7 +86,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       RELEASE_TAG: ${{ github.ref_name }}
       BUILD_NUMBER: ${{ github.run_number }}
-      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -142,43 +142,23 @@ jobs:
           spctl --assess --type execute "$app"
           mkdir -p build/updates
           ditto -c -k --sequesterRsrc --keepParent "$app" "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
-      - name: Get pinned update signing tools
-        run: |
-          release=https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz
-          curl --fail --location --proto '=https' --proto-redir '=https' --output "$RUNNER_TEMP/Sparkle.tar.xz" "$release"
-          echo "1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27  $RUNNER_TEMP/Sparkle.tar.xz" | shasum -a 256 -c -
-          mkdir -p "$RUNNER_TEMP/gewu-signing-tools"
-          tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/gewu-signing-tools"
-      - name: Sign update and generate appcast
+      - name: Sign update manifest
         env:
           ARCH: ${{ matrix.arch }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
         run: |
-          printf '%s' "$SPARKLE_PRIVATE_KEY" |
-            "$RUNNER_TEMP/gewu-signing-tools/bin/generate_appcast" \
-              --ed-key-file - --maximum-deltas 0 \
-              --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
-              --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
-              --link "https://github.com/$GITHUB_REPOSITORY/releases" \
-              -o "build/updates/appcast-$ARCH.xml" build/updates
-          signature="$(xmllint --xpath 'string(/rss/channel/item/enclosure/@*[local-name()="edSignature"])' \
-            "build/updates/appcast-$ARCH.xml")"
-          if [[ -z "$signature" ]]; then
-            echo '::error::The appcast has no signed update. Check that the public and private keys match.'
-            exit 1
-          fi
-          printf '%s' "$SPARKLE_PRIVATE_KEY" |
-            "$RUNNER_TEMP/gewu-signing-tools/bin/sign_update" \
-              --ed-key-file - --verify "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip" "$signature"
-          scripts/sign-native-update.sh "$RUNNER_TEMP/gewu-signing-tools/bin/sign_update" \
-            build/native/Gewu.app "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip" "$ARCH" "build/updates/update-$ARCH.json"
+          app=build/native/Gewu.app
+          archive="build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+          manifest="build/updates/update-$ARCH.json"
+          printf '%s' "$UPDATE_PRIVATE_KEY" |
+            "$app/Contents/Helpers/gewu-update" sign "$app" "$archive" "$manifest"
+          "$app/Contents/Helpers/gewu-update" verify "$app" "$manifest" "$archive"
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.arch }}
           path: |
             build/updates/Gewu-*.zip
-            build/updates/appcast-*.xml
             build/updates/update-*.json
           if-no-files-found: error
           retention-days: 14
@@ -205,8 +185,6 @@ jobs:
         run: |
           test -s "Gewu-$RELEASE_TAG-macos-arm64.zip"
           test -s "Gewu-$RELEASE_TAG-macos-x86_64.zip"
-          test -s appcast-arm64.xml
-          test -s appcast-x86_64.xml
           test -s update-arm64.json
           test -s update-x86_64.json
       - name: Create or reuse draft release
@@ -224,6 +202,6 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" --clobber \
             "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" \
-            appcast-arm64.xml appcast-x86_64.xml update-arm64.json update-x86_64.json
+            update-arm64.json update-x86_64.json
       - name: Publish release
         run: gh release edit "$RELEASE_TAG" --draft=false

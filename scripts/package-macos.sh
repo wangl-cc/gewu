@@ -42,7 +42,7 @@ for key in CFBundleIconFile CFBundleIconName; do
 done
 if [[ $# -eq 5 ]]; then
   : "${SIGNING_IDENTITY:?Supply the Developer ID Application identity}"
-  : "${SPARKLE_PUBLIC_KEY:?Supply the existing Ed25519 release public key}"
+  : "${UPDATE_PUBLIC_KEY:?Supply the base64 Ed25519 release public key}"
   if [[ "$SIGNING_IDENTITY" == "-" ]]; then
     echo "A release bundle requires a Developer ID Application identity." >&2
     exit 2
@@ -52,9 +52,7 @@ if [[ $# -eq 5 ]]; then
   lipo "$5" -verify_arch "$arch"
   mkdir -p "$app/Contents/Helpers"
   install -m 755 "$5" "$app/Contents/Helpers/gewu-update"
-  plutil -insert SUPublicEDKey -string "$SPARKLE_PUBLIC_KEY" "$plist"
-  plutil -insert SUFeedURL -string "https://github.com/wangl-cc/gewu/releases/latest/download/appcast-$arch.xml" "$plist"
-  plutil -insert SUVerifyUpdateBeforeExtraction -bool true "$plist"
+  plutil -insert GewuUpdatePublicKey -string "$UPDATE_PUBLIC_KEY" "$plist"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$app/Contents/Helpers/gewu-update"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$app"
 else

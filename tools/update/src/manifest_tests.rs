@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use ring::signature::{Ed25519KeyPair, KeyPair as _};
+use ring::signature::Ed25519KeyPair;
 use serde_json::json;
 
 use super::*;
@@ -58,4 +58,41 @@ fn signed_manifest_binds_architecture_version_os_and_archive() {
     let mut tampered = payload;
     tampered.push(b' ');
     assert!(Release::verify(&envelope(&tampered), &public, "arm64").is_err());
+}
+
+#[test]
+fn generated_keypair_signs_and_verifies_archive_manifest_round_trip() {
+    let (private, public) = generate_keypair().unwrap();
+    let (other_private, _) = generate_keypair().unwrap();
+    let archive = b"gewu-release-archive";
+    let release = Release::from_archive(
+        Version::new(1, 2, 3),
+        43,
+        "arm64",
+        Version::new(15, 0, 0),
+        Cursor::new(archive),
+    )
+    .unwrap();
+    let manifest = release.sign(&private, &public).unwrap();
+    let verified = Release::verify(&manifest, &public, "arm64").unwrap();
+    assert_eq!(verified.version, Version::new(1, 2, 3));
+    assert_eq!(verified.build, 43);
+    assert!(verified.verify_archive(Cursor::new(archive)).is_ok());
+    assert!(
+        verified
+            .verify_archive(Cursor::new(b"gewu-release-archivf"))
+            .is_err()
+    );
+    assert!(release.sign(&other_private, &public).is_err());
+    assert!(release.sign(&STANDARD.encode(b"short"), &public).is_err());
+    assert!(
+        Release::from_archive(
+            Version::new(1, 2, 3),
+            0,
+            "arm64",
+            Version::new(15, 0, 0),
+            Cursor::new(archive),
+        )
+        .is_err()
+    );
 }
