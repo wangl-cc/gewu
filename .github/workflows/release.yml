@@ -45,13 +45,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-      - name: Check update signing configuration
+      - name: Check signing configuration
         env:
-          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
-          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
+          SIGNING_IDENTITY: ${{ vars.SIGNING_IDENTITY }}
+          SIGNING_CERTIFICATE: ${{ secrets.SIGNING_CERTIFICATE }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          if [[ -z "$UPDATE_PUBLIC_KEY" || -z "$UPDATE_PRIVATE_KEY" ]]; then
-            echo '::error::Configure UPDATE_PUBLIC_KEY (variable) and UPDATE_PRIVATE_KEY (secret) before releasing.'
+          if [[ -z "$SIGNING_IDENTITY" || -z "$SIGNING_CERTIFICATE" || -z "$SIGNING_CERTIFICATE_PASSWORD" ]]; then
+            echo '::error::Configure SIGNING_IDENTITY (variable), SIGNING_CERTIFICATE, and SIGNING_CERTIFICATE_PASSWORD (secrets) before releasing.'
             exit 1
           fi
       - name: Install stable Rust toolchain
@@ -86,7 +87,6 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       RELEASE_TAG: ${{ github.ref_name }}
       BUILD_NUMBER: ${{ github.run_number }}
-      UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -108,28 +108,28 @@ jobs:
           targets: ${{ matrix.rust-target }}
       - name: Configure Rust cache
         uses: Swatinem/rust-cache@v2
-      - name: Import Developer ID certificate
+      - name: Import code signing certificate
         uses: Apple-Actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c # v7.2.0
         with:
-          p12-file-base64: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
-          p12-password: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ secrets.SIGNING_CERTIFICATE }}
+          p12-password: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
       - name: Build and sign native bundle
         env:
-          SIGNING_IDENTITY: ${{ vars.DEVELOPER_ID_APPLICATION }}
+          SIGNING_IDENTITY: ${{ vars.SIGNING_IDENTITY }}
           ARCH: ${{ matrix.arch }}
         run: |
-          : "${SIGNING_IDENTITY:?Configure DEVELOPER_ID_APPLICATION}"
+          : "${SIGNING_IDENTITY:?Configure SIGNING_IDENTITY}"
           cargo build --locked --release -p gewu-gpui -p gewu-update
           binaries="target/$CARGO_BUILD_TARGET/release"
           scripts/package-macos.sh "$binaries/gewu-gpui" "${RELEASE_TAG#v}" "$BUILD_NUMBER" build/native "$binaries/gewu-update"
           lipo build/native/Gewu.app/Contents/MacOS/Gewu -verify_arch "$ARCH"
           lipo build/native/Gewu.app/Contents/Helpers/gewu-update -verify_arch "$ARCH"
       - name: Notarize and staple app
+        if: ${{ vars.APPLE_TEAM_ID != '' }}
         env:
           APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
-          ARCH: ${{ matrix.arch }}
         run: |
           app=build/native/Gewu.app
           ditto -c -k --sequesterRsrc --keepParent "$app" build/notarization.zip
@@ -138,28 +138,32 @@ jobs:
           jq -e '.status == "Accepted"' build/notary-result.json
           xcrun stapler staple "$app"
           xcrun stapler validate "$app"
-          codesign --verify --deep --strict "$app"
           spctl --assess --type execute "$app"
-          mkdir -p build/updates
-          ditto -c -k --sequesterRsrc --keepParent "$app" "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
-      - name: Sign update manifest
+      - name: Package release archive
         env:
           ARCH: ${{ matrix.arch }}
-          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
         run: |
           app=build/native/Gewu.app
-          archive="build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
-          manifest="build/updates/update-$ARCH.json"
-          printf '%s' "$UPDATE_PRIVATE_KEY" |
-            "$app/Contents/Helpers/gewu-update" sign "$app" "$archive" "$manifest"
-          "$app/Contents/Helpers/gewu-update" verify "$app" "$manifest" "$archive"
+          codesign --verify --deep --strict "$app"
+          mkdir -p build/updates
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/updates/Gewu-$RELEASE_TAG-macos-$ARCH.zip"
+      - name: Generate update metadata
+        if: matrix.arch == 'arm64'
+        run: |
+          plist=build/native/Gewu.app/Contents/Info.plist
+          version=$(plutil -extract CFBundleShortVersionString raw "$plist")
+          build=$(plutil -extract CFBundleVersion raw "$plist")
+          minimum=$(plutil -extract LSMinimumSystemVersion raw "$plist")
+          while [[ "$minimum" != *.*.* ]]; do minimum=$minimum.0; done
+          jq -n --arg version "$version" --argjson build "$build" --arg minimum "$minimum" \
+            '{version: $version, build: $build, minimum_macos: $minimum}' > build/updates/update.json
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.arch }}
           path: |
             build/updates/Gewu-*.zip
-            build/updates/update-*.json
+            build/updates/update*.json
           if-no-files-found: error
           retention-days: 14
 
@@ -185,8 +189,7 @@ jobs:
         run: |
           test -s "Gewu-$RELEASE_TAG-macos-arm64.zip"
           test -s "Gewu-$RELEASE_TAG-macos-x86_64.zip"
-          test -s update-arm64.json
-          test -s update-x86_64.json
+          test -s update.json
       - name: Create or reuse draft release
         run: |
           draft="$(gh api --paginate "repos/$GH_REPO/releases" \
@@ -202,6 +205,6 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" --clobber \
             "Gewu-$RELEASE_TAG-macos-arm64.zip" "Gewu-$RELEASE_TAG-macos-x86_64.zip" \
-            update-arm64.json update-x86_64.json
+            update.json
       - name: Publish release
         run: gh release edit "$RELEASE_TAG" --draft=false

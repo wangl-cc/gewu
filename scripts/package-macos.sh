@@ -41,10 +41,9 @@ for key in CFBundleIconFile CFBundleIconName; do
   plutil -insert "$key" -string "$(plutil -extract "$key" raw "$staging/icons.plist")" "$plist"
 done
 if [[ $# -eq 5 ]]; then
-  : "${SIGNING_IDENTITY:?Supply the Developer ID Application identity}"
-  : "${UPDATE_PUBLIC_KEY:?Supply the base64 Ed25519 release public key}"
+  : "${SIGNING_IDENTITY:?Supply the code signing identity}"
   if [[ "$SIGNING_IDENTITY" == "-" ]]; then
-    echo "A release bundle requires a Developer ID Application identity." >&2
+    echo "A release bundle requires a persistent signing identity." >&2
     exit 2
   fi
   arch=$(lipo -archs "$binary")
@@ -52,9 +51,12 @@ if [[ $# -eq 5 ]]; then
   lipo "$5" -verify_arch "$arch"
   mkdir -p "$app/Contents/Helpers"
   install -m 755 "$5" "$app/Contents/Helpers/gewu-update"
-  plutil -insert GewuUpdatePublicKey -string "$UPDATE_PUBLIC_KEY" "$plist"
-  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$app/Contents/Helpers/gewu-update"
-  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$app"
+  timestamp=--timestamp=none
+  if [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
+    timestamp=--timestamp
+  fi
+  codesign --force --options runtime "$timestamp" --sign "$SIGNING_IDENTITY" "$app/Contents/Helpers/gewu-update"
+  codesign --force --options runtime "$timestamp" --sign "$SIGNING_IDENTITY" "$app"
 else
   codesign --force --sign - "$app"
 fi

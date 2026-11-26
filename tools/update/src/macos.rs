@@ -3,140 +3,95 @@ use std::{
     fs::{self, File},
     path::Path,
     process::Command,
+    ptr,
 };
 
+use objc2::runtime::AnyObject;
+use objc2_foundation::{
+    NSData, NSDictionary, NSProcessInfo, NSPropertyListMutabilityOptions,
+    NSPropertyListSerialization, NSString,
+};
 use rustix::fs::{CWD, RenameFlags, renameat_with};
 use semver::Version;
 
-use crate::manifest::{Release, Result, generate_keypair};
+use crate::{
+    http, macho,
+    release::{Release, Result, parse_macos_version},
+    security,
+};
 
 const REPOSITORY: &str = "https://github.com/wangl-cc/gewu/releases";
 const IDENTIFIER: &str = "cc.loongw.Gewu";
-const PUBLIC_KEY: &str = "GewuUpdatePublicKey";
+const ARCHIVE_LIMIT: u64 = 512 * 1024 * 1024;
 #[cfg(target_arch = "aarch64")]
 const ARCH: &str = "arm64";
 #[cfg(target_arch = "x86_64")]
 const ARCH: &str = "x86_64";
 
-fn output(command: &mut Command) -> Result<Vec<u8>> {
-    let result = command.output()?;
-    if !result.status.success() {
-        let details = String::from_utf8_lossy(&result.stderr);
-        return Err(format!(
-            "{} failed ({}): {}",
-            command.get_program().to_string_lossy(),
-            result.status,
-            details.trim()
+pub(crate) struct BundleInfo {
+    pub identifier: String,
+    pub version: Version,
+    pub build: u64,
+    pub minimum_macos: Version,
+}
+
+#[expect(
+    unsafe_code,
+    reason = "parses Info.plist via Foundation NSPropertyListSerialization"
+)]
+fn parse_info_plist(bytes: &[u8]) -> Result<BundleInfo> {
+    let data = NSData::with_bytes(bytes);
+    // SAFETY: `data` is a valid immutable `NSData`, and passing null for format out-param is
+    // documented.
+    let object = unsafe {
+        NSPropertyListSerialization::propertyListWithData_options_format_error(
+            &data,
+            NSPropertyListMutabilityOptions::Immutable,
+            ptr::null_mut(),
         )
-        .into());
     }
-    Ok(result.stdout)
+    .map_err(|err| err.localizedDescription().to_string())?;
+    let dict = object
+        .downcast_ref::<NSDictionary>()
+        .ok_or("Info.plist root is not a dictionary.")?;
+    let string = |key: &str| -> Result<String> {
+        let key: &AnyObject = &NSString::from_str(key);
+        let value = dict
+            .objectForKey(key)
+            .ok_or("Missing required Info.plist key.")?;
+        value
+            .downcast_ref::<NSString>()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Info.plist value is not a string.".into())
+    };
+    Ok(BundleInfo {
+        identifier: string("CFBundleIdentifier")?,
+        version: Version::parse(&string("CFBundleShortVersionString")?)?,
+        build: string("CFBundleVersion")?.parse()?,
+        minimum_macos: parse_macos_version(&string("LSMinimumSystemVersion")?)?,
+    })
 }
 
-fn text(command: &mut Command) -> Result<String> {
-    Ok(String::from_utf8(output(command)?)?.trim().to_owned())
-}
-
-fn plist(app: &Path, key: &str) -> Result<String> {
-    text(
-        Command::new("/usr/bin/plutil")
-            .args(["-extract", key, "raw", "-o", "-", "--"])
-            .arg(app.join("Contents/Info.plist")),
-    )
-}
-
-fn download(url: &str, max_bytes: u64) -> Command {
-    let mut cmd = Command::new("/usr/bin/curl");
-    cmd.args([
-        "--disable",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--location",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "--connect-timeout",
-        "20",
-        "--max-time",
-        "300",
-        "--max-filesize",
-    ])
-    .arg(max_bytes.to_string())
-    .arg("--url")
-    .arg(url);
-    cmd
-}
-
-fn parse_os_version(mut value: String) -> Result<Version> {
-    while value.matches('.').count() < 2 {
-        value.push_str(".0");
-    }
-    Ok(Version::parse(&value)?)
+fn read_info_plist(app: &Path) -> Result<BundleInfo> {
+    let bytes = fs::read(app.join("Contents/Info.plist"))?;
+    parse_info_plist(&bytes)
 }
 
 fn os_version() -> Result<Version> {
-    parse_os_version(text(
-        Command::new("/usr/bin/sw_vers").arg("-productVersion"),
-    )?)
+    let version = NSProcessInfo::processInfo().operatingSystemVersion();
+    Ok(Version::new(
+        u64::try_from(version.majorVersion)?,
+        u64::try_from(version.minorVersion)?,
+        u64::try_from(version.patchVersion)?,
+    ))
 }
 
 pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
-    let Some(action) = args.next() else {
-        return Err("Usage: gewu-update <check|install|sign|verify|keygen> ...".into());
-    };
-    if action.to_str() == Some("keygen") {
-        if args.next().is_some() {
-            return Err("Unexpected keygen arguments.".into());
-        }
-        let (private, public) = generate_keypair()?;
-        println!("UPDATE_PUBLIC_KEY={public}");
-        println!("UPDATE_PRIVATE_KEY={private}");
-        return Ok(());
-    }
-    let path = args.next().ok_or(
-        "Usage: gewu-update check APP | install APP EXPECTED_VERSION | sign APP ARCHIVE OUTPUT_JSON | verify APP MANIFEST ARCHIVE",
-    )?;
-    let app = fs::canonicalize(path)?;
-    if action.to_str() == Some("verify") {
-        let manifest = args.next().ok_or("Expected the release manifest path.")?;
-        let archive = args.next().ok_or("Expected the release archive path.")?;
-        if args.next().is_some() {
-            return Err("Unexpected verification arguments.".into());
-        }
-        let release = Release::verify(&fs::read(manifest)?, &plist(&app, PUBLIC_KEY)?, ARCH)?;
-        if release.version != Version::parse(&plist(&app, "CFBundleShortVersionString")?)?
-            || release.build != plist(&app, "CFBundleVersion")?.parse::<u64>()?
-        {
-            return Err("Signed metadata and bundle versions differ.".into());
-        }
-        return release.verify_archive(File::open(archive)?);
-    }
-    if action.to_str() == Some("sign") {
-        let archive = args.next().ok_or("Expected the release archive path.")?;
-        let output_path = args.next().ok_or("Expected the output manifest path.")?;
-        if args.next().is_some() {
-            return Err("Unexpected sign arguments.".into());
-        }
-        output(
-            Command::new("/usr/bin/lipo")
-                .arg(app.join("Contents/MacOS/Gewu"))
-                .args(["-verify_arch", ARCH]),
-        )?;
-        let public_key = plist(&app, PUBLIC_KEY)?;
-        let version = Version::parse(&plist(&app, "CFBundleShortVersionString")?)?;
-        let build = plist(&app, "CFBundleVersion")?.parse::<u64>()?;
-        let minimum_macos = parse_os_version(plist(&app, "LSMinimumSystemVersion")?)?;
-        let private_key = std::io::read_to_string(std::io::stdin().lock())?;
-        let release =
-            Release::from_archive(version, build, ARCH, minimum_macos, File::open(&archive)?)?;
-        let manifest = release.sign(&private_key, &public_key)?;
-        Release::verify(&manifest, &public_key, ARCH)?;
-        fs::write(output_path, &manifest)?;
-        return Ok(());
-    }
-    let expected = match action.to_str() {
+    let action = args.next();
+    let path = args
+        .next()
+        .ok_or("Usage: gewu-update check APP or gewu-update install APP EXPECTED_VERSION")?;
+    let expected = match action.as_deref().and_then(|s| s.to_str()) {
         Some("check") => None,
         Some("install") => {
             let version = args
@@ -146,14 +101,16 @@ pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
                 version.to_str().ok_or("Invalid expected version.")?,
             )?)
         }
-        _ => return Err("Expected check, install, sign, verify, or keygen.".into()),
+        _ => return Err("Expected check or install.".into()),
     };
     if args.next().is_some() {
         return Err("Unexpected update arguments.".into());
     }
+    let app = fs::canonicalize(path)?;
+    let info = read_info_plist(&app)?;
     let helper = app.join("Contents/Helpers/gewu-update");
     if fs::canonicalize(helper)? != fs::canonicalize(std::env::current_exe()?)?
-        || plist(&app, "CFBundleIdentifier")? != IDENTIFIER
+        || info.identifier != IDENTIFIER
     {
         return Err("Run the update helper from the Gewu bundle being updated.".into());
     }
@@ -169,21 +126,19 @@ pub(super) fn run(mut args: impl Iterator<Item = OsString>) -> Result<()> {
         )?;
     }
 
-    let key = plist(&app, PUBLIC_KEY)?;
-    let version = Version::parse(&plist(&app, "CFBundleShortVersionString")?)?;
-    let build = plist(&app, "CFBundleVersion")?.parse()?;
-    let endpoint = format!("{REPOSITORY}/latest/download/update-{ARCH}.json");
-    let release = Release::verify(&output(&mut download(&endpoint, 16 * 1024))?, &key, ARCH)?;
-    if release.available_for(&version, build, &os_version()?, expected.as_ref())? {
+    let endpoint = format!("{REPOSITORY}/latest/download/update.json");
+    let release = Release::parse(&http::get_bytes(&endpoint, 16 * 1024)?)?;
+    let os = os_version()?;
+    if release.available_for(&info.version, info.build, &os, expected.as_ref())? {
         if expected.is_some() {
-            replace(&app, &release, &key)?;
+            replace(&app, &release, &os)?;
         }
         println!("{}", release.version);
     }
     Ok(())
 }
 
-fn replace(app: &Path, release: &Release, key: &str) -> Result<()> {
+fn replace(app: &Path, release: &Release, os: &Version) -> Result<()> {
     let parent = app
         .parent()
         .ok_or("The application has no enclosing directory.")?;
@@ -194,56 +149,50 @@ fn replace(app: &Path, release: &Release, key: &str) -> Result<()> {
         "{REPOSITORY}/download/v{0}/Gewu-v{0}-macos-{ARCH}.zip",
         release.version
     );
-    output(download(&url, release.length).arg("--output").arg(&archive))?;
-    release.verify_archive(File::open(&archive)?)?;
+    http::download_to_file(&url, &archive, ARCHIVE_LIMIT)?;
     let expanded = staging.path().join("expanded");
-    output(
-        Command::new("/usr/bin/ditto")
-            .args(["-x", "-k"])
-            .arg(&archive)
-            .arg(&expanded),
-    )?;
+    let ditto = Command::new("/usr/bin/ditto")
+        .args(["-x", "-k"])
+        .arg(&archive)
+        .arg(&expanded)
+        .output()?;
+    if !ditto.status.success() {
+        let details = String::from_utf8_lossy(&ditto.stderr);
+        return Err(format!(
+            "/usr/bin/ditto failed ({}): {}",
+            ditto.status,
+            details.trim()
+        )
+        .into());
+    }
     let candidate = expanded.join("Gewu.app");
-    check_candidate(app, &candidate, release, key)?;
+    check_candidate(app, &candidate, release, os)?;
     // Atomic exchange preserves a complete installed bundle even if the helper is interrupted.
     renameat_with(CWD, candidate, CWD, app, RenameFlags::EXCHANGE)?;
     Ok(())
 }
 
-fn check_candidate(installed: &Path, candidate: &Path, release: &Release, key: &str) -> Result<()> {
-    if plist(candidate, "CFBundleIdentifier")? != IDENTIFIER
-        || plist(candidate, "CFBundleShortVersionString")? != release.version.to_string()
-        || plist(candidate, "CFBundleVersion")? != release.build.to_string()
-        || plist(candidate, PUBLIC_KEY)? != key
+fn check_candidate(
+    installed: &Path,
+    candidate: &Path,
+    release: &Release,
+    os: &Version,
+) -> Result<()> {
+    let info = read_info_plist(candidate)?;
+    if info.identifier != IDENTIFIER
+        || info.version != release.version
+        || info.build != release.build
+        || &info.minimum_macos > os
         || !candidate.join("Contents/Helpers/gewu-update").is_file()
     {
-        return Err("The signed application metadata does not match the expected release.".into());
+        return Err("The staged application metadata does not match the expected release.".into());
     }
-    let requirement = text(
-        Command::new("/usr/bin/codesign")
-            .args(["-d", "-r-"])
-            .arg(installed),
-    )?;
-    let requirement = requirement
-        .strip_prefix("designated => ")
-        .ok_or("Cannot read the installed application's signing requirement.")?;
-    output(
-        Command::new("/usr/bin/codesign")
-            .args(["--verify", "--deep", "--strict", "--check-notarization"])
-            .arg(format!("-R={requirement}"))
-            .arg(candidate),
-    )?;
-    output(
-        Command::new("/usr/sbin/spctl")
-            .args(["--assess", "--type", "execute"])
-            .arg(candidate),
-    )?;
     for executable in ["Contents/MacOS/Gewu", "Contents/Helpers/gewu-update"] {
-        output(
-            Command::new("/usr/bin/lipo")
-                .arg(candidate.join(executable))
-                .args(["-verify_arch", ARCH]),
-        )?;
+        macho::verify_arch(File::open(candidate.join(executable))?, ARCH)?;
     }
-    Ok(())
+    security::verify_candidate(installed, candidate)
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;

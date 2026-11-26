@@ -1,10 +1,16 @@
-//! Update a packaged Gewu application using its embedded release verification key.
-#![forbid(unsafe_code)]
+//! Update a packaged Gewu application using native macOS security verification.
+#![deny(unsafe_code, clippy::undocumented_unsafe_blocks)]
 
+#[cfg(target_os = "macos")]
+mod http;
+#[cfg(any(test, target_os = "macos"))]
+mod macho;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(test, target_os = "macos"))]
-mod manifest;
+mod release;
+#[cfg(target_os = "macos")]
+mod security;
 
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {

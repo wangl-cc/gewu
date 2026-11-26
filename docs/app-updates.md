@@ -1,28 +1,52 @@
 # macOS packaging and updates
 
-Local builds use an ad-hoc signature. Use the [development guide](../DEVELOPMENT.md#package-and-verify) to package one. The stable distribution uses a Developer ID Application certificate and Apple's notarization service. Its application identifier is `cc.loongw.Gewu`.
+Local builds use an ad-hoc signature. Use the [development guide](../DEVELOPMENT.md#package-and-verify) to package one. Release builds use a single macOS code-signing layer: a persistent self-signed code-signing certificate by default, or an Apple Developer ID Application certificate with Apple notarization when configured. The application identifier is `cc.loongw.Gewu`.
 
 ## Release configuration
 
-The release workflow uses the following GitHub Actions configuration. Generate an Ed25519 signing keypair with `cargo run --locked -p gewu-update -- keygen`, then store the public key and private seed in GitHub Actions.
+The release workflow uses the following GitHub Actions configuration. Installed bundles verify updates against their own code-signing designated requirement via macOS `Security.framework`, so keeping the signing certificate consistent across releases preserves automatic updates.
 
 | Setting | Kind | Purpose |
 | --- | --- | --- |
-| `UPDATE_PUBLIC_KEY` | Variable | Base64 32-byte Ed25519 verification key embedded in `Info.plist` as `GewuUpdatePublicKey` |
-| `UPDATE_PRIVATE_KEY` | Secret | Base64 32-byte Ed25519 signing seed supplied to `gewu-update sign` on standard input |
-| `DEVELOPER_ID_APPLICATION` | Variable | Signing identity of the Developer ID Application certificate |
-| `DEVELOPER_ID_CERTIFICATE`, `DEVELOPER_ID_CERTIFICATE_PASSWORD` | Secrets | Base64 PKCS#12 certificate with private key and its import password |
-| `APPLE_TEAM_ID` | Variable | Notarization team |
-| `NOTARY_APPLE_ID`, `NOTARY_APP_PASSWORD` | Secrets | Apple ID for the team and its app-specific password |
+| `SIGNING_IDENTITY` | Variable | Common name or signing identity of the code-signing certificate in the `.p12` bundle |
+| `SIGNING_CERTIFICATE`, `SIGNING_CERTIFICATE_PASSWORD` | Secrets | Base64 PKCS#12 code-signing certificate with private key and its import password |
+| `APPLE_TEAM_ID` | Variable (optional) | Set to enable Apple notarization, stapling, and Gatekeeper checks during release |
+| `NOTARY_APPLE_ID`, `NOTARY_APP_PASSWORD` | Secrets (optional) | Apple ID and app-specific password when `APPLE_TEAM_ID` is set |
 
-A stable `vX.Y.Z` tag must match the application crate version. CI builds the GUI and Rust updater per architecture, signs inner executables and the app, submits the bundle to notarization, staples its ticket, verifies the packaged app, and signs and verifies the update manifest. It publishes a ZIP archive and a native update manifest per architecture. Preview jobs and local bundles omit the update helper and public key.
+To create a persistent self-signed macOS code-signing `.p12` certificate locally without an Apple Developer account:
+
+```sh
+cat > codesign.cnf <<'EOF'
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = codesign
+[dn]
+CN = Gewu Self-Signed Code Signing
+[codesign]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+subjectKeyIdentifier = hash
+EOF
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout gewu-signing.key -out gewu-signing.crt -config codesign.cnf
+openssl pkcs12 -export -legacy -inkey gewu-signing.key -in gewu-signing.crt \
+  -out gewu-signing.p12 -name "Gewu Self-Signed Code Signing"
+base64 -i gewu-signing.p12 | pbcopy
+```
+
+Back up `gewu-signing.p12` in a password manager before discarding the temporary key files.
+
+A stable `vX.Y.Z` tag must match the application crate version. CI builds `gewu-gpui` and `gewu-update` per architecture, signs the inner helper and the application bundle with Hardened Runtime, optionally notarizes and staples when `APPLE_TEAM_ID` is configured, packages one ZIP archive per architecture, and publishes an `update.json` metadata file containing `version`, `build`, and `minimum_macos`. Preview jobs and local bundles omit `gewu-update`.
 
 ## Update authentication
 
-The application ships the [Rust helper](../tools/update/src/main.rs) at `Contents/Helpers/gewu-update`. During release, `gewu-update sign` hashes the archive, signs the metadata payload containing the release version, build, architecture, minimum OS, archive length, and SHA-256 digest with the Ed25519 private seed, and verifies the resulting `update-<arch>.json` manifest against `GewuUpdatePublicKey` in the bundle. Clients derive the archive URL from the verified version and architecture.
+The application ships the [Rust helper](../tools/update/src/main.rs) at `Contents/Helpers/gewu-update`. It queries `update.json` and downloads the matching `Gewu-v<version>-macos-<arch>.zip` over HTTPS via `NSURLSession`, extracts it with `/usr/bin/ditto`, reads `Info.plist` and the running macOS version via Foundation APIs, checks 64-bit Mach-O architectures directly, and validates the staged bundle against the installed application's designated signing requirement via `Security.framework`. It rejects ad-hoc signed installations, checks `version`, `build`, and `minimum_macos`, and atomically exchanges the bundles in the installation directory. Installation requires write access beside the bundle; reopen Gewu to run the update.
 
-The helper checks the archive before extraction and verifies the staged application's metadata, architecture, Gatekeeper assessment, Apple's online notarization ticket, and the installed application's designated signing requirement. It exchanges the bundles atomically in the installation directory. Installation requires write access beside the bundle. Reopen Gewu to run the update.
+When migrating later from a self-signed certificate to an Apple Developer ID certificate, publish a bridge release signed with the existing self-signed certificate whose `EXTRA_TRUSTED_REQUIREMENTS` in [security.rs](../tools/update/src/security.rs) includes the Apple Team requirement (`identifier "cc.loongw.Gewu" and anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"`), then cut subsequent releases with the Developer ID certificate.
 
 The Updates menu stores preferences under `GewuUpdateAutomaticChecks`, `GewuUpdateAutomaticInstall`, and `GewuUpdateLastCheck`. Automatic checks run at most once every 24 hours after a successful check, and retry after one hour if a check fails while Gewu is running. Manual checks are available immediately. The app calls `gewu-update check APP` to find the available version and passes that version to `gewu-update install APP EXPECTED_VERSION`. An empty successful response means there is no compatible update. Installation prints the confirmed version only after the bundle exchange succeeds. A changed offer requires another check.
 
-Before shipping, exercise an update with the actual release identities and a clean installation. The [acceptance checklist](dev/native-acceptance.md) records those gates.
+Before shipping, exercise an update with the actual release identity and a clean installation. The [acceptance checklist](dev/native-acceptance.md) records those gates.
