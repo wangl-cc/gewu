@@ -1,4 +1,6 @@
 #[cfg(target_os = "macos")]
+mod demo;
+#[cfg(target_os = "macos")]
 mod scenes;
 #[cfg(target_os = "macos")]
 mod session;
@@ -36,10 +38,20 @@ fn main() -> anyhow::Result<()> {
     let mut output = target_dir.join("ui-capture");
     let mut modes = Vec::new();
     let mut groups = Vec::new();
+    let mut demo_only = false;
+    let mut demo_width: u32 = 1280;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--demo" => demo_only = true,
+            "--width" => {
+                let w = args.next().context("--width expects a pixel width")?;
+                demo_width = w.parse().context("invalid --width")?;
+                if demo_width == 0 {
+                    bail!("--width must be positive");
+                }
+            }
             "--sample" => {
                 let p = args.next().context("--sample expects a file path")?;
                 sample = Some(fs::canonicalize(&p).unwrap_or_else(|_| PathBuf::from(p)));
@@ -74,7 +86,9 @@ fn main() -> anyhow::Result<()> {
                      --sample FILE    Use an existing gewu-data-gen 2M-row Parquet\n  \
                      --output DIR     Set the screenshot destination\n  \
                      --mode MODE      Capture one mode (standard or high-contrast)\n  \
-                     --group GROUP    Repeat to select scene groups ({})",
+                     --group GROUP    Repeat to select scene groups ({})\n  \
+                     --demo           Record animated PNG (APNG) README demos\n  \
+                     --width PX       Target width for --demo (default 1280)",
                     GROUPS.join(", ")
                 );
                 return Ok(());
@@ -114,6 +128,10 @@ fn main() -> anyhow::Result<()> {
     let corrupt = work.join("Damaged observations.parquet");
     fs::write(&corrupt, b"Incomplete example data")?;
     let text_system = gpui_kit::platform::current_platform(true).text_system();
+
+    if demo_only {
+        return demo::record_demo(&harbor, text_system, &output, demo_width);
+    }
 
     for &mode in &modes {
         for group in &groups {

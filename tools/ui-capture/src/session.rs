@@ -232,6 +232,45 @@ impl CaptureSession {
         self.set_output(ThemeAppearance::Light, true)
     }
 
+    pub fn set_theme(&mut self, appearance: ThemeAppearance) -> Result<()> {
+        self.set_output(appearance, true)
+    }
+
+    pub fn snapshot(&mut self) -> Result<image::RgbaImage> {
+        self.app.capture_screenshot(self.active_handle)
+    }
+
+    /// Computes window-local click coordinates for point `index` of `total` in `#scatter-plot`.
+    pub fn scatter_point(
+        &mut self,
+        index: usize,
+        total: usize,
+        y_value: f32,
+        y_min: f32,
+        y_max: f32,
+        log_y: bool,
+    ) -> Result<Point<Pixels>> {
+        let bounds = self.update_active(|w, _| w.find("scatter-plot").bounds())?;
+        let (x0, y0, x1, y1) = (
+            bounds.left().as_f32(),
+            bounds.top().as_f32(),
+            bounds.right().as_f32(),
+            bounds.bottom().as_f32(),
+        );
+        let fraction = if log_y {
+            (y_value / y_min).ln() / (y_max / y_min).ln()
+        } else {
+            (y_value - y_min) / (y_max - y_min)
+        };
+        let draw_w = x1 - x0 - 58.0;
+        let draw_h = y1 - y0 - 33.0;
+        let pad_x = (draw_w * 0.045).max(6.0);
+        let pad_y = (draw_h * 0.045).max(6.0);
+        let x = x0 + 50.0 + pad_x + (draw_w - 2.0 * pad_x) * (index as f32) / ((total - 1) as f32);
+        let y = y0 + 8.0 + pad_y + (draw_h - 2.0 * pad_y) * (1.0 - fraction);
+        Ok(gpui_kit::point(px(x), px(y)))
+    }
+
     pub fn capture(
         &mut self,
         code: &str,

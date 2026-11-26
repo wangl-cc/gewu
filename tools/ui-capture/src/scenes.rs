@@ -4,9 +4,7 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use gpui_kit::{
-    MouseButton, Pixels, PlatformTextSystem, Role, Size, px, size, test::TestWindowExt as _,
-};
+use gpui_kit::{MouseButton, Pixels, PlatformTextSystem, Role, Size, px, size};
 
 use crate::session::{CaptureSession, Mode};
 
@@ -136,25 +134,8 @@ fn chart(s: &mut CaptureSession) -> Result<()> {
             s.click_label("Log Y", None)?;
         }
         // Row 81 of the fixture has temperature 16.4 on a 10.2–19.2 domain.
-        let bounds = s.update_active(|w, _| w.find("scatter-plot").bounds())?;
-        let (x0, y0, x1, y1) = (
-            bounds.left().as_f32(),
-            bounds.top().as_f32(),
-            bounds.right().as_f32(),
-            bounds.bottom().as_f32(),
-        );
-        let fraction = if state == "off" {
-            (16.4_f32 - 10.2) / (19.2 - 10.2)
-        } else {
-            (16.4_f32 / 10.2).ln() / (19.2_f32 / 10.2).ln()
-        };
-        let draw_w = x1 - x0 - 58.0;
-        let draw_h = y1 - y0 - 33.0;
-        let pad_x = (draw_w * 0.045).max(6.0);
-        let pad_y = (draw_h * 0.045).max(6.0);
-        let x = x0 + 50.0 + pad_x + (draw_w - 2.0 * pad_x) * 80.0 / 95.0;
-        let y = y0 + 8.0 + pad_y + (draw_h - 2.0 * pad_y) * (1.0 - fraction);
-        s.click_point(gpui_kit::point(px(x), px(y)), MouseButton::Left)?;
+        let point = s.scatter_point(80, 96, 16.4, 10.2, 19.2, state == "on")?;
+        s.click_point(point, MouseButton::Left)?;
 
         let expected = state == "on";
         let mut verify = |session: &mut CaptureSession| -> Result<()> {

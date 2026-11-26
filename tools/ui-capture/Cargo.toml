@@ -15,3 +15,4 @@ anyhow = "1"
 gewu-gpui = { path = "../../crates/gewu-gpui", features = ["ui-capture"] }
 gpui-kit = { version = "=0.10.0", default-features = false, features = ["component", "assets", "gpui-fast", "test-support"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+png = "0.18"

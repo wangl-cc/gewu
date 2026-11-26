@@ -2487,6 +2487,7 @@ dependencies = [
  "gewu-gpui",
  "gpui-kit",
  "image",
+ "png 0.18.1",
 ]
 
 [[package]]
