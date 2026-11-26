@@ -1,5 +1,6 @@
-//! Native window defaults and the system document history.
+//! Native window defaults and persistent settings and state storage.
 mod recent;
+pub(crate) mod storage;
 pub(crate) mod update;
 
 use gpui_kit::{base::ThemeAppearance, *};

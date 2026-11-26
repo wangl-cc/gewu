@@ -2463,6 +2463,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "chrono",
+ "dirs 6.0.0",
  "gewu-app",
  "gewu-core",
  "gewu-macos",
@@ -2472,6 +2473,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "regex",
  "semver",
+ "serde",
+ "serde_json",
  "tempfile",
  "url",
 ]

@@ -10,8 +10,11 @@ description = "Native GPUI table over gewu-core"
 workspace = true
 
 [dependencies]
+dirs = "6"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 chrono.workspace = true
 url = "2"
 async-channel = "2"
@@ -31,7 +34,7 @@ tempfile = "3"
 gewu-macos = { path = "macos" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSOpenPanel", "NSSavePanel", "NSWindow", "NSDocumentController", "NSPasteboard", "NSPasteboardItem"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString", "NSUserDefaults"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSEvent", "NSGraphicsContext"] }

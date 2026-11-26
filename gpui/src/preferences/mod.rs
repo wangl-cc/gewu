@@ -1,8 +1,7 @@
-//! Application-wide display and export options. macOS retains the original defaults domain.
+//! Application-wide display, export, and update preferences.
 use gewu_core::{FileType, ParquetCompression};
 use gpui_kit::*;
 
-#[cfg(target_os = "macos")]
 mod storage;
 mod window;
 pub(crate) use window::open;
@@ -39,6 +38,8 @@ pub(crate) struct Preferences {
     pub parquet_compression: ParquetCompression,
     pub show_inspector: bool,
     pub skip_hide_warning: bool,
+    pub automatic_update_checks: bool,
+    pub automatic_update_install: bool,
 }
 
 impl Default for Preferences {
@@ -56,6 +57,8 @@ impl Default for Preferences {
             parquet_compression: ParquetCompression::Zstd,
             show_inspector: true,
             skip_hide_warning: false,
+            automatic_update_checks: false,
+            automatic_update_install: false,
         }
     }
 }
@@ -66,10 +69,7 @@ struct SaveChanges;
 impl Global for SaveChanges {}
 
 pub(crate) fn init(cx: &mut App) {
-    #[cfg(target_os = "macos")]
     let prefs = storage::load();
-    #[cfg(not(target_os = "macos"))]
-    let prefs = Preferences::default();
     cx.set_global(prefs);
     cx.set_global(SaveChanges);
 }
@@ -86,9 +86,8 @@ impl Preferences {
         if before == after {
             return;
         }
-        #[cfg(target_os = "macos")]
         if cx.has_global::<SaveChanges>()
-            && let Err(error) = storage::save(&before, &after)
+            && let Err(error) = storage::save(&after)
         {
             after = storage::load();
             cx.show_system_notification(SystemNotification {

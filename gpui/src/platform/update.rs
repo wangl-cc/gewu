@@ -9,7 +9,7 @@ use std::{
 use gpui_kit::{base::Theme, *};
 use semver::Version;
 
-use crate::{shell::update_menus, ui::button};
+use crate::{preferences::Preferences, shell::update_menus, ui::button};
 
 gpui_kit::actions!(gewu, [
     CheckForUpdates,
@@ -17,8 +17,6 @@ gpui_kit::actions!(gewu, [
     ToggleAutomaticUpdates
 ]);
 
-const AUTO_CHECK: &str = "GewuUpdateAutomaticChecks";
-const AUTO_INSTALL: &str = "GewuUpdateAutomaticInstall";
 const CHECK_INTERVAL: f64 = 24. * 60. * 60.;
 const RETRY_INTERVAL: f64 = 60. * 60.;
 
@@ -128,13 +126,17 @@ pub(crate) fn init(cx: &mut App) {
         updater.update(cx, |this, cx| this.check(true, cx));
     });
     cx.on_action(|_: &ToggleUpdateChecks, cx| {
-        set_option(AUTO_CHECK, !option(AUTO_CHECK));
+        Preferences::update(cx, |p| {
+            p.automatic_update_checks = !p.automatic_update_checks;
+        });
         update_menus(cx);
         let updater = cx.global::<UpdateService>().0.clone();
         updater.update(cx, |this, cx| this.schedule(cx));
     });
     cx.on_action(|_: &ToggleAutomaticUpdates, cx| {
-        set_option(AUTO_INSTALL, !option(AUTO_INSTALL));
+        Preferences::update(cx, |p| {
+            p.automatic_update_install = !p.automatic_update_install;
+        });
         update_menus(cx);
     });
     updater.update(cx, |this, cx| this.schedule(cx));
@@ -148,21 +150,22 @@ fn next_check_after(now: f64, last: f64, interval: f64) -> Duration {
 
 pub(crate) fn menu(cx: &App) -> Menu {
     let available = cx.has_global::<UpdateService>();
-    let enabled = available && option(AUTO_CHECK);
+    let prefs = Preferences::get(cx);
+    let enabled = available && prefs.automatic_update_checks;
     Menu::new("Updates").disabled(!available).items([
         MenuItem::action("Check for Updates…", CheckForUpdates),
         MenuItem::separator(),
         MenuItem::action("Automatically Check for Updates", ToggleUpdateChecks).checked(enabled),
         MenuItem::action("Automatically Install Updates", ToggleAutomaticUpdates)
             .disabled(!enabled)
-            .checked(available && option(AUTO_INSTALL)),
+            .checked(available && prefs.automatic_update_install),
     ])
 }
 
 impl Updater {
     fn schedule(&mut self, cx: &mut Context<Self>) {
         self.timer = None;
-        if !option(AUTO_CHECK)
+        if !Preferences::get(cx).automatic_update_checks
             || matches!(
                 self.status,
                 Status::Checking | Status::Installing | Status::Installed(_)
@@ -180,7 +183,7 @@ impl Updater {
         self.timer = Some(cx.spawn(async move |this, cx| {
             timer.await;
             let _ = this.update(cx, |this, cx| {
-                if option(AUTO_CHECK) {
+                if Preferences::get(cx).automatic_update_checks {
                     this.check(false, cx);
                 }
             });
@@ -235,9 +238,13 @@ impl Updater {
                     Ok(None) => this.status = Status::Current,
                     Ok(Some(version)) => {
                         this.status = Status::Available(version);
-                        if !this.interactive && option(AUTO_CHECK) && option(AUTO_INSTALL) {
+                        let prefs = Preferences::get(cx);
+                        if !this.interactive
+                            && prefs.automatic_update_checks
+                            && prefs.automatic_update_install
+                        {
                             this.install(cx);
-                        } else if this.interactive || option(AUTO_CHECK) {
+                        } else if this.interactive || prefs.automatic_update_checks {
                             cx.defer(Self::show_window);
                         }
                     }
@@ -321,39 +328,13 @@ fn clock() -> f64 {
         .as_secs_f64()
 }
 
-#[cfg(target_os = "macos")]
-fn option(key: &str) -> bool {
-    use objc2_foundation::{NSString, NSUserDefaults};
-    NSUserDefaults::standardUserDefaults().boolForKey(&NSString::from_str(key))
-}
-#[cfg(target_os = "macos")]
-fn set_option(key: &str, value: bool) {
-    use objc2_foundation::{NSString, NSUserDefaults};
-    NSUserDefaults::standardUserDefaults().setBool_forKey(value, &NSString::from_str(key));
-}
-#[cfg(target_os = "macos")]
 fn last_check() -> f64 {
-    use objc2_foundation::{NSString, NSUserDefaults};
-    NSUserDefaults::standardUserDefaults().doubleForKey(&NSString::from_str("GewuUpdateLastCheck"))
+    super::storage::load_state().last_update_check
 }
-#[cfg(target_os = "macos")]
+
 fn remember_check(now: f64) {
-    use objc2_foundation::{NSString, NSUserDefaults};
-    NSUserDefaults::standardUserDefaults()
-        .setDouble_forKey(now, &NSString::from_str("GewuUpdateLastCheck"));
+    let _ = super::storage::update_state(|state| state.last_update_check = now);
 }
-#[cfg(not(target_os = "macos"))]
-fn option(_: &str) -> bool {
-    false
-}
-#[cfg(not(target_os = "macos"))]
-fn set_option(_: &str, _: bool) {}
-#[cfg(not(target_os = "macos"))]
-fn last_check() -> f64 {
-    0.
-}
-#[cfg(not(target_os = "macos"))]
-fn remember_check(_: f64) {}
 
 #[cfg(all(test, unix))]
 #[path = "update_tests.rs"]

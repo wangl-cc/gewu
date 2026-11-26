@@ -1,8 +1,10 @@
-use objc2_foundation::{NSString, NSUserDefaults};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 
 use super::*;
+use crate::platform::storage::{read_json, settings_path, write_json};
 
-// Swift persisted the lowercase names. Early GPUI builds stored indices into these lists.
 const FORMATS: &[(&str, FileType)] = &[
     ("parquet", FileType::Parquet),
     ("csv", FileType::Csv),
@@ -23,167 +25,115 @@ const CODECS: &[(&str, ParquetCompression)] = &[
     ("uncompressed", ParquetCompression::Uncompressed),
 ];
 
-fn choice<T: Copy>(value: Option<String>, items: &[(&str, T)], fallback: T) -> T {
-    let Some(value) = value else { return fallback };
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SettingsFile {
+    high_contrast: Option<String>,
+    font_size: Option<f32>,
+    row_height: Option<f32>,
+    show_row_numbers: Option<bool>,
+    row_number_base: Option<u64>,
+    copy_includes_headers: Option<bool>,
+    statistics_digits: Option<usize>,
+    remember_export_format: Option<bool>,
+    last_export_format: Option<String>,
+    parquet_compression: Option<String>,
+    show_inspector: Option<bool>,
+    skip_hide_warning: Option<bool>,
+    automatic_update_checks: Option<bool>,
+    automatic_update_install: Option<bool>,
+}
+
+fn decode_choice<T: Copy>(value: Option<&str>, items: &[(&str, T)], fallback: T) -> T {
     value
-        .parse::<usize>()
-        .ok()
-        .and_then(|i| items.get(i))
-        .or_else(|| items.iter().find(|(name, _)| *name == value))
-        .map_or(fallback, |(_, v)| *v)
+        .and_then(|name| items.iter().find(|(label, _)| *label == name))
+        .map_or(fallback, |(_, item)| *item)
+}
+
+fn encode_choice<T: PartialEq>(value: T, items: &[(&str, T)]) -> Option<String> {
+    items
+        .iter()
+        .find(|(_, item)| *item == value)
+        .map(|(label, _)| (*label).to_owned())
 }
 
 pub(super) fn load() -> Preferences {
-    read_from(&NSUserDefaults::standardUserDefaults())
+    settings_path()
+        .as_deref()
+        .map(load_from)
+        .unwrap_or_default()
 }
 
-fn read_from(defaults: &NSUserDefaults) -> Preferences {
-    let bool_value = |key: &str, fallback| {
-        let key = NSString::from_str(key);
-        defaults
-            .objectForKey(&key)
-            .map_or(fallback, |_| defaults.boolForKey(&key))
-    };
-    let integer = |key: &str, fallback| {
-        let key = NSString::from_str(key);
-        defaults
-            .objectForKey(&key)
-            .map_or(fallback, |_| defaults.integerForKey(&key))
-    };
-    let dimension = |key: &str, fallback: f32, min, max| {
-        let key = NSString::from_str(key);
-        defaults
-            .objectForKey(&key)
-            .map(|_| defaults.doubleForKey(&key))
-            .filter(|v| v.is_finite())
-            .map_or(fallback, |v| v.clamp(min, max) as f32)
-    };
-    let string = |key| {
-        defaults
-            .stringForKey(&NSString::from_str(key))
-            .map(|s| s.to_string())
-    };
-    let p = Preferences::default();
+pub(super) fn load_from(path: &Path) -> Preferences {
+    let file: SettingsFile = read_json(path).unwrap_or_default();
+    let d = Preferences::default();
     Preferences {
-        high_contrast: choice(string("HighContrast"), CONTRAST, p.high_contrast),
-        font_size: dimension("TableFontSize", p.font_size, 10., 20.),
-        row_height: dimension("TableRowHeight", p.row_height, 24., 36.),
-        show_row_numbers: bool_value("ShowRowNumbers", p.show_row_numbers),
-        row_number_base: integer("RowNumberBase", p.row_number_base as isize).clamp(0, 1) as u64,
-        copy_includes_headers: bool_value("CopyIncludesHeaders", p.copy_includes_headers),
-        statistics_digits: integer("StatisticsSignificantDigits", p.statistics_digits as isize)
-            .clamp(3, 15) as usize,
-        remember_export_format: bool_value("RememberExportFormat", p.remember_export_format),
-        last_export_format: choice(string("LastExportFormat"), FORMATS, p.last_export_format),
-        parquet_compression: choice(string("ParquetCompression"), CODECS, p.parquet_compression),
-        show_inspector: bool_value("ShowColumnInspector", p.show_inspector),
-        skip_hide_warning: bool_value("SkipHideColumnWarning", p.skip_hide_warning),
+        high_contrast: decode_choice(file.high_contrast.as_deref(), CONTRAST, d.high_contrast),
+        font_size: file
+            .font_size
+            .filter(|v| v.is_finite())
+            .map_or(d.font_size, |v| v.clamp(10., 20.)),
+        row_height: file
+            .row_height
+            .filter(|v| v.is_finite())
+            .map_or(d.row_height, |v| v.clamp(24., 36.)),
+        show_row_numbers: file.show_row_numbers.unwrap_or(d.show_row_numbers),
+        row_number_base: file.row_number_base.map_or(d.row_number_base, |v| v.min(1)),
+        copy_includes_headers: file
+            .copy_includes_headers
+            .unwrap_or(d.copy_includes_headers),
+        statistics_digits: file
+            .statistics_digits
+            .map_or(d.statistics_digits, |v| v.clamp(3, 15)),
+        remember_export_format: file
+            .remember_export_format
+            .unwrap_or(d.remember_export_format),
+        last_export_format: decode_choice(
+            file.last_export_format.as_deref(),
+            FORMATS,
+            d.last_export_format,
+        ),
+        parquet_compression: decode_choice(
+            file.parquet_compression.as_deref(),
+            CODECS,
+            d.parquet_compression,
+        ),
+        show_inspector: file.show_inspector.unwrap_or(d.show_inspector),
+        skip_hide_warning: file.skip_hide_warning.unwrap_or(d.skip_hide_warning),
+        automatic_update_checks: file
+            .automatic_update_checks
+            .unwrap_or(d.automatic_update_checks),
+        automatic_update_install: file
+            .automatic_update_install
+            .unwrap_or(d.automatic_update_install),
     }
 }
 
-pub(super) fn save(before: &Preferences, after: &Preferences) -> Result<(), String> {
-    write_changes(&NSUserDefaults::standardUserDefaults(), before, after)
-}
-
-fn write_changes(
-    defaults: &NSUserDefaults,
-    before: &Preferences,
-    after: &Preferences,
-) -> Result<(), String> {
-    for (key, old, new) in [
-        ("TableFontSize", before.font_size, after.font_size),
-        ("TableRowHeight", before.row_height, after.row_height),
-    ] {
-        if old != new {
-            defaults.setDouble_forKey(f64::from(new), &NSString::from_str(key));
-        }
-    }
-    for (key, old, new) in [
-        (
-            "StatisticsSignificantDigits",
-            before.statistics_digits as isize,
-            after.statistics_digits as isize,
-        ),
-        (
-            "RowNumberBase",
-            before.row_number_base as isize,
-            after.row_number_base as isize,
-        ),
-    ] {
-        if old != new {
-            defaults.setInteger_forKey(new, &NSString::from_str(key));
-        }
-    }
-    for (key, old, new) in [
-        (
-            "CopyIncludesHeaders",
-            before.copy_includes_headers,
-            after.copy_includes_headers,
-        ),
-        (
-            "ShowRowNumbers",
-            before.show_row_numbers,
-            after.show_row_numbers,
-        ),
-        (
-            "RememberExportFormat",
-            before.remember_export_format,
-            after.remember_export_format,
-        ),
-        (
-            "ShowColumnInspector",
-            before.show_inspector,
-            after.show_inspector,
-        ),
-        (
-            "SkipHideColumnWarning",
-            before.skip_hide_warning,
-            after.skip_hide_warning,
-        ),
-    ] {
-        if old != new {
-            defaults.setBool_forKey(new, &NSString::from_str(key));
-        }
-    }
-    write_choice(
-        defaults,
-        "HighContrast",
-        CONTRAST,
-        before.high_contrast,
-        after.high_contrast,
-    )?;
-    write_choice(
-        defaults,
-        "LastExportFormat",
-        FORMATS,
-        before.last_export_format,
-        after.last_export_format,
-    )?;
-    write_choice(
-        defaults,
-        "ParquetCompression",
-        CODECS,
-        before.parquet_compression,
-        after.parquet_compression,
-    )
-}
-
-fn write_choice<T: PartialEq>(
-    defaults: &NSUserDefaults,
-    key: &str,
-    items: &[(&str, T)],
-    old: T,
-    new: T,
-) -> Result<(), String> {
-    if old == new {
+pub(super) fn save(prefs: &Preferences) -> Result<(), String> {
+    let Some(path) = settings_path() else {
         return Ok(());
-    }
-    let (name, _) = items
-        .iter()
-        .find(|(_, v)| *v == new)
-        .ok_or_else(|| format!("Unknown value for {key}"))?;
-    gewu_macos::set_string_default(defaults, key, name);
-    Ok(())
+    };
+    save_to(&path, prefs)
+}
+
+pub(super) fn save_to(path: &Path, prefs: &Preferences) -> Result<(), String> {
+    let file = SettingsFile {
+        high_contrast: encode_choice(prefs.high_contrast, CONTRAST),
+        font_size: Some(prefs.font_size),
+        row_height: Some(prefs.row_height),
+        show_row_numbers: Some(prefs.show_row_numbers),
+        row_number_base: Some(prefs.row_number_base),
+        copy_includes_headers: Some(prefs.copy_includes_headers),
+        statistics_digits: Some(prefs.statistics_digits),
+        remember_export_format: Some(prefs.remember_export_format),
+        last_export_format: encode_choice(prefs.last_export_format, FORMATS),
+        parquet_compression: encode_choice(prefs.parquet_compression, CODECS),
+        show_inspector: Some(prefs.show_inspector),
+        skip_hide_warning: Some(prefs.skip_hide_warning),
+        automatic_update_checks: Some(prefs.automatic_update_checks),
+        automatic_update_install: Some(prefs.automatic_update_install),
+    };
+    write_json(path, &file)
 }
 
 #[cfg(test)]
