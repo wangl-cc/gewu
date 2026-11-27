@@ -53,7 +53,7 @@ pub(super) fn bin_interval(ranges: &[RangeBounds], index: usize, floating_point:
 pub(super) fn histogram_peak_label(peak: u64, log_counts: bool) -> String {
     format!(
         "max {}{}",
-        crate::messages::format_count(peak),
+        crate::ui::messages::format_count(peak),
         if log_counts { " · log" } else { "" }
     )
 }
@@ -73,7 +73,7 @@ pub(super) fn histogram(
             } else {
                 "No values to plot"
             })
-            .children(crate::messages::omitted_values(
+            .children(crate::ui::messages::omitted_values(
                 histogram.non_positive_count,
                 histogram.infinite_count,
             ));
@@ -134,7 +134,7 @@ pub(super) fn histogram(
         .children((peak > 0).then(|| div().w_full().child(histogram_peak_label(peak, log_counts))))
         .child(plot)
         .child(histogram_axis(histogram))
-        .children(crate::messages::omitted_values(
+        .children(crate::ui::messages::omitted_values(
             histogram.non_positive_count,
             histogram.infinite_count,
         ))
@@ -225,7 +225,7 @@ fn middle_tick(h: &Histogram, minimum: &str, maximum: &str) -> Option<(f32, Stri
 
 fn histogram_label(text: &str) -> String {
     if text.len() <= 12 {
-        crate::messages::format_grouped_number(text)
+        crate::ui::messages::format_grouped_number(text)
     } else {
         labels::compact(text)
     }

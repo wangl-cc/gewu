@@ -65,7 +65,10 @@ impl FilterEditor {
     pub(super) fn include_missing(&self, count: u64, cx: &mut Context<Self>) -> base::Checkbox {
         crate::ui::checkbox(
             "include-missing",
-            format!("Include missing ({})", crate::messages::format_count(count)),
+            format!(
+                "Include missing ({})",
+                crate::ui::messages::format_count(count)
+            ),
             self.draft.missing != MissingPolicy::Exclude,
             cx,
             cx.listener(|editor, _, _, cx| {
@@ -107,7 +110,7 @@ impl Render for FilterEditor {
         }
         if let Some(error) = &self.error {
             panel = panel.child(
-                crate::errors::inline_warning(crate::errors::message(error))
+                crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                     .text_color(colors.danger_text),
             );
         }
@@ -205,7 +208,7 @@ impl Render for FilterEditor {
                             .child(div().text_xs().text_color(colors.muted_foreground).child(
                                 format!(
                                     "Missing values ({})",
-                                    crate::messages::format_count(facet.null_count)
+                                    crate::ui::messages::format_count(facet.null_count)
                                 ),
                             ))
                             .child(choices),

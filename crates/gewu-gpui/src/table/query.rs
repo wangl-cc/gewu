@@ -59,7 +59,7 @@ impl TableView {
             Ok(Some(filter)) => self.set_filter(filter.column, Some(filter.filter), cx),
             Ok(None) => (),
             Err(error) => {
-                self.notice = Some(Notice::FilterFailed(crate::errors::message(&error)));
+                self.notice = Some(Notice::FilterFailed(crate::ui::errors::message(&error)));
                 cx.notify();
             }
         }

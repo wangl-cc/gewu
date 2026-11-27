@@ -1,7 +1,7 @@
 use gpui_kit::{assets::IconName, component::Icon};
 
 use super::*;
-use crate::{messages::format_count, table::Notice};
+use crate::{table::Notice, ui::messages::format_count};
 
 impl TableView {
     pub(in crate::table) fn status_bar(
@@ -54,7 +54,7 @@ impl TableView {
         }
         if let Some(error) = self.data.queries().error() {
             status = status.child(
-                crate::errors::inline_warning(crate::errors::message(error))
+                crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                     .truncate()
                     .text_color(colors.danger_text),
             );
@@ -65,12 +65,12 @@ impl TableView {
                     div()
                         .min_w_0()
                         .truncate()
-                        .child(crate::errors::SELECT_CELL_TO_FILTER),
+                        .child(crate::ui::errors::SELECT_CELL_TO_FILTER),
                 );
             }
             Some(Notice::CopyFailed(message) | Notice::FilterFailed(message)) => {
                 status = status.child(
-                    crate::errors::inline_warning(message.clone())
+                    crate::ui::errors::inline_warning(message.clone())
                         .id("operation-notice")
                         .role(Role::Alert)
                         .aria_label(message.clone())
@@ -186,7 +186,7 @@ impl TableView {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .child(crate::data::preview_with_limit(&column.name, 36)),
+                                .child(crate::table::data::preview_with_limit(&column.name, 36)),
                         )
                         .on_click(cx.listener(move |t, _, w, cx| {
                             t.commit_grid_layout(cx);

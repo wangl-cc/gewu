@@ -9,9 +9,8 @@ use gpui_kit::{
 
 use super::{GetInfo, ImportOptions, info, open_paths, record_recent};
 use crate::{
-    data::TableData,
     platform,
-    table::TableView,
+    table::{TableView, data::TableData},
     ui::{button, disclosure, segment, segmented_tabs},
 };
 
@@ -296,17 +295,17 @@ impl Document {
                 .px_3()
                 .py_1()
                 .text_sm()
-                .child(crate::errors::warning_icon())
+                .child(crate::ui::errors::warning_icon())
                 .child(button("retry-open", "Retry", false, cx).on_click(retry))
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
-                        .child(crate::errors::message(error)),
+                        .child(crate::ui::errors::message(error)),
                 )
                 .into_any_element();
         }
-        let reason = crate::errors::open_reason(error);
+        let reason = crate::ui::errors::open_reason(error);
         let recovery_button =
             |id, label, primary| button(id, label, primary, cx).px_3().flex().items_center();
         let mut content = div()
@@ -324,7 +323,7 @@ impl Document {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(crate::errors::warning_icon())
+                    .child(crate::ui::errors::warning_icon())
                     .child("Could not open this file"),
             )
             .child(

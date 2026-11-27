@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 
 use super::*;
-use crate::columns::TableColumns;
+use crate::table::columns::TableColumns;
 
 /// Keep a reveal anchored to its column while layout measures the surrounding widths.
 #[derive(Clone, Copy, PartialEq)]
@@ -388,7 +388,8 @@ impl Layout {
         if rows.is_empty() {
             return 0..0;
         }
-        rows.start / crate::data::BLOCK_ROWS..rows.end.div_ceil(crate::data::BLOCK_ROWS)
+        rows.start / crate::table::data::BLOCK_ROWS
+            ..rows.end.div_ceil(crate::table::data::BLOCK_ROWS)
     }
 
     fn visible_columns(&self) -> Option<(usize, usize)> {

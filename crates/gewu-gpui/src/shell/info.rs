@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use gewu_core::{Dataset, FileMetadata, FileType};
 use gpui_kit::{base::SelectableText, *};
 
-use crate::{messages::format_count, platform, ui::button};
+use crate::{
+    platform,
+    ui::{button, messages::format_count},
+};
 
 struct FileDetails {
     path: PathBuf,
@@ -160,7 +163,10 @@ impl Render for FileDetails {
                     .child(
                         button("copy-path", "Copy Path", false, cx).on_click(cx.listener(
                             |this, _, _, cx| {
-                                crate::clipboard::write_text(this.path.display().to_string(), cx);
+                                crate::platform::clipboard::write_text(
+                                    this.path.display().to_string(),
+                                    cx,
+                                );
                             },
                         )),
                     )

@@ -229,7 +229,7 @@ impl ExportController {
         let job = match draft.view.export(&draft.columns, draft.format) {
             Ok(job) => Arc::new(job),
             Err(error) => {
-                *self = ExportController::Failed(crate::errors::message(&error));
+                *self = ExportController::Failed(crate::ui::errors::message(&error));
                 return;
             }
         };
@@ -262,7 +262,7 @@ impl ExportController {
                     Err(gewu_core::Error::Cancelled) => {
                         ExportController::Finished("Export cancelled".into())
                     }
-                    Err(error) => ExportController::Failed(crate::errors::message(&error)),
+                    Err(error) => ExportController::Failed(crate::ui::errors::message(&error)),
                 };
                 cx.notify();
             });
@@ -298,14 +298,14 @@ impl Render for ExportController {
             ExportController::Finished(message) => bar.child(status(message.clone().into())),
             ExportController::Failed(message) => bar
                 .text_color(crate::theme::GewuPalette::get(cx).danger_text)
-                .child(crate::errors::warning_icon())
+                .child(crate::ui::errors::warning_icon())
                 .child(status(message.clone().into())),
             ExportController::Writing(active) => {
                 let progress = active.job.progress();
                 bar.child(status(
                     format!(
                         "Exporting {} / {}",
-                        crate::messages::format_count(progress.rows_written),
+                        crate::ui::messages::format_count(progress.rows_written),
                         crate::counted(progress.total_rows, "row")
                     )
                     .into(),

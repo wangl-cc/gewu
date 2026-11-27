@@ -15,7 +15,7 @@ fn value_preview(value: &str) -> SharedString {
     if value.is_empty() {
         "(empty text)".into()
     } else {
-        crate::data::preview_with_limit(value, 96)
+        crate::table::data::preview_with_limit(value, 96)
     }
 }
 

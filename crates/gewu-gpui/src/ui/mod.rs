@@ -1,4 +1,7 @@
 //! Shared low-level UI primitives styled with `GewuPalette`.
+pub(crate) mod errors;
+pub(crate) mod messages;
+
 use gpui_kit::{
     assets::IconName,
     base::{

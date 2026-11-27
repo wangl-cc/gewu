@@ -88,7 +88,7 @@ fn formatting_alert(message: SharedString, cx: &App) -> AnyElement {
                 .py_1()
                 .bg(colors.surface)
                 .text_color(colors.danger_text)
-                .child(crate::errors::inline_warning(message)),
+                .child(crate::ui::errors::inline_warning(message)),
         )
         .into_any_element()
 }

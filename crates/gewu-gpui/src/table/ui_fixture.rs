@@ -7,7 +7,10 @@ use gpui_kit::{
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, TableView};
-use crate::{actions, data::TableData, selection::Selection};
+use crate::{
+    actions,
+    table::{data::TableData, selection::Selection},
+};
 
 pub(super) struct TableWindow {
     pub app: TestAppContext,
@@ -69,7 +72,9 @@ impl TableWindow {
     pub fn type_in_find(&mut self, text: &str) {
         self.ui.update(|window, cx| window.input(text, cx));
         self.ui.run_until_parked();
-        self.app.executor().advance_clock(crate::find::TYPING_DELAY);
+        self.app
+            .executor()
+            .advance_clock(crate::table::find::TYPING_DELAY);
         self.settle();
     }
 

@@ -1,4 +1,5 @@
 //! Native window defaults and persistent settings and state storage.
+pub(crate) mod clipboard;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 mod recent;

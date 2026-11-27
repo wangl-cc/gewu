@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use super::{Cell, ColumnDrag, Drawer, Order, Preferences, Selection, TableView, button};
-use crate::{columns::TableColumns, data::TableQuery};
+use crate::table::{columns::TableColumns, data::TableQuery};
 
 fn uses_column(query: &TableQuery, id: ColumnId) -> bool {
     query.filters.iter().any(|filter| filter.column == id)
@@ -280,7 +280,7 @@ impl TableView {
         };
         self.drawer(title, window, cx)
             .child(
-                crate::errors::inline_warning(message.clone())
+                crate::ui::errors::inline_warning(message.clone())
                     .id("hide-explanation")
                     .role(Role::Label)
                     .aria_label(message)

@@ -73,7 +73,7 @@ impl TableView {
                 )
             })
             .unwrap_or_else(|| column.technical_type.clone());
-        let mut tip = format!("{} · {details}", crate::data::preview(&column.name));
+        let mut tip = format!("{} · {details}", crate::table::data::preview(&column.name));
         let sorts = &self.data.query().sorts;
         if let Some((i, sort)) = sorts
             .iter()
@@ -117,7 +117,10 @@ impl TableView {
         font.features = crate::theme::tabular_digits();
         let measure = |text: &str, font_size: f32, weight| {
             // A very long first value can determine the cap without shaping the entire cell.
-            let preview = crate::data::single_line_prefix(text, crate::data::GRID_PREVIEW_BYTES);
+            let preview = crate::table::data::single_line_prefix(
+                text,
+                crate::table::data::GRID_PREVIEW_BYTES,
+            );
             let run = TextRun {
                 len: preview.len(),
                 font: Font {

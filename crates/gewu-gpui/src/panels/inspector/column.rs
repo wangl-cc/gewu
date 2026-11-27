@@ -111,7 +111,7 @@ impl Inspector {
                     Ok(data) => group.child(self.section_data(data, &results.column, window, cx)),
                     Err(error) => group
                         .child(
-                            crate::errors::inline_warning(crate::errors::message(error))
+                            crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                                 .text_color(colors.danger_text),
                         )
                         .child(
@@ -135,7 +135,7 @@ impl Inspector {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        use crate::messages::format_count;
+        use crate::ui::messages::format_count;
 
         let digits = crate::preferences::Preferences::get(cx).statistics_digits;
         let count = self.snapshot.filtered().row_count();
@@ -175,10 +175,10 @@ impl Inspector {
                             value
                                 .parse::<f64>()
                                 .ok()
-                                .map(|v| crate::messages::format_numeric_statistic(v, digits))
+                                .map(|v| crate::ui::messages::format_numeric_statistic(v, digits))
                                 .unwrap_or_else(|| value.clone())
                         } else if col.value_category == gewu_core::ValueCategory::Number {
-                            crate::messages::format_grouped_number(value)
+                            crate::ui::messages::format_grouped_number(value)
                         } else {
                             value.clone()
                         };
@@ -203,7 +203,7 @@ impl Inspector {
                     .map(|label| format!("≈ {label}"))
                     .or_else(|| {
                         s.mean
-                            .map(|v| crate::messages::format_numeric_statistic(v, digits))
+                            .map(|v| crate::ui::messages::format_numeric_statistic(v, digits))
                     });
                 if let (Some(mean), Some(exact)) = (mean, exact_mean) {
                     body = body.child(
@@ -219,7 +219,7 @@ impl Inspector {
                     body = body.child(
                         metric(
                             "Standard deviation",
-                            crate::messages::format_numeric_statistic(sd, digits),
+                            crate::ui::messages::format_numeric_statistic(sd, digits),
                             cx,
                         )
                         .id("Standard deviation")
@@ -260,7 +260,7 @@ impl Inspector {
                 if let Some(v) = s.mean {
                     body = body.child(metric(
                         "Mean",
-                        crate::messages::format_numeric_statistic(v, digits),
+                        crate::ui::messages::format_numeric_statistic(v, digits),
                         cx,
                     ));
                 }

@@ -24,7 +24,7 @@ use gpui_kit::{
     *,
 };
 
-use crate::data::BLOCK_ROWS;
+use crate::table::data::BLOCK_ROWS;
 
 pub(crate) const TYPING_DELAY: Duration = Duration::from_millis(150);
 
@@ -298,7 +298,7 @@ impl FindController {
         match view.find(&text, &ids) {
             Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
             Err(err) => {
-                self.message = FindMessage::Error(crate::errors::message(&err));
+                self.message = FindMessage::Error(crate::ui::errors::message(&err));
                 self.highlight_failed = true;
                 None
             }
@@ -372,7 +372,8 @@ impl FindController {
                     }
                     Err(error) => {
                         table.highlight_failed = true;
-                        table.message = FindMessage::Error(crate::errors::message(&error.into()));
+                        table.message =
+                            FindMessage::Error(crate::ui::errors::message(&error.into()));
                     }
                 }
                 cx.notify();
@@ -404,7 +405,8 @@ impl FindController {
                     Ok(None) => return,
                     Err(error) => {
                         find.counter = None;
-                        find.message = FindMessage::Error(crate::errors::message(&error.into()));
+                        find.message =
+                            FindMessage::Error(crate::ui::errors::message(&error.into()));
                     }
                 }
                 cx.notify();
@@ -457,7 +459,7 @@ impl FindController {
                         }
                     }
                     Err(error) => {
-                        table.message = FindMessage::Error(crate::errors::message(&error))
+                        table.message = FindMessage::Error(crate::ui::errors::message(&error))
                     }
                 }
                 let queued = std::mem::take(&mut table.queued);
@@ -487,8 +489,8 @@ impl Render for FindController {
         };
         let count = self.counter.as_ref().and_then(|counter| {
             if let Some((current, total)) = counter.position() {
-                let current = crate::messages::format_count(current);
-                let total = crate::messages::format_count(total);
+                let current = crate::ui::messages::format_count(current);
+                let total = crate::ui::messages::format_count(total);
                 Some((
                     format!("{current}/{total}"),
                     format!("Match {current} of {total}"),
@@ -524,7 +526,9 @@ impl Render for FindController {
                     } else {
                         colors.muted_foreground
                     })
-                    .when(error, |notice| notice.child(crate::errors::warning_icon()))
+                    .when(error, |notice| {
+                        notice.child(crate::ui::errors::warning_icon())
+                    })
                     .child(div().min_w_0().truncate().child(text.to_owned()))
                     .test_support()
             }))

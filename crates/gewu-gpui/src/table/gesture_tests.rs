@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, ui_fixture::TableWindow};
-use crate::selection::{Cell, Selection};
+use crate::table::selection::{Cell, Selection};
 
 const ROWS: u64 = 256;
 const COLUMNS: usize = 16;
@@ -126,7 +126,7 @@ fn selection_uses_the_column_widths_measured_for_this_frame() {
 fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
     use std::rc::Rc;
 
-    use crate::columns::ColumnWidth;
+    use crate::table::columns::ColumnWidth;
 
     let (_files, mut w) = open();
     let previous = w.read(|table| Rc::clone(&table.layout));

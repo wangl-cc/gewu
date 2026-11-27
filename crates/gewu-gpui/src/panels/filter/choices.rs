@@ -27,7 +27,7 @@ impl FilterEditor {
                 ChoiceRow {
                     accessible: format!("{label}, {}", crate::counted(choice.count, "row")).into(),
                     label,
-                    count: crate::messages::format_count(choice.count).into(),
+                    count: crate::ui::messages::format_count(choice.count).into(),
                 }
             })
             .collect();

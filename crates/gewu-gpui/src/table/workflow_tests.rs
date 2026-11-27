@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use super::ui_fixture::TableWindow;
-use crate::selection::{Cell, Selection};
+use crate::table::selection::{Cell, Selection};
 
 fn open() -> TableWindow {
     TableWindow::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv"))

@@ -181,8 +181,8 @@ impl ScatterChart {
         } else {
             format!(
                 "{} of {} points",
-                crate::messages::format_count(plotted),
-                crate::messages::format_count(self.sample.eligible_rows),
+                crate::ui::messages::format_count(plotted),
+                crate::ui::messages::format_count(self.sample.eligible_rows),
             )
         }
     }
@@ -257,7 +257,7 @@ impl Render for ScatterChart {
                 } else {
                     "No finite pairs in the selected log domain"
                 })
-                .children(crate::messages::omitted_pairs(
+                .children(crate::ui::messages::omitted_pairs(
                     self.sample.non_positive_rows,
                 ));
         };
@@ -424,7 +424,7 @@ impl Render for ScatterChart {
                     .clone()
                     .map(|context| div().w_full().truncate().child(context)),
             )
-            .children(crate::messages::omitted_pairs(
+            .children(crate::ui::messages::omitted_pairs(
                 self.sample.non_positive_rows,
             ))
     }

@@ -338,7 +338,7 @@ impl FilterEditor {
                 "No values to plot"
             });
         }
-        body = body.children(crate::messages::omitted_values(
+        body = body.children(crate::ui::messages::omitted_values(
             h.histogram.non_positive_count,
             h.histogram.infinite_count,
         ));

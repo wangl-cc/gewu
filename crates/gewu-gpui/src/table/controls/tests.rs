@@ -496,7 +496,7 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
     assert!(w.read(|t| {
         matches!(
             t.data.columns.entry(1).width,
-            crate::columns::ColumnWidth::Manual(_)
+            crate::table::columns::ColumnWidth::Manual(_)
         )
     }));
 

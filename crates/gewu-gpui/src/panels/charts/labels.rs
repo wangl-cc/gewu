@@ -159,7 +159,7 @@ pub(super) fn utc(seconds: f64) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(secs, nanos)
 }
 
-pub(crate) use crate::messages::significant_digits;
+pub(crate) use crate::ui::messages::significant_digits;
 
 #[cfg(test)]
 #[path = "labels_tests.rs"]

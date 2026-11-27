@@ -142,7 +142,7 @@ fn invalid_filter_preserves_the_displayed_query_and_recovers_on_edit() {
             t.data
                 .queries()
                 .error()
-                .map(crate::errors::message)
+                .map(crate::ui::errors::message)
                 .as_deref(),
             Some("The minimum 20 is greater than the maximum 3.")
         );
@@ -347,7 +347,7 @@ fn the_newest_copy_wins_across_document_windows() {
     w.click(w.cell(1, 2), Modifiers::default());
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv");
     let (_, other) = w.app.update(|cx| {
-        let data = crate::data::TableData::open(path.to_str().unwrap()).unwrap();
+        let data = crate::table::data::TableData::open(path.to_str().unwrap()).unwrap();
         gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| super::TableView::new(data, window, cx))
         })
@@ -463,7 +463,7 @@ fn grid_frame(w: &mut TableWindow) -> super::Frame {
 fn find_marks_the_preview_ellipsis_for_hits_after_a_newline_or_the_byte_limit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hidden.csv");
-    let long = "α".repeat(crate::data::GRID_PREVIEW_BYTES);
+    let long = "α".repeat(crate::table::data::GRID_PREVIEW_BYTES);
     std::fs::write(
         &path,
         format!("note\n{long}needle\n\"prefix\nneedle\"\nplain\n"),

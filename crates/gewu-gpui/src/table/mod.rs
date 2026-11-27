@@ -5,15 +5,16 @@
 
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
 
+use columns::ColumnWidth;
+use data::{TableData, TableQuery, copy_tsv};
 use gewu_core::ColumnSort;
 use gpui_kit::*;
+use scroll::VerticalScroll;
+use selection::{Cell, Selection};
 
 use crate::{
     actions::{self, Motion, Navigate},
-    data::{TableData, TableQuery, copy_tsv},
     preferences::Preferences,
-    scroll::VerticalScroll,
-    selection::{Cell, Selection},
 };
 
 #[cfg(test)]
@@ -27,8 +28,6 @@ const RESIZE_SLOP: f32 = 4.;
 const MIN_COLUMN: f32 = 76.;
 
 use layout::HorizontalScroll;
-
-use crate::columns::ColumnWidth;
 
 enum Drag {
     None,
@@ -63,7 +62,7 @@ pub struct TableView {
     body_pointer: Option<Point<Pixels>>,
     scrollbar_timer: Option<Task<()>>,
     pub focus: FocusHandle,
-    pub(crate) find: Entity<crate::find::FindController>,
+    pub(crate) find: Entity<crate::table::find::FindController>,
     _find_reveal: Subscription,
     _find_changed: Subscription,
     notice: Option<Notice>,
@@ -166,8 +165,9 @@ impl TableView {
             .iter()
             .map(|c| (c.id, c.name.clone().into()))
             .collect();
-        let find =
-            cx.new(|cx| crate::find::FindController::new(data.view().clone(), scope, window, cx));
+        let find = cx.new(|cx| {
+            crate::table::find::FindController::new(data.view().clone(), scope, window, cx)
+        });
         let reveal = cx.subscribe(&find, |table, _, hit: &gewu_core::CellMatch, cx| {
             table.commit_grid_layout(cx);
             if let Some(cell) = table.data.display_cell(hit.display_row, hit.column) {
@@ -299,7 +299,7 @@ impl TableView {
 
     pub fn scroll_to_row(&mut self, row: u64) {
         self.scroll
-            .set_anchor(crate::scroll::Anchor { row, offset: 0.0 });
+            .set_anchor(crate::table::scroll::Anchor { row, offset: 0.0 });
     }
 
     #[cfg(feature = "ui-capture")]
@@ -351,7 +351,7 @@ impl TableView {
 
     fn copy_cell_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.copy_task = None;
-        crate::clipboard::write_text(text, cx);
+        crate::platform::clipboard::write_text(text, cx);
         self.copy_finished(None, cx);
     }
 
@@ -373,7 +373,7 @@ impl TableView {
         let columns = self.data.column_ids(0..self.data.columns.len());
         let rows = selection.rows();
         let header = self.prefs.copy_includes_headers;
-        let request = crate::clipboard::CopyRequest::begin(cx);
+        let request = crate::platform::clipboard::CopyRequest::begin(cx);
         self.copy_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { copy_tsv(&view, rows, &columns, header) })
@@ -383,10 +383,10 @@ impl TableView {
                     return;
                 }
                 let failure = match result {
-                    Ok(text) => crate::clipboard::write_tsv(text, cx)
+                    Ok(text) => crate::platform::clipboard::write_tsv(text, cx)
                         .err()
                         .map(String::from),
-                    Err(error) => Some(crate::errors::clipboard_message(&error)),
+                    Err(error) => Some(crate::ui::errors::clipboard_message(&error)),
                 };
                 table.copy_finished(failure, cx);
             })
@@ -399,6 +399,9 @@ fn size_(w: f32, h: f32) -> Size<Pixels> {
     size(px(w), px(h))
 }
 
+mod columns;
+pub(crate) mod data;
+mod find;
 mod find_style;
 mod frame;
 mod header;
@@ -412,6 +415,8 @@ mod gesture_tests;
 mod paint;
 mod query;
 use query::Notice;
+mod scroll;
+mod selection;
 #[cfg(test)]
 mod ui_fixture;
 #[cfg(test)]

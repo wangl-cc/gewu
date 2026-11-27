@@ -61,9 +61,9 @@ impl TableView {
                         && let Some(Some(source)) =
                             self.data.cached_cell_text(column, row.display.0)
                     {
-                        let prefix = crate::data::single_line_prefix(
+                        let prefix = crate::table::data::single_line_prefix(
                             source,
-                            crate::data::GRID_PREVIEW_BYTES,
+                            crate::table::data::GRID_PREVIEW_BYTES,
                         );
                         // A cold viewport can immediately prove literal matches within its
                         // bounded preview. Hidden and typed hits wait for the engine bitmap.
@@ -104,7 +104,7 @@ impl TableView {
                 let name = if name.len() > 1024
                     || name.contains(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
                 {
-                    crate::data::preview(name)
+                    crate::table::data::preview(name)
                 } else {
                     name.clone()
                 };

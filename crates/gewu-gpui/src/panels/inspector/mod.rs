@@ -395,7 +395,7 @@ impl Inspector {
             Showing::Loading => pane.child("Loading analysis…"),
             Showing::Failed(error) => pane
                 .child(
-                    crate::errors::inline_warning(crate::errors::message(error))
+                    crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                         .text_color(colors.danger_text),
                 )
                 .child(

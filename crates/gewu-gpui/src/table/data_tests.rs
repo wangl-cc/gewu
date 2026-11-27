@@ -53,7 +53,7 @@ fn a_failed_visible_block_reports_the_error_without_yielding_cell_text() {
 
 #[test]
 fn hidden_and_reordered_columns_keep_their_identity_and_manual_width() {
-    use crate::columns::ColumnWidth;
+    use crate::table::columns::ColumnWidth;
 
     let mut table = sample();
     let first = table.columns[0].id;

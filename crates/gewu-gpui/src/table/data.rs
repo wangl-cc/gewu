@@ -78,7 +78,7 @@ impl Block {
                 }
             }
             Err(error) => {
-                let message: SharedString = crate::errors::message(&error).into();
+                let message: SharedString = crate::ui::errors::message(&error).into();
                 Self {
                     budget: message.len(),
                     text: BlockText::Failed(message),
@@ -140,7 +140,7 @@ pub use gewu_app::{AppliedView, TableQuery};
 
 pub struct TableData {
     queries: QuerySession,
-    pub columns: crate::columns::TableColumns,
+    pub columns: crate::table::columns::TableColumns,
     cache: HashMap<(ColumnId, u64), Block>,
     cache_bytes: usize,
     tick: u64,
@@ -153,7 +153,7 @@ impl TableData {
     }
 
     pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
-        let columns = crate::columns::TableColumns::new(dataset.column_infos());
+        let columns = crate::table::columns::TableColumns::new(dataset.column_infos());
         Self {
             queries: QuerySession::new(AppliedView::new(dataset)),
             columns,
@@ -167,9 +167,9 @@ impl TableData {
         &self,
         row: gewu_core::ViewRow,
         id: ColumnId,
-    ) -> Option<crate::selection::Cell> {
+    ) -> Option<crate::table::selection::Cell> {
         let column = self.columns.position(id)?;
-        (row.0 < self.row_count()).then_some(crate::selection::Cell {
+        (row.0 < self.row_count()).then_some(crate::table::selection::Cell {
             row: row.0,
             column: column.index(),
         })

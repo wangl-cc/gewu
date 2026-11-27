@@ -143,7 +143,7 @@ impl Inspector {
         let colors = crate::theme::GewuPalette::get(cx);
         let custom = self.settings.limit != 2048;
         let active = custom || self.scatter_options_open;
-        let formatted_limit = crate::messages::format_count(u64::from(self.settings.limit));
+        let formatted_limit = crate::ui::messages::format_count(u64::from(self.settings.limit));
         let ink = if active {
             colors.accent
         } else {
@@ -176,7 +176,7 @@ impl Inspector {
                 crate::ui::segmented_radios("scatter-limit-choices", "Maximum points", window, cx);
             for limit in [512u32, 1024, 2048, 4096] {
                 let selected = self.settings.limit == limit;
-                let label = crate::messages::format_count(u64::from(limit));
+                let label = crate::ui::messages::format_count(u64::from(limit));
                 let pick = cx.listener(move |panel, _, _, cx| {
                     panel.settings.limit = limit;
                     panel.scatter_options_open = false;

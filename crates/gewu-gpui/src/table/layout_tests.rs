@@ -1,5 +1,5 @@
 use super::{Cell, Layout, ROW_HEIGHT, VerticalScroll, size_};
-use crate::scroll::Anchor;
+use crate::table::scroll::Anchor;
 
 #[test]
 fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
