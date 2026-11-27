@@ -58,6 +58,16 @@ impl Brush {
     }
 }
 
+/// Loading the column's facet and, for a range filter, its distribution.
+enum Load {
+    Loading(#[expect(dead_code, reason = "held to cancel the read when replaced")] Task<()>),
+    /// The facet is in the draft. `preview` holds the distribution once a range needed it.
+    Ready {
+        preview: Option<Arc<Option<RangeHistogram>>>,
+    },
+    Failed(gewu_core::Error),
+}
+
 mod choices;
 use choices::ChoiceRow;
 
@@ -68,7 +78,7 @@ pub(crate) struct FilterEditor {
     rows: Vec<ChoiceRow>,
     matches: Vec<usize>,
     search_task: Option<Task<()>>,
-    preview: Option<Arc<Option<RangeHistogram>>>,
+    load: Load,
     drag: Option<Brush>,
     scale: AxisScale,
     log_counts: bool,
@@ -80,8 +90,6 @@ pub(crate) struct FilterEditor {
     brushed_bounds: [Option<String>; 2],
     _bound_changes: [Subscription; 2],
     _input: Subscription,
-    load: Option<Task<()>>,
-    error: Option<gewu_core::Error>,
 }
 
 impl EventEmitter<FilterEvent> for FilterEditor {}
@@ -138,7 +146,7 @@ impl FilterEditor {
             rows: Vec::new(),
             matches: Vec::new(),
             search_task: None,
-            preview: None,
+            load: Load::Ready { preview: None },
             scale: AxisScale::Linear,
             drag: None,
             log_counts: false,
@@ -150,8 +158,6 @@ impl FilterEditor {
             brushed_bounds: [None, None],
             _bound_changes: bound_changes,
             _input: subscription,
-            load: None,
-            error: None,
         };
         this.load(cx);
         this
@@ -177,10 +183,8 @@ impl FilterEditor {
         let scale = self.scale;
         let mode = self.draft.mode;
         let keep_exact = self.draft.has_exact_condition();
-        self.preview = None;
         self.drag = None;
-        self.error = None;
-        self.load = Some(cx.spawn(async move |this, cx| {
+        self.load = Load::Loading(cx.spawn(async move |this, cx| {
             let result: gewu_core::Result<_> = cx
                 .background_spawn(async move {
                     let cache = snapshot.analyses();
@@ -200,23 +204,40 @@ impl FilterEditor {
                 })
                 .await;
             let _ = this.update(cx, |editor, cx| {
-                match result {
+                editor.load = match result {
                     Ok((facet, modes, preview)) => {
                         if !modes.contains(&editor.draft.mode) {
                             editor.draft.mode = modes[0];
                         }
                         editor.install_choices(facet, cx);
-                        editor.preview = preview;
+                        Load::Ready { preview }
                     }
-                    Err(error) => editor.error = Some(error),
-                }
+                    Err(error) => Load::Failed(error),
+                };
                 cx.notify();
             });
         }));
     }
 
+    /// The range distribution, once loaded and when the column has one.
+    fn preview(&self) -> Option<&RangeHistogram> {
+        match &self.load {
+            Load::Ready {
+                preview: Some(preview),
+            } => preview.as_ref().as_ref(),
+            _ => None,
+        }
+    }
+
+    fn load_error(&self) -> Option<&gewu_core::Error> {
+        match &self.load {
+            Load::Failed(error) => Some(error),
+            _ => None,
+        }
+    }
+
     fn selected_bins(&self, cx: &App) -> Option<(usize, usize)> {
-        let h = self.preview.as_deref()?.as_ref()?;
+        let h = self.preview()?;
         let low = self.low.read(cx).value();
         let high = self.high.read(cx).value();
         if low.is_empty() && high.is_empty() {
@@ -272,11 +293,7 @@ impl FilterEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let n = self
-            .preview
-            .as_deref()
-            .and_then(Option::as_ref)
-            .map_or(0, |h| h.ranges.len());
+        let n = self.preview().map_or(0, |h| h.ranges.len());
         let Some(last_index) = n.checked_sub(1) else {
             return;
         };
@@ -287,9 +304,7 @@ impl FilterEditor {
     }
 
     fn brush(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(drag), Some(histogram)) =
-            (self.drag, self.preview.as_deref().and_then(Option::as_ref))
-        else {
+        let (Some(drag), Some(histogram)) = (self.drag, self.preview()) else {
             return;
         };
         let (a, b) = drag.span(index, histogram.ranges.len());
@@ -321,7 +336,7 @@ impl FilterEditor {
 
     fn select_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         self.draft.mode = mode;
-        if mode == Mode::Range && self.preview.is_none() {
+        if mode == Mode::Range && !matches!(self.load, Load::Ready { preview: Some(_) }) {
             self.load(cx);
         }
         cx.notify();

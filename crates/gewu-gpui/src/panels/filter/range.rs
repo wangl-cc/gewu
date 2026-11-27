@@ -52,7 +52,7 @@ impl FilterEditor {
 
     pub(super) fn range(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let mut content = div().flex().flex_col().gap_2();
-        if let Some(preview) = self.preview.as_deref().and_then(Option::as_ref) {
+        if let Some(preview) = self.preview() {
             content = content.child(self.range_plot(preview, window, cx));
         }
         content.child(

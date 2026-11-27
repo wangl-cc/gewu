@@ -108,7 +108,7 @@ impl Render for FilterEditor {
         {
             panel = panel.child(super::super::filter_description(&applied.filter));
         }
-        if let Some(error) = &self.error {
+        if let Some(error) = self.load_error() {
             panel = panel.child(
                 crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                     .text_color(colors.danger_text),
@@ -214,7 +214,7 @@ impl Render for FilterEditor {
                             .child(choices),
                     );
             }
-        } else if self.error.is_none() {
+        } else if self.load_error().is_none() {
             panel = panel.child("Loading filter choices…");
         }
         panel
@@ -233,7 +233,7 @@ impl Render for FilterEditor {
                     )
                     .child(
                         button("apply-filter", "Apply", true, cx)
-                            .disabled(self.draft.facet().is_none() || self.error.is_some())
+                            .disabled(self.draft.facet().is_none() || self.load_error().is_some())
                             .on_click(cx.listener(|editor, _, _, cx| {
                                 editor.draft.search = editor.text.read(cx).value().to_string();
                                 editor.draft.low = editor.low.read(cx).value().to_string();
