@@ -1,4 +1,15 @@
 /// Format a display count with the English UI's digit grouping.
+/// The name a file format goes by in the interface.
+pub(crate) fn format_name(format: gewu_core::FileType) -> &'static str {
+    use gewu_core::FileType;
+    match format {
+        FileType::Parquet => "Parquet",
+        FileType::Csv => "CSV",
+        FileType::Tsv => "TSV",
+        FileType::Xlsx => "Excel",
+    }
+}
+
 /// Find found nothing in the current scope.
 pub(crate) const NO_MATCHES: &str = "No matches";
 

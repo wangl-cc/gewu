@@ -4,6 +4,8 @@ use gewu_core::{
     ValueParseError,
 };
 
+use super::messages::format_name;
+
 pub(crate) fn warning_icon() -> gpui_kit::component::Icon {
     use gpui_kit::{
         component::{Icon, Sizable, Size},
@@ -60,7 +62,8 @@ pub(crate) fn open_reason(error: &Error) -> String {
     match error {
         Error::File(FileError::Decode { format, .. }) => {
             format!(
-                "The file could not be read as {format}. It may be damaged or use a different format."
+                "The file could not be read as {}. It may be damaged or use a different format.",
+                format_name(*format)
             )
         }
         Error::Io(e) if e.source.kind() == std::io::ErrorKind::NotFound => {
@@ -96,10 +99,13 @@ pub(crate) fn message(error: &Error) -> String {
             };
             format!("Could not {action} {}. {}", e.path.display(), e.source)
         }
-        Error::File(FileError::UnknownFormat) => "Choose a Parquet, CSV, TSV or XLSX file.".into(),
+        Error::File(FileError::UnknownFormat) => "Choose a Parquet, CSV, TSV or Excel file.".into(),
         Error::File(FileError::NoWorksheets) => "The workbook has no worksheets.".into(),
         Error::File(FileError::Decode { format, source }) => {
-            format!("Could not read the file as {format}. {source}")
+            format!(
+                "Could not read the file as {}. {source}",
+                format_name(*format)
+            )
         }
         Error::File(FileError::SheetNotFound { sheet }) => {
             format!("The workbook has no worksheet named “{sheet}”.")
@@ -136,10 +142,16 @@ pub(crate) fn message(error: &Error) -> String {
             "The export would replace its source file. Choose another destination.".into()
         }
         Error::Export(ExportError::NestedColumns { format, .. }) => {
-            format!("Choose Parquet to preserve nested values, or export them as text in {format}.")
+            format!(
+                "Choose Parquet to preserve nested values, or export them as text in {}.",
+                format_name(*format)
+            )
         }
         Error::Export(ExportError::Encode { format, source }) => {
-            format!("Could not write the data as {format}. {source}")
+            format!(
+                "Could not write the data as {}. {source}",
+                format_name(*format)
+            )
         }
         Error::Export(e) => e.to_string(),
         Error::Column(e) => format!("Could not use the selected columns. {e}"),

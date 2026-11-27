@@ -75,7 +75,7 @@ Scatter analysis accepts `x_scale` and `y_scale` with independent `AxisScale::Li
 
 ## File adapters
 
-`FileType` selects read and write adapters under `file/`. `FileMetadata` is tagged by format, so format-specific metadata does not leak into unrelated formats. [File formats](../../docs/spec/file-formats.md) owns the externally visible inference, precision, conversion and worksheet policies.
+`FileType` selects read and write adapters under `file/`. `FileType::from_path` names the format of a path's extension without reading the file, `extension` gives the conventional extension for writing, and `has_header_choice` and `has_worksheets` tell which `OpenOptions` apply to a format. `FileMetadata` is tagged by format, so format-specific metadata does not leak into unrelated formats. [File formats](../../docs/spec/file-formats.md) owns the externally visible inference, precision, conversion and worksheet policies.
 
 `OpenOptions` supplies an explicit format, header policy (`has_header`) and XLSX worksheet name (`sheet`). The delimited adapter uses `arrow-csv` for decoding and writing, with the `csv` crate for the integer-precision check. XLSX uses Calamine for reading and `rust_xlsxwriter` for writing.
 

@@ -59,20 +59,41 @@ impl FileType {
         }
     }
 
+    /// The format a path's extension names, ignoring case. The content is not inspected,
+    /// so an extensionless Parquet file has none; opening it still detects the format.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?;
+        [Self::Parquet, Self::Csv, Self::Tsv, Self::Xlsx]
+            .into_iter()
+            .find(|format| extension.eq_ignore_ascii_case(format.extension()))
+    }
+
+    /// The conventional file extension, lowercase and without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Parquet => "parquet",
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+            Self::Xlsx => "xlsx",
+        }
+    }
+
+    /// Whether the first row can be read either as column names or as data
+    /// ([`OpenOptions::has_header`]).
+    pub fn has_header_choice(self) -> bool {
+        matches!(self, Self::Csv | Self::Tsv | Self::Xlsx)
+    }
+
+    /// Whether a file holds named worksheets ([`OpenOptions::sheet`]).
+    pub fn has_worksheets(self) -> bool {
+        self == Self::Xlsx
+    }
+
     fn detect(path: &Path, file: &mut File) -> Result<Self, FileError> {
         // A CSV header can itself start with PAR1, so a recognized extension
         // takes precedence over the extensionless Parquet fallback.
-        match path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("parquet") => return Ok(Self::Parquet),
-            Some("csv") => return Ok(Self::Csv),
-            Some("tsv") => return Ok(Self::Tsv),
-            Some("xlsx") => return Ok(Self::Xlsx),
-            _ => {}
+        if let Some(format) = Self::from_path(path) {
+            return Ok(format);
         }
         let mut magic = [0; 4];
         let n = file

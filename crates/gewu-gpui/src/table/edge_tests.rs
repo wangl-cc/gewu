@@ -253,10 +253,11 @@ fn export_panel_writes_each_format_and_selected_parquet_codec() {
         w.keys("cmd-shift-e");
         w.ui.update(|window, cx| window.click("export-format", cx));
         w.settle();
-        let label = if format == "parquet" {
-            "Parquet".to_owned()
-        } else {
-            format.to_uppercase()
+        let label = match format {
+            "parquet" => "Parquet",
+            "xlsx" => "Excel",
+            "csv" => "CSV",
+            _ => "TSV",
         };
         w.ui.update(|window, cx| window.click(label, cx));
         w.settle();

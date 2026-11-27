@@ -45,8 +45,7 @@ impl ExportController {
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
-        let extension = draft.format.to_string().to_lowercase();
-        let name = format!("{stem}-export.{extension}");
+        let name = format!("{stem}-export.{}", draft.format.extension());
         let receiver = cx.prompt_for_new_path(
             draft.source.parent().unwrap_or(std::path::Path::new(".")),
             Some(&name),

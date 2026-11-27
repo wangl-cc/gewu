@@ -1,7 +1,7 @@
 //! An information window owns only a description of the file as it was opened.
 use std::path::PathBuf;
 
-use gewu_core::{Dataset, FileMetadata, FileType};
+use gewu_core::{Dataset, FileMetadata};
 use gpui_kit::{base::SelectableText, *};
 
 use crate::{
@@ -39,12 +39,7 @@ impl From<&Dataset> for FileDetails {
             .unwrap_or(path.as_os_str())
             .to_string_lossy()
             .into_owned();
-        let kind = match dataset.format() {
-            FileType::Csv => "CSV",
-            FileType::Tsv => "TSV",
-            FileType::Xlsx => "Excel",
-            FileType::Parquet => "Parquet",
-        };
+        let kind = crate::ui::messages::format_name(dataset.format());
         let mut rows = vec![
             ("Name".into(), name),
             ("Kind".into(), format!("{kind} table")),

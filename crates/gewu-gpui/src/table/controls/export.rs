@@ -84,7 +84,7 @@ impl TableView {
                 .iter()
                 .map(|format| Choice {
                     value: *format,
-                    label: format.to_string().into(),
+                    label: crate::ui::messages::format_name(*format).into(),
                 })
                 .collect(),
             selected: Some(draft.format),

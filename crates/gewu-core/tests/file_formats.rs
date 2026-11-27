@@ -475,3 +475,36 @@ mod xlsx {
             .starts_with(".gewu-export-")));
     }
 }
+
+#[test]
+fn a_path_names_its_format_by_extension_regardless_of_case() {
+    use std::path::Path;
+    for format in [
+        FileType::Parquet,
+        FileType::Csv,
+        FileType::Tsv,
+        FileType::Xlsx,
+    ] {
+        let lower = format!("table.{}", format.extension());
+        let upper = format!("table.{}", format.extension().to_uppercase());
+        assert_eq!(FileType::from_path(Path::new(&lower)), Some(format));
+        assert_eq!(FileType::from_path(Path::new(&upper)), Some(format));
+    }
+    for unnamed in ["table", "table.txt", "csv", ".parquet"] {
+        assert_eq!(FileType::from_path(Path::new(unnamed)), None, "{unnamed}");
+    }
+    let header: Vec<_> = [
+        FileType::Parquet,
+        FileType::Csv,
+        FileType::Tsv,
+        FileType::Xlsx,
+    ]
+    .map(|format| (format.has_header_choice(), format.has_worksheets()))
+    .into();
+    assert_eq!(header, [
+        (false, false),
+        (true, false),
+        (true, false),
+        (true, true)
+    ]);
+}

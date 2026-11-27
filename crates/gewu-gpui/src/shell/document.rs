@@ -139,9 +139,7 @@ impl Document {
     fn start_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.path.clone();
         let list_sheets = self.sheets.is_empty()
-            && path
-                .extension()
-                .is_some_and(|s| s.eq_ignore_ascii_case("xlsx"));
+            && FileType::from_path(&path).is_some_and(FileType::has_worksheets);
         self.reader = Some(cx.spawn_in(window, async move |this, cx| {
             // Several clicks may arrive before GPUI schedules the reader.
             let Ok(Some(import)) = this.update(cx, |this, _| this.import.begin_read()) else {
@@ -192,10 +190,7 @@ impl Document {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.header_available = matches!(
-            dataset.format(),
-            FileType::Csv | FileType::Tsv | FileType::Xlsx
-        );
+        self.header_available = dataset.format().has_header_choice();
         if let FileMetadata::Xlsx { sheet, sheets } = dataset.metadata() {
             self.set_sheets(sheets.clone(), cx);
             import.sheet = Some(sheet.clone());

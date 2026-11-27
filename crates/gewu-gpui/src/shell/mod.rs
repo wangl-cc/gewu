@@ -309,12 +309,10 @@ fn open_document(
     Ok(opened)
 }
 
+/// Whether the file at `path` offers reading its first row as column names, judged by name
+/// before it is opened.
 fn supports_header(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| {
-        ["csv", "tsv", "xlsx"]
-            .iter()
-            .any(|kind| ext.eq_ignore_ascii_case(kind))
-    })
+    gewu_core::FileType::from_path(path).is_some_and(gewu_core::FileType::has_header_choice)
 }
 
 fn open_with_header(paths: Vec<PathBuf>, has_header: bool, cx: &mut App) {
