@@ -9,6 +9,7 @@ use crate::{actions::*, platform};
 pub(crate) mod assets;
 pub(crate) mod document;
 mod export;
+mod import;
 mod info;
 mod picker;
 

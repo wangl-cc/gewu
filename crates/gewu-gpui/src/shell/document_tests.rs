@@ -128,7 +128,7 @@ fn picker_header_choice_applies_to_eligible_files_and_parquet_offers_recovery() 
     for index in 0..3 {
         let (doc, _) = session.viewer(index);
         doc.read_with(&session.app, |doc, cx| {
-            assert!(doc.header_available && !doc.displayed.has_header);
+            assert!(doc.header_available && !doc.import.displayed().has_header);
             if index < 2 {
                 assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
             }
@@ -174,7 +174,7 @@ fn finder_import_options_warn_before_removing_conditions_and_allow_cancel() {
     session.app.simulate_prompt_answer("Cancel");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
-        assert!(doc.displayed.has_header);
+        assert!(doc.import.displayed().has_header);
         assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
     });
     ui.dispatch_action(ImportOptions);
@@ -182,7 +182,7 @@ fn finder_import_options_warn_before_removing_conditions_and_allow_cancel() {
     session.app.simulate_prompt_answer("Read as Data");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
-        assert!(!doc.displayed.has_header);
+        assert!(!doc.import.displayed().has_header);
         assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 4);
     });
 }
@@ -254,7 +254,7 @@ fn sheet_switches_keep_the_shown_table_on_failure_or_cancellation() {
     session.open(vec![fixture("multi-sheet.xlsx")]);
     let (doc, mut ui) = session.viewer(0);
     let original = doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("First"));
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("First"));
         doc.table.clone().unwrap()
     });
     let index = |sheet| {
@@ -267,7 +267,7 @@ fn sheet_switches_keep_the_shown_table_on_failure_or_cancellation() {
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
         assert!(
-            matches!(&doc.load, Load::Failed(_, error) if error.to_string().contains("#DIV/0!"))
+            matches!(doc.import.load(), Load::Failed(_, error) if error.to_string().contains("#DIV/0!"))
         );
         assert_eq!(doc.table.as_ref(), Some(&original));
     });
@@ -277,13 +277,13 @@ fn sheet_switches_keep_the_shown_table_on_failure_or_cancellation() {
     });
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert!(matches!(doc.load, Load::Ready));
+        assert!(matches!(*doc.import.load(), Load::Ready));
         assert_eq!(doc.table.as_ref(), Some(&original));
     });
     ui.update(|w, cx| w.click(("sheet", last), cx));
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"));
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Last"));
         assert_ne!(doc.table.as_ref(), Some(&original));
     });
 }
@@ -317,7 +317,7 @@ fn a_narrow_workbook_shares_one_footer_between_worksheets_and_status() {
         assert_eq!(w.find(("sheet", last)).selected(), Some(true));
     });
     doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"))
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Last"))
     });
 }
 
@@ -341,8 +341,8 @@ fn worksheet_and_header_edits_compose_before_the_reader_finishes() {
     session.app.simulate_prompt_answer("Read as Data");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"));
-        assert!(!doc.displayed.has_header);
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Last"));
+        assert!(!doc.import.displayed().has_header);
     });
 
     ui.dispatch_action(ImportOptions);
@@ -351,8 +351,8 @@ fn worksheet_and_header_edits_compose_before_the_reader_finishes() {
     ui.update(|w, cx| w.click(("sheet", first), cx));
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("First"));
-        assert!(doc.displayed.has_header);
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("First"));
+        assert!(doc.import.displayed().has_header);
     });
 }
 
@@ -453,7 +453,7 @@ fn unreadable_first_sheet_leaves_the_workbook_catalog_available() {
     let first = doc.read_with(&session.app, |doc, cx| {
         assert!(doc.table.is_none());
         assert!(
-            matches!(&doc.load, Load::Failed(_, error) if error.to_string().contains("#DIV/0!"))
+            matches!(doc.import.load(), Load::Failed(_, error) if error.to_string().contains("#DIV/0!"))
         );
         assert!(cx.global::<Documents>().recent.paths().is_empty());
         assert_eq!(doc.sheets[0], "Bad");
@@ -462,8 +462,8 @@ fn unreadable_first_sheet_leaves_the_workbook_catalog_available() {
     ui.update(|w, cx| w.click(("sheet", first), cx));
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
-        assert!(matches!(doc.load, Load::Ready));
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("First"));
+        assert!(matches!(*doc.import.load(), Load::Ready));
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("First"));
         assert_eq!(
             cx.global::<Documents>().recent.paths(),
             std::slice::from_ref(&doc.path)
@@ -495,7 +495,7 @@ fn chart_page_and_point_limit_survive_replacing_the_worksheet() {
     });
     ui.run_until_parked();
     doc.read_with(&session.app, |d, _| {
-        assert_eq!(d.displayed.sheet.as_deref(), Some("Last"))
+        assert_eq!(d.import.displayed().sheet.as_deref(), Some("Last"))
     });
     ui.update(|w, cx| {
         w.render_frame(cx);
@@ -521,8 +521,8 @@ fn failed_header_reload_retries_the_requested_options() {
     session.app.simulate_prompt_answer("Read as Data");
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert!(matches!(doc.load, Load::Failed(_, _)));
-        assert!(doc.displayed.has_header);
+        assert!(matches!(*doc.import.load(), Load::Failed(_, _)));
+        assert!(doc.import.displayed().has_header);
         assert_eq!(doc.table.as_ref(), Some(&original));
     });
     fs::rename(moved, file).unwrap();
@@ -534,8 +534,8 @@ fn failed_header_reload_retries_the_requested_options() {
     });
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
-        assert!(matches!(doc.load, Load::Ready));
-        assert!(!doc.displayed.has_header);
+        assert!(matches!(*doc.import.load(), Load::Ready));
+        assert!(!doc.import.displayed().has_header);
         assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
     });
 }
@@ -555,7 +555,7 @@ fn successive_unicode_sheet_requests_preserve_exact_names() {
     });
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("Cafe\u{301}"));
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Cafe\u{301}"));
         assert_eq!(doc.table.as_ref().unwrap().read(cx).data.columns.len(), 1);
     });
 }
@@ -575,7 +575,9 @@ fn document_menu_reads_file_info_and_changes_import_options() {
     session.app.run_until_parked();
     session.app.simulate_prompt_answer("Read as Data");
     session.app.run_until_parked();
-    doc.read_with(&session.app, |doc, _| assert!(!doc.displayed.has_header));
+    doc.read_with(&session.app, |doc, _| {
+        assert!(!doc.import.displayed().has_header)
+    });
     ui.dispatch_action(ClearRecent);
     session.app.run_until_parked();
     session
@@ -601,7 +603,7 @@ fn export_keeps_the_original_worksheet_when_the_save_panel_outlives_a_switch() {
     ui.update(|w, cx| w.click(("sheet", last), cx));
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, _| {
-        assert_eq!(doc.displayed.sheet.as_deref(), Some("Last"))
+        assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Last"))
     });
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("first.csv");

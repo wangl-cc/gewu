@@ -10,7 +10,12 @@ use gpui_kit::{
     *,
 };
 
-use super::{GetInfo, ImportOptions, export::ExportController, info, open_paths, record_recent};
+use super::{
+    GetInfo, ImportOptions,
+    export::ExportController,
+    import::{Import, ImportSession, Load, ReadOutcome},
+    info, open_paths, record_recent,
+};
 use crate::{
     actions,
     panels::{Inspector, InspectorPage},
@@ -19,18 +24,6 @@ use crate::{
     table::{TableEvent, TableView, data::TableData},
     ui::{button, disclosure, segment, segmented_tabs},
 };
-
-#[derive(Clone, PartialEq, Eq)]
-struct Import {
-    sheet: Option<String>,
-    has_header: bool,
-}
-
-enum Load {
-    Ready,
-    Pending(Import),
-    Failed(Import, gewu_core::Error),
-}
 
 /// A scatter point revealed in the table, marked in the chart until the selection leaves it.
 struct MarkedPoint {
@@ -50,9 +43,8 @@ pub(crate) struct Document {
     export: Option<Entity<ExportController>>,
     sheets: Vec<String>,
     worksheet_tabs: Option<Entity<WorksheetTabs>>,
-    displayed: Import,
     header_available: bool,
-    load: Load,
+    import: ImportSession,
     reader: Option<Task<()>>,
     import_dialog: Option<Task<()>>,
     show_error_details: bool,
@@ -92,27 +84,18 @@ impl Document {
             export: None,
             sheets: Vec::new(),
             worksheet_tabs: None,
-            displayed: initial.clone(),
             header_available,
-            load: Load::Ready,
+            import: ImportSession::new(initial),
             reader: None,
             import_dialog: None,
             show_error_details: false,
         };
-        document.request(initial, window, cx);
+        document.start_reader(window, cx);
         document
     }
 
     pub(crate) fn table(&self) -> Option<Entity<TableView>> {
         self.table.clone()
-    }
-
-    fn import_selection(&self) -> &Import {
-        match &self.load {
-            Load::Pending(import) => import,
-            Load::Failed(import, _) if self.table.is_none() => import,
-            _ => &self.displayed,
-        }
     }
 
     fn edit_import(
@@ -121,13 +104,13 @@ impl Document {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut import = self.import_selection().clone();
+        let mut import = self.import.selection().clone();
         edit(&mut import);
         self.request(import, window, cx);
     }
 
-    fn set_load(&mut self, load: Load, cx: &mut Context<Self>) {
-        self.load = load;
+    /// The load state changed: technical details of an earlier failure collapse.
+    fn load_changed(&mut self, cx: &mut Context<Self>) {
         self.show_error_details = false;
         cx.notify();
     }
@@ -145,20 +128,15 @@ impl Document {
     }
 
     fn request(&mut self, import: Import, window: &mut Window, cx: &mut Context<Self>) {
-        if self.table.is_some() && self.displayed == import {
-            self.set_load(Load::Ready, cx);
-        } else {
-            self.set_load(Load::Pending(import), cx);
-            self.start_pending(window, cx);
+        let start = self.import.request(import);
+        self.load_changed(cx);
+        if start {
+            self.start_reader(window, cx);
         }
     }
 
-    // Disk reads are blocking. Keep one running reader and only the latest requested
-    // import, so a cancelled read cannot install a stale table or overlap a new decode.
-    fn start_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.reader.is_some() || !matches!(self.load, Load::Pending(_)) {
-            return;
-        }
+    /// Read the latest requested import in the background. See [`ImportSession`].
+    fn start_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.path.clone();
         let list_sheets = self.sheets.is_empty()
             && path
@@ -166,14 +144,7 @@ impl Document {
                 .is_some_and(|s| s.eq_ignore_ascii_case("xlsx"));
         self.reader = Some(cx.spawn_in(window, async move |this, cx| {
             // Several clicks may arrive before GPUI schedules the reader.
-            let Ok(Some(import)) = this.update(cx, |this, _| {
-                if let Load::Pending(latest) = &this.load {
-                    Some(latest.clone())
-                } else {
-                    this.reader = None;
-                    None
-                }
-            }) else {
+            let Ok(Some(import)) = this.update(cx, |this, _| this.import.begin_read()) else {
                 return;
             };
             let options = import.clone();
@@ -202,15 +173,13 @@ impl Document {
                     if let Some(sheets) = sheets {
                         this.set_sheets(sheets, cx);
                     }
-                    if matches!(&this.load, Load::Pending(latest) if *latest == import) {
-                        match dataset {
-                            Ok(dataset) => this.install(dataset, import, window, cx),
-                            Err(error) => this.set_load(Load::Failed(import, error), cx),
-                        }
-                    } else {
-                        this.start_pending(window, cx);
-                        cx.notify();
+                    match this.import.read_finished(import.clone(), dataset) {
+                        ReadOutcome::Install(dataset) => this.install(dataset, import, window, cx),
+                        ReadOutcome::Failed => this.load_changed(cx),
+                        ReadOutcome::Next => this.start_reader(window, cx),
+                        ReadOutcome::Withdrawn => {}
                     }
+                    cx.notify();
                 })
             });
         }));
@@ -231,7 +200,7 @@ impl Document {
             self.set_sheets(sheets.clone(), cx);
             import.sheet = Some(sheet.clone());
         }
-        self.displayed = import;
+        self.import.installed(import);
         let table =
             cx.new(|cx| TableView::new(TableData::from_dataset(Arc::new(dataset)), window, cx));
         self._table_events = Some(cx.subscribe(&table, Self::on_table_event));
@@ -250,7 +219,7 @@ impl Document {
             record_recent(&self.path, cx);
         }
         self.table = Some(table);
-        self.set_load(Load::Ready, cx);
+        self.load_changed(cx);
     }
 
     fn on_table_event(
@@ -385,7 +354,7 @@ impl Document {
         } else {
             "first occupied row"
         };
-        let current = if self.import_selection().has_header {
+        let current = if self.import.selection().has_header {
             "column names"
         } else {
             "data"
@@ -709,7 +678,7 @@ impl Render for Document {
                 cx.listener(|this, _: &ImportOptions, w, cx| this.import_options(w, cx)),
             );
         }
-        let load = match &self.load {
+        let load = match self.import.load() {
             Load::Ready => None,
             Load::Pending(_) => Some(
                 div()
@@ -843,7 +812,7 @@ impl Render for WorksheetTabs {
                 let sheet = name.clone();
                 let parent = self.document.clone();
                 let scroll = self.scroll.clone();
-                let active = doc.import_selection().sheet.as_ref() == Some(name);
+                let active = doc.import.selection().sheet.as_ref() == Some(name);
                 let tab = Tab::new(("sheet", index))
                     .selected(active)
                     .set_position(index + 1, doc.sheets.len())
