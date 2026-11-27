@@ -336,9 +336,9 @@ impl TableView {
         self.copy_finished(None, cx);
     }
 
-    fn copy_finished(&mut self, failure: Option<String>, cx: &mut Context<Self>) {
-        if let Some(message) = failure {
-            self.notice = Some(Notice::CopyFailed(message));
+    fn copy_finished(&mut self, failure: Option<CopyFailure>, cx: &mut Context<Self>) {
+        if let Some(failure) = failure {
+            self.notice = Some(Notice::CopyFailed(failure));
             cx.notify();
         } else if matches!(self.notice, Some(Notice::CopyFailed(_))) {
             self.notice = None;
@@ -366,8 +366,8 @@ impl TableView {
                 let failure = match result {
                     Ok(text) => crate::platform::clipboard::write_tsv(text, cx)
                         .err()
-                        .map(|error| crate::ui::errors::pasteboard_message(error).to_owned()),
-                    Err(error) => Some(crate::ui::errors::clipboard_message(&error)),
+                        .map(CopyFailure::Pasteboard),
+                    Err(error) => Some(CopyFailure::Encode(error)),
                 };
                 table.copy_finished(failure, cx);
             })
@@ -396,6 +396,7 @@ mod controls;
 mod gesture_tests;
 mod paint;
 mod query;
+pub(crate) use query::CopyFailure;
 use query::Notice;
 mod scroll;
 mod selection;

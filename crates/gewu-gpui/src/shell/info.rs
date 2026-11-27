@@ -97,7 +97,7 @@ pub(super) fn open(dataset: &Dataset, cx: &mut App) {
         ));
         cx.new(|_| details)
     }) {
-        super::report_window_error(error.to_string(), cx);
+        super::report_window_error(&error.to_string(), cx);
     }
 }
 

@@ -158,7 +158,8 @@ fn a_copy_failure_survives_query_changes_and_clears_after_a_successful_copy() {
     let mut w = open();
     w.app.update(|cx| {
         w.table.update(cx, |table, cx| {
-            table.copy_finished(Some("Could not write to the clipboard".into()), cx);
+            let limit = gewu_core::ExportError::SizeLimit { limit: 1 << 20 };
+            table.copy_finished(Some(super::CopyFailure::Encode(limit.into())), cx);
             table.cycle_sort(1, false, cx);
         })
     });

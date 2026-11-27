@@ -9,9 +9,11 @@ use crate::{actions::*, platform};
 pub(crate) mod assets;
 pub(crate) mod document;
 mod export;
+pub(crate) use export::ExportFailure;
 mod import;
 mod info;
 mod picker;
+pub(crate) use picker::PickerError;
 mod update;
 
 gpui_kit::actions!(gewu, [
@@ -228,13 +230,13 @@ pub(crate) fn update_menus(cx: &App) {
     ]);
 }
 
-fn report_window_error(message: String, cx: &mut App) {
+fn report_window_error(message: &str, cx: &mut App) {
     if let Some(active) = cx.active_window() {
         let _ = active.update(cx, |_, window, cx| {
             window.prompt(
                 PromptLevel::Critical,
                 "Could Not Open Table",
-                Some(&message),
+                Some(message),
                 &["OK"],
                 cx,
             )
@@ -243,7 +245,7 @@ fn report_window_error(message: String, cx: &mut App) {
         cx.show_system_notification(SystemNotification {
             tag: "gewu-open-error".into(),
             title: "Could Not Open Table".into(),
-            body: message.into(),
+            body: message.to_owned().into(),
             actions: Vec::new(),
         });
     }
@@ -256,7 +258,7 @@ fn choose_files(cx: &mut App) {
     }
     match picker::FilePicker::show(cx) {
         Ok(picker) => cx.global_mut::<Documents>().picker = Some(picker),
-        Err(error) => report_window_error(error, cx),
+        Err(error) => report_window_error(&crate::ui::errors::picker_message(&error), cx),
     }
 }
 
@@ -340,7 +342,7 @@ fn open_with_header(paths: Vec<PathBuf>, has_header: bool, cx: &mut App) {
         let has_header = has_header || !supports_header(&path);
         let options = platform::window_options(cx);
         if let Err(err) = open_document(path, has_header, options, cx) {
-            report_window_error(err.to_string(), cx);
+            report_window_error(&err.to_string(), cx);
         }
     }
 }

@@ -66,18 +66,11 @@ impl TableView {
                         .into_any_element(),
                 );
             }
-            Some(Notice::CopyFailed(message) | Notice::FilterFailed(message)) => {
-                items.push(
-                    crate::ui::errors::inline_warning(message.clone())
-                        .id("operation-notice")
-                        .role(Role::Alert)
-                        .aria_label(message.clone())
-                        .text_color(colors.danger_text)
-                        .min_w_0()
-                        .truncate()
-                        .test_support()
-                        .into_any_element(),
-                );
+            Some(Notice::CopyFailed(failure)) => {
+                items.push(failure_notice(crate::ui::errors::copy_message(failure), cx));
+            }
+            Some(Notice::FilterFailed(error)) => {
+                items.push(failure_notice(crate::ui::errors::message(error), cx));
             }
             _ => {}
         }
@@ -228,4 +221,18 @@ impl TableView {
         }
         panel.into_any_element()
     }
+}
+
+/// A failed operation, announced to assistive technology.
+fn failure_notice(message: String, cx: &App) -> AnyElement {
+    let colors = crate::theme::GewuPalette::get(cx);
+    crate::ui::errors::inline_warning(message.clone())
+        .id("operation-notice")
+        .role(Role::Alert)
+        .aria_label(message)
+        .text_color(colors.danger_text)
+        .min_w_0()
+        .truncate()
+        .test_support()
+        .into_any_element()
 }

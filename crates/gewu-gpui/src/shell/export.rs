@@ -16,8 +16,16 @@ pub(super) enum ExportController {
         _task: Task<()>,
     },
     Writing(WorkingExport),
-    Finished(String),
-    Failed(String),
+    /// The name of the file written.
+    Exported(String),
+    Cancelled,
+    Failed(ExportFailure),
+}
+
+pub(crate) enum ExportFailure {
+    /// The save panel could not be shown.
+    Destination(Box<dyn std::error::Error + Send + Sync>),
+    Write(gewu_core::Error),
 }
 
 pub(super) struct WorkingExport {
@@ -57,10 +65,9 @@ impl ExportController {
                     *model = ExportController::Idle;
                     match destination {
                         Ok(Ok(Some(path))) => model.write_export(draft, path, cx),
-                        Ok(Err(e)) => {
-                            *model = ExportController::Failed(format!(
-                                "Could not choose export destination: {e}"
-                            ))
+                        Ok(Err(error)) => {
+                            *model =
+                                ExportController::Failed(ExportFailure::Destination(error.into()))
                         }
                         _ => {}
                     }
@@ -75,7 +82,7 @@ impl ExportController {
         let job = match draft.view.export(&draft.columns, draft.format) {
             Ok(job) => Arc::new(job),
             Err(error) => {
-                *self = ExportController::Failed(crate::ui::errors::message(&error));
+                *self = ExportController::Failed(ExportFailure::Write(error));
                 return;
             }
         };
@@ -103,12 +110,10 @@ impl ExportController {
                                 p.parquet_compression = draft.compression;
                             }
                         });
-                        ExportController::Finished(format!("Exported {title}"))
+                        ExportController::Exported(title)
                     }
-                    Err(gewu_core::Error::Cancelled) => {
-                        ExportController::Finished("Export cancelled".into())
-                    }
-                    Err(error) => ExportController::Failed(crate::ui::errors::message(&error)),
+                    Err(gewu_core::Error::Cancelled) => ExportController::Cancelled,
+                    Err(error) => ExportController::Failed(ExportFailure::Write(error)),
                 };
                 cx.notify();
             });
@@ -141,11 +146,16 @@ impl Render for ExportController {
             ExportController::Choosing { .. } => {
                 bar.child(status("Choosing export destination…".into()))
             }
-            ExportController::Finished(message) => bar.child(status(message.clone().into())),
-            ExportController::Failed(message) => bar
+            ExportController::Exported(name) => {
+                bar.child(status(format!("Exported {name}").into()))
+            }
+            ExportController::Cancelled => bar.child(status("Export cancelled".into())),
+            ExportController::Failed(failure) => bar
                 .text_color(crate::theme::GewuPalette::get(cx).danger_text)
                 .child(crate::ui::errors::warning_icon())
-                .child(status(message.clone().into())),
+                .child(status(
+                    crate::ui::errors::export_failure_message(failure).into(),
+                )),
             ExportController::Writing(active) => {
                 let progress = active.job.progress();
                 bar.child(status(

@@ -4,7 +4,10 @@ impl TableView {
     pub(super) fn build_frame(&mut self, layout: Rc<Layout>, cx: &App) -> Frame {
         let visible = layout.columns.iter().map(|c| c.0);
         let visible_rows = layout.vertical.visible_rows();
-        let formatting_error = self.data.prefetch(visible, visible_rows.clone());
+        let formatting_error = self
+            .data
+            .prefetch(visible, visible_rows.clone())
+            .map(|error| crate::ui::errors::message(error).into());
 
         let find = self.find.read(cx);
         let row_y = |row: u64| HEADER_HEIGHT + layout.vertical.row_top(row) as f32;

@@ -5,6 +5,14 @@ use gpui_kit::*;
 
 use super::{Documents, open_with_header, report_window_error};
 
+/// Why the picker could not offer files.
+pub(crate) enum PickerError {
+    NotMainThread,
+    /// AppKit did not create an open panel.
+    Unavailable,
+    Prompt(Box<dyn std::error::Error + Send + Sync>),
+}
+
 pub(super) struct FilePicker {
     #[cfg(target_os = "macos")]
     panel: Option<crate::platform::macos::OpenPanel>,
@@ -12,17 +20,16 @@ pub(super) struct FilePicker {
 }
 
 impl FilePicker {
-    pub fn show(cx: &mut App) -> Result<Self, String> {
+    pub fn show(cx: &mut App) -> Result<Self, PickerError> {
         #[cfg(target_os = "macos")]
         if !cx.is_test() {
-            let main =
-                objc2::MainThreadMarker::new().ok_or("The file picker needs the main thread.")?;
+            let main = objc2::MainThreadMarker::new().ok_or(PickerError::NotMainThread)?;
             let (sender, receiver) = async_channel::bounded(1);
             let panel =
                 crate::platform::macos::open_files(main, super::supports_header, move |choice| {
                     let _ = sender.try_send(choice);
                 })
-                .ok_or("macOS could not open the file picker.")?;
+                .ok_or(PickerError::Unavailable)?;
             return Ok(Self {
                 panel: Some(panel),
                 _selection: Self::receive(
@@ -42,7 +49,7 @@ impl FilePicker {
                 .await
                 .unwrap_or(Ok(None))
                 .map(|paths| paths.map(|p| (p, true)))
-                .map_err(|e| e.to_string())
+                .map_err(|error| PickerError::Prompt(error.into()))
         };
         Ok(Self {
             #[cfg(target_os = "macos")]
@@ -52,7 +59,7 @@ impl FilePicker {
     }
 
     fn receive(
-        selection: impl Future<Output = Result<Option<(Vec<PathBuf>, bool)>, String>> + 'static,
+        selection: impl Future<Output = Result<Option<(Vec<PathBuf>, bool)>, PickerError>> + 'static,
         cx: &mut App,
     ) -> Task<()> {
         cx.spawn(async move |cx| {
@@ -61,7 +68,9 @@ impl FilePicker {
                 cx.global_mut::<Documents>().picker = None;
                 match result {
                     Ok(Some((paths, header))) => open_with_header(paths, header, cx),
-                    Err(error) => report_window_error(error, cx),
+                    Err(error) => {
+                        report_window_error(&crate::ui::errors::picker_message(&error), cx)
+                    }
                     Ok(None) => {}
                 }
             });

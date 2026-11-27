@@ -47,7 +47,7 @@ enum BlockText {
         visible: Vec<OnceCell<SharedString>>,
         originals: Vec<Option<SharedString>>,
     },
-    Failed(SharedString),
+    Failed(gewu_core::Error),
 }
 
 struct Block {
@@ -77,14 +77,11 @@ impl Block {
                     budget,
                 }
             }
-            Err(error) => {
-                let message: SharedString = crate::ui::errors::message(&error).into();
-                Self {
-                    budget: message.len(),
-                    text: BlockText::Failed(message),
-                    tick,
-                }
-            }
+            Err(error) => Self {
+                budget: size_of::<gewu_core::Error>(),
+                text: BlockText::Failed(error),
+                tick,
+            },
         }
     }
 
@@ -220,17 +217,18 @@ impl TableData {
         change
     }
 
-    /// Format missing blocks and keep the visible working set resident.
+    /// Format missing blocks and keep the visible working set resident. Returns the error of
+    /// a visible block that could not be formatted.
     pub fn prefetch(
         &mut self,
         columns: impl IntoIterator<Item = usize>,
         rows: Range<u64>,
-    ) -> Option<SharedString> {
+    ) -> Option<&gewu_core::Error> {
         self.tick += 1;
         if rows.is_empty() {
             return None;
         }
-        let mut error = None;
+        let mut failed = None;
         let blocks = rows.start / BLOCK_ROWS..=(rows.end - 1) / BLOCK_ROWS;
         for column in columns {
             for block in blocks.clone() {
@@ -248,10 +246,8 @@ impl TableData {
                     cells
                 });
                 entry.tick = self.tick;
-                if error.is_none()
-                    && let BlockText::Failed(message) = &entry.text
-                {
-                    error = Some(message.clone());
+                if failed.is_none() && matches!(entry.text, BlockText::Failed(_)) {
+                    failed = Some(key);
                 }
             }
         }
@@ -272,7 +268,11 @@ impl TableData {
                 }
             }
         }
-        error
+        // Eviction only removes blocks outside this working set.
+        match &self.cache.get(&failed?)?.text {
+            BlockText::Failed(error) => Some(error),
+            BlockText::Ready { .. } => None,
+        }
     }
 
     /// Cached text of a cell: `Some(None)` is null; unfetched or failed blocks have no value.

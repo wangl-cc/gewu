@@ -45,7 +45,10 @@ fn a_failed_visible_block_reports_the_error_without_yielding_cell_text() {
         ),
     );
     let error = data.prefetch([0], 0..1).unwrap();
-    assert!(error.contains("fixture"));
+    assert!(matches!(
+        error,
+        gewu_core::Error::Internal(gewu_core::InternalError::Invariant(text)) if text == "fixture"
+    ));
     assert!(data.cell_preview(0, 0).is_none());
     assert!(data.cell(0, 0).is_none());
     assert!(data.prefetch([1], 0..1).is_none());

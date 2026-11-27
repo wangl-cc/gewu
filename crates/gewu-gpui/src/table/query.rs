@@ -2,10 +2,18 @@ use gewu_app::{QueryCompletion, QueryJob, QueryResult};
 
 use super::*;
 
+/// The status bar's report of the last table operation. One slot: a newer report replaces
+/// an older one, and an operation that succeeds clears its own kind of failure.
 pub(super) enum Notice {
     SelectCellToFilter,
-    FilterFailed(String),
-    CopyFailed(String),
+    FilterFailed(gewu_core::Error),
+    CopyFailed(CopyFailure),
+}
+
+pub(crate) enum CopyFailure {
+    /// Encoding the selection as TSV failed.
+    Encode(gewu_core::Error),
+    Pasteboard(crate::platform::clipboard::PasteboardError),
 }
 
 impl TableView {
@@ -59,7 +67,7 @@ impl TableView {
             Ok(Some(filter)) => self.set_filter(filter.column, Some(filter.filter), cx),
             Ok(None) => (),
             Err(error) => {
-                self.notice = Some(Notice::FilterFailed(crate::ui::errors::message(&error)));
+                self.notice = Some(Notice::FilterFailed(error));
                 cx.notify();
             }
         }
