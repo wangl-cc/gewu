@@ -1,3 +1,5 @@
+//! The Columns drawer: showing, hiding and reordering columns. Hiding a column that a filter
+//! or sort uses waits for the query that removes those conditions.
 use gewu_core::ColumnId;
 use gpui_kit::{
     base::input::{InputAccessibility, InputEvent, InputState},

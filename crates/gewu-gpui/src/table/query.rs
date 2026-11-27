@@ -1,3 +1,5 @@
+//! Running the table's query edits through the session and applying a finished result, and
+//! the status bar notice of the last table operation.
 use gewu_app::{QueryCompletion, QueryJob, QueryResult};
 
 use super::*;

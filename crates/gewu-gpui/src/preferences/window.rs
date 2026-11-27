@@ -1,3 +1,4 @@
+//! The Settings window.
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;

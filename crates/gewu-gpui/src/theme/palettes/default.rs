@@ -1,3 +1,4 @@
+//! The default light and dark palettes.
 use gpui_kit::base::ThemeAppearance;
 
 use super::super::{

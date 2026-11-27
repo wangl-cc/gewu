@@ -1,3 +1,4 @@
+//! The grid's context menus and the cell detail popover.
 use gewu_core::ColumnId;
 use gpui_kit::{
     base::{self, TestSupportExt},

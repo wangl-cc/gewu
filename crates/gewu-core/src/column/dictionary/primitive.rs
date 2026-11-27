@@ -1,3 +1,5 @@
+//! Canonical keys for primitive dictionary values, so equal values share one entry
+//! regardless of their bit pattern (for example `-0.0` and `0.0`, or NaN payloads).
 use std::{hash::Hash, sync::Arc};
 
 use arrow::{array, datatypes::*};

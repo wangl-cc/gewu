@@ -1,3 +1,5 @@
+//! The engine's error type, divided by the operation that failed. Nested internal errors
+//! surface at the top level, and only broken contracts are internal.
 use std::path::PathBuf;
 
 use thiserror::Error;

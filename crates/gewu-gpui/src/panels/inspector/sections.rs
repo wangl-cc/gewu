@@ -1,3 +1,4 @@
+//! Which analyses the column page shows for a column, and loading them together.
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

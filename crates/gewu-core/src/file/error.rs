@@ -1,3 +1,4 @@
+//! Errors of reading and writing files, and of the codecs behind them.
 use arrow::datatypes::DataType;
 use thiserror::Error;
 

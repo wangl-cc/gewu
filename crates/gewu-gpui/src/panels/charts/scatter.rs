@@ -1,3 +1,5 @@
+//! The scatter plot: sampled points, hover readout, keyboard inspection and revealing a
+//! point's row in the table.
 use std::sync::Arc;
 
 use gewu_core::{AxisScale, ScatterResult, SourceRow};

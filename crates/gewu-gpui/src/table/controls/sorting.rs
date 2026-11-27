@@ -1,3 +1,4 @@
+//! The Sort drawer: adding, replacing, reversing and reordering sort rules.
 use std::collections::HashSet;
 
 use gewu_core::{ColumnId, ColumnSort};

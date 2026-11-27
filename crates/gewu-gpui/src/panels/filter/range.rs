@@ -1,3 +1,4 @@
+//! The filter editor's range mode: bound inputs and the brushable distribution preview.
 use gpui_kit::{base::TestSupportExt, prelude::FluentBuilder};
 
 use super::*;

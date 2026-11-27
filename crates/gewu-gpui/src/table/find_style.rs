@@ -1,3 +1,4 @@
+//! Styling the Find matches within a cell's fitted line of text.
 use std::ops::Range;
 
 use gpui_kit::*;

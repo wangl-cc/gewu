@@ -1,3 +1,4 @@
+//! Charts drawn for the Inspector and the filter editor: histograms and the scatter plot.
 mod axis;
 mod labels;
 mod scatter;

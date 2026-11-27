@@ -1,3 +1,4 @@
+//! Errors of cell Find.
 use thiserror::Error;
 
 use crate::{ColumnId, FilterError, InternalError};

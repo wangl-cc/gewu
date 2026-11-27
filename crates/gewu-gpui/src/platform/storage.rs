@@ -1,3 +1,4 @@
+//! Where settings and app state live, and writing their JSON files atomically.
 use std::{
     fs::{self, OpenOptions},
     io::Write as _,

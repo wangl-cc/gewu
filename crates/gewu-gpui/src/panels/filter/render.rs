@@ -1,3 +1,4 @@
+//! The filter editor's element tree: mode tabs, the controls of each mode and the footer.
 use base::TestSupportExt;
 
 use super::*;

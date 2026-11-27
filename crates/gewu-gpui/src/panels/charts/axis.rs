@@ -1,3 +1,4 @@
+//! Axis ticks and their labels for linear and logarithmic scales.
 use chrono::Datelike;
 use gewu_core::{AxisScale, ScatterAxisKind};
 

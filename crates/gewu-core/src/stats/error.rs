@@ -1,3 +1,4 @@
+//! Errors of statistics, distributions and scatter sampling.
 use arrow::datatypes::DataType;
 use thiserror::Error;
 

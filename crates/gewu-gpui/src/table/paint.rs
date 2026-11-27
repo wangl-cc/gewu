@@ -1,3 +1,4 @@
+//! Painting a frame of the grid: body cells, row-number gutter, header and scrollbar thumbs.
 use super::{layout::FUNNEL_WIDTH, *};
 
 pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {

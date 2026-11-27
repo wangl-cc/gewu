@@ -1,3 +1,5 @@
+//! A filter being edited: its mode, values and missing-value policy, converted to and from a
+//! Core filter. Pure state, tested without a window.
 use std::{collections::BTreeSet, sync::Arc};
 
 use gewu_core::{ColumnCapabilities, Filter, FilterChoices, FilterCondition, TextMatch};

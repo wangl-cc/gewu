@@ -1,3 +1,5 @@
+//! The settings file: preferences under stable names; missing or unknown values fall back to
+//! the defaults.
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};

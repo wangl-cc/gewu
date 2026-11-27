@@ -1,3 +1,4 @@
+//! Icons bundled with the app beyond the component library's set.
 use std::borrow::Cow;
 
 use gpui_kit::{

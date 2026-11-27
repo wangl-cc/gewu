@@ -1,3 +1,5 @@
+//! Building one frame of the grid from the committed layout: the visible rows, cell text,
+//! header markers, Find spans and selection outlines. The frame is immutable and painted once.
 use super::*;
 
 impl TableView {

@@ -1,3 +1,4 @@
+//! The Inspector's pickers and chart options popovers.
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;

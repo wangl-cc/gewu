@@ -1,3 +1,4 @@
+//! The recent documents list: kept in the app state file and announced to the system.
 use std::path::{Path, PathBuf};
 
 use gpui_kit::App;

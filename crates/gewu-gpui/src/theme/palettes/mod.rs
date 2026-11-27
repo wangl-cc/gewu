@@ -1,3 +1,4 @@
+//! The built-in palettes.
 use gpui_kit::base::ThemeAppearance;
 
 use super::Theme;

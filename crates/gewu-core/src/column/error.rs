@@ -1,3 +1,4 @@
+//! Errors of column selection and filtering.
 use arrow::datatypes::DataType;
 use thiserror::Error;
 

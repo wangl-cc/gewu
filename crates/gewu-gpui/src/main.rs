@@ -1,3 +1,4 @@
+//! The Gewu application: opens each path given on the command line.
 #![forbid(unsafe_code)]
 
 fn main() {

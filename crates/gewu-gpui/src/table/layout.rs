@@ -1,3 +1,6 @@
+//! The grid's geometry for one frame: viewport, scrollbar tracks, visible columns and header
+//! parts. Drawing and hit testing share the committed layout; widths measured while laying
+//! out a frame are committed after it is drawn.
 use std::collections::{BTreeMap, btree_map::Entry};
 
 use super::*;

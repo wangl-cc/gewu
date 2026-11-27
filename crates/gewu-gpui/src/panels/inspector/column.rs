@@ -1,3 +1,4 @@
+//! The Inspector's column page: summary metrics, distribution and value sections.
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;

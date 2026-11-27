@@ -1,3 +1,4 @@
+//! The high-contrast light and dark palettes: the same tokens with stronger values.
 use gpui_kit::base::ThemeAppearance;
 
 use super::super::{
