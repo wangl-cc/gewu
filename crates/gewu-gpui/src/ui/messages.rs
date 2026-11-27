@@ -1,4 +1,7 @@
 /// Format a display count with the English UI's digit grouping.
+/// Find found nothing in the current scope.
+pub(crate) const NO_MATCHES: &str = "No matches";
+
 pub(crate) fn format_count(n: u64) -> String {
     let mut text = n.to_string();
     let mut index = text.len();

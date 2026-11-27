@@ -1,20 +1,11 @@
-//! Native single-line search input and snapshot-scoped match navigation.
+//! The search field and the shell around the table's [`FindSession`]: it feeds the session
+//! the input's text, the displayed view, the visible columns and the viewport, runs the jobs
+//! it returns in the background and hands their results back.
 
-use std::{
-    collections::HashMap,
-    ops::Range,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use gewu_core::{
-    CellMatch, ColumnHighlight, ColumnId, Find, FindCounts, FindHighlight, MAX_FIND_HIGHLIGHT_ROWS,
-    OrderedView,
-};
+use gewu_app::find::{FindSession, FindStatus, FindWork};
+use gewu_core::{CellMatch, ColumnId, OrderedView, ViewRow};
 use gpui_kit::{
     base::{
         self,
@@ -24,72 +15,63 @@ use gpui_kit::{
     *,
 };
 
-use crate::table::data::BLOCK_ROWS;
-
 pub(crate) const TYPING_DELAY: Duration = Duration::from_millis(150);
-
-#[derive(Default)]
-struct Highlights(HashMap<(ColumnId, u64), (u64, Rc<ColumnHighlight>)>);
-
-struct MatchCounter {
-    // Navigation can move and wrap while the tally for its starting cell is still running.
-    starting_counts: Option<FindCounts>,
-    movement: i128,
-    cancelled: Arc<AtomicBool>,
-    _task: Task<()>,
-}
-
-impl MatchCounter {
-    fn position(&self) -> Option<(u64, u64)> {
-        let FindCounts { through, total } = self.starting_counts?;
-        if through == 0 || total == 0 {
-            return None;
-        }
-        let zero_based = (i128::from(through - 1) + self.movement).rem_euclid(i128::from(total));
-        Some((zero_based as u64 + 1, total))
-    }
-}
-
-impl Drop for MatchCounter {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
-}
-
-enum FindMessage {
-    Idle,
-    Searching,
-    NoMatches,
-    Error(String),
-    Location {
-        source: gewu_core::SourceRow,
-        name: SharedString,
-        wrapped: bool,
-    },
-}
 
 pub(crate) struct FindController {
     input: Entity<InputState>,
     _subscription: Subscription,
-    pub(crate) open: bool,
-    message: FindMessage,
-    session: Option<Arc<Find>>,
-    cursor: Option<CellMatch>,
-    view: Option<Arc<OrderedView>>,
-    columns: Vec<(ColumnId, SharedString)>,
-    viewport_rows: Range<u64>,
-    viewport_columns: Vec<ColumnId>,
-    queued: i64,
-    highlights: Highlights,
+    session: FindSession,
+    /// Display names of the visible columns, set together with the session's scope.
+    names: Vec<(ColumnId, SharedString)>,
     navigation: Option<Task<()>>,
-    counter: Option<MatchCounter>,
+    count: Option<Task<()>>,
     reading: Option<Task<()>>,
-    highlight_failed: bool,
 }
 
+impl EventEmitter<CellMatch> for FindController {}
+
 impl FindController {
+    pub(crate) fn new(
+        view: Arc<OrderedView>,
+        columns: Vec<(ColumnId, SharedString)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in table"));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |find, input, event: &InputEvent, _, cx| match event {
+                InputEvent::Focus => {
+                    find.session.open();
+                    cx.notify();
+                }
+                InputEvent::Change => {
+                    let text = input.read(cx).value();
+                    let work = find.session.set_text(&text);
+                    find.restart(work, cx);
+                }
+                InputEvent::PressEnter { shift, .. } => find.find_match(*shift, cx),
+                _ => {}
+            },
+        );
+        Self {
+            input,
+            _subscription: subscription,
+            session: FindSession::new(view, columns.iter().map(|(id, _)| *id).collect()),
+            names: columns,
+            navigation: None,
+            count: None,
+            reading: None,
+        }
+    }
+
     pub(crate) fn text(&self, cx: &App) -> SharedString {
         self.input.read(cx).value()
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.session.is_open()
     }
 
     #[cfg(test)]
@@ -97,62 +79,23 @@ impl FindController {
         self.input.read(cx).focus_handle(cx).is_focused(window)
     }
 
-    fn invalidate(&mut self) {
-        self.queued = 0;
-        self.highlights.0.clear();
-        self.reading = None;
-        self.navigation = None;
-        self.counter = None;
-        self.highlight_failed = false;
-        self.session = None;
-        self.cursor = None;
-        self.message = FindMessage::Idle;
-    }
-
     pub(crate) fn can_navigate(&self) -> bool {
-        self.navigation.is_some() || self.cursor.is_some()
+        self.session.can_navigate()
     }
 
     /// None means the background search has not classified this cell yet.
+    #[cfg(test)]
     pub(crate) fn cached_match(&self, column: ColumnId, row: u64) -> Option<bool> {
-        self.highlights.cached_match(column, row)
+        self.session.cached_match(column, row)
     }
 
     pub(crate) fn current_match(&self) -> Option<CellMatch> {
-        self.cursor
+        self.session.current()
     }
 
-    pub(crate) fn session(&self) -> Option<&Find> {
-        self.session.as_deref()
-    }
-}
-impl Highlights {
-    fn cached_match(&self, column: ColumnId, row: u64) -> Option<bool> {
-        self.0
-            .get(&(column, row / BLOCK_ROWS))
-            .map(|(start, column)| column.matches((row - start) as usize))
-    }
-
-    fn store_highlights(&mut self, result: FindHighlight) {
-        let first = result.start / BLOCK_ROWS;
-        let count = u64::from(result.n_rows).div_ceil(BLOCK_ROWS);
-        for column in result.columns {
-            // A batched read can fill several cache slots with the same bitmap.
-            let column = Rc::new(column);
-            for block in first..first + count {
-                self.0
-                    .insert((column.column, block), (result.start, Rc::clone(&column)));
-            }
-        }
-    }
-}
-
-impl EventEmitter<CellMatch> for FindController {}
-
-impl FindController {
     pub(crate) fn set_view(&mut self, view: Option<Arc<OrderedView>>, cx: &mut Context<Self>) {
-        self.view = view;
-        self.restart_scope(None, Duration::ZERO, cx);
+        let work = self.session.set_view(view);
+        self.restart(work, cx);
     }
 
     pub(crate) fn set_columns(
@@ -161,111 +104,21 @@ impl FindController {
         retain_match: bool,
         cx: &mut Context<Self>,
     ) {
-        let hit = self
-            .cursor
-            .filter(|c| retain_match && columns.iter().any(|(id, _)| *id == c.column));
-        self.viewport_columns
-            .retain(|id| columns.iter().any(|(column, _)| column == id));
-        self.columns = columns;
-        if self.view.is_some() {
-            self.restart_scope(hit, Duration::ZERO, cx);
-        }
+        let work = self
+            .session
+            .set_columns(columns.iter().map(|(id, _)| *id).collect(), retain_match);
+        self.names = columns;
+        self.restart(work, cx);
     }
 
-    fn restart_scope(&mut self, hit: Option<CellMatch>, delay: Duration, cx: &mut Context<Self>) {
-        self.invalidate();
-        if self.open && self.view.is_some() {
-            if let Some(hit) = hit {
-                self.show_match(hit, false);
-                if let Some(session) = self.find_session(cx) {
-                    self.start_count(session, hit, cx);
-                }
-            } else {
-                self.advance_find(1, delay, cx);
-            }
-            self.load_highlights(cx);
-        }
-        cx.notify();
-    }
-
-    // Scope changes cancel navigation in invalidate(). A retained hit keeps its view and
-    // is checked against the new columns by set_columns before it reaches this method.
-    fn show_match(&mut self, hit: CellMatch, wrapped: bool) {
-        let Some(source) = self
-            .view
-            .as_ref()
-            .and_then(|view| view.source_row_at(hit.display_row))
-        else {
-            unreachable!("a Find hit belongs to its active ordered view");
-        };
-        let Some((_, name)) = self.columns.iter().find(|(id, _)| *id == hit.column) else {
-            unreachable!("a Find hit belongs to its active column scope");
-        };
-        self.cursor = Some(hit);
-        self.message = FindMessage::Location {
-            source,
-            name: name.clone(),
-            wrapped,
-        };
-    }
-
-    pub(crate) fn message(&self, cx: &App) -> String {
-        match &self.message {
-            FindMessage::Idle => String::new(),
-            FindMessage::Searching => "Searching…".into(),
-            FindMessage::NoMatches => "No matches".into(),
-            FindMessage::Error(text) => text.clone(),
-            FindMessage::Location {
-                source,
-                name,
-                wrapped,
-            } => {
-                let prefix = if *wrapped { "Wrapped · " } else { "" };
-                let row = source.0 + crate::preferences::Preferences::get(cx).row_number_base;
-                format!("{prefix}Row {row} · {name}")
-            }
-        }
-    }
-
-    pub(crate) fn new(
-        view: Arc<OrderedView>,
-        columns: Vec<(ColumnId, SharedString)>,
-        window: &mut Window,
+    pub(crate) fn set_viewport(
+        &mut self,
+        rows: std::ops::Range<u64>,
+        columns: Vec<ColumnId>,
         cx: &mut Context<Self>,
-    ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in table"));
-        let subscription =
-            cx.subscribe_in(
-                &input,
-                window,
-                |find, _, event: &InputEvent, _, cx| match event {
-                    InputEvent::Focus => {
-                        find.open = true;
-                        cx.notify();
-                    }
-                    InputEvent::Change => find.restart_scope(None, TYPING_DELAY, cx),
-                    InputEvent::PressEnter { shift, .. } => find.find_match(*shift, cx),
-                    _ => {}
-                },
-            );
-        Self {
-            input,
-            _subscription: subscription,
-            view: Some(view),
-            columns,
-            open: false,
-            message: FindMessage::Idle,
-            session: None,
-            cursor: None,
-            viewport_rows: 0..0,
-            viewport_columns: vec![],
-            queued: 0,
-            highlights: Highlights::default(),
-            navigation: None,
-            counter: None,
-            reading: None,
-            highlight_failed: false,
-        }
+    ) {
+        let work = self.session.set_viewport(rows, columns);
+        self.run(work, cx);
     }
 
     pub(crate) fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -273,202 +126,111 @@ impl FindController {
             input.focus(window, cx);
             input.select_all(window, cx);
         });
-        self.open = true;
+        self.session.open();
         cx.notify();
     }
 
     pub(crate) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open = false;
+        self.session.close();
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.invalidate();
+        self.cancel();
         cx.notify();
-    }
-
-    fn find_session(&mut self, cx: &App) -> Option<Arc<Find>> {
-        if let Some(session) = &self.session {
-            return Some(session.clone());
-        }
-        let text = self.text(cx);
-        let view = self.view.as_ref()?;
-        if text.trim().is_empty() || self.columns.is_empty() || self.highlight_failed {
-            return None;
-        }
-        let ids = self.columns.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        match view.find(&text, &ids) {
-            Ok(find) => Some(self.session.insert(Arc::new(find)).clone()),
-            Err(err) => {
-                self.message = FindMessage::Error(crate::ui::errors::message(&err));
-                self.highlight_failed = true;
-                None
-            }
-        }
-    }
-
-    pub(crate) fn set_viewport(
-        &mut self,
-        rows: Range<u64>,
-        columns: Vec<ColumnId>,
-        cx: &mut Context<Self>,
-    ) {
-        self.viewport_rows = rows;
-        self.viewport_columns = columns;
-        self.load_highlights(cx);
-    }
-
-    fn load_highlights(&mut self, cx: &mut Context<Self>) {
-        let rows = self.viewport_rows.clone();
-        if !self.open || self.reading.is_some() || self.highlight_failed || rows.is_empty() {
-            return;
-        }
-        let Some(find) = self.find_session(cx) else {
-            return;
-        };
-        let first = rows.start / BLOCK_ROWS;
-        let end = rows.end.div_ceil(BLOCK_ROWS);
-        let cols = self.viewport_columns.clone();
-        // Keep a few screens for backtracking. A jump through a large file should
-        // never grow the highlight cache in proportion to the rows traversed.
-        let screen_blocks = cols.len() * (end - first) as usize;
-        if self.highlights.0.len() > screen_blocks.saturating_mul(4) {
-            self.highlights
-                .0
-                .retain(|(id, b), _| cols.contains(id) && (first..end).contains(b));
-        }
-        let Some(block) = (first..end).find(|&b| {
-            cols.iter()
-                .any(|id| !self.highlights.0.contains_key(&(*id, b)))
-        }) else {
-            return;
-        };
-        let missing: Vec<_> = cols
-            .into_iter()
-            .filter(|id| !self.highlights.0.contains_key(&(*id, block)))
-            .collect();
-        let max = end.min(block + u64::from(MAX_FIND_HIGHLIGHT_ROWS) / BLOCK_ROWS);
-        let stop = (block + 1..max)
-            .find(|&b| {
-                missing
-                    .iter()
-                    .any(|id| self.highlights.0.contains_key(&(*id, b)))
-            })
-            .unwrap_or(max);
-        self.reading = Some(cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    find.highlight(
-                        &missing,
-                        block * BLOCK_ROWS,
-                        ((stop - block) * BLOCK_ROWS) as u32,
-                    )
-                })
-                .await;
-            _ = this.update(cx, |table, cx| {
-                table.reading = None;
-                match result {
-                    Ok(batch) => {
-                        table.highlights.store_highlights(batch);
-                        table.load_highlights(cx);
-                    }
-                    Err(error) => {
-                        table.highlight_failed = true;
-                        table.message =
-                            FindMessage::Error(crate::ui::errors::message(&error.into()));
-                    }
-                }
-                cx.notify();
-            });
-        }));
     }
 
     pub(crate) fn find_match(&mut self, previous: bool, cx: &mut Context<Self>) {
-        self.advance_find(if previous { -1 } else { 1 }, Duration::ZERO, cx);
+        let work = self.session.step(if previous { -1 } else { 1 });
+        self.run(work, cx);
     }
 
-    fn start_count(&mut self, session: Arc<Find>, hit: CellMatch, cx: &mut Context<Self>) {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let stop = Arc::clone(&cancelled);
-        let worker = cx
-            .background_executor()
-            .spawn_with_priority(Priority::Low, async move {
-                session.counts_at(hit, || stop.load(Ordering::Relaxed))
-            });
-        let task = cx.spawn(async move |this, cx| {
-            let result = worker.await;
-            _ = this.update(cx, |find, cx| {
-                match result {
-                    Ok(Some(counts)) => {
-                        if let Some(counter) = &mut find.counter {
-                            counter.starting_counts = Some(counts);
-                        }
-                    }
-                    Ok(None) => return,
-                    Err(error) => {
-                        find.counter = None;
-                        find.message =
-                            FindMessage::Error(crate::ui::errors::message(&error.into()));
-                    }
-                }
-                cx.notify();
-            });
-        });
-        self.counter = Some(MatchCounter {
-            starting_counts: None,
-            movement: 0,
-            cancelled,
-            _task: task,
-        });
+    fn cancel(&mut self) {
+        self.navigation = None;
+        self.count = None;
+        self.reading = None;
     }
 
-    fn advance_find(&mut self, by: i64, delay: Duration, cx: &mut Context<Self>) {
-        if self.navigation.is_some() {
-            self.queued = self.queued.saturating_add(by);
-            return;
+    /// The scope changed: the work of the previous search no longer applies.
+    fn restart(&mut self, work: FindWork, cx: &mut Context<Self>) {
+        self.cancel();
+        self.run(work, cx);
+    }
+
+    fn run(&mut self, work: FindWork, cx: &mut Context<Self>) {
+        if let Some(hit) = work.reveal {
+            cx.emit(hit);
         }
-        let Some(session) = self.find_session(cx) else {
-            return;
-        };
-        let cursor = self.cursor;
-        self.message = FindMessage::Searching;
+        if let Some(job) = work.step {
+            self.navigation = Some(cx.spawn(async move |this, cx| {
+                if job.debounce {
+                    cx.background_executor().timer(TYPING_DELAY).await;
+                }
+                let result = cx.background_spawn(async move { job.run() }).await;
+                _ = this.update(cx, |find, cx| {
+                    find.navigation = None;
+                    let work = find.session.step_finished(result);
+                    find.run(work, cx);
+                });
+            }));
+        }
+        if let Some(job) = work.count {
+            let worker = cx
+                .background_executor()
+                .spawn_with_priority(Priority::Low, async move { job.run() });
+            self.count = Some(cx.spawn(async move |this, cx| {
+                let result = worker.await;
+                _ = this.update(cx, |find, cx| {
+                    find.session.count_finished(result);
+                    cx.notify();
+                });
+            }));
+        }
+        if let Some(job) = work.highlight {
+            self.reading = Some(cx.spawn(async move |this, cx| {
+                let result = cx.background_spawn(async move { job.run() }).await;
+                _ = this.update(cx, |find, cx| {
+                    let work = find.session.highlight_finished(result);
+                    find.run(work, cx);
+                });
+            }));
+        }
         cx.notify();
-        self.navigation = Some(cx.spawn(async move |this, cx| {
-            if !delay.is_zero() {
-                cx.background_executor().timer(delay).await;
+    }
+
+    /// The status announced to assistive technology and shown as the search's location.
+    pub(crate) fn message(&self, cx: &App) -> String {
+        match self.session.status() {
+            FindStatus::Idle => String::new(),
+            FindStatus::Searching { .. } => "Searching…".into(),
+            FindStatus::NoMatches => crate::ui::messages::NO_MATCHES.into(),
+            FindStatus::Failed { error, .. } => crate::ui::errors::message(error),
+            FindStatus::At { hit, wrapped } => {
+                let source = self
+                    .session
+                    .view()
+                    .and_then(|view| view.source_row_at(hit.display_row));
+                let name = self.names.iter().find(|(id, _)| *id == hit.column);
+                let (Some(source), Some((_, name))) = (source, name) else {
+                    return String::new();
+                };
+                let prefix = if *wrapped { "Wrapped · " } else { "" };
+                let row = source.0 + crate::preferences::Preferences::get(cx).row_number_base;
+                format!("{prefix}Row {row} · {name}")
             }
-            let result = cx
-                .background_spawn(async move {
-                    let (hit, wrapped) = gewu_app::find::step(&session, cursor, by)?;
-                    Ok::<_, gewu_core::Error>((session, hit, wrapped))
-                })
-                .await;
-            _ = this.update(cx, |table, cx| {
-                table.navigation = None;
-                match result {
-                    Ok((session, hit, wrapped)) => {
-                        if let Some(hit) = hit {
-                            table.show_match(hit, wrapped);
-                            if let Some(counter) = &mut table.counter {
-                                counter.movement += i128::from(by);
-                            } else {
-                                table.start_count(session, hit, cx);
-                            }
-                            cx.emit(hit);
-                        } else {
-                            table.cursor = None;
-                            table.message = FindMessage::NoMatches;
-                        }
-                    }
-                    Err(error) => {
-                        table.message = FindMessage::Error(crate::ui::errors::message(&error))
-                    }
-                }
-                let queued = std::mem::take(&mut table.queued);
-                if queued != 0 {
-                    table.advance_find(queued, Duration::ZERO, cx);
-                }
-                cx.notify();
-            });
-        }));
+        }
+    }
+
+    /// The match highlights to paint in one displayed cell. See [`FindSession::cell_spans`].
+    pub(crate) fn cell_spans<'a>(
+        &self,
+        column: ColumnId,
+        row: ViewRow,
+        text_matchable: bool,
+        source: impl FnOnce() -> Option<(&'a str, &'a str)>,
+        shown_len: usize,
+        spans: &mut Vec<std::ops::Range<usize>>,
+    ) {
+        self.session
+            .cell_spans(column, row, text_matchable, source, shown_len, spans);
     }
 }
 
@@ -476,30 +238,28 @@ impl Render for FindController {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let input = &self.input;
         let colors = crate::theme::GewuPalette::get(cx);
-        let searching = self.open && !self.text(cx).is_empty();
+        let searching = self.session.is_open() && !self.text(cx).is_empty();
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let icon = gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Search)
             .size(px(14.))
             .text_color(colors.muted_foreground);
-        let notice = match &self.message {
-            FindMessage::Error(text) => Some(text.as_str()),
-            FindMessage::NoMatches => Some("No matches"),
-            FindMessage::Location { wrapped: true, .. } => Some("Wrapped"),
+        let error = matches!(self.session.status(), FindStatus::Failed { .. });
+        let notice: Option<String> = match self.session.status() {
+            FindStatus::Failed { error, .. } => Some(crate::ui::errors::message(error)),
+            FindStatus::NoMatches => Some(crate::ui::messages::NO_MATCHES.into()),
+            FindStatus::At { wrapped: true, .. } => Some("Wrapped".into()),
             _ => None,
         };
-        let count = self.counter.as_ref().and_then(|counter| {
-            if let Some((current, total)) = counter.position() {
+        let count = self.session.count().map(|position| match position {
+            Some((current, total)) => {
                 let current = crate::ui::messages::format_count(current);
                 let total = crate::ui::messages::format_count(total);
-                Some((
+                (
                     format!("{current}/{total}"),
                     format!("Match {current} of {total}"),
-                ))
-            } else if counter.starting_counts.is_none() {
-                Some(("…".into(), "Counting matches".into()))
-            } else {
-                None
+                )
             }
+            None => ("…".into(), "Counting matches".into()),
         });
         let trigger = div()
             .flex_1()
@@ -511,11 +271,10 @@ impl Render for FindController {
             .child(icon)
             .child(div().flex_1().min_w_0().child(Input::new(input)))
             .children(notice.filter(|_| searching).map(|text| {
-                let error = matches!(self.message, FindMessage::Error(_));
                 div()
                     .id("find-notice")
                     .role(if error { Role::Alert } else { Role::Status })
-                    .aria_label(text.to_owned())
+                    .aria_label(text.clone())
                     .max_w(relative(0.55))
                     .flex()
                     .items_center()
@@ -529,7 +288,7 @@ impl Render for FindController {
                     .when(error, |notice| {
                         notice.child(crate::ui::errors::warning_icon())
                     })
-                    .child(div().min_w_0().truncate().child(text.to_owned()))
+                    .child(div().min_w_0().truncate().child(text))
                     .test_support()
             }))
             .children(count.map(|(text, label)| {
@@ -546,9 +305,10 @@ impl Render for FindController {
             }))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, w, cx| {
                 if event.button == MouseButton::Left
-                    && (!this.open || !this.input.read(cx).focus_handle(cx).is_focused(w))
+                    && (!this.session.is_open()
+                        || !this.input.read(cx).focus_handle(cx).is_focused(w))
                 {
-                    this.open = true;
+                    this.session.open();
                     this.input.update(cx, |input, cx| input.focus(w, cx));
                     cx.notify();
                 }
@@ -632,7 +392,3 @@ impl Render for FindController {
         bar.into_any_element()
     }
 }
-
-#[cfg(test)]
-#[path = "find_tests.rs"]
-mod tests;

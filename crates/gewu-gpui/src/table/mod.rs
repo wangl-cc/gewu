@@ -233,7 +233,7 @@ impl TableView {
         if self.close_panel(window, cx) {
             return true;
         }
-        if !self.find.read(cx).open {
+        if !self.find.read(cx).is_open() {
             return false;
         }
         self.find.update(cx, |find, cx| find.close(window, cx));

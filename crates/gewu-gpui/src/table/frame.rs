@@ -52,35 +52,22 @@ impl TableView {
                         size_(width, self.prefs.row_height),
                     ));
                 }
-                if let Some(session) = find.session() {
-                    let hit = if current {
-                        Some(true)
-                    } else {
-                        find.cached_match(info.id, row.display.0)
-                    };
-                    if hit.unwrap_or(info.capabilities.text_match)
-                        && let Some(Some(source)) =
-                            self.data.cached_cell_text(column, row.display.0)
-                    {
-                        let prefix = crate::table::data::single_line_prefix(
+                let data = &self.data;
+                find.cell_spans(
+                    info.id,
+                    row.display,
+                    info.capabilities.text_match,
+                    || {
+                        let source = data.cached_cell_text(column, row.display.0)??;
+                        let preview = crate::table::data::single_line_prefix(
                             source,
                             crate::table::data::GRID_PREVIEW_BYTES,
                         );
-                        // A cold viewport can immediately prove literal matches within its
-                        // bounded preview. Hidden and typed hits wait for the engine bitmap.
-                        let confirmed = hit == Some(true);
-                        let search_text = if confirmed { source } else { prefix };
-                        text_matches.extend(session.text_match_ranges(search_text, prefix.len()));
-                        if confirmed && text_matches.len() == first_span {
-                            if prefix.len() < source.len() {
-                                text_matches.push(prefix.len()..text.len());
-                            } else if !info.capabilities.text_match && !text.is_empty() {
-                                // Typed equality can match a differently formatted value.
-                                text_matches.push(0..text.len());
-                            }
-                        }
-                    }
-                }
+                        Some((source, preview))
+                    },
+                    text.len(),
+                    &mut text_matches,
+                );
                 cells.push(PaintCell {
                     y: row.y,
                     text,

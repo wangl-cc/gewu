@@ -452,8 +452,8 @@ impl Layout {
         if rows.is_empty() {
             return 0..0;
         }
-        rows.start / crate::table::data::BLOCK_ROWS
-            ..rows.end.div_ceil(crate::table::data::BLOCK_ROWS)
+        let block = gewu_app::find::HIGHLIGHT_BLOCK_ROWS;
+        rows.start / block..rows.end.div_ceil(block)
     }
 
     fn visible_columns(&self) -> Option<(usize, usize)> {

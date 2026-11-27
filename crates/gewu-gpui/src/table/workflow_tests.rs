@@ -24,7 +24,10 @@ fn only_bound_keys_reach_the_grid() {
         .write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     w.keys("cmd-shift-c ctrl-cmd-f");
     assert_eq!(w.clipboard().as_deref(), Some("unchanged"));
-    assert!(!w.app.read(|cx| w.table.read(cx).find.read(cx).open));
+    assert!(
+        !w.app
+            .read(|cx| w.table.read(cx).find_bar().read(cx).is_open())
+    );
 }
 
 #[test]
@@ -64,11 +67,18 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     assert_eq!(w.source_rows(), [4, 2, 0]);
 
     w.keys("cmd-f");
-    assert!(w.ui.update(|window, cx| w.table.read(cx).find.read(cx).input_focused(window, cx)));
+    assert!(w.ui.update(|window, cx| {
+        w.table
+            .read(cx)
+            .find_bar()
+            .read(cx)
+            .input_focused(window, cx)
+    }));
     w.type_in_find("marker");
     assert_eq!(w.selection(), single(0, 2));
     assert_eq!(
-        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
+        w.app
+            .read(|cx| w.table.read(cx).find_bar().read(cx).message(cx)),
         "Row 5 · note"
     );
     w.ui.update(|window, _| {
@@ -87,7 +97,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
             let t = w.table.read(cx);
             let id = t.data.columns[2].id;
             (0..3)
-                .map(|r| t.find.read(cx).cached_match(id, r))
+                .map(|r| t.find_bar().read(cx).cached_match(id, r))
                 .collect::<Vec<_>>()
         }),
         [Some(true), Some(true), Some(false)]
@@ -99,7 +109,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     assert_eq!(w.selection(), single(0, 2));
     assert!(
         w.app
-            .read(|cx| w.table.read(cx).find.read(cx).message(cx) == "Wrapped · Row 5 · note")
+            .read(|cx| w.table.read(cx).find_bar().read(cx).message(cx) == "Wrapped · Row 5 · note")
     );
     w.ui.update(|window, _| {
         assert_eq!(window.find("find-notice").label(), Some("Wrapped"));
@@ -123,7 +133,8 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     w.keys("cmd-f cmd-a");
     w.type_in_find("absent");
     assert_eq!(
-        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
+        w.app
+            .read(|cx| w.table.read(cx).find_bar().read(cx).message(cx)),
         "No matches"
     );
     w.ui.update(|window, _| {

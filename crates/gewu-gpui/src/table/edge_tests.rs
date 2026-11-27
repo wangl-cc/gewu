@@ -389,7 +389,8 @@ fn empty_filtered_grid_recovers_only_when_the_reset_draft_is_applied() {
     w.keys("cmd-f");
     w.type_in_find("marker");
     assert_eq!(
-        w.app.read(|cx| w.table.read(cx).find.read(cx).message(cx)),
+        w.app
+            .read(|cx| w.table.read(cx).find_bar().read(cx).message(cx)),
         "No matches"
     );
     w.keys("escape");
@@ -562,7 +563,7 @@ fn hiding_columns_rebuilds_live_find_and_zero_columns_have_no_selection() {
     w.settle();
     w.app.read(|cx| {
         assert_eq!(
-            w.table.read(cx).find.read(cx).cached_match(note, 1),
+            w.table.read(cx).find_bar().read(cx).cached_match(note, 1),
             Some(true)
         )
     });

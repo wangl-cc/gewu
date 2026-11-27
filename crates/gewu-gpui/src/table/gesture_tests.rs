@@ -189,8 +189,13 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
     w.type_in_find("needle");
     let column = w.read(|t| t.data.columns[0].id);
     let matched = |w: &TableWindow, row| {
-        w.app
-            .read(|cx| w.table.read(cx).find.read(cx).cached_match(column, row))
+        w.app.read(|cx| {
+            w.table
+                .read(cx)
+                .find_bar()
+                .read(cx)
+                .cached_match(column, row)
+        })
     };
     assert_eq!(matched(&w, 0), Some(true));
     assert_eq!(matched(&w, 128), None);
