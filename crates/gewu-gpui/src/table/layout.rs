@@ -284,6 +284,19 @@ impl Layout {
             y.clamp(HEADER_HEIGHT, bottom.next_down()),
         )
     }
+
+    fn highlight_blocks(&self) -> Range<u64> {
+        let rows = self.vertical.visible_rows();
+        if rows.is_empty() {
+            return 0..0;
+        }
+        let block = gewu_app::find::HIGHLIGHT_BLOCK_ROWS;
+        rows.start / block..rows.end.div_ceil(block)
+    }
+
+    fn visible_columns(&self) -> Option<(usize, usize)> {
+        Some((self.columns.first()?.0, self.columns.last()?.0))
+    }
 }
 
 /// Always-visible tracks take space only where the data overflows. Either track
@@ -446,20 +459,5 @@ impl TableView {
         if find_viewport_changed {
             cx.emit(FindViewportChanged);
         }
-    }
-}
-
-impl Layout {
-    fn highlight_blocks(&self) -> Range<u64> {
-        let rows = self.vertical.visible_rows();
-        if rows.is_empty() {
-            return 0..0;
-        }
-        let block = gewu_app::find::HIGHLIGHT_BLOCK_ROWS;
-        rows.start / block..rows.end.div_ceil(block)
-    }
-
-    fn visible_columns(&self) -> Option<(usize, usize)> {
-        Some((self.columns.first()?.0, self.columns.last()?.0))
     }
 }

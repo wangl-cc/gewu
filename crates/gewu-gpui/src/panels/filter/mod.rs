@@ -1,6 +1,11 @@
 //! Per-column editor. All counts and range bounds come from this column's facet.
+mod choices;
+mod range;
+mod render;
+
 use std::sync::Arc;
 
+use choices::ChoiceRow;
 use gewu_app::AppliedView;
 use gewu_core::{
     AxisScale, ColumnId, ColumnInfo, Filter, FilterChoices, RangeHistogram, TextMatch,
@@ -67,9 +72,6 @@ enum Load {
     },
     Failed(gewu_core::Error),
 }
-
-mod choices;
-use choices::ChoiceRow;
 
 pub(crate) struct FilterEditor {
     snapshot: AppliedView,
@@ -356,6 +358,3 @@ impl FilterEditor {
         self.select_mode(modes[0], cx);
     }
 }
-
-mod range;
-mod render;

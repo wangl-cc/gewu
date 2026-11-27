@@ -57,10 +57,6 @@ impl<K: Eq + Hash, P: PartialEq, V> Slots<K, P, V> {
 
 type ScatterParams = (Option<ColumnId>, ColumnId, u32, AxisScale, AxisScale);
 
-#[cfg(test)]
-#[path = "analysis_tests.rs"]
-mod tests;
-
 /// Cached analyses of a single filtered row set. Failed computations can be retried.
 pub struct Analyses {
     pub(super) rows: Arc<FilteredView>,
@@ -163,3 +159,7 @@ impl Analyses {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "analysis_tests.rs"]
+mod tests;

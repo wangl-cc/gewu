@@ -7,6 +7,7 @@
 
 use std::{cell::OnceCell, collections::HashMap, ops::Range, sync::Arc};
 
+pub use gewu_app::{AppliedView, TableQuery};
 use gewu_app::{QueryCompletion, QueryJob, QueryResult, QuerySession};
 use gewu_core::{
     ColumnId, Dataset, ExportOptions, FileType, FormattedColumnSegment, OrderedView, ValueCategory,
@@ -139,8 +140,6 @@ impl Block {
         }))
     }
 }
-
-pub use gewu_app::{AppliedView, TableQuery};
 
 pub struct TableData {
     queries: QuerySession,

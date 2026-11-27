@@ -20,6 +20,7 @@ mod columns;
 mod export;
 mod menus;
 mod sorting;
+mod status;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -477,8 +478,6 @@ fn footer() -> Div {
         .justify_end()
         .gap_2()
 }
-
-mod status;
 
 #[cfg(test)]
 mod tests;

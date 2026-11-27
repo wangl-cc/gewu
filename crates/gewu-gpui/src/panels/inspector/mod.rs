@@ -1,4 +1,8 @@
 //! The selection inspected here is independent of the keyboard selection in the table.
+mod column;
+pub(super) mod controls;
+mod sections;
+
 use std::sync::Arc;
 
 use gewu_app::AppliedView;
@@ -10,6 +14,7 @@ use gpui_kit::{
     base::{self, TestSupportExt},
     *,
 };
+use sections::{ColumnResults, SectionData};
 
 use super::charts::{self, ScatterChart};
 use crate::ui::{button, segment, segmented_tabs};
@@ -26,9 +31,6 @@ enum Picker {
     X,
     Y,
 }
-
-mod sections;
-use sections::{ColumnResults, SectionData};
 
 enum Loaded {
     Column(ColumnResults),
@@ -307,9 +309,6 @@ impl Inspector {
         cx.notify();
     }
 }
-
-mod column;
-pub(super) mod controls;
 
 struct ResizeInspector;
 

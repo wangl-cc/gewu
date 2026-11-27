@@ -1,7 +1,25 @@
 //! The table view: fixed-height virtualized rows and columns, painted with
 //! one canvas. `render` fetches the visible text from Core synchronously and
 //! builds a [`Frame`]; the canvas paints it. Nothing is drawn as a
-//! placeholder: a cell is either text from Core or `null`.
+//! placeholder: a cell is either text from Core or `null`. `TableView` is the shell around
+//! the pure [`GridModel`] that owns selection, scrolling, drags and hover.
+
+mod accessibility;
+mod columns;
+mod controls;
+pub(crate) mod data;
+mod find;
+mod find_style;
+mod frame;
+mod grid;
+mod header;
+mod input;
+mod layout;
+mod paint;
+mod query;
+mod render;
+mod scroll;
+mod selection;
 
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
@@ -11,6 +29,9 @@ use data::{TableData, TableQuery, copy_tsv};
 use gewu_core::ColumnSort;
 use gpui_kit::*;
 use grid::{GridModel, HeaderHover};
+use layout::Layout;
+pub(crate) use query::CopyFailure;
+use query::Notice;
 use scroll::VerticalScroll;
 use selection::{Cell, Selection};
 
@@ -380,34 +401,13 @@ fn size_(w: f32, h: f32) -> Size<Pixels> {
     size(px(w), px(h))
 }
 
-mod columns;
-pub(crate) mod data;
-mod find;
-mod find_style;
-mod frame;
-mod grid;
-mod header;
-mod input;
-mod layout;
-use layout::Layout;
-mod accessibility;
-mod controls;
+#[cfg(test)]
+mod edge_tests;
 #[cfg(test)]
 mod gesture_tests;
-mod paint;
-mod query;
-pub(crate) use query::CopyFailure;
-use query::Notice;
-mod scroll;
-mod selection;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod ui_fixture;
 #[cfg(test)]
 mod workflow_tests;
-
-mod render;
-
-#[cfg(test)]
-mod edge_tests;
-#[cfg(test)]
-mod layout_tests;
