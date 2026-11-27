@@ -12,6 +12,7 @@ mod export;
 mod import;
 mod info;
 mod picker;
+mod update;
 
 gpui_kit::actions!(gewu, [
     OpenFiles,
@@ -114,7 +115,7 @@ pub(crate) fn install_file_actions(
         picker: None,
         _events: events,
     });
-    platform::update::init(cx);
+    update::init(cx);
     cx.on_action(|_: &OpenFiles, cx| choose_files(cx));
     cx.on_action(|_: &ClearRecent, cx| {
         cx.global_mut::<Documents>().recent.clear();
@@ -170,7 +171,7 @@ pub(crate) fn update_menus(cx: &App) {
     cx.set_menus([
         Menu::new("Gewu").items([
             MenuItem::action("Settings…", Preferences),
-            MenuItem::submenu(platform::update::menu(cx)),
+            MenuItem::submenu(update::menu(cx)),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

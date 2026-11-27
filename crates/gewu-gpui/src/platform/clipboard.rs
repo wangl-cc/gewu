@@ -1,5 +1,16 @@
-//! Write one pasteboard item so spreadsheets can select TSV and editors can select plain text.
+//! Copying table text. A copy is current only while no newer copy started, in any window, and
+//! nothing else wrote the pasteboard meanwhile: toolkit text fields write it without going
+//! through here. Dropping a table's copy task cancels a superseded copy within that table; the
+//! generation also orders copies across windows.
 use gpui_kit::{App, ClipboardItem, Global};
+
+#[cfg(target_os = "macos")]
+pub(crate) use super::macos::pasteboard::PasteboardError;
+
+/// Why the clipboard did not take the copied text.
+#[cfg(not(target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PasteboardError {}
 
 /// Orders requests across windows, even while their TSV is still being generated.
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -54,17 +65,12 @@ impl ClipboardState {
         }
         #[cfg(target_os = "macos")]
         {
-            Self::from_board(&objc2_app_kit::NSPasteboard::generalPasteboard())
+            Self::ChangeCount(super::macos::pasteboard::change_count())
         }
         #[cfg(not(target_os = "macos"))]
         {
             Self::Untracked
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn from_board(board: &objc2_app_kit::NSPasteboard) -> Self {
-        Self::ChangeCount(board.changeCount())
     }
 }
 
@@ -73,69 +79,11 @@ pub(crate) fn write_text(value: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(value));
 }
 
-pub(crate) fn write_tsv(value: String, cx: &mut App) -> Result<(), &'static str> {
+pub(crate) fn write_tsv(value: String, cx: &mut App) -> Result<(), PasteboardError> {
     #[cfg(target_os = "macos")]
     if !cx.is_test() {
-        return macos::write(&objc2_app_kit::NSPasteboard::generalPasteboard(), &value);
+        return super::macos::pasteboard::write_tsv(&value);
     }
     cx.write_to_clipboard(ClipboardItem::new_string(value));
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-mod macos {
-    use objc2::runtime::ProtocolObject;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
-    use objc2_foundation::{NSArray, NSString};
-
-    const TYPES: [&str; 2] = [
-        "public.utf8-plain-text",
-        "public.utf8-tab-separated-values-text",
-    ];
-
-    pub(super) fn write(board: &NSPasteboard, value: &str) -> Result<(), &'static str> {
-        let item = NSPasteboardItem::new();
-        let text = NSString::from_str(value);
-        for kind in TYPES {
-            if !item.setString_forType(&text, &NSString::from_str(kind)) {
-                return Err("Could not prepare the clipboard contents");
-            }
-        }
-        let writer: &ProtocolObject<dyn NSPasteboardWriting> = ProtocolObject::from_ref(&*item);
-        board.clearContents();
-        board
-            .writeObjects(&NSArray::from_slice(&[writer]))
-            .then_some(())
-            .ok_or("Could not write to the clipboard")
-    }
-
-    #[test]
-    fn macos_reads_both_formats_from_a_single_pasteboard_item() {
-        let board = NSPasteboard::pasteboardWithUniqueName();
-        let text = "café\t温度\r\n";
-        write(&board, text).unwrap();
-        let items = board.pasteboardItems().unwrap();
-        assert_eq!(items.count(), 1);
-        let item = items.objectAtIndex(0);
-        for kind in TYPES {
-            assert_eq!(
-                item.stringForType(&NSString::from_str(kind))
-                    .unwrap()
-                    .to_string(),
-                text
-            );
-        }
-        board.clearContents();
-    }
-
-    #[test]
-    fn copying_identical_contents_advances_the_native_pasteboard() {
-        let board = NSPasteboard::pasteboardWithUniqueName();
-        write(&board, "same").unwrap();
-        let pending = super::ClipboardState::from_board(&board);
-        assert!(pending == super::ClipboardState::from_board(&board));
-        write(&board, "same").unwrap();
-        assert!(pending != super::ClipboardState::from_board(&board));
-        board.clearContents();
-    }
 }

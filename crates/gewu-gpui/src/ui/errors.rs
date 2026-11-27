@@ -23,6 +23,37 @@ pub(crate) fn inline_warning(text: impl Into<gpui_kit::SharedString>) -> gpui_ki
         .child(div().min_w_0().child(text.into()))
 }
 
+pub(crate) fn update_message(error: &crate::platform::update::HelperError) -> String {
+    use crate::platform::update::HelperError;
+    match error {
+        HelperError::Launch(error) => format!("The update helper could not start: {error}"),
+        HelperError::Failed { status, message } if message.is_empty() => {
+            format!("Update helper exited with {status}")
+        }
+        HelperError::Failed { message, .. } => message.clone(),
+        HelperError::Output(error) => {
+            format!("The update helper reported unreadable output: {error}")
+        }
+        HelperError::Version(error) => format!("Invalid update version: {error}"),
+        HelperError::Unexpected(version) => format!("Unexpected update version: {version}"),
+    }
+}
+
+pub(crate) fn pasteboard_message(
+    error: crate::platform::clipboard::PasteboardError,
+) -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::platform::clipboard::PasteboardError;
+        match error {
+            PasteboardError::Prepare => "Could not prepare the clipboard contents",
+            PasteboardError::Write => "Could not write to the clipboard",
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    match error {}
+}
+
 pub(crate) const SELECT_CELL_TO_FILTER: &str = "Select a cell to filter by its value";
 
 pub(crate) fn open_reason(error: &Error) -> String {

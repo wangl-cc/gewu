@@ -66,16 +66,31 @@ mod delegate {
     }
 }
 
+/// An open panel shown by [`open_files`].
+pub(crate) struct OpenPanel(Retained<NSOpenPanel>);
+
+impl OpenPanel {
+    /// Bring the panel back to the front.
+    pub(crate) fn activate(&self) {
+        self.0.makeKeyAndOrderFront(None);
+    }
+
+    /// Close the panel as if cancelled.
+    pub(crate) fn dismiss(&self) {
+        self.0.performClose(None);
+    }
+}
+
 /// Show a multi-file panel. The header choice applies to paths accepted by `supports_header`.
 #[expect(
     unsafe_code,
     reason = "AppKit's panel constructor, action and weak delegate are checked here"
 )]
-pub fn open_files(
+pub(crate) fn open_files(
     main: MainThreadMarker,
     supports_header: fn(&Path) -> bool,
     on_finish: impl Fn(Option<(Vec<PathBuf>, bool)>) + 'static,
-) -> Option<Retained<NSOpenPanel>> {
+) -> Option<OpenPanel> {
     // SAFETY: This class selector is called on the main thread. AppKit can return nil despite
     // objc2-app-kit's non-null 0.3 binding. Capture the autoreleased result as an Option.
     let panel: Option<Retained<NSOpenPanel>> = unsafe { msg_send![class!(NSOpenPanel), openPanel] };
@@ -121,5 +136,5 @@ pub fn open_files(
         }
     });
     panel.beginWithCompletionHandler(&completion);
-    Some(panel)
+    Some(OpenPanel(panel))
 }

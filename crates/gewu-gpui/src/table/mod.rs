@@ -366,7 +366,7 @@ impl TableView {
                 let failure = match result {
                     Ok(text) => crate::platform::clipboard::write_tsv(text, cx)
                         .err()
-                        .map(String::from),
+                        .map(|error| crate::ui::errors::pasteboard_message(error).to_owned()),
                     Err(error) => Some(crate::ui::errors::clipboard_message(&error)),
                 };
                 table.copy_finished(failure, cx);

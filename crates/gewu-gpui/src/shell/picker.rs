@@ -1,14 +1,13 @@
+//! The file picker: the native open panel on macOS, otherwise the toolkit's path prompt.
 use std::path::PathBuf;
 
 use gpui_kit::*;
-#[cfg(target_os = "macos")]
-use {objc2::rc::Retained, objc2_app_kit::NSOpenPanel};
 
 use super::{Documents, open_with_header, report_window_error};
 
 pub(super) struct FilePicker {
     #[cfg(target_os = "macos")]
-    panel: Option<Retained<NSOpenPanel>>,
+    panel: Option<crate::platform::macos::OpenPanel>,
     _selection: Task<()>,
 }
 
@@ -72,14 +71,14 @@ impl FilePicker {
     pub fn activate(&self) {
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
-            panel.makeKeyAndOrderFront(None);
+            panel.activate();
         }
     }
 
     pub fn dismiss(&self) {
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
-            panel.performClose(None);
+            panel.dismiss();
         }
     }
 }

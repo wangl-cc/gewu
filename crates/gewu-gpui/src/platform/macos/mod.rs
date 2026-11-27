@@ -1,11 +1,23 @@
-//! Typed operations for native macOS methods whose bindings accept arbitrary Objective-C objects.
+//! Every Objective-C call the app makes: typed operations over AppKit and Foundation for the
+//! open panel, the pasteboard, recent documents and display options.
+use std::path::Path;
+
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSDocumentController;
+use objc2_foundation::NSURL;
 
 mod display;
+pub(crate) mod pasteboard;
 mod picker;
 pub(crate) use display::{DisplayObservation, accessibility_display_options};
-pub(crate) use picker::open_files;
+pub(crate) use picker::{OpenPanel, open_files};
+
+/// Add `path` to this application's system recent documents.
+pub(crate) fn note_recent_document(main: MainThreadMarker, path: &Path) {
+    if let Some(url) = NSURL::from_file_path(path) {
+        NSDocumentController::sharedDocumentController(main).noteNewRecentDocumentURL(&url);
+    }
+}
 
 /// Clear this application's system recent documents, as in AppKit's Clear Menu action.
 #[expect(unsafe_code, reason = "AppKit declares the sender nullable")]

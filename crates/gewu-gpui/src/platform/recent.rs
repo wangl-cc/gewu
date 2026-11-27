@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::App;
 #[cfg(target_os = "macos")]
-use {objc2::MainThreadMarker, objc2_app_kit::NSDocumentController, objc2_foundation::NSURL};
+use objc2::MainThreadMarker;
 
 use super::storage;
 
@@ -56,10 +56,8 @@ impl RecentDocuments {
             });
         }
         #[cfg(target_os = "macos")]
-        if let Some(main) = self.macos
-            && let Some(url) = NSURL::from_file_path(path)
-        {
-            NSDocumentController::sharedDocumentController(main).noteNewRecentDocumentURL(&url);
+        if let Some(main) = self.macos {
+            super::macos::note_recent_document(main, path);
         }
         #[cfg(not(target_os = "macos"))]
         cx.add_recent_document(path);
