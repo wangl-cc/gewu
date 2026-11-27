@@ -2,10 +2,15 @@
 
 use std::ops::Range;
 
+use gewu_core::ViewRow;
+
+use super::columns::VisibleCol;
+
+/// A displayed cell: a row of the displayed view and a visible column position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
-    pub row: u64,
-    pub column: usize,
+    pub row: ViewRow,
+    pub column: VisibleCol,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,12 +27,19 @@ impl Selection {
         }
     }
 
+    /// The selected display rows, as the span Core's row ranges take.
     pub fn rows(&self) -> Range<u64> {
-        self.anchor.row.min(self.head.row)..self.anchor.row.max(self.head.row) + 1
+        let (a, b) = (self.anchor.row.0, self.head.row.0);
+        a.min(b)..a.max(b) + 1
     }
 
-    pub fn columns(&self) -> Range<usize> {
-        self.anchor.column.min(self.head.column)..self.anchor.column.max(self.head.column) + 1
+    pub fn contains_row(&self, row: ViewRow) -> bool {
+        self.rows().contains(&row.0)
+    }
+
+    pub fn columns(&self) -> Range<VisibleCol> {
+        let (a, b) = (self.anchor.column, self.head.column);
+        a.min(b)..a.max(b).next()
     }
 
     /// Move the head by `rows` x `columns`, clamped to the table; without
@@ -40,11 +52,12 @@ impl Selection {
         row_count: u64,
         column_count: usize,
     ) -> Self {
-        let row = (self.head.row as i128 + rows as i128)
+        let row = (i128::from(self.head.row.0) + i128::from(rows))
             .clamp(0, row_count.saturating_sub(1) as i128) as u64;
-        let column = (self.head.column as i128 + i128::from(columns))
-            .clamp(0, column_count.saturating_sub(1) as i128) as usize;
-        let head = Cell { row, column };
+        let head = Cell {
+            row: ViewRow(row),
+            column: self.head.column.moved(columns, column_count),
+        };
         if extend {
             Self {
                 anchor: self.anchor,
@@ -55,12 +68,17 @@ impl Selection {
         }
     }
 
-    pub fn all(row_count: u64, column_count: usize) -> Option<Self> {
+    pub fn all(row_count: u64, last_column: Option<VisibleCol>) -> Option<Self> {
         let row = row_count.checked_sub(1)?;
-        let column = column_count.checked_sub(1)?;
         Some(Self {
-            anchor: Cell { row: 0, column: 0 },
-            head: Cell { row, column },
+            anchor: Cell {
+                row: ViewRow(0),
+                column: VisibleCol::FIRST,
+            },
+            head: Cell {
+                row: ViewRow(row),
+                column: last_column?,
+            },
         })
     }
 }

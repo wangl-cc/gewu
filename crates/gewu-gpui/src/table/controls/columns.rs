@@ -8,7 +8,10 @@ use gpui_kit::{
 };
 
 use super::{Cell, ColumnDrag, Drawer, Order, Preferences, Selection, TableView, button};
-use crate::table::{columns::TableColumns, data::TableQuery};
+use crate::table::{
+    columns::{TableColumns, VisibleCol},
+    data::TableQuery,
+};
 
 fn uses_column(query: &TableQuery, id: ColumnId) -> bool {
     query.filters.iter().any(|filter| filter.column == id)
@@ -164,11 +167,10 @@ impl TableView {
                         .child(column.display_type.clone()),
                 );
             if let Some(position) = position {
-                let index = position.index();
                 let payload = ColumnDrag {
                     document: cx.entity_id(),
                     order: Order::Columns,
-                    index,
+                    index: position.index(),
                     id,
                     name: column.name.clone().into(),
                 };
@@ -185,23 +187,19 @@ impl TableView {
                         if let Some(from) = t.data.columns.position(drag.id)
                             && let Some(to) = t.data.columns.position(id)
                         {
-                            t.change_columns(
-                                true,
-                                |columns| columns.move_to(from.index(), to.index()),
-                                cx,
-                            );
+                            t.change_columns(true, |columns| columns.move_to(from, to), cx);
                             cx.notify();
                         }
                     }));
                 row = row
                     .child(
                         super::icon_button(("column-earlier", raw), "Move column earlier", "↑", cx)
-                            .disabled(index == 0)
+                            .disabled(position == VisibleCol::FIRST)
                             .on_click(cx.listener(move |t, _, _, cx| t.move_column(id, -1, cx))),
                     )
                     .child(
                         super::icon_button(("column-later", raw), "Move column later", "↓", cx)
-                            .disabled(index + 1 == self.data.columns.len())
+                            .disabled(Some(position) == self.data.columns.last())
                             .on_click(cx.listener(move |t, _, _, cx| t.move_column(id, 1, cx))),
                     );
             } else {
@@ -438,11 +436,7 @@ impl TableView {
         let Some(index) = self.data.columns.position(id) else {
             return;
         };
-        let index = index.index();
-        let Some(target) = index
-            .checked_add_signed(by)
-            .filter(|i| *i < self.data.columns.len())
-        else {
+        let Some(target) = index.step(by, self.data.columns.len()) else {
             return;
         };
         self.change_columns(true, |columns| columns.move_to(index, target), cx);
@@ -489,7 +483,7 @@ impl TableView {
             .filter(|_| !columns.is_empty())
             .map(|(s, anchor, head)| {
                 let relocate = |cell: Cell, id| Cell {
-                    column: columns.position(id).map_or(0, |column| column.index()),
+                    column: columns.position(id).unwrap_or(VisibleCol::FIRST),
                     ..cell
                 };
                 Selection {

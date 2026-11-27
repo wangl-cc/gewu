@@ -3,7 +3,7 @@
 
 use gpui_kit::*;
 
-use super::{Cell, Frame, HEADER_HEIGHT, Selection, TableView};
+use super::{Cell, Frame, HEADER_HEIGHT, Selection, TableView, layout::LaidColumn};
 
 pub(super) fn grid(table: &TableView, window: &Window) -> Stateful<Div> {
     let grid = div()
@@ -44,14 +44,19 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
         .top_0()
         .w_full()
         .h(px(HEADER_HEIGHT.min(layout.body_bottom()).max(0.)));
-    for (index, left, width) in layout.clipped_columns() {
+    for LaidColumn {
+        column: index,
+        x: left,
+        width,
+    } in layout.clipped_columns()
+    {
         let column = &table.data.columns[index];
         let id = column.id;
         let entity = cx.weak_entity();
         let mut header = div()
             .id(("column", id.into_raw()))
             .role(Role::ColumnHeader)
-            .aria_column_index(index)
+            .aria_column_index(index.index())
             .aria_label(table.data.columns.entry(index).label.clone())
             .absolute()
             .left(px(left))
@@ -82,7 +87,7 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
         if top >= bottom {
             continue;
         }
-        let row = frame_row.display.0;
+        let row = frame_row.display;
         let source = frame_row.source;
         let mut row_node = div()
             .id(("source-row", source.0))
@@ -92,12 +97,17 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
             .top(px(top))
             .h(px(bottom - top))
             .w_full();
-        if let Some(index) = usize::try_from(row).ok().and_then(|n| n.checked_add(1)) {
+        if let Some(index) = usize::try_from(row.0).ok().and_then(|n| n.checked_add(1)) {
             row_node = row_node.aria_row_index(index);
         }
-        for (column, left, width) in layout.clipped_columns() {
+        for LaidColumn {
+            column,
+            x: left,
+            width,
+        } in layout.clipped_columns()
+        {
             let cell = Cell { row, column };
-            let Some(value) = table.data.cell(column, row) else {
+            let Some(value) = table.data.cell(cell) else {
                 continue;
             };
             let text = match value {
@@ -109,11 +119,11 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
             let selected = table
                 .grid
                 .selection()
-                .filter(|s| s.rows().contains(&row) && s.columns().contains(&column));
+                .filter(|s| s.contains_row(row) && s.columns().contains(&column));
             let mut node = div()
                 .id(("column", id.into_raw()))
                 .role(Role::GridCell)
-                .aria_column_index(column)
+                .aria_column_index(column.index())
                 .aria_label(format!(
                     "{}, row {}",
                     table.data.columns.entry(column).label,
@@ -138,7 +148,7 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
                 let entity = cx.weak_entity();
                 node = node.on_a11y_action(action, move |_, window, cx| {
                     _ = entity.update(cx, |table, cx| {
-                        if table.data.view().source_row_at(gewu_core::ViewRow(row)) == Some(source)
+                        if table.data.view().source_row_at(row) == Some(source)
                             && table.data.columns.get(column).is_some_and(|c| c.id == id)
                         {
                             table.commit_grid_layout(cx);
@@ -167,8 +177,8 @@ fn selection_description(selection: Selection) -> SharedString {
         "Selected display rows {} through {}, columns {} through {}",
         rows.start + 1,
         rows.end,
-        columns.start + 1,
-        columns.end,
+        columns.start.index() + 1,
+        columns.end.index(),
     )
     .into()
 }

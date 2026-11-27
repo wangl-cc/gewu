@@ -1,12 +1,20 @@
 use gpui_kit::{Axis, Bounds, Point};
 
-use super::{Cell, HEADER_HEIGHT, Layout, ROW_HEIGHT, SCROLLBAR, VerticalScroll, size_};
+use super::{HEADER_HEIGHT, Layout, ROW_HEIGHT, SCROLLBAR, VerticalScroll, size_};
 use crate::table::{
     PAD,
-    columns::fixture::columns,
-    layout::{HeaderPart, HorizontalScroll},
+    columns::fixture::{cell, col, columns},
+    layout::{HeaderPart, HorizontalScroll, LaidColumn},
     scroll::Anchor,
 };
+
+fn laid(column: usize, x: f32, width: f32) -> LaidColumn {
+    LaidColumn {
+        column: col(column),
+        x,
+        width,
+    }
+}
 
 #[test]
 fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
@@ -17,14 +25,14 @@ fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
         scroll_x: 194.,
         content_width: 100.,
         // Column 2 starts behind the frozen gutter.
-        columns: vec![(2, -10., 80.), (3, 70., 60.)],
+        columns: vec![laid(2, -10., 80.), laid(3, 70., 60.)],
         vertical: VerticalScroll::new(2, ROW_HEIGHT.into(), 168.),
     };
-    let first = Cell { row: 0, column: 2 };
-    let last = Cell { row: 1, column: 3 };
-    assert_eq!(layout.column_edges(2..3), Some((-10., 70.)));
-    assert_eq!(layout.column_edges(0..8), Some((-10., 130.)));
-    assert_eq!(layout.column_edges(4..5), None);
+    let first = cell(0, 2);
+    let last = cell(1, 3);
+    assert_eq!(layout.column_edges(col(2)..col(3)), Some((-10., 70.)));
+    assert_eq!(layout.column_edges(col(0)..col(8)), Some((-10., 130.)));
+    assert_eq!(layout.column_edges(col(4)..col(5)), None);
     assert_eq!(layout.cell_at(24., 32.), Some(first));
     assert_eq!(layout.cell_at(70., 64.), Some(last));
     for (x, y) in [(23., 32.), (24., 31.), (130., 48.), (80., 96.)] {
@@ -38,15 +46,12 @@ fn click_requires_a_painted_cell_but_drag_extends_to_the_edge() {
         row: 45,
         offset: 12.,
     });
-    layout.columns[1].2 = 180.;
-    assert_eq!(layout.cell_at(70., 52.), Some(Cell { row: 46, column: 3 }));
-    assert_eq!(layout.cell_at(199., 52.), Some(Cell { row: 46, column: 3 }));
+    layout.columns[1].width = 180.;
+    assert_eq!(layout.cell_at(70., 52.), Some(cell(46, 3)));
+    assert_eq!(layout.cell_at(199., 52.), Some(cell(46, 3)));
     assert_eq!(layout.cell_at(200., 52.), None);
     assert_eq!(layout.cell_at(70., 200.), None);
-    assert_eq!(
-        layout.drag_cell_at(300., 300.),
-        Some(Cell { row: 50, column: 3 })
-    );
+    assert_eq!(layout.drag_cell_at(300., 300.), Some(cell(50, 3)));
 }
 
 #[test]
@@ -57,27 +62,27 @@ fn header_parts_share_one_funnel_and_divider_geometry() {
         gutter: 20.,
         scroll_x: 0.,
         content_width: 200.,
-        columns: vec![(0, 20., 100.), (1, 120., 100.)],
+        columns: vec![laid(0, 20., 100.), laid(1, 120., 100.)],
         vertical: VerticalScroll::new(2, ROW_HEIGHT.into(), 168.),
     };
     let right = 120.;
     assert_eq!(Layout::funnel_left(right), right - PAD - 9.);
     for (x, part) in [
         (19., None),
-        (21., Some(HeaderPart::Title(0))),
-        (right - PAD - 14.5, Some(HeaderPart::Title(0))),
-        (right - PAD - 14., Some(HeaderPart::Funnel(0))),
-        (right - 4.5, Some(HeaderPart::Funnel(0))),
-        (right - 4., Some(HeaderPart::Divider(0))),
-        (right + 4., Some(HeaderPart::Divider(0))),
-        (right + 4.5, Some(HeaderPart::Title(1))),
-        (224., Some(HeaderPart::Divider(1))),
+        (21., Some(HeaderPart::Title(col(0)))),
+        (right - PAD - 14.5, Some(HeaderPart::Title(col(0)))),
+        (right - PAD - 14., Some(HeaderPart::Funnel(col(0)))),
+        (right - 4.5, Some(HeaderPart::Funnel(col(0)))),
+        (right - 4., Some(HeaderPart::Divider(col(0)))),
+        (right + 4., Some(HeaderPart::Divider(col(0)))),
+        (right + 4.5, Some(HeaderPart::Title(col(1)))),
+        (224., Some(HeaderPart::Divider(col(1)))),
         (224.5, None),
     ] {
         assert_eq!(layout.header_part_at(x), part, "at {x}");
     }
-    assert_eq!(layout.divider_band(0), Some((116., 124.)));
-    assert_eq!(layout.divider_band(1), Some((216., 224.)));
+    assert_eq!(layout.divider_band(col(0)), Some((116., 124.)));
+    assert_eq!(layout.divider_band(col(1)), Some((216., 224.)));
 }
 
 #[test]

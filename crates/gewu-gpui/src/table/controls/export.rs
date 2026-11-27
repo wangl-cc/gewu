@@ -51,7 +51,7 @@ impl TableView {
         self.controls.drawer = Some(Drawer::Export(ExportDraft {
             view: self.data.view().clone(),
             source: self.data.snapshot().dataset().path().to_owned(),
-            columns: self.data.column_ids(0..self.data.columns.len()),
+            columns: self.data.columns.ids(),
             format: if prefs.remember_export_format {
                 prefs.last_export_format
             } else {

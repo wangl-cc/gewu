@@ -3,6 +3,7 @@ use std::path::Path;
 use gpui_kit::{InputEvent, Modifiers, MouseButton, MouseDownEvent, px, size, test::TestWindowExt};
 
 use super::ui_fixture::TableWindow;
+use crate::table::columns::fixture::col;
 
 fn open() -> TableWindow {
     TableWindow::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv"))
@@ -125,7 +126,7 @@ fn invalid_filter_preserves_the_displayed_query_and_recovers_on_edit() {
     let original = w.read(|t| t.data.view().clone());
     w.app.update(|cx| {
         w.table.update(cx, |table, cx| {
-            let score = table.data.columns[1].id;
+            let score = table.data.columns[col(1)].id;
             table.edit_query(cx, |query| {
                 query.filters.push(ColumnFilter {
                     column: score,
@@ -160,7 +161,7 @@ fn a_copy_failure_survives_query_changes_and_clears_after_a_successful_copy() {
         w.table.update(cx, |table, cx| {
             let limit = gewu_core::ExportError::SizeLimit { limit: 1 << 20 };
             table.copy_finished(Some(super::CopyFailure::Encode(limit.into())), cx);
-            table.cycle_sort(1, false, cx);
+            table.cycle_sort(col(1), false, cx);
         })
     });
     w.settle();
@@ -192,7 +193,7 @@ fn a_filter_that_keeps_every_row_stays_in_the_summary_until_its_replacement_appl
     let mut w = open();
     let base_footer_height =
         w.ui.update(|window, _| window.find("document-footer").bounds().size.height);
-    let score = w.read(|t| t.data.columns[1].id);
+    let score = w.read(|t| t.data.columns[col(1)].id);
     let raw = score.into_raw() as usize;
     w.app.update(|cx| {
         w.table.update(cx, |t, cx| {
@@ -217,7 +218,7 @@ fn a_filter_that_keeps_every_row_stays_in_the_summary_until_its_replacement_appl
     w.settle();
     w.ui.update(|window, cx| window.click(("locate-filter", raw), cx));
     w.settle();
-    assert_eq!(w.selection().unwrap().head.column, 1);
+    assert_eq!(w.selection().unwrap().head.column, col(1));
     w.ui.update(|window, cx| window.click("filtered-count", cx));
     w.settle();
     w.ui.update(|window, cx| {
@@ -301,7 +302,7 @@ fn copying_a_cell_supersedes_an_unfinished_row_copy() {
         w.table.update(cx, |t, cx| {
             assert!(t.copy_task.is_some());
             let cell = t.grid.selection().unwrap().head;
-            let text = t.data.cell(cell.column, cell.row).unwrap().unwrap();
+            let text = t.data.cell(cell).unwrap().unwrap();
             t.copy_cell_text(text.to_string(), cx);
         });
     });
@@ -450,7 +451,7 @@ fn reversing_a_pending_sort_restores_find_on_the_original_view() {
     w.settle();
     assert!(w.read(|t| std::sync::Arc::ptr_eq(&original, t.data.view())));
     w.keys("cmd-g");
-    assert_eq!(w.selection().unwrap().head.row, 2);
+    assert_eq!(w.selection().unwrap().head.row.0, 2);
 }
 
 fn grid_frame(w: &mut TableWindow) -> super::Frame {
@@ -530,22 +531,22 @@ fn typing_replaces_a_pending_search_and_reordering_keeps_the_current_match() {
     w.ui.run_until_parked();
     assert_eq!(w.selection(), None);
     w.type_in_find("ker");
-    assert_eq!(w.selection().unwrap().head.row, 1);
+    assert_eq!(w.selection().unwrap().head.row.0, 1);
     w.keys("cmd-g cmd-g");
-    assert_eq!(w.selection().unwrap().head.row, 2);
+    assert_eq!(w.selection().unwrap().head.row.0, 2);
     w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 3 of 3")));
-    let note = w.read(|t| t.data.columns[2].id.into_raw() as usize);
+    let note = w.read(|t| t.data.columns[col(2)].id.into_raw() as usize);
     w.ui.update(|window, cx| window.dispatch_action(Box::new(crate::actions::ManageColumns), cx));
     w.settle();
     w.ui.update(|window, cx| window.click(("column-earlier", note), cx));
     w.settle();
     let head = w.selection().unwrap().head;
-    assert_eq!((head.row, head.column), (2, 1));
+    assert_eq!((head.row.0, head.column.index()), (2, 1));
     w.ui.update(|window, _| assert_eq!(window.find("find-count").label(), Some("Match 2 of 3")));
     w.ui.update(|window, cx| window.click("close-table-drawer", cx));
     w.keys("cmd-g");
     let head = w.selection().unwrap().head;
-    assert_eq!((head.row, head.column), (2, 2));
+    assert_eq!((head.row.0, head.column.index()), (2, 2));
 }
 
 #[test]
@@ -555,8 +556,8 @@ fn hiding_columns_rebuilds_live_find_and_zero_columns_have_no_selection() {
     w.type_in_find("marker");
     let (group, note) = w.read(|t| {
         (
-            t.data.columns[0].id.into_raw() as usize,
-            t.data.columns[2].id,
+            t.data.columns[col(0)].id.into_raw() as usize,
+            t.data.columns[col(2)].id,
         )
     });
     w.ui.update(|window, cx| window.dispatch_action(Box::new(crate::actions::ManageColumns), cx));

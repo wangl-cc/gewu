@@ -5,10 +5,13 @@ use crate::{
     actions::Motion,
     table::{
         HEADER_HEIGHT, MIN_COLUMN, PAD, ROW_HEIGHT, SCROLLBAR,
-        columns::{ColumnWidth, TableColumns, fixture::columns},
+        columns::{
+            ColumnWidth, TableColumns,
+            fixture::{cell, col, columns},
+        },
         layout::Layout,
         scroll::VerticalScroll,
-        selection::{Cell, Selection},
+        selection::Selection,
         size_,
     },
 };
@@ -68,7 +71,7 @@ impl Grid {
 
     fn cell(&self, row: u64, column: usize) -> Point<Pixels> {
         point(
-            px(self.layout.column_left(column).unwrap() + 10.),
+            px(self.layout.column_left(col(column)).unwrap() + 10.),
             px(HEADER_HEIGHT + self.layout.vertical.row_top(row) as f32 + ROW_HEIGHT / 2.),
         )
     }
@@ -123,13 +126,17 @@ impl Grid {
         scrolled
     }
 
+    /// The selected rows and visible column positions, as tests name them.
     fn ranges(&self) -> Option<(std::ops::Range<u64>, std::ops::Range<usize>)> {
-        self.model.selection().map(|s| (s.rows(), s.columns()))
+        self.model.selection().map(|s| {
+            let columns = s.columns();
+            (s.rows(), columns.start.index()..columns.end.index())
+        })
     }
 }
 
 fn single(row: u64, column: usize) -> Option<Selection> {
-    Some(Selection::single(Cell { row, column }))
+    Some(Selection::single(cell(row, column)))
 }
 
 #[test]
@@ -159,7 +166,7 @@ fn presses_select_cells_shift_extends_from_the_anchor_and_blank_areas_change_not
 #[test]
 fn a_double_press_on_a_cell_selects_it_and_asks_to_show_it() {
     let mut grid = Grid::new(680., 420., false);
-    let cell = Cell { row: 3, column: 1 };
+    let cell = cell(3, 1);
     assert_eq!(
         grid.press(grid.cell(3, 1), false, 2),
         Some(GridEffect::ShowCell(cell))
@@ -191,7 +198,7 @@ fn a_drag_resting_past_the_bottom_edge_scrolls_each_frame_until_the_last_row() {
         assert!(frames < 1000, "edge scrolling must stop at the last row");
     }
     assert_eq!(grid.model.scroll().fraction(), 1.);
-    assert_eq!(grid.model.selection().unwrap().head.row, ROWS - 1);
+    assert_eq!(grid.model.selection().unwrap().head.row.0, ROWS - 1);
     grid.model.pointer_up();
     assert_eq!(grid.edge_frame(), None);
 }
@@ -208,17 +215,17 @@ fn keys_move_or_extend_the_head_and_reveal_it() {
     grid.key(Motion::Down, false);
     assert_eq!(grid.model.selection(), single(4, 1));
     assert!(grid.key(Motion::PageDown, false));
-    let row = grid.model.selection().unwrap().head.row;
+    let row = grid.model.selection().unwrap().head.row.0;
     assert_eq!(row, 4 + grid.model.scroll().page_rows());
     assert!(grid.layout.vertical.visible_rows().contains(&row));
     grid.key(Motion::LastRow, false);
-    assert_eq!(grid.model.selection().unwrap().head.row, ROWS - 1);
+    assert_eq!(grid.model.selection().unwrap().head.row.0, ROWS - 1);
     assert_eq!(grid.model.scroll().fraction(), 1.);
     grid.key(Motion::FirstRow, true);
     assert_eq!(grid.model.selection().unwrap().rows(), 0..ROWS);
     assert_eq!(grid.model.scroll().fraction(), 0.);
     grid.key(Motion::LastColumn, false);
-    let right = grid.layout.column_left(COLUMNS - 1).unwrap() + WIDTH;
+    let right = grid.layout.column_left(col(COLUMNS - 1)).unwrap() + WIDTH;
     assert!(right <= grid.layout.body_right());
     assert!(!grid.key(Motion::LastColumn, false));
 }
@@ -230,14 +237,14 @@ fn header_presses_sort_filter_or_start_a_resize_by_the_part_under_the_pointer() 
     assert_eq!(
         grid.press(grid.header(GUTTER + 10.), false, 1),
         Some(GridEffect::CycleSort {
-            column: 0,
+            column: col(0),
             multiple: false
         })
     );
     assert_eq!(
         grid.press(grid.header(GUTTER + 10.), true, 1),
         Some(GridEffect::CycleSort {
-            column: 0,
+            column: col(0),
             multiple: true
         })
     );
@@ -246,15 +253,15 @@ fn header_presses_sort_filter_or_start_a_resize_by_the_part_under_the_pointer() 
     assert_eq!(funnel, right - PAD - 14.);
     assert_eq!(
         grid.press(grid.header(funnel), false, 1),
-        Some(GridEffect::EditFilter(0))
+        Some(GridEffect::EditFilter(col(0)))
     );
     assert!(matches!(
         grid.press(grid.header(funnel - 0.5), false, 1),
-        Some(GridEffect::CycleSort { column: 0, .. })
+        Some(GridEffect::CycleSort { column, .. }) if column == col(0)
     ));
     assert_eq!(
         grid.press(grid.header(right - 3.), false, 2),
-        Some(GridEffect::Autofit(0))
+        Some(GridEffect::Autofit(col(0)))
     );
     assert_eq!(grid.press(grid.header(right + 3.), false, 1), None);
     assert!(grid.model.is_dragging());
@@ -268,18 +275,18 @@ fn a_divider_drag_resizes_from_the_press_and_stops_at_the_minimum_width() {
     assert_eq!(
         grid.drag(grid.header(right + 60.)),
         Some(DragUpdate::Resize {
-            column: 0,
+            column: col(0),
             width: WIDTH + 60.
         })
     );
     assert_eq!(
         grid.drag(grid.header(GUTTER)),
         Some(DragUpdate::Resize {
-            column: 0,
+            column: col(0),
             width: MIN_COLUMN
         })
     );
-    assert_eq!(grid.layout.column_left(1), Some(GUTTER + MIN_COLUMN));
+    assert_eq!(grid.layout.column_left(col(1)), Some(GUTTER + MIN_COLUMN));
 }
 
 #[test]
@@ -334,7 +341,7 @@ fn hidden_overlay_tracks_pass_presses_through_unless_a_shown_thumb_was_hovered()
     assert!(grid.model.pointer_hover(inside, &grid.layout, false));
     assert_eq!(grid.model.active_thumb(), None);
     assert!(grid.press(inside, false, 1).is_none());
-    assert_eq!(grid.model.selection().unwrap().head.row, 2);
+    assert_eq!(grid.model.selection().unwrap().head.row.0, 2);
     grid.model.pointer_up();
     // While the tracks flash after scrolling, hovering one keeps it hittable once hidden.
     assert!(grid.model.pointer_hover(inside, &grid.layout, true));
@@ -342,7 +349,7 @@ fn hidden_overlay_tracks_pass_presses_through_unless_a_shown_thumb_was_hovered()
     grid.press(inside, false, 1);
     assert!(grid.model.is_dragging());
     assert!(grid.model.scroll().fraction() > 0.);
-    assert_eq!(grid.model.selection().unwrap().head.row, 2);
+    assert_eq!(grid.model.selection().unwrap().head.row.0, 2);
 }
 
 #[test]
@@ -359,21 +366,24 @@ fn hover_reports_only_changes_that_are_drawn() {
         grid.model
             .pointer_hover(grid.cell(4, 0), &grid.layout, true)
     );
-    assert_eq!(grid.model.hovered_cell(&grid.layout).unwrap().row, 4);
+    assert_eq!(grid.model.hovered_cell(&grid.layout).unwrap().row.0, 4);
     grid.model.scroll_to_row(1);
     grid.draw();
-    assert_eq!(grid.model.hovered_cell(&grid.layout).unwrap().row, 5);
+    assert_eq!(grid.model.hovered_cell(&grid.layout).unwrap().row.0, 5);
     let right = GUTTER + WIDTH;
     assert!(
         grid.model
             .pointer_hover(grid.header(right), &grid.layout, true)
     );
-    assert_eq!(grid.model.header_hover(), Some(HeaderHover::Divider(0)));
+    assert_eq!(
+        grid.model.header_hover(),
+        Some(HeaderHover::Divider(col(0)))
+    );
     assert!(
         grid.model
             .pointer_hover(grid.header(right - PAD - 10.), &grid.layout, true)
     );
-    assert_eq!(grid.model.header_hover(), Some(HeaderHover::Column(0)));
+    assert_eq!(grid.model.header_hover(), Some(HeaderHover::Column(col(0))));
     assert!(grid.model.pointer_left());
     assert!(!grid.model.pointer_left());
     assert_eq!(grid.model.header_hover(), None);

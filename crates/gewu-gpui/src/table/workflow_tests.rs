@@ -6,14 +6,17 @@ use gpui_kit::{
 };
 
 use super::ui_fixture::TableWindow;
-use crate::table::selection::{Cell, Selection};
+use crate::table::{
+    columns::fixture::{cell, col},
+    selection::Selection,
+};
 
 fn open() -> TableWindow {
     TableWindow::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/workflow.csv"))
 }
 
 fn single(row: u64, column: usize) -> Option<Selection> {
-    Some(Selection::single(Cell { row, column }))
+    Some(Selection::single(cell(row, column)))
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     assert_eq!(
         w.app.read(|cx| {
             let t = w.table.read(cx);
-            let id = t.data.columns[2].id;
+            let id = t.data.columns[col(2)].id;
             (0..3)
                 .map(|r| t.find_bar().read(cx).cached_match(id, r))
                 .collect::<Vec<_>>()
@@ -195,9 +198,9 @@ fn find_reveals_the_entire_column_after_measuring_its_neighbors() {
     w.read(|t| {
         let left = t
             .layout
-            .column_left(29)
+            .column_left(col(29))
             .expect("the matching column must be painted");
         assert!(left >= t.layout.gutter);
-        assert!(left + t.column_width(29) <= t.layout.body_right());
+        assert!(left + t.column_width(col(29)) <= t.layout.body_right());
     });
 }

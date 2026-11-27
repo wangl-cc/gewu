@@ -14,6 +14,8 @@ use gewu_core::{
 };
 use gpui_kit::SharedString;
 
+use super::{columns::VisibleCol, selection::Cell};
+
 pub(super) const BLOCK_ROWS: u64 = 64;
 /// Limit the encoded TSV before handing it to the pasteboard.
 const COPY_BYTE_LIMIT: usize = 64 * 1024 * 1024;
@@ -166,16 +168,9 @@ impl TableData {
         }
     }
 
-    pub(super) fn display_cell(
-        &self,
-        row: gewu_core::ViewRow,
-        id: ColumnId,
-    ) -> Option<crate::table::selection::Cell> {
+    pub(super) fn display_cell(&self, row: gewu_core::ViewRow, id: ColumnId) -> Option<Cell> {
         let column = self.columns.position(id)?;
-        (row.0 < self.row_count()).then_some(crate::table::selection::Cell {
-            row: row.0,
-            column: column.index(),
-        })
+        (row.0 < self.row_count()).then_some(Cell { row, column })
     }
 
     pub(super) fn source_row_count(&self) -> usize {
@@ -186,7 +181,7 @@ impl TableData {
         self.view().row_count()
     }
 
-    pub(super) fn is_number(&self, column: usize) -> bool {
+    pub(super) fn is_number(&self, column: VisibleCol) -> bool {
         self.columns[column].value_category == ValueCategory::Number
     }
 
@@ -227,7 +222,7 @@ impl TableData {
     /// a visible block that could not be formatted.
     pub(super) fn prefetch(
         &mut self,
-        columns: impl IntoIterator<Item = usize>,
+        columns: impl IntoIterator<Item = VisibleCol>,
         rows: Range<u64>,
     ) -> Option<&gewu_core::Error> {
         self.tick += 1;
@@ -282,21 +277,18 @@ impl TableData {
     }
 
     /// Cached text of a cell: `Some(None)` is null; unfetched or failed blocks have no value.
-    pub(super) fn cell(&mut self, column: usize, row: u64) -> Option<Option<SharedString>> {
-        let block = self
-            .cache
-            .get_mut(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
+    pub(super) fn cell(&mut self, cell: Cell) -> Option<Option<SharedString>> {
+        let (key, offset) = self.block_of(cell)?;
+        let block = self.cache.get_mut(&key)?;
         let before = block.budget;
-        let text = block.full_text((row % BLOCK_ROWS) as u32);
+        let text = block.full_text(offset);
         self.cache_bytes += block.budget - before;
         text
     }
 
-    pub(super) fn cached_cell_text(&self, column: usize, row: u64) -> Option<Option<&str>> {
-        let block = self
-            .cache
-            .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
-        let relative = (row % BLOCK_ROWS) as u32;
+    pub(super) fn cached_cell_text(&self, cell: Cell) -> Option<Option<&str>> {
+        let (key, relative) = self.block_of(cell)?;
+        let block = self.cache.get(&key)?;
         match &block.text {
             BlockText::Ready { segment, .. } if relative < segment.row_count() => {
                 Some(segment.cell(relative))
@@ -305,14 +297,16 @@ impl TableData {
         }
     }
 
-    pub(super) fn cell_preview(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
-        self.cache
-            .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?
-            .preview((row % BLOCK_ROWS) as u32)
+    pub(super) fn cell_preview(&self, cell: Cell) -> Option<Option<SharedString>> {
+        let (key, offset) = self.block_of(cell)?;
+        self.cache.get(&key)?.preview(offset)
     }
 
-    pub(super) fn column_ids(&self, columns: Range<usize>) -> Vec<ColumnId> {
-        columns.map(|index| self.columns[index].id).collect()
+    /// The cache key of the block holding `cell`, and the cell's offset in it.
+    fn block_of(&self, cell: Cell) -> Option<((ColumnId, u64), u32)> {
+        let id = self.columns.get(cell.column)?.id;
+        let row = cell.row.0;
+        Some(((id, row / BLOCK_ROWS), (row % BLOCK_ROWS) as u32))
     }
 }
 

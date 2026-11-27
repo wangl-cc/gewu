@@ -1,10 +1,10 @@
 //! Building one frame of the grid from the committed layout: the visible rows, cell text,
 //! header markers, Find spans and selection outlines. The frame is immutable and painted once.
-use super::*;
+use super::{columns::VisibleCol, layout::LaidColumn, *};
 
 impl TableView {
     pub(super) fn build_frame(&mut self, layout: Rc<Layout>, cx: &App) -> Frame {
-        let visible = layout.columns.iter().map(|c| c.0);
+        let visible = layout.columns.iter().map(|laid| laid.column);
         let visible_rows = layout.vertical.visible_rows();
         let formatting_error = self
             .data
@@ -36,11 +36,15 @@ impl TableView {
         let mut text_matches = Vec::new();
         let mut current_match = None;
         let mut columns = Vec::with_capacity(layout.columns.len());
-        for &(column, x, width) in &layout.columns {
+        for &LaidColumn { column, x, width } in &layout.columns {
             let info = &self.data.columns[column];
             let mut cells = Vec::with_capacity(rows.len());
             for row in &rows {
-                let (text, null) = match self.data.cell_preview(column, row.display.0) {
+                let cell = Cell {
+                    row: row.display,
+                    column,
+                };
+                let (text, null) = match self.data.cell_preview(cell) {
                     Some(Some(text)) => (text, false),
                     Some(None) => (SharedString::new_static("null"), true),
                     None => {
@@ -63,7 +67,7 @@ impl TableView {
                     row.display,
                     info.capabilities.text_match,
                     || {
-                        let source = data.cached_cell_text(column, row.display.0)??;
+                        let source = data.cached_cell_text(cell)??;
                         let preview = crate::table::data::single_line_prefix(
                             source,
                             crate::table::data::GRID_PREVIEW_BYTES,
@@ -91,7 +95,7 @@ impl TableView {
         let header = layout
             .columns
             .iter()
-            .map(|&(column, ..)| {
+            .map(|&LaidColumn { column, .. }| {
                 let id = self.data.columns[column].id;
                 let name = &self.data.columns.entry(column).label;
                 let name = if crate::table::data::fits_one_line(name) {
@@ -118,7 +122,7 @@ impl TableView {
                 }
             })
             .collect();
-        let cell_bounds = |rows: Range<u64>, cols: Range<usize>| -> Option<Bounds<Pixels>> {
+        let cell_bounds = |rows: Range<u64>, cols: Range<VisibleCol>| -> Option<Bounds<Pixels>> {
             let (x0, x1) = layout.column_edges(cols)?;
             let y0 = (HEADER_HEIGHT as f64 + layout.vertical.row_top(rows.start)).max(-1e6) as f32;
             let y1 = (HEADER_HEIGHT as f64 + layout.vertical.row_top(rows.end)).min(1e6) as f32;
@@ -126,9 +130,13 @@ impl TableView {
                 .then(|| Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))))
         };
         let head = selection.and_then(|s| {
-            cell_bounds(s.head.row..s.head.row + 1, s.head.column..s.head.column + 1)
+            let head = Selection::single(s.head);
+            cell_bounds(head.rows(), head.columns())
         });
-        let hovered_row_y = self.grid.hovered_cell(&layout).map(|cell| row_y(cell.row));
+        let hovered_row_y = self
+            .grid
+            .hovered_cell(&layout)
+            .map(|cell| row_y(cell.row.0));
         let selection = selection.and_then(|s| cell_bounds(s.rows(), s.columns()));
         Frame {
             formatting_error,

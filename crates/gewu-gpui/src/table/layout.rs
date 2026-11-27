@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 
 use super::*;
-use crate::table::columns::TableColumns;
+use crate::table::columns::{TableColumns, VisibleCol};
 
 /// Keep a reveal anchored to its column while layout measures the surrounding widths.
 #[derive(Clone, Copy, PartialEq)]
@@ -24,23 +24,40 @@ impl HorizontalScroll {
     fn offset_with_widths(
         self,
         columns: &TableColumns,
-        width: impl Fn(usize) -> f32,
+        width: impl Fn(VisibleCol) -> f32,
         viewport: f32,
     ) -> f32 {
         match self {
             Self::Offset(offset) => offset,
             Self::Reveal { column, from } => {
-                let Some(index) = columns.position(column) else {
+                let Some(target) = columns.position(column) else {
                     return from;
                 };
-                let index = index.index();
-                let left: f32 = (0..index).map(&width).sum();
-                let right_aligned = left + width(index) - viewport;
+                let left: f32 = columns
+                    .positions()
+                    .take_while(|&column| column < target)
+                    .map(&width)
+                    .sum();
+                let right_aligned = left + width(target) - viewport;
                 // Show the entire column when it fits, otherwise keep as much of it in view as
                 // possible.
                 from.clamp(left.min(right_aligned), left.max(right_aligned))
             }
         }
+    }
+}
+
+/// A visible column as laid out for one frame, in canvas coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct LaidColumn {
+    pub(super) column: VisibleCol,
+    pub(super) x: f32,
+    pub(super) width: f32,
+}
+
+impl LaidColumn {
+    pub(super) fn right(&self) -> f32 {
+        self.x + self.width
     }
 }
 
@@ -50,8 +67,8 @@ pub(super) struct Layout {
     /// Canvas available to the header, gutter, and data after reserving permanent tracks.
     pub(super) viewport: Size<Pixels>,
     pub(super) gutter: f32,
-    /// Visible columns: (index, x in window, width).
-    pub(super) columns: Vec<(usize, f32, f32)>,
+    /// The visible columns that intersect the body, left to right.
+    pub(super) columns: Vec<LaidColumn>,
     pub(super) vertical: VerticalScroll,
     pub(super) scroll_x: f32,
     pub(super) content_width: f32,
@@ -70,7 +87,7 @@ impl Layout {
             bounds,
             gutter,
             grid_columns,
-            |index| grid_columns.width(index),
+            |column| grid_columns.width(column),
             scroll,
             horizontal,
             auto_hide_scrollbars,
@@ -81,13 +98,12 @@ impl Layout {
         bounds: Bounds<Pixels>,
         gutter: f32,
         grid_columns: &TableColumns,
-        width: impl Fn(usize) -> f32,
+        width: impl Fn(VisibleCol) -> f32,
         scroll: &VerticalScroll,
         horizontal: HorizontalScroll,
         auto_hide_scrollbars: bool,
     ) -> Self {
-        let widths = (0..grid_columns.len()).map(&width);
-        let content_width = widths.clone().sum::<f32>();
+        let content_width = grid_columns.positions().map(&width).sum::<f32>();
         let viewport = viewport_size(
             bounds.size,
             gutter,
@@ -105,12 +121,17 @@ impl Layout {
             .clamp(0., (content_width - body_width).max(0.));
         let mut columns = Vec::new();
         let mut x = 0.;
-        for (index, width) in widths.enumerate() {
+        for column in grid_columns.positions() {
+            let width = width(column);
             if x >= scroll_x + body_width {
                 break;
             }
             if x + width > scroll_x {
-                columns.push((index, gutter + x - scroll_x, width));
+                columns.push(LaidColumn {
+                    column,
+                    x: gutter + x - scroll_x,
+                    width,
+                });
             }
             x += width;
         }
@@ -186,24 +207,33 @@ impl Layout {
     }
 
     /// Clip partially visible cells to the same gutter and viewport as the painted body.
-    pub(super) fn clipped_columns(&self) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
-        self.columns.iter().filter_map(|&(index, x, width)| {
-            let left = x.max(self.gutter);
-            let right = (x + width).min(self.body_right());
-            (right > left).then_some((index, left, right - left))
+    pub(super) fn clipped_columns(&self) -> impl Iterator<Item = LaidColumn> + '_ {
+        self.columns.iter().filter_map(|laid| {
+            let left = laid.x.max(self.gutter);
+            let right = laid.right().min(self.body_right());
+            (right > left).then_some(LaidColumn {
+                column: laid.column,
+                x: left,
+                width: right - left,
+            })
         })
+    }
+
+    /// The layout of a visible column, if it intersects the body.
+    pub(super) fn laid(&self, column: VisibleCol) -> Option<&LaidColumn> {
+        self.columns.iter().find(|laid| laid.column == column)
     }
 
     /// Horizontal edges of the cells in the selection that were laid out for this frame.
     /// Keep partial edge cells at their full width; the paint mask clips their outlines.
-    pub(super) fn column_edges(&self, columns: Range<usize>) -> Option<(f32, f32)> {
+    pub(super) fn column_edges(&self, columns: Range<VisibleCol>) -> Option<(f32, f32)> {
         let mut overlap = self
             .columns
             .iter()
-            .filter(|(index, ..)| columns.contains(index));
+            .filter(|laid| columns.contains(&laid.column));
         let first = overlap.next()?;
         let last = overlap.next_back().unwrap_or(first);
-        Some((first.1, last.1 + last.2))
+        Some((first.x, last.right()))
     }
 
     /// The left edge of the funnel glyph in the header of the column ending at `right`.
@@ -212,9 +242,8 @@ impl Layout {
     }
 
     /// The divider band around the right edge of a visible column, clipped to the body.
-    pub(super) fn divider_band(&self, column: usize) -> Option<(f32, f32)> {
-        let &(_, left, width) = self.columns.iter().find(|c| c.0 == column)?;
-        let edge = left + width;
+    pub(super) fn divider_band(&self, column: VisibleCol) -> Option<(f32, f32)> {
+        let edge = self.laid(column)?.right();
         let start = (edge - RESIZE_SLOP).max(self.gutter);
         let end = (edge + RESIZE_SLOP).min(self.body_right());
         (end > start).then_some((start, end))
@@ -225,37 +254,37 @@ impl Layout {
         if !(self.gutter..self.body_right()).contains(&x) {
             return None;
         }
-        if let Some(&(column, ..)) = self
+        if let Some(laid) = self
             .columns
             .iter()
-            .find(|&&(_, left, width)| (x - (left + width)).abs() <= RESIZE_SLOP)
+            .find(|laid| (x - laid.right()).abs() <= RESIZE_SLOP)
         {
-            return Some(HeaderPart::Divider(column));
+            return Some(HeaderPart::Divider(laid.column));
         }
-        let &(column, left, width) = self
+        let laid = self
             .columns
             .iter()
-            .find(|(_, left, width)| (*left..left + width).contains(&x))?;
-        Some(if x >= Self::funnel_left(left + width) - FUNNEL_SLOP {
-            HeaderPart::Funnel(column)
+            .find(|laid| (laid.x..laid.right()).contains(&x))?;
+        Some(if x >= Self::funnel_left(laid.right()) - FUNNEL_SLOP {
+            HeaderPart::Funnel(laid.column)
         } else {
-            HeaderPart::Title(column)
+            HeaderPart::Title(laid.column)
         })
     }
 
     /// The left edge of a visible column.
-    pub(super) fn column_left(&self, column: usize) -> Option<f32> {
-        self.columns.iter().find(|c| c.0 == column).map(|c| c.1)
+    pub(super) fn column_left(&self, column: VisibleCol) -> Option<f32> {
+        self.laid(column).map(|laid| laid.x)
     }
 
-    pub(super) fn column_at(&self, x: f32) -> Option<usize> {
+    pub(super) fn column_at(&self, x: f32) -> Option<VisibleCol> {
         if !(self.gutter..self.body_right()).contains(&x) {
             return None;
         }
         self.columns
             .iter()
-            .find(|(_, left, width)| (*left..left + width).contains(&x))
-            .map(|c| c.0)
+            .find(|laid| (laid.x..laid.right()).contains(&x))
+            .map(|laid| laid.column)
     }
 
     pub(super) fn cell_at(&self, x: f32, y: f32) -> Option<Cell> {
@@ -264,14 +293,13 @@ impl Layout {
         }
         Some(Cell {
             column: self.column_at(x)?,
-            row: self.vertical.row_at(f64::from(y - HEADER_HEIGHT))?,
+            row: gewu_core::ViewRow(self.vertical.row_at(f64::from(y - HEADER_HEIGHT))?),
         })
     }
 
     /// A drag past the painted cells extends to the nearest visible cell.
     pub(super) fn drag_cell_at(&self, x: f32, y: f32) -> Option<Cell> {
-        let &(_, last_x, last_width) = self.columns.last()?;
-        let right = self.body_right().min(last_x + last_width);
+        let right = self.body_right().min(self.columns.last()?.right());
         let rows = self.vertical.visible_rows();
         let bottom = self
             .body_bottom()
@@ -294,8 +322,8 @@ impl Layout {
         rows.start / block..rows.end.div_ceil(block)
     }
 
-    fn visible_columns(&self) -> Option<(usize, usize)> {
-        Some((self.columns.first()?.0, self.columns.last()?.0))
+    fn visible_columns(&self) -> Option<(VisibleCol, VisibleCol)> {
+        Some((self.columns.first()?.column, self.columns.last()?.column))
     }
 }
 
@@ -338,15 +366,15 @@ pub(super) struct Scrollbar {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HeaderPart {
     /// The resize target around the column's right edge.
-    Divider(usize),
+    Divider(VisibleCol),
     /// The filter funnel near the right edge, and the slop around it up to the divider.
-    Funnel(usize),
+    Funnel(VisibleCol),
     /// The rest of the header, which sorts the column.
-    Title(usize),
+    Title(VisibleCol),
 }
 
 impl HeaderPart {
-    pub(super) fn column(self) -> usize {
+    pub(super) fn column(self) -> VisibleCol {
         match self {
             Self::Divider(column) | Self::Funnel(column) | Self::Title(column) => column,
         }
@@ -367,7 +395,7 @@ struct MeasuredColumn {
 /// text cache, but changes to width, scroll and Find are committed after drawing.
 pub(super) struct GridFrameLayout {
     pub(super) layout: Rc<Layout>,
-    measured: BTreeMap<usize, MeasuredColumn>,
+    measured: BTreeMap<VisibleCol, MeasuredColumn>,
     font_size: f32,
     horizontal: HorizontalScroll,
 }
@@ -385,16 +413,17 @@ impl TableView {
     ) -> GridFrameLayout {
         let auto_hide = cx.should_auto_hide_scrollbars();
         let mut layout = self.compute_layout(bounds, auto_hide);
-        let mut measured = BTreeMap::<usize, MeasuredColumn>::new();
+        let mut measured = BTreeMap::<VisibleCol, MeasuredColumn>::new();
         loop {
             let mut changed = false;
-            for &(index, ..) in &layout.columns {
-                let col = self.data.columns.entry(index);
+            for laid in &layout.columns {
+                let column = laid.column;
+                let col = self.data.columns.entry(column);
                 if col.width == ColumnWidth::Unmeasured
-                    && let Entry::Vacant(entry) = measured.entry(index)
+                    && let Entry::Vacant(entry) = measured.entry(column)
                 {
                     let id = col.info.id;
-                    let width = self.initial_width(index, window);
+                    let width = self.initial_width(column, window);
                     entry.insert(MeasuredColumn { id, width });
                     changed = true;
                 }
@@ -406,10 +435,11 @@ impl TableView {
                 bounds,
                 layout.gutter,
                 &self.data.columns,
-                |index| {
-                    measured
-                        .get(&index)
-                        .map_or_else(|| self.data.columns.width(index), |column| column.width)
+                |column| {
+                    measured.get(&column).map_or_else(
+                        || self.data.columns.width(column),
+                        |measured| measured.width,
+                    )
                 },
                 self.grid.scroll(),
                 self.grid.horizontal(),
@@ -437,17 +467,17 @@ impl TableView {
             return;
         };
         if frame.font_size == self.prefs.font_size {
-            for (index, measurement) in frame.measured {
+            for (column, measurement) in frame.measured {
                 if self
                     .data
                     .columns
-                    .get(index)
+                    .get(column)
                     .is_some_and(|c| c.id == measurement.id)
-                    && self.data.columns.entry(index).width == ColumnWidth::Unmeasured
+                    && self.data.columns.entry(column).width == ColumnWidth::Unmeasured
                 {
                     self.data
                         .columns
-                        .set_width(index, ColumnWidth::Measured(measurement.width));
+                        .set_width(column, ColumnWidth::Measured(measurement.width));
                 }
             }
         }

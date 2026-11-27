@@ -1,5 +1,8 @@
-//! Visible columns for pure layout and interaction tests.
-use super::{ColumnWidth, TableColumns};
+//! Visible columns and cells for pure layout and interaction tests.
+use gewu_core::ViewRow;
+
+use super::{ColumnWidth, TableColumns, VisibleCol};
+use crate::table::selection::Cell;
 
 /// `count` columns of `width` points each.
 pub(in crate::table) fn columns(count: usize, width: f32) -> TableColumns {
@@ -9,8 +12,21 @@ pub(in crate::table) fn columns(count: usize, width: f32) -> TableColumns {
     std::fs::write(&path, format!("{}\n", header.join(","))).unwrap();
     let dataset = gewu_core::Dataset::open(&path).unwrap();
     let mut columns = TableColumns::new(dataset.column_infos());
-    for index in 0..count {
-        columns.set_width(index, ColumnWidth::Manual(width));
+    for column in columns.positions() {
+        columns.set_width(column, ColumnWidth::Manual(width));
     }
     columns
+}
+
+/// The visible column at `index`, as a test names it.
+pub(in crate::table) fn col(index: usize) -> VisibleCol {
+    VisibleCol(index)
+}
+
+/// The cell at display `row` in the visible column at `column`.
+pub(in crate::table) fn cell(row: u64, column: usize) -> Cell {
+    Cell {
+        row: ViewRow(row),
+        column: col(column),
+    }
 }

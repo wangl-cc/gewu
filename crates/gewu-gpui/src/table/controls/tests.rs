@@ -4,7 +4,7 @@ use gpui_kit::{Action, ElementId, Modifiers, test::TestWindowExt};
 
 use crate::{
     actions::{EditFilter, EditSort, ExportTable, ManageColumns},
-    table::ui_fixture::TableWindow,
+    table::{columns::fixture::col, ui_fixture::TableWindow},
 };
 
 fn window() -> TableWindow {
@@ -71,7 +71,7 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
     assert_eq!(w.selection(), before);
     w.click(hit, Modifiers::default());
     let head = w.selection().unwrap().head;
-    assert_eq!((head.row, head.column), (59, 1));
+    assert_eq!((head.row.0, head.column.index()), (59, 1));
     assert!(w.read(|table| table.layout.vertical.visible_rows().contains(&59)));
     w.ui.update(|window, _| {
         assert_eq!(
@@ -82,7 +82,7 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
     action(&mut w, ManageColumns);
     click(&mut w, ("column-earlier", 1usize));
     click(&mut w, "close-table-drawer");
-    assert_eq!(w.selection().unwrap().head.column, 0);
+    assert_eq!(w.selection().unwrap().head.column, col(0));
     w.ui.update(|window, _| {
         assert_eq!(
             window.find("scatter-plot").label(),
@@ -90,7 +90,7 @@ fn clicking_a_scatter_point_reveals_its_source_row_in_the_filtered_sort_order() 
         );
     });
     w.keys("up");
-    assert_eq!(w.selection().unwrap().head.row, 58);
+    assert_eq!(w.selection().unwrap().head.row.0, 58);
     w.ui.update(|window, _| {
         assert_eq!(
             window.find("scatter-plot").label(),
@@ -176,7 +176,7 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
         &table.controls.drawer,
         Some(super::Drawer::Cell { value: Some(value), .. }) if value.as_ref() == text
     )));
-    assert_eq!(w.selection().unwrap().head.column, 1);
+    assert_eq!(w.selection().unwrap().head.column, col(1));
     let row_bottom = w.read(|table| {
         table.layout.bounds.top()
             + gpui_kit::px(crate::table::HEADER_HEIGHT + table.layout.vertical.row_top(1) as f32)
@@ -292,7 +292,7 @@ fn pressing_anywhere_in_a_menu_row_paints_the_full_row() {
 fn header_menu_commands_apply_to_the_column_under_the_pointer_not_the_selection() {
     let mut w = window();
     w.click(w.cell(0, 0), Modifiers::default());
-    let score = w.read(|t| t.data.columns[1].id);
+    let score = w.read(|t| t.data.columns[col(1)].id);
     // Rows in the header menu, counting separators.
     let choose = |w: &mut TableWindow, row: usize, label: &str| {
         open_header_menu_at(w, 1);
@@ -402,7 +402,7 @@ fn a_failed_pending_filter_keeps_its_conditioned_column_visible() {
     let mut w = window();
     w.ui.simulate_resize(size(px(960.), px(840.)));
     w.settle();
-    let group = w.read(|t| t.data.columns[0].id);
+    let group = w.read(|t| t.data.columns[col(0)].id);
     w.click(w.cell(0, 0), Modifiers::default());
     w.keys("cmd-alt-shift-l");
     assert_eq!(w.source_rows(), [0, 2, 4]);
@@ -438,10 +438,10 @@ fn a_failed_pending_filter_keeps_its_conditioned_column_visible() {
 fn finishing_a_hide_closes_the_filter_editor_anchored_to_that_column() {
     for sort_already_displayed in [false, true] {
         let mut w = window();
-        let group = w.read(|t| t.data.columns[0].id);
+        let group = w.read(|t| t.data.columns[col(0)].id);
         w.ui.update(|_, cx| {
             w.table
-                .update(cx, |table, cx| table.cycle_sort(0, false, cx))
+                .update(cx, |table, cx| table.cycle_sort(col(0), false, cx))
         });
         if sort_already_displayed {
             w.settle();
@@ -466,7 +466,7 @@ fn finishing_a_hide_closes_the_filter_editor_anchored_to_that_column() {
 #[test]
 fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
     let mut w = window();
-    let ids = w.read(|t| t.data.column_ids(0..3));
+    let ids = w.read(|t| t.data.columns.ids()[..3].to_vec());
     let group = ids[0].into_raw() as usize;
     let score = ids[1].into_raw() as usize;
     w.click(w.cell(0, 0), Modifiers::default());
@@ -493,7 +493,7 @@ fn confirmed_hide_clears_conditions_and_reorders_without_replacing_rows() {
     click(&mut w, ("column-later", score));
     click(&mut w, "show-all-columns");
     assert!(w.read(|t| Arc::ptr_eq(&view, t.data.view())));
-    assert_eq!(w.read(|t| t.data.column_ids(0..3)), [
+    assert_eq!(w.read(|t| t.data.columns.ids()[..3].to_vec()), [
         ids[2], ids[1], ids[0]
     ]);
     click(&mut w, "close-table-drawer");
@@ -510,7 +510,7 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
     use gpui_kit::{Role, point, px, test::TestQueryExt};
 
     let mut w = window();
-    let ids = w.read(|t| t.data.column_ids(0..3));
+    let ids = w.read(|t| t.data.columns.ids()[..3].to_vec());
     let group = ids[0].into_raw() as usize;
     let score = ids[1].into_raw() as usize;
     let note = ids[2].into_raw() as usize;
@@ -520,7 +520,7 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
     let score_divider = w.read(|t| {
         t.layout.bounds.origin
             + point(
-                px(t.layout.column_left(1).unwrap() + t.data.columns.width(1)),
+                px(t.layout.column_left(col(1)).unwrap() + t.data.columns.width(col(1))),
                 px(16.),
             )
     });
@@ -530,10 +530,10 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
     w.settle();
     w.click(w.cell(0, 1), Modifiers::default());
     let view = w.read(|t| t.data.view().clone());
-    let width = w.read(|t| t.data.columns.width(1));
+    let width = w.read(|t| t.data.columns.width(col(1)));
     assert!(w.read(|t| {
         matches!(
-            t.data.columns.entry(1).width,
+            t.data.columns.entry(col(1)).width,
             crate::table::columns::ColumnWidth::Manual(_)
         )
     }));
@@ -565,19 +565,21 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
         );
     });
     click(&mut w, ("column-earlier", score));
-    assert_eq!(w.read(|t| t.data.column_ids(0..2)), [ids[1], ids[0]]);
+    assert_eq!(w.read(|t| t.data.columns.ids()[..2].to_vec()), [
+        ids[1], ids[0]
+    ]);
     click(&mut w, "restore-column-order");
-    assert_eq!(w.read(|t| t.data.column_ids(0..2)), ids[..2]);
+    assert_eq!(w.read(|t| t.data.columns.ids()[..2].to_vec()), ids[..2]);
     w.ui.update(|window, _| {
         assert_eq!(window.find("restore-column-order").disabled(), Some(true));
     });
     assert!(w.read(|t| {
         Arc::ptr_eq(&view, t.data.view())
             && t.data.columns.len() == 2
-            && t.data.columns.width(1) == width
+            && t.data.columns.width(col(1)) == width
             && t.grid
                 .selection()
-                .is_some_and(|s| s.head.column == 1 && s.head.row == 0)
+                .is_some_and(|s| s.head.column == col(1) && s.head.row.0 == 0)
     }));
 }
 
@@ -600,7 +602,7 @@ fn dragging_the_last_of_28_columns_to_the_top_scrolls_and_reorders_it() {
     let mut w = TableWindow::open(&path);
     w.ui.simulate_resize(size(px(320.), px(300.)));
     action(&mut w, ManageColumns);
-    let ids = w.read(|table| table.data.column_ids(0..28));
+    let ids = w.read(|table| table.data.columns.ids()[..28].to_vec());
     w.ui.update(|window, cx| {
         window.scroll(
             "column-list",
@@ -657,7 +659,7 @@ fn dragging_the_last_of_28_columns_to_the_top_scrolls_and_reorders_it() {
         click_count: 1,
     });
     w.settle();
-    assert_eq!(w.read(|table| table.data.column_ids(0..2)), [
+    assert_eq!(w.read(|table| table.data.columns.ids()[..2].to_vec()), [
         ids[27], ids[0]
     ]);
 }
@@ -675,10 +677,11 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
     w.ui.simulate_resize(size(px(640.), px(720.)));
     w.settle();
 
-    for col in [3, 0, 6] {
+    for index in [3, 0, 6] {
+        let column = col(index);
         let (center, right, bottom) = w.read(|t| {
-            let left = t.layout.bounds.left() + px(t.layout.column_left(col).unwrap());
-            let width = px(t.column_width(col));
+            let left = t.layout.bounds.left() + px(t.layout.column_left(column).unwrap());
+            let width = px(t.column_width(column));
             (
                 left + width / 2.,
                 left + width,
@@ -695,7 +698,7 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
             let expected = (center - panel.size.width / 2.).clamp(px(0.), width - panel.size.width);
             assert!(
                 (panel.left() - expected).abs() <= px(1.),
-                "column {col}: panel left {}, expected {expected}",
+                "column {index}: panel left {}, expected {expected}",
                 panel.left()
             );
             assert!((panel.top() - bottom).abs() <= px(1.));
@@ -716,7 +719,8 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
     });
     w.settle();
     let header = w.read(|t| {
-        t.layout.bounds.left() + px(t.layout.column_left(3).unwrap() + t.column_width(3) / 2.)
+        t.layout.bounds.left()
+            + px(t.layout.column_left(col(3)).unwrap() + t.column_width(col(3)) / 2.)
     });
     let after =
         w.ui.update(|window, _| window.find("filter-editor").bounds());
@@ -734,7 +738,7 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
 #[test]
 fn filter_and_sort_summaries_follow_applied_rows_and_rule_priority() {
     let mut w = window();
-    let ids = w.read(|t| t.data.column_ids(0..3));
+    let ids = w.read(|t| t.data.columns.ids()[..3].to_vec());
     action(&mut w, EditFilter);
     click(&mut w, "no-values");
     click(&mut w, ("facet", 0usize));

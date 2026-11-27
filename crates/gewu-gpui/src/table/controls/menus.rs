@@ -1,5 +1,5 @@
 //! The grid's context menus and the cell detail popover.
-use gewu_core::ViewRow;
+
 use gpui_kit::{
     base::{self, TestSupportExt},
     component::{
@@ -104,12 +104,12 @@ impl TableView {
             && !self
                 .grid
                 .selection()
-                .is_some_and(|s| s.rows().contains(&cell.row))
+                .is_some_and(|s| s.contains_row(cell.row))
         {
             self.set_selection(Some(Selection::single(cell)), cx);
         }
         let column_id = self.data.columns[column].id;
-        let target = cell.map(|cell| (ViewRow(cell.row), column_id));
+        let target = cell.map(|cell| (cell.row, column_id));
         let focus = self.focus.clone();
         // Which commands apply to this column, decided once from the requested query.
         let query = self.requested_query();
@@ -273,7 +273,7 @@ impl TableView {
         }))
         .on_action(cx.listener(|t, a: &CopyCell, _, cx| {
             if let Some(cell) = t.data.display_cell(a.row, a.column)
-                && let Some(value) = t.data.cell(cell.column, cell.row)
+                && let Some(value) = t.data.cell(cell)
             {
                 t.copy_cell_text(value.unwrap_or_default().to_string(), cx);
             }
@@ -292,7 +292,7 @@ impl TableView {
         cx: &mut Context<Self>,
     ) {
         self.commit_grid_layout(cx);
-        let Some(value) = self.data.cell(cell.column, cell.row) else {
+        let Some(value) = self.data.cell(cell) else {
             return;
         };
         let anchor = self.layout.bounds.origin
@@ -301,7 +301,7 @@ impl TableView {
                     .layout
                     .column_left(cell.column)
                     .unwrap_or(self.layout.gutter)),
-                px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32 + 4.),
+                px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row.0 + 1) as f32 + 4.),
             );
         self.set_selection(Some(Selection::single(cell)), cx);
         self.focus_panel(window, cx);

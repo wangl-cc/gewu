@@ -1,5 +1,5 @@
 //! Column measurement and hover targets share the canvas's actual bounds.
-use super::*;
+use super::{columns::VisibleCol, *};
 
 const SAMPLE_ROWS: u64 = 128;
 const INITIAL_MAX: f32 = 320.;
@@ -42,8 +42,8 @@ pub(super) fn sort_marker(descending: bool, priority: usize, rules: usize) -> Sh
 impl TableView {
     pub(super) fn hover_target(&self, l: &Layout) -> Option<AnyElement> {
         let index = match self.grid.header_hover()? {
-            HeaderHover::Divider(index) => {
-                let (start, end) = l.divider_band(index)?;
+            HeaderHover::Divider(column) => {
+                let (start, end) = l.divider_band(column)?;
                 return Some(
                     div()
                         .relative()
@@ -59,12 +59,12 @@ impl TableView {
                         .into_any_element(),
                 );
             }
-            HeaderHover::Column(index) => index,
+            HeaderHover::Column(column) => column,
         };
-        let &(_, left, width) = l.columns.iter().find(|c| c.0 == index)?;
+        let laid = l.laid(index)?;
         let column = &self.data.columns[index];
-        let start = left.max(l.gutter);
-        let end = (left + width).min(l.body_right());
+        let start = laid.x.max(l.gutter);
+        let end = laid.right().min(l.body_right());
         if start >= end {
             return None;
         }
@@ -101,7 +101,7 @@ impl TableView {
         }
         let tip: SharedString = tip.into();
         let area = div()
-            .id(("header-tip", index))
+            .id(("header-tip", index.index()))
             .absolute()
             .left(px(start))
             .w(px(end - start))
@@ -110,18 +110,18 @@ impl TableView {
         Some(div().relative().size_full().child(area).into_any_element())
     }
 
-    pub(super) fn initial_width(&mut self, column: usize, window: &Window) -> f32 {
+    pub(super) fn initial_width(&mut self, column: VisibleCol, window: &Window) -> f32 {
         self.measure_width(column, 0, INITIAL_MAX, window)
     }
 
-    pub(super) fn autofit(&mut self, column: usize, window: &Window) {
+    pub(super) fn autofit(&mut self, column: VisibleCol, window: &Window) {
         let width = self.measure_width(column, self.layout.vertical.anchor().row, FIT_MAX, window);
         self.data
             .columns
             .set_width(column, ColumnWidth::Measured(width));
     }
 
-    fn measure_width(&mut self, column: usize, start: u64, max: f32, window: &Window) -> f32 {
+    fn measure_width(&mut self, column: VisibleCol, start: u64, max: f32, window: &Window) -> f32 {
         let mut font = window.text_style().font();
         font.features = crate::theme::tabular_digits();
         let measure = |text: &str, font_size: f32, weight| {
@@ -168,7 +168,11 @@ impl TableView {
             ))
             + HEADER_INSET;
         for row in rows {
-            if let Some(Some(text)) = self.data.cell_preview(column, row) {
+            let cell = Cell {
+                row: gewu_core::ViewRow(row),
+                column,
+            };
+            if let Some(Some(text)) = self.data.cell_preview(cell) {
                 width =
                     width.max(measure(&text, self.prefs.font_size, FontWeight::NORMAL) + 2. * PAD);
             }

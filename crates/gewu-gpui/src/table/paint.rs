@@ -189,8 +189,9 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
             bounds: header_mask,
         }),
         |window| {
-            for ((column, x, width), header) in l.columns.iter().zip(&frame.header) {
-                let right = x + width;
+            for (laid, header) in l.columns.iter().zip(&frame.header) {
+                let (column, x, width) = (&laid.column, &laid.x, &laid.width);
+                let right = laid.right();
                 if header.selected {
                     window.paint_quad(fill(
                         rect(*x, 0., *width, HEADER_HEIGHT - hairline),

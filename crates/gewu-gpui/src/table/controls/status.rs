@@ -1,5 +1,6 @@
 //! The table's contributions to the document status bar: counts, query state, notices and
 //! the applied-condition summaries with their popovers.
+use gewu_core::ViewRow;
 use gpui_kit::{assets::IconName, component::Icon};
 
 use super::*;
@@ -182,13 +183,10 @@ impl TableView {
                         .on_click(cx.listener(move |t, _, w, cx| {
                             t.commit_grid_layout(cx);
                             if let Some(column) = t.data.columns.position(id) {
-                                let row = t.grid.selection().map(|s| s.head.row).unwrap_or(0);
-                                let cell = Cell {
-                                    column: column.index(),
-                                    row,
-                                };
+                                let row = t.grid.selection().map_or(ViewRow(0), |s| s.head.row);
+                                let cell = Cell { column, row };
                                 t.reveal(cell);
-                                if row < t.data.row_count() {
+                                if row.0 < t.data.row_count() {
                                     t.set_selection(Some(Selection::single(cell)), cx);
                                 }
                             }

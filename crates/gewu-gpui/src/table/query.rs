@@ -24,7 +24,12 @@ impl TableView {
     }
 
     /// Advance the requested ordering even while an earlier sort is running.
-    pub(super) fn cycle_sort(&mut self, column: usize, multiple: bool, cx: &mut Context<Self>) {
+    pub(super) fn cycle_sort(
+        &mut self,
+        column: columns::VisibleCol,
+        multiple: bool,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.data.columns[column].id;
         self.edit_query(cx, |query| {
             let sorts = &mut query.sorts;
@@ -65,7 +70,7 @@ impl TableView {
             cx.notify();
         }
         let id = self.data.columns[cell.column].id;
-        match self.data.view().exact_filter_for_cell(id, cell.row) {
+        match self.data.view().exact_filter_for_cell(id, cell.row.0) {
             Ok(Some(filter)) => self.set_filter(filter.column, Some(filter.filter), cx),
             Ok(None) => (),
             Err(error) => {

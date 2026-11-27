@@ -13,7 +13,7 @@ use gpui_kit::{Along, Axis, Pixels, Point};
 
 use super::{
     HEADER_HEIGHT, MIN_COLUMN,
-    columns::TableColumns,
+    columns::{TableColumns, VisibleCol},
     layout::{HeaderPart, HorizontalScroll, Layout, Scrollbar},
     scroll::{Anchor, VerticalScroll},
     selection::{Cell, Selection},
@@ -33,7 +33,7 @@ enum Drag {
         edge: Option<Point<Pixels>>,
     },
     Resize {
-        column: usize,
+        column: VisibleCol,
         start_x: f32,
         start_width: f32,
     },
@@ -45,8 +45,8 @@ enum Drag {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HeaderHover {
-    Column(usize),
-    Divider(usize),
+    Column(VisibleCol),
+    Divider(VisibleCol),
 }
 
 impl From<HeaderPart> for HeaderHover {
@@ -70,9 +70,9 @@ pub(super) enum GridHit {
 /// Work a pointer press asks of the table.
 #[derive(Debug, PartialEq)]
 pub(super) enum GridEffect {
-    CycleSort { column: usize, multiple: bool },
-    EditFilter(usize),
-    Autofit(usize),
+    CycleSort { column: VisibleCol, multiple: bool },
+    EditFilter(VisibleCol),
+    Autofit(VisibleCol),
     ShowCell(Cell),
 }
 
@@ -84,7 +84,7 @@ pub(super) enum DragUpdate {
     /// The pointer rests past the body edge: keep extending the selection every frame.
     EdgeScrolling,
     Resize {
-        column: usize,
+        column: VisibleCol,
         width: f32,
     },
 }
@@ -201,7 +201,7 @@ impl GridModel {
     /// Scroll the least to show `cell` entirely. The column stays the target while layout
     /// measures the columns around it.
     pub(super) fn reveal(&mut self, cell: Cell, columns: &TableColumns, layout: &Layout) {
-        self.scroll.reveal(cell.row);
+        self.scroll.reveal(cell.row.0);
         self.horizontal = HorizontalScroll::Reveal {
             from: self.scroll_x(columns, layout),
             column: columns[cell.column].id,
@@ -480,9 +480,10 @@ impl GridModel {
         if rows == 0 || columns.is_empty() {
             return false;
         }
-        let current = self
-            .selection
-            .unwrap_or(Selection::single(Cell { row: 0, column: 0 }));
+        let current = self.selection.unwrap_or(Selection::single(Cell {
+            row: gewu_core::ViewRow(0),
+            column: VisibleCol::FIRST,
+        }));
         let page = self.scroll.page_rows() as i64;
         let far = i64::MAX / 2;
         let (dr, dc) = match motion {

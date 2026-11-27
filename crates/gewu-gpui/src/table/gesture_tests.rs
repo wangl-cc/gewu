@@ -6,7 +6,10 @@ use gpui_kit::{
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, ui_fixture::TableWindow};
-use crate::table::selection::{Cell, Selection};
+use crate::table::{
+    columns::fixture::{cell, col},
+    selection::Selection,
+};
 
 const ROWS: u64 = 256;
 const COLUMNS: usize = 16;
@@ -35,7 +38,7 @@ fn wheel(window: &mut TableWindow, dx: f32, dy: f32) {
     window.ui.simulate_event(ScrollEvent {
         position: window.cell(
             window.read(|t| t.layout.vertical.anchor().row),
-            window.read(|t| t.layout.columns[0].0),
+            window.read(|t| t.layout.columns[0].column.index()),
         ),
         delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
         touch_phase: TouchPhase::Moved,
@@ -87,7 +90,8 @@ fn jumped_frames_show_the_ordered_values_and_source_row_numbers_immediately() {
                         (source + t.prefs.row_number_base).to_string()
                     );
                 }
-                for ((column, ..), painted) in frame.layout.columns.iter().zip(frame.columns) {
+                for (laid, painted) in frame.layout.columns.iter().zip(frame.columns) {
+                    let column = &laid.column;
                     let values = view
                         .format_column(t.data.columns[*column].id, rows.start, count)
                         .unwrap();
@@ -108,11 +112,12 @@ fn selection_uses_the_column_widths_measured_for_this_frame() {
     let (_files, mut w) = open();
     w.ui.update(|window, cx| {
         w.table.update(cx, |table, cx| {
-            let cell = Cell { row: 0, column: 2 };
+            let cell = cell(0, 2);
             table.set_selection(Some(Selection::single(cell)), cx);
             table.data.columns.invalidate_measurements();
             let geometry = table.prepare_grid_layout(table.layout.bounds, window, cx);
-            let (_, left, width) = geometry.layout.columns[cell.column];
+            let laid = *geometry.layout.laid(cell.column).unwrap();
+            let (left, width) = (laid.x, laid.width);
             let frame = table.build_frame(geometry.layout, cx);
             let bounds = frame.head.unwrap();
             assert_eq!(bounds.left(), px(left));
@@ -132,7 +137,10 @@ fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
     let previous = w.read(|table| Rc::clone(&table.layout));
     w.ui.update(|window, cx| {
         w.table.update(cx, |table, cx| {
-            table.data.columns.set_width(0, ColumnWidth::Unmeasured);
+            table
+                .data
+                .columns
+                .set_width(col(0), ColumnWidth::Unmeasured);
             table.scroll_to_row(128);
             cx.notify();
         });
@@ -140,7 +148,7 @@ fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
         {
             let table = w.table.read(cx);
             assert!(Rc::ptr_eq(&previous, &table.layout));
-            assert!(table.data.columns.entry(0).width == ColumnWidth::Unmeasured);
+            assert!(table.data.columns.entry(col(0)).width == ColumnWidth::Unmeasured);
         }
         let click = previous.bounds.origin
             + point(
@@ -161,18 +169,12 @@ fn grid_geometry_is_committed_after_drawing_and_used_for_the_next_click() {
     w.read(|table| {
         assert_eq!(table.layout.vertical.anchor().row, 128);
         assert!(matches!(
-            table.data.columns.entry(0).width,
+            table.data.columns.entry(col(0)).width,
             ColumnWidth::Measured(_)
         ));
-        assert_eq!(table.layout.columns[0].2, table.column_width(0));
+        assert_eq!(table.layout.columns[0].width, table.column_width(col(0)));
     });
-    assert_eq!(
-        w.selection(),
-        Some(Selection::single(Cell {
-            row: 128,
-            column: 0
-        }))
-    );
+    assert_eq!(w.selection(), Some(Selection::single(cell(128, 0))));
 }
 
 #[test]
@@ -187,7 +189,7 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
     let mut w = TableWindow::open(&path);
     w.keys("cmd-f");
     w.type_in_find("needle");
-    let column = w.read(|t| t.data.columns[0].id);
+    let column = w.read(|t| t.data.columns[col(0)].id);
     let matched = |w: &TableWindow, row| {
         w.app.read(|cx| {
             w.table
@@ -233,22 +235,13 @@ fn pointer_and_keyboard_input_reach_the_selection_and_copy() {
         shift: true,
         ..Default::default()
     });
-    assert_eq!(
-        w.selection().map(|s| (s.rows(), s.columns())),
-        Some((2..6, 0..3))
-    );
+    assert_eq!(w.ranges(), Some((2..6, 0..3)));
     let from = w.cell(1, 0);
     let to = w.cell(4, 1);
     drag(&mut w, from, to);
-    assert_eq!(
-        w.selection().map(|s| (s.rows(), s.columns())),
-        Some((1..5, 0..2))
-    );
+    assert_eq!(w.ranges(), Some((1..5, 0..2)));
     w.keys("shift-down shift-down shift-right");
-    assert_eq!(
-        w.selection().map(|s| (s.rows(), s.columns())),
-        Some((1..7, 0..3))
-    );
+    assert_eq!(w.ranges(), Some((1..7, 0..3)));
     w.keys("cmd-c");
     let expected = (2..=7)
         .map(|r| {
@@ -262,13 +255,10 @@ fn pointer_and_keyboard_input_reach_the_selection_and_copy() {
         + "\r\n";
     assert_eq!(w.clipboard().unwrap(), expected);
     w.keys("end");
-    assert_eq!(w.selection().unwrap().head.row, ROWS - 1);
+    assert_eq!(w.selection().unwrap().head.row.0, ROWS - 1);
     assert!(w.read(|t| t.layout.vertical.visible_rows().contains(&(ROWS - 1))));
     w.keys("cmd-a");
-    assert_eq!(
-        w.selection().map(|s| (s.rows(), s.columns())),
-        Some((0..ROWS, 0..COLUMNS))
-    );
+    assert_eq!(w.ranges(), Some((0..ROWS, 0..COLUMNS)));
 }
 
 #[test]
@@ -301,23 +291,23 @@ fn selected_columns_keep_their_header_and_filter_affordance_when_rows_scroll_off
 fn resizing_autofit_wheel_scrollbars_and_sorting_reach_the_table() {
     let (_files, mut w) = open();
     let normal = Modifiers::default();
-    let initial = w.read(|t| t.column_width(0));
+    let initial = w.read(|t| t.column_width(col(0)));
     let divider = w.read(|t| {
         t.layout.bounds.origin
             + point(
-                px(t.layout.column_left(0).unwrap() + initial),
+                px(t.layout.column_left(col(0)).unwrap() + initial),
                 px(HEADER_HEIGHT / 2.),
             )
     });
     let end = divider + point(px(60.), px(0.));
     drag(&mut w, divider, end);
-    assert_eq!(w.read(|t| t.column_width(0)), initial + 60.);
-    let automatic = w.read(|t| t.column_width(1));
+    assert_eq!(w.read(|t| t.column_width(col(0))), initial + 60.);
+    let automatic = w.read(|t| t.column_width(col(1)));
     w.app
         .update(|cx| crate::preferences::Preferences::update(cx, |p| p.font_size = 20.));
     w.settle();
-    assert_eq!(w.read(|t| t.column_width(0)), initial + 60.);
-    assert!(w.read(|t| t.column_width(1)) > automatic);
+    assert_eq!(w.read(|t| t.column_width(col(0))), initial + 60.);
+    assert!(w.read(|t| t.column_width(col(1))) > automatic);
     w.app
         .update(|cx| crate::preferences::Preferences::update(cx, |p| p.font_size = 12.));
     w.settle();
@@ -330,7 +320,7 @@ fn resizing_autofit_wheel_scrollbars_and_sorting_reach_the_table() {
     });
     w.ui.simulate_mouse_up(end, MouseButton::Left, normal);
     w.settle();
-    assert!(w.read(|t| t.column_width(0)) < initial + 60.);
+    assert!(w.read(|t| t.column_width(col(0))) < initial + 60.);
 
     wheel(&mut w, 0., -2. * ROW_HEIGHT);
     w.settle();
@@ -346,14 +336,14 @@ fn resizing_autofit_wheel_scrollbars_and_sorting_reach_the_table() {
     drag(&mut w, thumb, bottom);
     assert_eq!(w.read(|t| t.layout.vertical.fraction()), 1.);
 
-    assert!(w.read(|t| t.layout.column_left(COLUMNS - 1)).is_none());
+    assert!(w.read(|t| t.layout.column_left(col(COLUMNS - 1))).is_none());
     wheel(&mut w, -10_000., 0.);
     w.settle();
     let header = w.header(COLUMNS - 1);
     w.click(header, normal);
     assert_eq!(
         w.read(|t| t.data.query().sorts[0].column),
-        w.read(|t| t.data.columns[COLUMNS - 1].id)
+        w.read(|t| t.data.columns[col(COLUMNS - 1)].id)
     );
     w.click(header, normal);
     assert_eq!(

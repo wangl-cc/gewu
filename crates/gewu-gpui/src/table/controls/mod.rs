@@ -2,14 +2,14 @@
 use std::{cell::Cell as ValueCell, collections::HashSet, rc::Rc};
 
 pub(crate) use export::ExportDraft;
-use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow, ViewRow};
+use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow};
 use gpui_kit::{
     base::{self, input::InputState},
     prelude::FluentBuilder,
     *,
 };
 
-use super::{Cell, Layout, Selection, TableEvent, TableView};
+use super::{Cell, Layout, Selection, TableEvent, TableView, columns::VisibleCol};
 use crate::{
     panels::{FilterEditor, FilterEvent},
     preferences::Preferences,
@@ -41,6 +41,8 @@ enum Order {
 struct ColumnDrag {
     document: EntityId,
     order: Order,
+    /// The row's position in the dragged list (visible order or sort priority), which
+    /// places the insertion marker above or below a target row.
     index: usize,
     id: ColumnId,
     name: SharedString,
@@ -132,7 +134,7 @@ impl TableView {
             return false;
         };
         self.set_selection(Some(Selection::single(cell)), cx);
-        self.grid.center_if_outside(cell.row);
+        self.grid.center_if_outside(cell.row.0);
         self.reveal(cell);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -143,10 +145,7 @@ impl TableView {
     pub(crate) fn selected_source_cell(&self) -> Option<(ColumnId, SourceRow)> {
         let selection = self.grid.selection().filter(|s| s.anchor == s.head)?;
         let column = self.data.columns.get(selection.head.column)?.id;
-        let row = self
-            .data
-            .view()
-            .source_row_at(ViewRow(selection.head.row))?;
+        let row = self.data.view().source_row_at(selection.head.row)?;
         Some((column, row))
     }
 
@@ -202,8 +201,11 @@ impl TableView {
     }
 
     pub(crate) fn selected_column(&self) -> Option<ColumnId> {
-        let index = self.grid.selection().map_or(0, |s| s.head.column);
-        self.data.columns.get(index).map(|column| column.id)
+        let column = self
+            .grid
+            .selection()
+            .map_or(VisibleCol::FIRST, |s| s.head.column);
+        self.data.columns.get(column).map(|column| column.id)
     }
 
     pub(crate) fn filter_column(
@@ -252,11 +254,16 @@ impl TableView {
     pub(super) fn filter_anchor(&self, column: ColumnId, layout: &Layout) -> Point<Pixels> {
         let center = layout
             .clipped_columns()
-            .find(|&(index, ..)| self.data.columns.get(index).is_some_and(|c| c.id == column))
-            .map(|(_, left, width)| left + width / 2.)
+            .find(|laid| {
+                self.data
+                    .columns
+                    .get(laid.column)
+                    .is_some_and(|c| c.id == column)
+            })
+            .map(|laid| laid.x + laid.width / 2.)
             .unwrap_or_else(
                 || match (layout.columns.last(), self.data.columns.position(column)) {
-                    (Some(&(last, ..)), Some(index)) if index.index() > last => layout.body_right(),
+                    (Some(last), Some(position)) if position > last.column => layout.body_right(),
                     _ => layout.gutter,
                 },
             );

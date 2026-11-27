@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, TableView};
-use crate::table::selection::Selection;
+use crate::table::{columns::fixture::col, selection::Selection};
 
 /// A document window opened the way the app opens a file, driven through its table.
 pub(super) struct TableWindow {
@@ -83,7 +83,7 @@ impl TableWindow {
         self.read(|t| {
             t.layout.bounds.origin
                 + point(
-                    px(t.layout.column_left(column).unwrap() + 10.),
+                    px(t.layout.column_left(col(column)).unwrap() + 10.),
                     px(HEADER_HEIGHT + t.layout.vertical.row_top(row) as f32 + ROW_HEIGHT / 2.),
                 )
         })
@@ -93,7 +93,7 @@ impl TableWindow {
         self.read(|t| {
             t.layout.bounds.origin
                 + point(
-                    px(t.layout.column_left(column).unwrap() + 10.),
+                    px(t.layout.column_left(col(column)).unwrap() + 10.),
                     px(HEADER_HEIGHT / 2.),
                 )
         })
@@ -101,6 +101,14 @@ impl TableWindow {
 
     pub fn selection(&self) -> Option<Selection> {
         self.read(|t| t.grid.selection())
+    }
+
+    /// The selected rows and visible column positions, as tests name them.
+    pub fn ranges(&self) -> Option<(std::ops::Range<u64>, std::ops::Range<usize>)> {
+        self.selection().map(|s| {
+            let columns = s.columns();
+            (s.rows(), columns.start.index()..columns.end.index())
+        })
     }
 
     pub fn source_rows(&self) -> Vec<u64> {

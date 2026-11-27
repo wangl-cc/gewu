@@ -206,7 +206,7 @@ impl TableView {
             .layout
             .columns
             .iter()
-            .filter_map(|(i, ..)| self.data.columns.get(*i).map(|c| c.id))
+            .filter_map(|laid| self.data.columns.get(laid.column).map(|c| c.id))
             .collect();
         self.find.update(cx, |find, cx| {
             find.set_viewport(self.layout.vertical.visible_rows(), columns, cx)
@@ -305,7 +305,7 @@ impl TableView {
     }
 
     #[cfg(test)]
-    fn column_width(&self, column: usize) -> f32 {
+    fn column_width(&self, column: columns::VisibleCol) -> f32 {
         self.data.columns.width(column)
     }
 
@@ -315,8 +315,7 @@ impl TableView {
 
     #[cfg(feature = "ui-capture")]
     pub(crate) fn capture_cell_point(&self, column: &str, row: u64) -> Option<Point<Pixels>> {
-        let index =
-            (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
+        let index = self.capture_column(column)?;
         let left = self.layout.column_left(index)?;
         let row_height = self.layout.vertical.row_height() as f32;
         Some(
@@ -330,14 +329,21 @@ impl TableView {
 
     #[cfg(feature = "ui-capture")]
     pub(crate) fn capture_header_bounds(&self, column: &str) -> Option<Bounds<Pixels>> {
-        let index =
-            (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
+        let index = self.capture_column(column)?;
         let left = self.layout.column_left(index)?;
         let width = self.data.columns.width(index);
         Some(Bounds::new(
             self.layout.bounds.origin + point(px(left), px(0.)),
             size(px(width), px(HEADER_HEIGHT)),
         ))
+    }
+
+    #[cfg(feature = "ui-capture")]
+    fn capture_column(&self, name: &str) -> Option<columns::VisibleCol> {
+        let columns = &self.data.columns;
+        columns
+            .positions()
+            .find(|&column| columns.entry(column).label == name)
     }
 
     #[cfg(feature = "ui-capture")]
@@ -370,7 +376,7 @@ impl TableView {
             return;
         };
         let view = self.data.view().clone();
-        let columns = self.data.column_ids(0..self.data.columns.len());
+        let columns = self.data.columns.ids();
         let rows = selection.rows();
         let header = self.prefs.copy_includes_headers;
         let request = crate::platform::clipboard::CopyRequest::begin(cx);

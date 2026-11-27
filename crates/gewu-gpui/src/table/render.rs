@@ -48,7 +48,10 @@ impl Render for TableView {
             .key_context("GewuGrid")
             .on_action(cx.listener(Self::navigate))
             .on_action(cx.listener(|t, _: &base::input::SelectAll, _, cx| {
-                t.set_selection(Selection::all(t.data.row_count(), t.data.columns.len()), cx);
+                t.set_selection(
+                    Selection::all(t.data.row_count(), t.data.columns.last()),
+                    cx,
+                );
                 cx.notify();
             }))
             .on_action(cx.listener(|t, _: &actions::FilterSelection, _, cx| t.filter_selected(cx)))
