@@ -64,7 +64,7 @@ pub(crate) enum TableEvent {
 impl EventEmitter<TableEvent> for TableView {}
 
 pub(crate) struct TableView {
-    pub(crate) data: TableData,
+    data: TableData,
     prefs: Preferences,
     _style_changes: Subscription,
     _window_activation: Subscription,

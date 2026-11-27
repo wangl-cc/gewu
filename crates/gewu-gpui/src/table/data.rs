@@ -14,9 +14,9 @@ use gewu_core::{
 };
 use gpui_kit::SharedString;
 
-pub const BLOCK_ROWS: u64 = 64;
+pub(super) const BLOCK_ROWS: u64 = 64;
 /// Limit the encoded TSV before handing it to the pasteboard.
-pub const COPY_BYTE_LIMIT: usize = 64 * 1024 * 1024;
+const COPY_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 pub(crate) const GRID_PREVIEW_BYTES: usize = 1024;
 
 /// The grid shapes a single line. Keep the complete engine text available for details and copy.
@@ -141,9 +141,9 @@ impl Block {
     }
 }
 
-pub struct TableData {
+pub(crate) struct TableData {
     queries: QuerySession,
-    pub columns: crate::table::columns::TableColumns,
+    pub(super) columns: crate::table::columns::TableColumns,
     cache: HashMap<(ColumnId, u64), Block>,
     cache_bytes: usize,
     tick: u64,
@@ -151,11 +151,11 @@ pub struct TableData {
 
 impl TableData {
     #[cfg(test)]
-    pub fn open(path: &str) -> gewu_core::Result<Self> {
+    pub(super) fn open(path: &str) -> gewu_core::Result<Self> {
         Ok(Self::from_dataset(Arc::new(Dataset::open(path)?)))
     }
 
-    pub fn from_dataset(dataset: Arc<Dataset>) -> Self {
+    pub(crate) fn from_dataset(dataset: Arc<Dataset>) -> Self {
         let columns = crate::table::columns::TableColumns::new(dataset.column_infos());
         Self {
             queries: QuerySession::new(AppliedView::new(dataset)),
@@ -166,7 +166,7 @@ impl TableData {
         }
     }
 
-    pub(crate) fn display_cell(
+    pub(super) fn display_cell(
         &self,
         row: gewu_core::ViewRow,
         id: ColumnId,
@@ -178,44 +178,44 @@ impl TableData {
         })
     }
 
-    pub fn source_row_count(&self) -> usize {
+    pub(super) fn source_row_count(&self) -> usize {
         self.queries.displayed().dataset().n_rows()
     }
 
-    pub fn row_count(&self) -> u64 {
+    pub(super) fn row_count(&self) -> u64 {
         self.view().row_count()
     }
 
-    pub fn is_number(&self, column: usize) -> bool {
+    pub(super) fn is_number(&self, column: usize) -> bool {
         self.columns[column].value_category == ValueCategory::Number
     }
 
-    pub fn clear_cache(&mut self) {
+    pub(super) fn clear_cache(&mut self) {
         self.cache.clear();
         self.cache_bytes = 0;
     }
 
-    pub fn snapshot(&self) -> AppliedView {
+    pub(super) fn snapshot(&self) -> AppliedView {
         self.queries.displayed().clone()
     }
 
-    pub fn query(&self) -> &Arc<TableQuery> {
+    pub(super) fn query(&self) -> &Arc<TableQuery> {
         self.queries.displayed().query()
     }
 
-    pub fn view(&self) -> &Arc<OrderedView> {
+    pub(super) fn view(&self) -> &Arc<OrderedView> {
         self.queries.displayed().view()
     }
 
-    pub(crate) fn queries(&self) -> &QuerySession {
+    pub(super) fn queries(&self) -> &QuerySession {
         &self.queries
     }
 
-    pub(crate) fn edit_query(&mut self, edit: impl FnOnce(&mut TableQuery)) -> Option<QueryJob> {
+    pub(super) fn edit_query(&mut self, edit: impl FnOnce(&mut TableQuery)) -> Option<QueryJob> {
         self.queries.edit(edit)
     }
 
-    pub(crate) fn finish_query(&mut self, completed: QueryResult) -> QueryCompletion {
+    pub(super) fn finish_query(&mut self, completed: QueryResult) -> QueryCompletion {
         let change = self.queries.finish(completed);
         if matches!(change, QueryCompletion::Installed) {
             self.clear_cache();
@@ -225,7 +225,7 @@ impl TableData {
 
     /// Format missing blocks and keep the visible working set resident. Returns the error of
     /// a visible block that could not be formatted.
-    pub fn prefetch(
+    pub(super) fn prefetch(
         &mut self,
         columns: impl IntoIterator<Item = usize>,
         rows: Range<u64>,
@@ -282,7 +282,7 @@ impl TableData {
     }
 
     /// Cached text of a cell: `Some(None)` is null; unfetched or failed blocks have no value.
-    pub fn cell(&mut self, column: usize, row: u64) -> Option<Option<SharedString>> {
+    pub(super) fn cell(&mut self, column: usize, row: u64) -> Option<Option<SharedString>> {
         let block = self
             .cache
             .get_mut(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
@@ -292,7 +292,7 @@ impl TableData {
         text
     }
 
-    pub(crate) fn cached_cell_text(&self, column: usize, row: u64) -> Option<Option<&str>> {
+    pub(super) fn cached_cell_text(&self, column: usize, row: u64) -> Option<Option<&str>> {
         let block = self
             .cache
             .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?;
@@ -305,19 +305,19 @@ impl TableData {
         }
     }
 
-    pub fn cell_preview(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
+    pub(super) fn cell_preview(&self, column: usize, row: u64) -> Option<Option<SharedString>> {
         self.cache
             .get(&(self.columns.get(column)?.id, row / BLOCK_ROWS))?
             .preview((row % BLOCK_ROWS) as u32)
     }
 
-    pub fn column_ids(&self, columns: Range<usize>) -> Vec<ColumnId> {
+    pub(super) fn column_ids(&self, columns: Range<usize>) -> Vec<ColumnId> {
         columns.map(|index| self.columns[index].id).collect()
     }
 }
 
 /// TSV of display rows × columns through Core's export path, the format spreadsheets paste.
-pub fn copy_tsv(
+pub(super) fn copy_tsv(
     view: &OrderedView,
     rows: Range<u64>,
     columns: &[ColumnId],

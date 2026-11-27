@@ -130,7 +130,16 @@ fn picker_header_choice_applies_to_eligible_files_and_parquet_offers_recovery() 
         doc.read_with(&session.app, |doc, cx| {
             assert!(doc.header_available && !doc.import.displayed().has_header);
             if index < 2 {
-                assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
+                assert_eq!(
+                    doc.table
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .snapshot()
+                        .view()
+                        .row_count(),
+                    2
+                );
             }
         });
     }
@@ -175,7 +184,16 @@ fn finder_import_options_warn_before_removing_conditions_and_allow_cancel() {
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
         assert!(doc.import.displayed().has_header);
-        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
+        assert_eq!(
+            doc.table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .snapshot()
+                .view()
+                .row_count(),
+            2
+        );
     });
     ui.dispatch_action(ImportOptions);
     ui.run_until_parked();
@@ -183,7 +201,16 @@ fn finder_import_options_warn_before_removing_conditions_and_allow_cancel() {
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
         assert!(!doc.import.displayed().has_header);
-        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 4);
+        assert_eq!(
+            doc.table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .snapshot()
+                .view()
+                .row_count(),
+            4
+        );
     });
 }
 
@@ -225,7 +252,13 @@ fn reopening_a_document_preserves_its_query_and_other_windows_queries() {
     let (second_doc, mut second_window) = session.viewer(1);
     let rows = |doc: &Entity<Document>| {
         doc.read_with(&session.app, |doc, cx| {
-            doc.table.as_ref().unwrap().read(cx).data.row_count()
+            doc.table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .snapshot()
+                .view()
+                .row_count()
         })
     };
     let filter_first_row = |window: &mut VisualTestContext| {
@@ -536,7 +569,16 @@ fn failed_header_reload_retries_the_requested_options() {
     doc.read_with(&session.app, |doc, cx| {
         assert!(matches!(*doc.import.load(), Load::Ready));
         assert!(!doc.import.displayed().has_header);
-        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.row_count(), 2);
+        assert_eq!(
+            doc.table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .snapshot()
+                .view()
+                .row_count(),
+            2
+        );
     });
 }
 
@@ -556,7 +598,10 @@ fn successive_unicode_sheet_requests_preserve_exact_names() {
     ui.run_until_parked();
     doc.read_with(&session.app, |doc, cx| {
         assert_eq!(doc.import.displayed().sheet.as_deref(), Some("Cafe\u{301}"));
-        assert_eq!(doc.table.as_ref().unwrap().read(cx).data.columns.len(), 1);
+        assert_eq!(
+            doc.table.as_ref().unwrap().read(cx).visible_columns().len(),
+            1
+        );
     });
 }
 
@@ -651,7 +696,13 @@ fn view_and_filter_menus_operate_on_the_focused_document() {
     };
     let rows = || {
         doc.read_with(&session.app, |doc, cx| {
-            doc.table.as_ref().unwrap().read(cx).data.row_count()
+            doc.table
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .snapshot()
+                .view()
+                .row_count()
         })
     };
 

@@ -24,9 +24,9 @@ impl ColumnWidth {
 }
 
 pub(crate) struct GridColumn {
-    pub info: ColumnInfo,
-    pub label: SharedString,
-    pub width: ColumnWidth,
+    pub(super) info: ColumnInfo,
+    pub(super) label: SharedString,
+    pub(super) width: ColumnWidth,
 }
 
 /// Position in the visible order, valid until columns are hidden or reordered.
@@ -34,7 +34,7 @@ pub(crate) struct GridColumn {
 pub(crate) struct VisibleCol(usize);
 
 impl VisibleCol {
-    pub fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         self.0
     }
 }
@@ -46,7 +46,7 @@ pub(crate) struct TableColumns {
 }
 
 impl TableColumns {
-    pub fn new(columns: Vec<ColumnInfo>) -> Self {
+    pub(super) fn new(columns: Vec<ColumnInfo>) -> Self {
         Self {
             order: (0..columns.len()).collect(),
             schema: columns
@@ -60,32 +60,34 @@ impl TableColumns {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.order.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.order.is_empty()
     }
 
-    pub fn entry(&self, index: usize) -> &GridColumn {
+    pub(super) fn entry(&self, index: usize) -> &GridColumn {
         &self.schema[self.order[index]]
     }
 
-    pub fn set_width(&mut self, index: usize, width: ColumnWidth) {
+    pub(super) fn set_width(&mut self, index: usize, width: ColumnWidth) {
         self.schema[self.order[index]].width = width;
     }
 
-    pub fn get(&self, index: usize) -> Option<&ColumnInfo> {
+    pub(super) fn get(&self, index: usize) -> Option<&ColumnInfo> {
         self.order.get(index).map(|&slot| &self.schema[slot].info)
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &ColumnInfo> + Clone {
+    pub(super) fn iter(&self) -> impl ExactSizeIterator<Item = &ColumnInfo> + Clone {
         self.order.iter().map(|&slot| &self.schema[slot].info)
     }
 
     /// Visible columns in display order, then hidden columns in source order.
-    pub fn visible_then_hidden(&self) -> impl Iterator<Item = (Option<VisibleCol>, &ColumnInfo)> {
+    pub(super) fn visible_then_hidden(
+        &self,
+    ) -> impl Iterator<Item = (Option<VisibleCol>, &ColumnInfo)> {
         let mut visible = vec![false; self.schema.len()];
         for &slot in &self.order {
             visible[slot] = true;
@@ -103,17 +105,17 @@ impl TableColumns {
             )
     }
 
-    pub fn position(&self, id: ColumnId) -> Option<VisibleCol> {
+    pub(super) fn position(&self, id: ColumnId) -> Option<VisibleCol> {
         self.iter()
             .position(|column| column.id == id)
             .map(VisibleCol)
     }
 
-    pub fn width(&self, index: usize) -> f32 {
+    pub(super) fn width(&self, index: usize) -> f32 {
         self.entry(index).width.points()
     }
 
-    pub fn invalidate_measurements(&mut self) {
+    pub(super) fn invalidate_measurements(&mut self) {
         for column in &mut self.schema {
             if matches!(column.width, ColumnWidth::Measured(_)) {
                 column.width = ColumnWidth::Unmeasured;
@@ -121,7 +123,7 @@ impl TableColumns {
         }
     }
 
-    pub fn set_visible(&mut self, mut requested: HashSet<ColumnId>, visible: bool) -> bool {
+    pub(super) fn set_visible(&mut self, mut requested: HashSet<ColumnId>, visible: bool) -> bool {
         let previous = self.order.len();
         if visible {
             for &slot in &self.order {
@@ -139,7 +141,7 @@ impl TableColumns {
         self.order.len() != previous
     }
 
-    pub fn move_to(&mut self, from: usize, to: usize) -> bool {
+    pub(super) fn move_to(&mut self, from: usize, to: usize) -> bool {
         if from == to || from >= self.len() || to >= self.len() {
             return false;
         }
@@ -148,12 +150,12 @@ impl TableColumns {
         true
     }
 
-    pub fn is_in_source_order(&self) -> bool {
+    pub(super) fn is_in_source_order(&self) -> bool {
         self.order.is_sorted()
     }
 
     /// Restore the relative source order of the visible columns.
-    pub fn restore_source_order(&mut self) -> bool {
+    pub(super) fn restore_source_order(&mut self) -> bool {
         if self.is_in_source_order() {
             return false;
         }
