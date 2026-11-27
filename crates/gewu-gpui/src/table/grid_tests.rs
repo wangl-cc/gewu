@@ -327,17 +327,20 @@ fn thumbs_follow_the_pointer_and_track_presses_center_the_thumb_there() {
 }
 
 #[test]
-fn hidden_overlay_tracks_pass_presses_through_until_a_thumb_is_hovered() {
+fn hidden_overlay_tracks_pass_presses_through_unless_a_shown_thumb_was_hovered() {
     let mut grid = Grid::new(680., 420., true);
     let track = grid.layout.scrollbar(Axis::Vertical).unwrap().track;
     let inside = point(track.center().x, grid.cell(2, 0).y);
+    assert!(grid.model.pointer_hover(inside, &grid.layout, false));
+    assert_eq!(grid.model.active_thumb(), None);
     assert!(grid.press(inside, false, 1).is_none());
     assert_eq!(grid.model.selection().unwrap().head.row, 2);
     grid.model.pointer_up();
-    assert!(grid.model.pointer_hover(inside, &grid.layout, false));
+    // While the tracks flash after scrolling, hovering one keeps it hittable once hidden.
+    assert!(grid.model.pointer_hover(inside, &grid.layout, true));
     assert_eq!(grid.model.active_thumb(), Some(Axis::Vertical));
     grid.press(inside, false, 1);
-    assert_eq!(grid.model.active_thumb(), Some(Axis::Vertical));
+    assert!(grid.model.is_dragging());
     assert!(grid.model.scroll().fraction() > 0.);
     assert_eq!(grid.model.selection().unwrap().head.row, 2);
 }
