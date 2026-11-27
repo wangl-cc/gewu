@@ -1,6 +1,8 @@
 //! Application-wide display, export, and update preferences.
 use gewu_core::{FileType, ParquetCompression};
-use gpui_kit::*;
+use gpui_kit::{base::ThemeAppearance, *};
+
+use crate::theme::Theme;
 
 mod file;
 mod window;
@@ -26,6 +28,8 @@ impl HighContrast {
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Preferences {
+    pub light_theme: &'static Theme,
+    pub dark_theme: &'static Theme,
     pub high_contrast: HighContrast,
     pub font_size: f32,
     pub row_height: f32,
@@ -45,6 +49,8 @@ pub(crate) struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            light_theme: Theme::default_for(ThemeAppearance::Light),
+            dark_theme: Theme::default_for(ThemeAppearance::Dark),
             high_contrast: HighContrast::System,
             font_size: 13.,
             row_height: 28.,
@@ -98,8 +104,11 @@ impl Preferences {
             });
         }
         cx.set_global(after);
-        if before.high_contrast != after.high_contrast {
-            crate::platform::refresh_contrast(cx);
+        if before.high_contrast != after.high_contrast
+            || before.light_theme != after.light_theme
+            || before.dark_theme != after.dark_theme
+        {
+            crate::platform::refresh_theme(cx);
         }
         cx.refresh_windows();
     }

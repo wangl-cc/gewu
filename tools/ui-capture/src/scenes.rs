@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Result, bail};
 use gpui_kit::{MouseButton, Pixels, PlatformTextSystem, Role, Size, px, size};
 
-use crate::session::{CaptureSession, Mode};
+use crate::session::{CaptureSession, CaptureTarget};
 
 pub const GROUPS: &[&str] = &[
     "overview",
@@ -26,7 +26,7 @@ pub fn run_group(
     dataset: &Path,
     text_system: Arc<dyn PlatformTextSystem>,
     output: PathBuf,
-    mode: Mode,
+    target: &CaptureTarget,
 ) -> Result<()> {
     let open = |window_size: Option<Size<Pixels>>| {
         CaptureSession::open(
@@ -34,7 +34,7 @@ pub fn run_group(
             window_size,
             text_system.clone(),
             output.clone(),
-            mode,
+            target.clone(),
         )
     };
     match group {
@@ -47,7 +47,7 @@ pub fn run_group(
         "preferences" => preferences(&mut open(None)?),
         "corrupt" => corrupt(&mut open(None)?),
         "large" => large(&mut open(None)?),
-        "truncated" if mode == Mode::Standard => truncated(&mut open(None)?),
+        "truncated" if !target.is_high_contrast() => truncated(&mut open(None)?),
         "truncated" => Ok(()),
         other => bail!("unknown scene group {other:?}"),
     }

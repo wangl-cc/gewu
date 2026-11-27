@@ -22,7 +22,6 @@ enum ButtonTone {
     Primary,
     Secondary,
     Ghost,
-    Danger,
 }
 
 enum ButtonSize {
@@ -61,12 +60,6 @@ fn button_chrome(
             colors.foreground,
             colors.button_secondary_hover,
             colors.secondary_pressed(),
-        ),
-        ButtonTone::Danger => (
-            Some(colors.danger_fill),
-            colors.danger_fill_foreground,
-            colors.danger_hover(),
-            colors.danger_pressed(),
         ),
     };
     base::Button::new(id)
@@ -138,22 +131,6 @@ pub(crate) fn button(
         id,
         label.into(),
         tone,
-        ButtonSize::Regular,
-        false,
-        false,
-        cx,
-    )
-}
-
-pub(crate) fn danger_button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    cx: &App,
-) -> base::Button {
-    labeled_button(
-        id,
-        label.into(),
-        ButtonTone::Danger,
         ButtonSize::Regular,
         false,
         false,

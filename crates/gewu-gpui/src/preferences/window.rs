@@ -1,7 +1,10 @@
 use gpui_kit::prelude::FluentBuilder;
 
 use super::*;
-use crate::ui::{button, checkbox, segment, segmented_radios};
+use crate::{
+    panels::choice::{Choice, ChoiceField},
+    ui::{button, checkbox, segment, segmented_radios},
+};
 
 struct Settings;
 struct SettingsWindow(AnyWindowHandle);
@@ -15,7 +18,7 @@ pub(crate) fn open(cx: &mut App) {
     {
         return;
     }
-    let options = crate::platform::sized_window(430., 424., cx);
+    let options = crate::platform::sized_window(430., 496., cx);
     match gpui_kit::open_window(options, cx, |w, cx| {
         crate::platform::follow_appearance(w, cx);
         w.set_window_title("Gewu Settings");
@@ -130,6 +133,59 @@ impl Render for Settings {
                 .child(div().flex_1().child(label))
                 .child(density),
         );
+        let theme_row = |id,
+                         label: &'static str,
+                         choices: &[&'static Theme],
+                         selected: &'static Theme,
+                         set_theme: fn(&mut Preferences, &'static Theme),
+                         window: &mut Window,
+                         cx: &mut App| {
+            let options = choices
+                .iter()
+                .copied()
+                .map(|theme| Choice {
+                    value: theme,
+                    label: theme.name.into(),
+                })
+                .collect();
+            div()
+                .flex()
+                .items_center()
+                .child(div().flex_1().child(label))
+                .child(
+                    div().w(px(196.)).child(
+                        ChoiceField {
+                            id,
+                            label,
+                            options,
+                            selected: Some(selected),
+                            searchable: false,
+                        }
+                        .element(window, cx, move |&theme, _, cx| {
+                            Preferences::update(cx, |p| set_theme(p, theme));
+                        }),
+                    ),
+                )
+        };
+        view = view
+            .child(theme_row(
+                ElementId::from("light-theme"),
+                "Light theme",
+                Theme::LIGHT,
+                p.light_theme,
+                |p, t| p.light_theme = t,
+                window,
+                cx,
+            ))
+            .child(theme_row(
+                ElementId::from("dark-theme"),
+                "Dark theme",
+                Theme::DARK,
+                p.dark_theme,
+                |p, t| p.dark_theme = t,
+                window,
+                cx,
+            ));
         let mut contrast = segmented_radios("contrast-options", "High contrast", window, cx);
         for (i, (label, mode)) in [
             ("Follow System", HighContrast::System),

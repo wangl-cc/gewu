@@ -309,7 +309,7 @@ impl TableView {
                             .on_click(cx.listener(|t, _, w, cx| t.cancel_hide(w, cx))),
                     )
                     .child(
-                        crate::ui::danger_button("confirm-hide", "Hide", cx)
+                        button("confirm-hide", "Hide", true, cx)
                             .on_click(cx.listener(|t, _, w, cx| t.confirm_hide(w, cx))),
                     ),
             )

@@ -1,7 +1,7 @@
 use gpui_kit::{TextRun, base::ThemeAppearance, font};
 
 use super::matched_runs;
-use crate::theme::GewuPalette;
+use crate::theme::Theme;
 
 #[test]
 fn fitted_hits_preserve_ink_and_only_mark_the_ellipsis_when_every_hit_is_hidden() {
@@ -10,7 +10,7 @@ fn fitted_hits_preserve_ink_and_only_mark_the_ellipsis_when_every_hit_is_hidden(
     let line = "αA2…";
     let visible = "αA2".len();
     for appearance in [ThemeAppearance::Light, ThemeAppearance::Dark] {
-        let colors = GewuPalette::default_for(appearance);
+        let colors = Theme::default_for(appearance).palette;
         let normal = TextRun {
             len: line.len(),
             font: font("System UI"),

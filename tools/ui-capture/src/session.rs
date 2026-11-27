@@ -28,7 +28,7 @@ impl Render for IdleWindow {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Standard,
     HighContrast,
@@ -43,6 +43,35 @@ impl Mode {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CaptureTarget {
+    Mode(Mode),
+    Theme(String),
+}
+
+impl CaptureTarget {
+    pub fn default_appearance(&self) -> ThemeAppearance {
+        match self {
+            Self::Mode(_) => ThemeAppearance::Light,
+            Self::Theme(id) => capture::theme_appearance(id).unwrap_or(ThemeAppearance::Light),
+        }
+    }
+
+    pub fn is_high_contrast(&self) -> bool {
+        match self {
+            Self::Mode(mode) => *mode == Mode::HighContrast,
+            Self::Theme(id) => id.starts_with("high-contrast-"),
+        }
+    }
+
+    pub fn dir_name(&self) -> &str {
+        match self {
+            Self::Mode(mode) => mode.as_str(),
+            Self::Theme(id) => id.as_str(),
+        }
+    }
+}
+
 pub type MenuOpener<'a> = &'a mut dyn FnMut(&mut CaptureSession) -> Result<()>;
 pub type FrameVerifier<'a> = &'a mut dyn FnMut(&mut CaptureSession) -> Result<()>;
 
@@ -52,7 +81,7 @@ pub struct CaptureSession {
     idle: AnyWindowHandle,
     active_handle: AnyWindowHandle,
     settings: Option<AnyWindowHandle>,
-    mode: Mode,
+    target: CaptureTarget,
     output: PathBuf,
 }
 
@@ -62,7 +91,7 @@ impl CaptureSession {
         window_size: Option<Size<Pixels>>,
         text_system: Arc<dyn PlatformTextSystem>,
         output: PathBuf,
-        mode: Mode,
+        target: CaptureTarget,
     ) -> Result<Self> {
         let mut app = HeadlessAppContext::with_platform(
             text_system,
@@ -83,21 +112,34 @@ impl CaptureSession {
             idle,
             active_handle,
             settings: None,
-            mode,
+            target,
             output,
         };
-        session.set_output(ThemeAppearance::Light, true)?;
+        let initial_appearance = session.target.default_appearance();
+        session.set_output(initial_appearance, true)?;
 
-        let palette = session.update_active(|_, cx| capture::palette_mode(cx))?;
-        if mode == Mode::HighContrast || palette != Some("standard") {
-            session.open_settings()?;
-            let choice = if mode == Mode::HighContrast {
-                "On"
-            } else {
-                "Off"
-            };
-            session.click_label(choice, Some(Role::RadioButton))?;
-            session.focus_document()?;
+        match &session.target {
+            CaptureTarget::Mode(mode) => {
+                let mode = *mode;
+                let palette = session.update_active(|_, cx| capture::palette_mode(cx))?;
+                if mode == Mode::HighContrast || palette != Some("standard") {
+                    session.open_settings()?;
+                    let choice = if mode == Mode::HighContrast {
+                        "On"
+                    } else {
+                        "Off"
+                    };
+                    session.click_label(choice, Some(Role::RadioButton))?;
+                    session.focus_document()?;
+                }
+            }
+            CaptureTarget::Theme(id) => {
+                let id = id.clone();
+                if !session.app.update(|cx| capture::select_theme(&id, cx)) {
+                    bail!("unknown theme {id:?}");
+                }
+                session.settle()?;
+            }
         }
         Ok(session)
     }
@@ -224,12 +266,12 @@ impl CaptureSession {
             }
         };
         self.active_handle = handle;
-        self.set_output(ThemeAppearance::Light, true)
+        self.set_output(self.target.default_appearance(), true)
     }
 
     pub fn focus_document(&mut self) -> Result<()> {
         self.active_handle = self.doc.window;
-        self.set_output(ThemeAppearance::Light, true)
+        self.set_output(self.target.default_appearance(), true)
     }
 
     pub fn set_theme(&mut self, appearance: ThemeAppearance) -> Result<()> {
@@ -280,21 +322,33 @@ impl CaptureSession {
         mut menu: Option<MenuOpener<'_>>,
         mut verify: Option<FrameVerifier<'_>>,
     ) -> Result<()> {
-        let states: &[(ThemeAppearance, bool)] = if self.mode == Mode::HighContrast || active_only {
-            &[
-                (ThemeAppearance::Light, true),
-                (ThemeAppearance::Dark, true),
-            ]
-        } else {
-            &[
-                (ThemeAppearance::Light, true),
-                (ThemeAppearance::Light, false),
-                (ThemeAppearance::Dark, true),
-                (ThemeAppearance::Dark, false),
-            ]
+        let states: Vec<(ThemeAppearance, bool)> = match &self.target {
+            CaptureTarget::Mode(mode) => {
+                if *mode == Mode::HighContrast || active_only {
+                    vec![
+                        (ThemeAppearance::Light, true),
+                        (ThemeAppearance::Dark, true),
+                    ]
+                } else {
+                    vec![
+                        (ThemeAppearance::Light, true),
+                        (ThemeAppearance::Light, false),
+                        (ThemeAppearance::Dark, true),
+                        (ThemeAppearance::Dark, false),
+                    ]
+                }
+            }
+            CaptureTarget::Theme(_) => {
+                let appearance = self.target.default_appearance();
+                if self.target.is_high_contrast() || active_only {
+                    vec![(appearance, true)]
+                } else {
+                    vec![(appearance, true), (appearance, false)]
+                }
+            }
         };
 
-        for &(appearance, active) in states {
+        for (appearance, active) in states {
             let matches_name =
                 |el: &ElementSnapshot| el.label() == Some(label) || el.value() == Some(label);
             self.set_output(appearance, active)?;
@@ -315,16 +369,25 @@ impl CaptureSession {
                 label.to_owned()
             };
 
-            let (palette, is_active, scale, viewport) = self.update_active(|w, cx| {
-                (
-                    capture::palette_mode(cx),
-                    w.is_window_active(),
-                    w.scale_factor(),
-                    w.viewport_size(),
-                )
-            })?;
-            if palette != Some(self.mode.as_str()) {
-                bail!("unexpected installed palette {palette:?}");
+            let (palette_mode, installed_id, is_active, scale, viewport) =
+                self.update_active(|w, cx| {
+                    (
+                        capture::palette_mode(cx),
+                        capture::installed_theme_id(cx),
+                        w.is_window_active(),
+                        w.scale_factor(),
+                        w.viewport_size(),
+                    )
+                })?;
+            let palette_ok = match &self.target {
+                CaptureTarget::Mode(mode) => palette_mode == Some(mode.as_str()),
+                CaptureTarget::Theme(id) => installed_id == Some(id.as_str()),
+            };
+            if !palette_ok {
+                bail!(
+                    "unexpected installed palette {installed_id:?} for {:?}",
+                    self.target
+                );
             }
             if is_active != active {
                 bail!("unexpected active state {is_active} (expected {active})");
@@ -337,7 +400,7 @@ impl CaptureSession {
             let focus_name = if active { "active" } else { "inactive" };
             let path = self
                 .output
-                .join(self.mode.as_str())
+                .join(self.target.dir_name())
                 .join(format!("{app_name}-{focus_name}-2x"))
                 .join(format!("{code}.png"));
             if let Some(parent) = path.parent() {
@@ -380,7 +443,7 @@ impl CaptureSession {
             );
         }
 
-        self.set_output(ThemeAppearance::Light, true)?;
+        self.set_output(self.target.default_appearance(), true)?;
         if let Some(open_menu) = menu
             && self
                 .find_by(

@@ -28,6 +28,8 @@ const CODECS: &[(&str, ParquetCompression)] = &[
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SettingsFile {
+    light_theme: Option<String>,
+    dark_theme: Option<String>,
     high_contrast: Option<String>,
     font_size: Option<f32>,
     row_height: Option<f32>,
@@ -57,6 +59,16 @@ fn encode_choice<T: PartialEq>(value: T, items: &[(&str, T)]) -> Option<String> 
         .map(|(label, _)| (*label).to_owned())
 }
 
+fn decode_theme(
+    value: Option<&str>,
+    choices: &[&'static Theme],
+    fallback: &'static Theme,
+) -> &'static Theme {
+    value
+        .and_then(|id| choices.iter().copied().find(|theme| theme.id == id))
+        .unwrap_or(fallback)
+}
+
 pub(super) fn load() -> Preferences {
     settings_path()
         .as_deref()
@@ -68,6 +80,8 @@ pub(super) fn load_from(path: &Path) -> Preferences {
     let file: SettingsFile = read_json(path).unwrap_or_default();
     let d = Preferences::default();
     Preferences {
+        light_theme: decode_theme(file.light_theme.as_deref(), Theme::LIGHT, d.light_theme),
+        dark_theme: decode_theme(file.dark_theme.as_deref(), Theme::DARK, d.dark_theme),
         high_contrast: decode_choice(file.high_contrast.as_deref(), CONTRAST, d.high_contrast),
         font_size: file
             .font_size
@@ -118,6 +132,8 @@ pub(super) fn save(prefs: &Preferences) -> Result<(), String> {
 
 pub(super) fn save_to(path: &Path, prefs: &Preferences) -> Result<(), String> {
     let file = SettingsFile {
+        light_theme: Some(prefs.light_theme.id.to_owned()),
+        dark_theme: Some(prefs.dark_theme.id.to_owned()),
         high_contrast: encode_choice(prefs.high_contrast, CONTRAST),
         font_size: Some(prefs.font_size),
         row_height: Some(prefs.row_height),

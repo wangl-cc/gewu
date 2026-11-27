@@ -51,31 +51,35 @@ fn apply_appearance(window: &Window, cx: &mut App) {
     install_theme(appearance, cx);
 }
 
-pub(crate) fn refresh_contrast(cx: &mut App) {
+pub(crate) fn refresh_theme(cx: &mut App) {
     install_theme(base::Theme::global(cx).appearance, cx);
 }
 
 pub(crate) fn install_theme(appearance: ThemeAppearance, cx: &mut App) {
     use crate::{
         preferences::Preferences,
-        theme::{GewuPalette, VisualCues},
+        theme::{Theme, VisualCues},
     };
     #[cfg(target_os = "macos")]
     let (system_contrast, differentiate) = macos::accessibility_display_options();
     #[cfg(not(target_os = "macos"))]
     let (system_contrast, differentiate) = (false, false);
-    let contrast = Preferences::get(cx).high_contrast.enabled(system_contrast);
+    let prefs = Preferences::get(cx);
+    let contrast = prefs.high_contrast.enabled(system_contrast);
     let cues = VisualCues::for_enhancement(contrast || differentiate);
     if cx.try_global::<VisualCues>() != Some(&cues) {
         cx.set_global(cues);
         cx.refresh_windows();
     }
-    let palette = if contrast {
-        GewuPalette::high_contrast_for(appearance)
+    let theme = if contrast {
+        Theme::high_contrast_for(appearance)
     } else {
-        GewuPalette::default_for(appearance)
+        match appearance {
+            ThemeAppearance::Light => prefs.light_theme,
+            ThemeAppearance::Dark => prefs.dark_theme,
+        }
     };
-    palette.install(cx);
+    theme.install(cx);
 }
 
 #[cfg(target_os = "macos")]
@@ -92,7 +96,7 @@ pub(crate) fn observe_display_options(cx: &mut App) {
     });
     let updates = cx.spawn(async move |cx| {
         while recv.recv().await.is_ok() {
-            cx.update(refresh_contrast);
+            cx.update(refresh_theme);
         }
     });
     cx.set_global(DisplayUpdates {

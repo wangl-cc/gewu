@@ -10,26 +10,52 @@ use gpui_kit::{MouseButton, PlatformTextSystem, base::ThemeAppearance, px, size}
 use image::{RgbaImage, imageops::FilterType};
 use png::{BitDepth, BlendOp, ColorType, Compression, DisposeOp, Encoder, Filter};
 
-use crate::session::{CaptureSession, Mode};
+use crate::session::{CaptureSession, CaptureTarget, Mode};
 
 pub fn record_demo(
     dataset: &Path,
     text_system: Arc<dyn PlatformTextSystem>,
     output_dir: &Path,
     target_width: u32,
+    themes: &[String],
 ) -> Result<()> {
     fs::create_dir_all(output_dir)?;
 
-    for (name, appearance) in [
-        ("demo-light.png", ThemeAppearance::Light),
-        ("demo-dark.png", ThemeAppearance::Dark),
-    ] {
+    let runs: Vec<(String, CaptureTarget, ThemeAppearance)> = if themes.is_empty() {
+        vec![
+            (
+                "demo-light.png".to_owned(),
+                CaptureTarget::Mode(Mode::Standard),
+                ThemeAppearance::Light,
+            ),
+            (
+                "demo-dark.png".to_owned(),
+                CaptureTarget::Mode(Mode::Standard),
+                ThemeAppearance::Dark,
+            ),
+        ]
+    } else {
+        themes
+            .iter()
+            .map(|id| {
+                let appearance =
+                    gewu_gpui::capture::theme_appearance(id).unwrap_or(ThemeAppearance::Light);
+                (
+                    format!("demo-{id}.png"),
+                    CaptureTarget::Theme(id.clone()),
+                    appearance,
+                )
+            })
+            .collect()
+    };
+
+    for (name, target, appearance) in runs {
         let mut s = CaptureSession::open(
             dataset,
             Some(size(px(1024.), px(640.))),
             text_system.clone(),
             output_dir.to_path_buf(),
-            Mode::Standard,
+            target,
         )?;
         s.set_theme(appearance)?;
 

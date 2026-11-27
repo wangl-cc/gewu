@@ -12,6 +12,13 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     } else {
         colors.selection_inactive
     };
+    let header_selection = if active {
+        colors.button_secondary
+    } else {
+        colors
+            .button_secondary
+            .alpha(colors.button_secondary.a * 0.55)
+    };
     let focus = if active {
         colors.focus_ring
     } else {
@@ -145,13 +152,18 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
             if *selected {
                 window.paint_quad(fill(
                     rect(0., *y, l.gutter - hairline, row_height),
-                    selection,
+                    header_selection,
                 ));
             }
+            let row_ink = if *selected && active {
+                text_color
+            } else {
+                muted
+            };
             let line = window.text_system().shape_line(
                 label.clone(),
                 px(ROW_NUMBER_SIZE),
-                &[run(label.len(), muted)],
+                &[run(label.len(), row_ink)],
                 None,
             );
             let tx = l.gutter - PAD - line.width.as_f32();
@@ -181,7 +193,7 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                 if header.selected {
                     window.paint_quad(fill(
                         rect(*x, 0., *width, HEADER_HEIGHT - hairline),
-                        selection,
+                        header_selection,
                     ));
                 } else if frame.header_hover == Some(HeaderHover::Column(*column)) {
                     window.paint_quad(fill(

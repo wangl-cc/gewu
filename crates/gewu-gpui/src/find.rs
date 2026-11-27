@@ -549,6 +549,7 @@ impl Render for FindController {
                     cx.notify();
                 }
             }));
+        let active_focus = focused && window.is_window_active();
         let mut field = div()
             .id("table-search")
             .flex_1()
@@ -561,10 +562,13 @@ impl Render for FindController {
             .pr(px(if searching { 4. } else { 8. }))
             .bg(colors.canvas)
             .border_1()
-            .border_color(colors.border)
-            .hover(move |s| s.border_color(colors.input_hover()))
-            .when(focused && window.is_window_active(), |field| {
-                field.shadow(colors.focus_shadows())
+            .border_color(if active_focus {
+                colors.muted_foreground
+            } else {
+                colors.border
+            })
+            .when(!active_focus, |field| {
+                field.hover(move |s| s.border_color(colors.input_hover()))
             })
             .rounded(px(6.))
             .child(trigger);

@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::{FileType, HighContrast, ParquetCompression, Preferences, load_from, save_to};
+use crate::theme::palettes::{catppuccin, default};
 
 #[test]
 fn settings_json_round_trips_all_preferences_including_enums_and_fractions() {
@@ -10,6 +11,8 @@ fn settings_json_round_trips_all_preferences_including_enums_and_fractions() {
     assert!(load_from(&path) == Preferences::default());
 
     let custom = Preferences {
+        light_theme: &catppuccin::LATTE,
+        dark_theme: &catppuccin::MOCHA,
         high_contrast: HighContrast::On,
         font_size: 15.75,
         row_height: 31.25,
@@ -53,6 +56,8 @@ fn partial_corrupt_or_out_of_range_settings_json_falls_back_per_field() {
     fs::write(
         &path,
         br#"{
+            "light_theme": "catppuccin-mocha",
+            "dark_theme": "unknown-theme",
             "font_size": 99.0,
             "row_height": 10.0,
             "row_number_base": 5,
@@ -65,6 +70,8 @@ fn partial_corrupt_or_out_of_range_settings_json_falls_back_per_field() {
     )
     .unwrap();
     let loaded = load_from(&path);
+    assert_eq!(loaded.light_theme, &default::LIGHT);
+    assert_eq!(loaded.dark_theme, &default::DARK);
     assert_eq!(loaded.font_size, 20.);
     assert_eq!(loaded.row_height, 24.);
     assert_eq!(loaded.row_number_base, 1);

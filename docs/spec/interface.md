@@ -36,7 +36,7 @@ View > Columns… and the header menu open column management as a sheet. It can 
 
 Find uses a native search field in the toolbar. Command-F focuses it. Return and Shift-Return move to the next and previous match. The right side of the field shows an ellipsis while the total is being counted and the current match and total once known, such as `3/12`, alongside an inline clear button while a query is present. Matches are counted by cell. Navigation is available while the count is running. The field reports no matches or errors inline. The Find group’s accessibility description includes the source row and column of a match. Previous and next buttons appear beside the field while a query is present and are disabled when there are no matches. Escape or the inline clear button clears the query and returns focus to the table. Find keeps the displayed rows and Inspector page in view.
 
-Find highlights the matching part of each displayed value. If truncation hides the entire match, the ellipsis carries the highlight. The active selection and its row and column headers use the accent color, changing to neutral when the window loses focus. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
+Find highlights the matching part of each displayed value. If truncation hides the entire match, the ellipsis carries the highlight. The active cell outline uses the accent color, changing to neutral when the window loses focus; the selected row and column headers use a neutral highlight. The current Find result has its own outline, which stays on that result when the table selection moves. Clearing the search removes these marks.
 
 ## Filter editors
 

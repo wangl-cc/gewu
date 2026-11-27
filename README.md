@@ -65,4 +65,6 @@ Gewu is free software: you can redistribute it and/or modify it under the terms 
 
 Gewu is distributed without any warranty; without even the implied warranty of merchantability or fitness for a particular purpose. See the license for details.
 
+Built-in Catppuccin themes use the [Catppuccin](https://github.com/catppuccin/catppuccin) palette (MIT License, Copyright (c) 2021 Catppuccin).
+
 <!-- markdownlint-disable-file MD033 MD041 -->

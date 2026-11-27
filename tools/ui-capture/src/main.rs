@@ -19,10 +19,11 @@ fn main() -> anyhow::Result<()> {
     };
 
     use anyhow::{Context as _, bail};
+    use gewu_gpui::capture;
 
     use crate::{
         scenes::{GROUPS, run_group},
-        session::Mode,
+        session::{CaptureTarget, Mode},
     };
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -37,6 +38,7 @@ fn main() -> anyhow::Result<()> {
     let mut sample: Option<PathBuf> = None;
     let mut output = target_dir.join("ui-capture");
     let mut modes = Vec::new();
+    let mut themes = Vec::new();
     let mut groups = Vec::new();
     let mut demo_only = false;
     let mut demo_width: u32 = 1280;
@@ -73,6 +75,16 @@ fn main() -> anyhow::Result<()> {
                 }
                 None => bail!("--mode expects standard or high-contrast"),
             },
+            "--theme" => {
+                let id = args.next().context("--theme expects a built-in theme id")?;
+                if capture::theme_appearance(&id).is_none() {
+                    bail!(
+                        "unknown --theme {id:?} (valid: {})",
+                        capture::theme_ids().join(", ")
+                    );
+                }
+                themes.push(id);
+            }
             "--group" => {
                 let g = args.next().context("--group expects a scene group name")?;
                 if !GROUPS.contains(&g.as_str()) {
@@ -86,9 +98,11 @@ fn main() -> anyhow::Result<()> {
                      --sample FILE    Use an existing gewu-data-gen 2M-row Parquet\n  \
                      --output DIR     Set the screenshot destination\n  \
                      --mode MODE      Capture one mode (standard or high-contrast)\n  \
+                     --theme ID       Repeat to capture specific themes ({})\n  \
                      --group GROUP    Repeat to select scene groups ({})\n  \
                      --demo           Record animated PNG (APNG) README demos\n  \
                      --width PX       Target width for --demo (default 1280)",
+                    capture::theme_ids().join(", "),
                     GROUPS.join(", ")
                 );
                 return Ok(());
@@ -97,6 +111,9 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if !modes.is_empty() && !themes.is_empty() {
+        bail!("--mode and --theme cannot be combined");
+    }
     if modes.is_empty() {
         modes = vec![Mode::Standard, Mode::HighContrast];
     }
@@ -130,17 +147,23 @@ fn main() -> anyhow::Result<()> {
     let text_system = gpui_kit::platform::current_platform(true).text_system();
 
     if demo_only {
-        return demo::record_demo(&harbor, text_system, &output, demo_width);
+        return demo::record_demo(&harbor, text_system, &output, demo_width, &themes);
     }
 
-    for &mode in &modes {
+    let targets: Vec<CaptureTarget> = if themes.is_empty() {
+        modes.into_iter().map(CaptureTarget::Mode).collect()
+    } else {
+        themes.into_iter().map(CaptureTarget::Theme).collect()
+    };
+
+    for target in &targets {
         for group in &groups {
             let dataset = match group.as_str() {
                 "corrupt" => corrupt.as_path(),
                 "large" => large_sample.as_deref().context("missing large sample")?,
                 _ => harbor.as_path(),
             };
-            run_group(group, dataset, text_system.clone(), output.clone(), mode)?;
+            run_group(group, dataset, text_system.clone(), output.clone(), target)?;
         }
     }
     Ok(())

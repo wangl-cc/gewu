@@ -7,7 +7,63 @@ use gpui_kit::{
     base::ThemeAppearance,
 };
 
-use crate::{actions, platform, preferences, shell, theme::GewuPalette};
+use crate::{
+    actions, platform, preferences, shell,
+    theme::{GewuPalette, Theme},
+};
+
+fn all_themes() -> impl Iterator<Item = &'static Theme> {
+    Theme::LIGHT
+        .iter()
+        .copied()
+        .chain(Theme::DARK.iter().copied())
+        .chain([
+            Theme::high_contrast_for(ThemeAppearance::Light),
+            Theme::high_contrast_for(ThemeAppearance::Dark),
+        ])
+}
+
+/// Returns all built-in theme identifiers supported by [`select_theme`].
+pub fn theme_ids() -> Vec<&'static str> {
+    all_themes().map(|theme| theme.id).collect()
+}
+
+/// Returns the [`ThemeAppearance`] of built-in theme `id`, if known.
+pub fn theme_appearance(id: &str) -> Option<ThemeAppearance> {
+    all_themes()
+        .find(|theme| theme.id == id)
+        .map(|theme| theme.appearance)
+}
+
+/// Selects built-in theme `id` in preferences, installs its palette, and refreshes windows.
+pub fn select_theme(id: &str, cx: &mut App) -> bool {
+    let Some(theme) = all_themes().find(|theme| theme.id == id) else {
+        return false;
+    };
+    if theme == Theme::high_contrast_for(theme.appearance) {
+        preferences::Preferences::update(cx, |p| p.high_contrast = preferences::HighContrast::On);
+    } else {
+        preferences::Preferences::update(cx, |p| {
+            p.high_contrast = preferences::HighContrast::Off;
+            match theme.appearance {
+                ThemeAppearance::Light => p.light_theme = theme,
+                ThemeAppearance::Dark => p.dark_theme = theme,
+            }
+        });
+    }
+    platform::install_theme(theme.appearance, cx);
+    cx.refresh_windows();
+    true
+}
+
+/// Returns the identifier of the currently installed theme palette, if it matches a built-in one.
+pub fn installed_theme_id(cx: &App) -> Option<&'static str> {
+    let appearance = gpui_kit::base::Theme::global(cx).appearance;
+    let installed = GewuPalette::get(cx);
+    all_themes()
+        .find(|theme| theme.appearance == appearance && theme.palette == installed)
+        .map(|theme| theme.id)
+}
 
 /// Keeps a headless document session's open-URL channel alive for its lifetime.
 pub struct DocumentSession {
@@ -55,9 +111,9 @@ pub fn set_appearance(appearance: ThemeAppearance, cx: &mut App) {
 pub fn palette_mode(cx: &App) -> Option<&'static str> {
     let appearance = gpui_kit::base::Theme::global(cx).appearance;
     let installed = GewuPalette::get(cx);
-    if installed == GewuPalette::default_for(appearance) {
+    if installed == Theme::default_for(appearance).palette {
         Some("standard")
-    } else if installed == GewuPalette::high_contrast_for(appearance) {
+    } else if installed == Theme::high_contrast_for(appearance).palette {
         Some("high-contrast")
     } else {
         None
