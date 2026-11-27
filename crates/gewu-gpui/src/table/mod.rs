@@ -55,8 +55,6 @@ pub(crate) enum TableEvent {
     /// The displayed snapshot or the visible columns changed.
     ContextChanged,
     SelectionChanged,
-    /// The user asked to analyze a column from the table's context menu.
-    Analyze(gewu_core::ColumnId),
     /// The user confirmed an export of the captured view.
     Export(ExportDraft),
 }

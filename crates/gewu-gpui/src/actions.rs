@@ -1,4 +1,5 @@
 //! Keyboard commands are scoped to the document, the focused grid or the focused scatter plot.
+use gewu_core::{ColumnId, ViewRow};
 use gpui_kit::{Action, App, KeyBinding, base::input};
 
 gpui_kit::actions!(gewu, [
@@ -16,7 +17,8 @@ gpui_kit::actions!(gewu, [
     ExportTable,
     PreviousPoint,
     NextPoint,
-    RevealPoint
+    RevealPoint,
+    ClearSorting
 ]);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,6 +41,58 @@ pub(crate) enum Motion {
 pub(crate) struct Navigate {
     pub motion: Motion,
     pub extend: bool,
+}
+
+/// Context-menu commands on the column or cell the menu was opened on.
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct SortColumn {
+    pub column: ColumnId,
+    pub descending: bool,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct ClearColumnSort {
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct FilterColumn {
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct ClearColumnFilter {
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct AnalyzeColumn {
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct HideColumn {
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct CopyCell {
+    pub row: ViewRow,
+    pub column: ColumnId,
+}
+
+#[derive(Action, Clone, Debug, PartialEq, Eq)]
+#[action(namespace = gewu, no_json)]
+pub(crate) struct ViewCell {
+    pub row: ViewRow,
+    pub column: ColumnId,
 }
 
 #[derive(Action, Clone, Debug, Default, PartialEq, Eq)]

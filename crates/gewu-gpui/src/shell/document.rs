@@ -247,7 +247,6 @@ impl Document {
                     panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
                 }
             }
-            TableEvent::Analyze(column) => self.analyze_column(*column, cx),
             TableEvent::Export(draft) => {
                 let export = self
                     .export
@@ -515,6 +514,9 @@ impl Document {
             .on_action(
                 cx.listener(|doc, _: &actions::ShowInspector, _, cx| doc.toggle_inspector(cx)),
             )
+            .on_action(cx.listener(|doc, a: &actions::AnalyzeColumn, _, cx| {
+                doc.analyze_column(a.column, cx)
+            }))
             .on_action(cx.listener(|doc, _: &actions::ShowChartInspector, _, cx| {
                 doc.show_inspector_page(InspectorPage::Chart, cx)
             }))

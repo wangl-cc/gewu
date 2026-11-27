@@ -214,7 +214,11 @@ fn cell_context_menu_copies_the_clicked_value_with_embedded_line_breaks() {
 }
 
 fn open_header_menu(w: &mut TableWindow) {
-    let point = w.header(0);
+    open_header_menu_at(w, 0);
+}
+
+fn open_header_menu_at(w: &mut TableWindow, column: usize) {
+    let point = w.header(column);
     w.ui.simulate_event(gpui_kit::MouseDownEvent {
         button: gpui_kit::MouseButton::Right,
         position: point,
@@ -282,6 +286,40 @@ fn pressing_anywhere_in_a_menu_row_paints_the_full_row() {
         assert_eq!(activations.get(), i + 1);
     }
     app.quit();
+}
+
+#[test]
+fn header_menu_commands_apply_to_the_column_under_the_pointer_not_the_selection() {
+    let mut w = window();
+    w.click(w.cell(0, 0), Modifiers::default());
+    let score = w.read(|t| t.data.columns[1].id);
+    // Rows in the header menu, counting separators.
+    let choose = |w: &mut TableWindow, row: usize, label: &str| {
+        open_header_menu_at(w, 1);
+        w.ui.update(|window, cx| {
+            let item = window.within("popup-menu").within(row).find("menu-content");
+            assert_eq!(item.value(), Some(label));
+            window.within("popup-menu").click(row, cx);
+        });
+        w.settle();
+    };
+    choose(&mut w, 1, "Sort Descending");
+    assert_eq!(
+        w.read(|t| t
+            .data
+            .query()
+            .sorts
+            .iter()
+            .map(|s| (s.column, s.descending))
+            .collect::<Vec<_>>()),
+        [(score, true)]
+    );
+    choose(&mut w, 2, "Clear Column Sort");
+    assert!(w.read(|t| t.data.query().sorts.is_empty()));
+    choose(&mut w, 7, "Analyze Column");
+    w.ui.update(|window, _| assert_eq!(window.find("Inspect column").value(), Some("score")));
+    choose(&mut w, 10, "Hide Column");
+    assert!(w.read(|t| t.data.columns.position(score).is_none()));
 }
 
 #[test]

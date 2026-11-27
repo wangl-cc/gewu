@@ -1,5 +1,5 @@
 //! The grid's context menus and the cell detail popover.
-use gewu_core::ColumnId;
+use gewu_core::ViewRow;
 use gpui_kit::{
     base::{self, TestSupportExt},
     component::{
@@ -11,13 +11,13 @@ use gpui_kit::{
 };
 
 use super::{Cell, Drawer, Selection, TableView, button};
-use crate::table::{HEADER_HEIGHT, TableEvent, grid::GridHit};
-
-#[derive(Clone, Copy)]
-struct MenuTarget {
-    column: ColumnId,
-    cell: Option<Cell>,
-}
+use crate::{
+    actions::{
+        AnalyzeColumn, AnalyzeSelectedColumn, ClearColumnFilter, ClearColumnSort, ClearSorting,
+        CopyCell, EditFilter, FilterColumn, HideColumn, ManageColumns, SortColumn, ViewCell,
+    },
+    table::{HEADER_HEIGHT, grid::GridHit},
+};
 
 pub(super) struct OpenMenu {
     position: Point<Pixels>,
@@ -86,22 +86,6 @@ pub(super) fn menu_item(
     .disabled(!enabled)
 }
 
-#[derive(Clone, Copy)]
-enum Command {
-    CopyCell,
-    CopyRows,
-    Detail,
-    Filter,
-    ClearFilter,
-    Analyze,
-    Ascending,
-    Descending,
-    ClearSort,
-    ClearSorting,
-    Columns,
-    Hide,
-}
-
 impl TableView {
     pub(in crate::table) fn context_menu(
         &mut self,
@@ -124,74 +108,107 @@ impl TableView {
         {
             self.set_selection(Some(Selection::single(cell)), cx);
         }
-        let target = MenuTarget {
-            column: self.data.columns[column].id,
-            cell,
-        };
+        let column_id = self.data.columns[column].id;
+        let target = cell.map(|cell| (ViewRow(cell.row), column_id));
         let focus = self.focus.clone();
-        let has_sort = self
-            .requested_query()
-            .sorts
-            .iter()
-            .any(|s| s.column == target.column);
-        let sorted = !self.requested_query().sorts.is_empty();
-        let filtered = self
-            .requested_query()
-            .filters
-            .iter()
-            .any(|f| f.column == target.column);
-        let table = cx.weak_entity();
+        // Which commands apply to this column, decided once from the requested query.
+        let query = self.requested_query();
+        let has_sort = query.sorts.iter().any(|s| s.column == column_id);
+        let sorted = !query.sorts.is_empty();
+        let filtered = query.filters.iter().any(|f| f.column == column_id);
         let popup = PopupMenu::build(window, cx, |menu, window, _| {
-            use Command::*;
-            let item = |label: &'static str, command| {
-                let table = table.clone();
-                let enabled = match command {
-                    ClearFilter => filtered,
-                    ClearSort => has_sort,
-                    ClearSorting => sorted,
-                    _ => true,
-                };
-                let action: Option<Box<dyn Action>> = match command {
-                    CopyRows => Some(Box::new(base::input::Copy)),
-                    Filter => Some(Box::new(crate::actions::EditFilter)),
-                    Analyze => Some(Box::new(crate::actions::AnalyzeSelectedColumn)),
-                    _ => None,
-                };
-                let shortcut = action.as_deref().and_then(|action| {
+            let item = |label: &'static str,
+                        action: Box<dyn Action>,
+                        enabled: bool,
+                        shortcut: Option<&dyn Action>| {
+                let shortcut = shortcut.and_then(|action| {
                     Kbd::binding_for_action_in(action, &focus, window)
                         .or_else(|| Kbd::global_binding_for_action(action, window))
                 });
-                menu_item(label, enabled, shortcut)
-                    .when_some(action, |item, action| item.action(action))
-                    .on_click(move |_, w, cx| {
-                        let _ = table.update(cx, |t, cx| t.menu_command(command, target, w, cx));
-                    })
+                menu_item(label, enabled, shortcut).action(action)
             };
+            let column = column_id;
             let menu = menu.min_w(px(194.)).action_context(focus.clone());
-            let menu = if target.cell.is_some() {
-                menu.item(item("Copy Cell", CopyCell))
-                    .item(item("Copy Selected Rows", CopyRows))
-                    .item(item("View Cell…", Detail))
+            let menu = if let Some((row, column)) = target {
+                menu.item(item(
+                    "Copy Cell",
+                    Box::new(CopyCell { row, column }),
+                    true,
+                    None,
+                ))
+                .item(item(
+                    "Copy Selected Rows",
+                    Box::new(base::input::Copy),
+                    true,
+                    Some(&base::input::Copy),
+                ))
+                .item(item(
+                    "View Cell…",
+                    Box::new(ViewCell { row, column }),
+                    true,
+                    None,
+                ))
             } else {
-                menu.item(item("Sort Ascending", Ascending))
-                    .item(item("Sort Descending", Descending))
-                    .item(item("Clear Column Sort", ClearSort))
-                    .item(item("Clear Sorting", ClearSorting))
+                menu.item(item(
+                    "Sort Ascending",
+                    Box::new(SortColumn {
+                        column,
+                        descending: false,
+                    }),
+                    true,
+                    None,
+                ))
+                .item(item(
+                    "Sort Descending",
+                    Box::new(SortColumn {
+                        column,
+                        descending: true,
+                    }),
+                    true,
+                    None,
+                ))
+                .item(item(
+                    "Clear Column Sort",
+                    Box::new(ClearColumnSort { column }),
+                    has_sort,
+                    None,
+                ))
+                .item(item("Clear Sorting", Box::new(ClearSorting), sorted, None))
             };
             let menu = menu
                 .separator()
-                .item(item("Filter Column…", Filter))
-                .item(item("Clear Column Filter", ClearFilter))
-                .item(item("Analyze Column", Analyze));
-            if target.cell.is_none() {
+                .item(item(
+                    "Filter Column…",
+                    Box::new(FilterColumn { column }),
+                    true,
+                    Some(&EditFilter),
+                ))
+                .item(item(
+                    "Clear Column Filter",
+                    Box::new(ClearColumnFilter { column }),
+                    filtered,
+                    None,
+                ))
+                .item(item(
+                    "Analyze Column",
+                    Box::new(AnalyzeColumn { column }),
+                    true,
+                    Some(&AnalyzeSelectedColumn),
+                ));
+            if target.is_none() {
                 menu.separator()
-                    .item(item("Columns…", Columns))
-                    .item(item("Hide Column", Hide))
+                    .item(item("Columns…", Box::new(ManageColumns), true, None))
+                    .item(item(
+                        "Hide Column",
+                        Box::new(HideColumn { column }),
+                        true,
+                        None,
+                    ))
             } else {
                 menu
             }
         });
-        let anchor = if target.cell.is_some() {
+        let anchor = if target.is_some() {
             event.position + point(px(4.), px(12.))
         } else {
             point(
@@ -238,42 +255,34 @@ impl TableView {
         cx.notify();
     }
 
-    fn menu_command(
-        &mut self,
-        command: Command,
-        target: MenuTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        use Command::*;
-        let id = target.column;
-        match command {
-            CopyCell => {
-                if let Some(cell) = target.cell
-                    && let Some(value) = self.data.cell(cell.column, cell.row)
-                {
-                    self.copy_cell_text(value.unwrap_or_default().to_string(), cx);
-                }
+    /// Handlers for the context menu's commands, on the table's root.
+    pub(in crate::table) fn menu_actions(&self, view: Div, cx: &mut Context<Self>) -> Div {
+        view.on_action(
+            cx.listener(|t, a: &SortColumn, _, cx| t.set_direction(a.column, a.descending, cx)),
+        )
+        .on_action(cx.listener(|t, a: &ClearColumnSort, _, cx| {
+            let id = a.column;
+            t.change_sorts(|s| s.retain(|r| r.column != id), cx)
+        }))
+        .on_action(cx.listener(|t, _: &ClearSorting, _, cx| t.change_sorts(Vec::clear, cx)))
+        .on_action(cx.listener(|t, a: &FilterColumn, w, cx| t.filter_column(a.column, w, cx)))
+        .on_action(cx.listener(|t, a: &ClearColumnFilter, _, cx| t.set_filter(a.column, None, cx)))
+        .on_action(cx.listener(|t, a: &HideColumn, w, cx| {
+            t.open_columns(w, cx);
+            t.request_hide(&[a.column], w, cx);
+        }))
+        .on_action(cx.listener(|t, a: &CopyCell, _, cx| {
+            if let Some(cell) = t.data.display_cell(a.row, a.column)
+                && let Some(value) = t.data.cell(cell.column, cell.row)
+            {
+                t.copy_cell_text(value.unwrap_or_default().to_string(), cx);
             }
-            CopyRows => self.copy(window, cx),
-            Detail => {
-                if let Some(cell) = target.cell {
-                    self.show_cell(cell, window, cx);
-                }
+        }))
+        .on_action(cx.listener(|t, a: &ViewCell, w, cx| {
+            if let Some(cell) = t.data.display_cell(a.row, a.column) {
+                t.show_cell(cell, w, cx);
             }
-            Filter => self.filter_column(id, window, cx),
-            ClearFilter => self.set_filter(id, None, cx),
-            Analyze => cx.emit(TableEvent::Analyze(id)),
-            Ascending => self.set_direction(id, false, cx),
-            Descending => self.set_direction(id, true, cx),
-            ClearSort => self.change_sorts(|s| s.retain(|r| r.column != id), cx),
-            ClearSorting => self.change_sorts(Vec::clear, cx),
-            Columns => self.open_columns(window, cx),
-            Hide => {
-                self.open_columns(window, cx);
-                self.request_hide(&[id], window, cx);
-            }
-        }
+        }))
     }
 
     pub(in crate::table) fn show_cell(

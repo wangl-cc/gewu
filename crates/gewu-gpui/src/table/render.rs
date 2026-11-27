@@ -180,10 +180,8 @@ impl Render for TableView {
         } else {
             table.into_any_element()
         };
-        div().size_full().flex().child(table).children(self.panel(
-            window,
-            cx,
-            filter_anchor.map(|(_, anchor)| anchor),
-        ))
+        let root = self.menu_actions(div().size_full().flex(), cx);
+        root.child(table)
+            .children(self.panel(window, cx, filter_anchor.map(|(_, anchor)| anchor)))
     }
 }
