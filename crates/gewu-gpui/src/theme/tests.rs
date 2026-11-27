@@ -133,21 +133,10 @@ fn themes_classify_light_and_dark_with_unique_ids() {
 fn default_solid_controls_pair_white_ink_with_opaque_fills() {
     for mode in [ThemeAppearance::Light, ThemeAppearance::Dark] {
         let p = &Theme::default_for(mode).palette;
-        for ink in [
-            p.accent_foreground,
-            p.danger_fill_foreground,
-            p.switch_thumb,
-        ] {
+        for ink in [p.accent_foreground, p.switch_thumb] {
             assert_eq!(ink, white());
         }
-        for fill in [
-            p.accent,
-            p.accent_hover,
-            p.accent_pressed(),
-            p.danger_fill,
-            p.danger_hover,
-            p.danger_pressed,
-        ] {
+        for fill in [p.accent, p.accent_hover, p.accent_pressed()] {
             assert_eq!(fill.a, 1.);
         }
         assert!(p.find_span_current.a > p.find_span.a);
@@ -161,7 +150,6 @@ fn dark_surfaces_and_segment_thumb_rise_above_their_backing() {
     assert!(luminance(p.surface) > luminance(p.canvas));
     let track = p.surface.blend(p.segment_track);
     assert!(luminance(track.blend(p.segment_thumb)) > luminance(track));
-    assert_ne!(p.danger_fill, p.danger_text);
 }
 
 #[test]
@@ -199,9 +187,6 @@ fn catppuccin_flavors_keep_text_and_control_ink_legible() {
         for fill in [p.accent, p.accent_hover, p.accent_pressed()] {
             assert_contrast(p.accent_foreground, fill, 4.5);
             assert_contrast(p.switch_thumb, fill, 4.5);
-        }
-        for fill in [p.danger_fill, p.danger_hover, p.danger_pressed] {
-            assert_contrast(p.danger_fill_foreground, fill, 4.5);
         }
     }
     assert_ne!(palettes::catppuccin::LATTE.palette.elevated, white());
@@ -244,9 +229,6 @@ fn high_contrast_text_and_control_ink_remain_legible_in_painted_states() {
         for fill in [p.accent, p.accent_hover, p.accent_pressed()] {
             assert_contrast(p.accent_foreground, fill, 4.5);
             assert_contrast(p.switch_thumb, fill, 4.5);
-        }
-        for fill in [p.danger_fill, p.danger_hover, p.danger_pressed] {
-            assert_contrast(p.danger_fill_foreground, fill, 4.5);
         }
     }
 }

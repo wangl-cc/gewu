@@ -51,10 +51,6 @@ pub(crate) struct GewuPalette {
     pub find_span_current: Hsla,
     pub find_current_border: Hsla,
     pub danger_text: Hsla,
-    pub danger_fill: Hsla,
-    pub danger_hover: Hsla,
-    pub danger_pressed: Hsla,
-    pub danger_fill_foreground: Hsla,
     pub chart_primary: Hsla,
     pub chart_primary_hover: Hsla,
     pub chart_muted: Hsla,
@@ -184,8 +180,6 @@ impl GewuPalette {
         c.secondary_foreground = self.foreground;
         c.border = self.border;
         c.input = self.border;
-        c.destructive = self.danger_fill;
-        c.destructive_foreground = self.danger_fill_foreground;
         c.ring = self.focus_ring;
         c.selection = self.selection_active;
         c
@@ -229,8 +223,6 @@ impl GewuPalette {
             c.input = self.border;
             c.ring = self.focus_ring;
             c.selection = self.selection_active;
-            c.danger = self.danger_fill;
-            c.danger_foreground = self.danger_fill_foreground;
             c.button_primary = self.accent;
             c.button_primary_hover = self.accent_hover;
             c.button_primary_active = self.accent_pressed();
@@ -239,10 +231,6 @@ impl GewuPalette {
             c.button_secondary_hover = self.button_secondary_hover;
             c.button_secondary_foreground = self.foreground;
             c.button_secondary_active = self.secondary_pressed();
-            c.button_danger = self.danger_fill;
-            c.button_danger_hover = self.danger_hover;
-            c.button_danger_active = self.danger_pressed;
-            c.button_danger_foreground = self.danger_fill_foreground;
             c.radius = px(6.);
             c.radius_lg = px(10.);
         });
