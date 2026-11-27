@@ -29,6 +29,16 @@ impl Render for HeaderTip {
     }
 }
 
+/// A sorted column's header marker: its direction, and its priority when several columns sort.
+pub(super) fn sort_marker(descending: bool, priority: usize, rules: usize) -> SharedString {
+    let arrow = if descending { "▼" } else { "▲" };
+    if rules > 1 {
+        format!("{arrow}{}", priority + 1).into()
+    } else {
+        SharedString::new_static(arrow)
+    }
+}
+
 impl TableView {
     pub(super) fn hover_target(&self, l: &Layout) -> Option<AnyElement> {
         let index = match self.grid.header_hover()? {
@@ -141,12 +151,8 @@ impl TableView {
         self.data.prefetch([column], rows.clone());
         // Size for a future sort of any priority so sorting does not reflow measured columns.
         let last = self.data.snapshot().dataset().schema().fields().len();
-        let sort = ["▲", "▼"].into_iter().fold(0.0f32, |width, arrow| {
-            let marker = if last > 1 {
-                format!("{arrow}{last}")
-            } else {
-                arrow.into()
-            };
+        let sort = [false, true].into_iter().fold(0.0f32, |width, descending| {
+            let marker = sort_marker(descending, last.saturating_sub(1), last);
             width.max(measure(&marker, SORT_SIZE, FontWeight::NORMAL))
         });
         let mut width = (measure(

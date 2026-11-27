@@ -1,9 +1,8 @@
 //! Data engine for gewu, a read-only table viewer.
 //!
-//! The Mac app shares immutable [`Dataset`], [`FilteredView`], and [`OrderedView`]
-//! objects with the Rust application layer. Callers own query conditions and choose which result
-//! to display. Sorting and filtering never move data; they only produce a new
-//! list of row numbers.
+//! Callers share immutable [`Dataset`], [`FilteredView`] and [`OrderedView`] values across
+//! threads, own their query conditions and choose which result to display. Sorting and filtering
+//! never move data; they only produce a new list of row numbers.
 
 mod col_view;
 mod column;

@@ -1,4 +1,5 @@
-//! The table's data, read straight from gewu-core: no FFI, no packing.
+//! The table's data: the query session over the displayed view, the visible columns and the
+//! cache of display text.
 //!
 //! Display text is formatted by Core per (column, 64-row block) and cached as
 //! a native column segment. Only visible cells acquire owned GPUI text; it is reused
@@ -31,11 +32,17 @@ pub(crate) fn preview_with_limit(text: &str, max_bytes: usize) -> SharedString {
     }
 }
 
+/// Characters that end a line of text.
+const LINE_BREAKS: [char; 5] = ['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'];
+
+/// Whether the grid shows `text` in full on one line.
+pub(crate) fn fits_one_line(text: &str) -> bool {
+    text.len() <= GRID_PREVIEW_BYTES && !text.contains(LINE_BREAKS)
+}
+
 pub(crate) fn single_line_prefix(text: &str, max_bytes: usize) -> &str {
     let limit = text.floor_char_boundary(text.len().min(max_bytes));
-    let end = text[..limit]
-        .find(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
-        .unwrap_or(limit);
+    let end = text[..limit].find(LINE_BREAKS).unwrap_or(limit);
     &text[..end]
 }
 
@@ -310,7 +317,7 @@ impl TableData {
     }
 }
 
-/// TSV of display rows x columns through Core's export path, as the Mac app copies.
+/// TSV of display rows × columns through Core's export path, the format spreadsheets paste.
 pub fn copy_tsv(
     view: &OrderedView,
     rows: Range<u64>,

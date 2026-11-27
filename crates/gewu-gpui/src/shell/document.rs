@@ -384,7 +384,7 @@ impl Document {
         error: &gewu_core::Error,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let colors = Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let import = import.clone();
         let retry =
             cx.listener(move |this, _, window, cx| this.request(import.clone(), window, cx));
@@ -659,13 +659,13 @@ impl Document {
 
 impl Render for Document {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let mut view = div()
             .key_context("GewuDocument")
             .size_full()
             .flex()
             .flex_col()
-            .bg(colors.background)
+            .bg(colors.canvas)
             .text_color(colors.foreground)
             .on_drop(|paths: &ExternalPaths, _, cx| open_paths(paths.paths().to_vec(), cx));
         if self.header_available {

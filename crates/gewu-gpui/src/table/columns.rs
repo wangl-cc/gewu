@@ -11,10 +11,13 @@ pub(crate) enum ColumnWidth {
     Manual(f32),
 }
 
+/// The width assumed for a column until a drawn frame measures it.
+const UNMEASURED_WIDTH: f32 = 110.;
+
 impl ColumnWidth {
     fn points(self) -> f32 {
         match self {
-            Self::Unmeasured => 110.,
+            Self::Unmeasured => UNMEASURED_WIDTH,
             Self::Measured(points) | Self::Manual(points) => points,
         }
     }

@@ -92,22 +92,16 @@ impl TableView {
             .map(|&(column, ..)| {
                 let id = self.data.columns[column].id;
                 let name = &self.data.columns.entry(column).label;
-                let name = if name.len() > 1024
-                    || name.contains(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'])
-                {
-                    crate::table::data::preview(name)
-                } else {
+                let name = if crate::table::data::fits_one_line(name) {
                     name.clone()
+                } else {
+                    crate::table::data::preview(name)
                 };
                 let sorts = &self.data.query().sorts;
-                let sort = sorts.iter().position(|s| s.column == id).map(|i| {
-                    let arrow = if sorts[i].descending { "▼" } else { "▲" };
-                    if sorts.len() > 1 {
-                        format!("{arrow}{}", i + 1).into()
-                    } else {
-                        SharedString::new_static(arrow)
-                    }
-                });
+                let sort = sorts
+                    .iter()
+                    .position(|s| s.column == id)
+                    .map(|i| header::sort_marker(sorts[i].descending, i, sorts.len()));
                 let filtered = self.data.query().filters.iter().any(|f| f.column == id);
                 let selected = selection.is_some_and(|s| s.columns().contains(&column));
                 let show = filtered

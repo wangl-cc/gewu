@@ -2,7 +2,7 @@
 //! check or installation. The packaged helper does the work (see [`platform::update`]).
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gpui_kit::{base::Theme, *};
+use gpui_kit::*;
 use semver::Version;
 
 use super::update_menus;
@@ -225,7 +225,7 @@ impl Updater {
 
 impl Render for Updater {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Theme::global(cx).tokens.colors;
+        let colors = crate::theme::GewuPalette::get(cx);
         let message = match &self.status {
             Status::Idle | Status::Checking => "Checking for updates…".into(),
             Status::Current => "Gewu is up to date.".into(),
@@ -247,7 +247,7 @@ impl Render for Updater {
             .flex()
             .flex_col()
             .gap_3()
-            .bg(colors.background)
+            .bg(colors.canvas)
             .text_color(colors.foreground)
             .child(if matches!(self.status, Status::Failed(_)) {
                 crate::ui::errors::inline_warning(message).into_any_element()
