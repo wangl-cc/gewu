@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use super::{Cell, Drawer, Selection, TableView, button};
-use crate::table::HEADER_HEIGHT;
+use crate::table::{HEADER_HEIGHT, TableEvent};
 
 #[derive(Clone, Copy)]
 struct MenuTarget {
@@ -266,7 +266,7 @@ impl TableView {
             }
             Filter => self.filter_column(id, window, cx),
             ClearFilter => self.set_filter(id, None, cx),
-            Analyze => self.analyze_column(id, cx),
+            Analyze => cx.emit(TableEvent::Analyze(id)),
             Ascending => self.set_direction(id, false, cx),
             Descending => self.set_direction(id, true, cx),
             ClearSort => self.change_sorts(|s| s.retain(|r| r.column != id), cx),

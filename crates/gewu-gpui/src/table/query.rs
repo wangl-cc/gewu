@@ -41,7 +41,7 @@ impl TableView {
         });
     }
 
-    pub fn filter_selected(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn filter_selected(&mut self, cx: &mut Context<Self>) {
         let Some(cell) = self.selection.map(|s| s.head) else {
             self.notice = Some(Notice::SelectCellToFilter);
             cx.notify();
@@ -65,7 +65,7 @@ impl TableView {
         }
     }
 
-    pub fn clear_filters(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn clear_filters(&mut self, cx: &mut Context<Self>) {
         self.edit_query(cx, |q| q.filters.clear());
     }
 

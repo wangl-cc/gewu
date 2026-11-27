@@ -8,6 +8,7 @@ use crate::{actions::*, platform};
 
 pub(crate) mod assets;
 pub(crate) mod document;
+mod export;
 mod info;
 mod picker;
 
@@ -261,7 +262,19 @@ pub(crate) fn open_paths(paths: Vec<PathBuf>, cx: &mut App) {
     open_with_header(paths, true, cx);
 }
 
-#[cfg(feature = "ui-capture")]
+/// Install the app's actions, globals and document handling for a session that tools,
+/// examples and tests drive: the given preferences, recent documents kept in memory and no
+/// opened-URL events.
+pub(crate) fn init_session(preferences: crate::preferences::Preferences, cx: &mut App) {
+    gpui_kit::init(cx);
+    crate::actions::init(cx);
+    cx.set_global(preferences);
+    let (_, receive) = async_channel::unbounded();
+    install_file_actions(platform::RecentDocuments::session(), receive, cx);
+}
+
+/// Open `path` in its own document window, at `window_size` if given.
+#[cfg(any(test, feature = "ui-capture"))]
 pub(crate) fn open_document_with_size(
     path: PathBuf,
     window_size: Option<Size<Pixels>>,
@@ -271,16 +284,27 @@ pub(crate) fn open_document_with_size(
     if let Some(size) = window_size {
         options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(Point::default(), size)));
     }
-    let path = path
-        .canonicalize()
+    open_document(canonical(path), true, options, cx).ok()
+}
+
+fn canonical(path: PathBuf) -> PathBuf {
+    path.canonicalize()
         .or_else(|_| std::path::absolute(&path))
-        .unwrap_or(path);
-    let (handle, doc) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Document::new(path.clone(), true, window, cx))
-    })
-    .ok()?;
-    cx.global_mut::<Documents>().windows.push((path, handle));
-    Some((handle, doc))
+        .unwrap_or(path)
+}
+
+/// Open a window for `path`, which must be canonical: windows are found by their path.
+fn open_document(
+    path: PathBuf,
+    has_header: bool,
+    options: WindowOptions,
+    cx: &mut App,
+) -> gpui_kit::Result<(AnyWindowHandle, Entity<Document>)> {
+    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| Document::new(path.clone(), has_header, window, cx))
+    })?;
+    cx.global_mut::<Documents>().windows.push((path, opened.0));
+    Ok(opened)
 }
 
 fn supports_header(path: &Path) -> bool {
@@ -302,10 +326,7 @@ fn open_with_header(paths: Vec<PathBuf>, has_header: bool, cx: &mut App) {
         .windows
         .retain(|(_, handle)| windows.contains(handle));
     for path in paths {
-        let path = path
-            .canonicalize()
-            .or_else(|_| std::path::absolute(&path))
-            .unwrap_or(path);
+        let path = canonical(path);
         if let Some((_, handle)) = cx
             .global::<Documents>()
             .windows
@@ -315,21 +336,11 @@ fn open_with_header(paths: Vec<PathBuf>, has_header: bool, cx: &mut App) {
             let _ = (*handle).update(cx, |_, w, _| w.activate_window());
             continue;
         }
+        // A mixed selection applies the header policy only to eligible files.
+        let has_header = has_header || !supports_header(&path);
         let options = platform::window_options(cx);
-        let result = gpui_kit::open_window(options, cx, |window, cx| {
-            // A mixed selection applies the header policy only to eligible files.
-            cx.new(|cx| {
-                Document::new(
-                    path.clone(),
-                    has_header || !supports_header(&path),
-                    window,
-                    cx,
-                )
-            })
-        });
-        match result {
-            Ok((handle, _)) => cx.global_mut::<Documents>().windows.push((path, handle)),
-            Err(err) => report_window_error(err.to_string(), cx),
+        if let Err(err) = open_document(path, has_header, options, cx) {
+            report_window_error(err.to_string(), cx);
         }
     }
 }

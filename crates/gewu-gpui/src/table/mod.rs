@@ -3,9 +3,10 @@
 //! builds a [`Frame`]; the canvas paints it. Nothing is drawn as a
 //! placeholder: a cell is either text from Core or `null`.
 
-use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use columns::ColumnWidth;
+pub(crate) use controls::ExportDraft;
 use data::{TableData, TableQuery, copy_tsv};
 use gewu_core::ColumnSort;
 use gpui_kit::*;
@@ -45,10 +46,21 @@ enum Drag {
     },
 }
 
-pub struct TableView {
+/// What the document hosting a table reacts to.
+pub(crate) enum TableEvent {
+    /// The displayed snapshot or the visible columns changed.
+    ContextChanged,
+    SelectionChanged,
+    /// The user asked to analyze a column from the table's context menu.
+    Analyze(gewu_core::ColumnId),
+    /// The user confirmed an export of the captured view.
+    Export(ExportDraft),
+}
+
+impl EventEmitter<TableEvent> for TableView {}
+
+pub(crate) struct TableView {
     pub(crate) data: TableData,
-    pub(crate) document_title: Option<SharedString>,
-    pub(crate) worksheet_tabs: Option<AnyView>,
     prefs: Preferences,
     _style_changes: Subscription,
     _window_activation: Subscription,
@@ -61,8 +73,8 @@ pub struct TableView {
     thumb_hover: Option<Axis>,
     body_pointer: Option<Point<Pixels>>,
     scrollbar_timer: Option<Task<()>>,
-    pub focus: FocusHandle,
-    pub(crate) find: Entity<crate::table::find::FindController>,
+    pub(crate) focus: FocusHandle,
+    find: Entity<crate::table::find::FindController>,
     _find_reveal: Subscription,
     _find_changed: Subscription,
     notice: Option<Notice>,
@@ -132,16 +144,6 @@ struct Frame {
 }
 
 impl TableView {
-    /// Create a virtualized table over an immutable dataset.
-    pub fn from_dataset(
-        dataset: Arc<gewu_core::Dataset>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        crate::platform::follow_appearance(window, cx);
-        Self::new(TableData::from_dataset(dataset), window, cx)
-    }
-
     pub(crate) fn new(data: TableData, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let prefs = Preferences::get(cx);
         let style_changes = cx.observe_global::<Preferences>(|table, cx| {
@@ -179,8 +181,6 @@ impl TableView {
         let changed = cx.observe(&find, |_, _, cx| cx.notify());
         Self {
             prefs,
-            document_title: None,
-            worksheet_tabs: None,
             _style_changes: style_changes,
             _window_activation: cx
                 .observe_window_activation(window, Self::window_activation_changed),
@@ -249,11 +249,65 @@ impl TableView {
         self.refresh_highlights(cx);
     }
 
-    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The search field the document shows in its title bar.
+    pub(crate) fn find_bar(&self) -> &Entity<crate::table::find::FindController> {
+        &self.find
+    }
+
+    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_grid_layout(cx);
         self.find
             .update(cx, |find, cx| find.focus_input(window, cx));
         self.refresh_highlights(cx);
+    }
+
+    pub(crate) fn can_step_find(&self, cx: &App) -> bool {
+        self.find.read(cx).can_navigate()
+    }
+
+    pub(crate) fn step_find(&mut self, previous: bool, cx: &mut Context<Self>) {
+        self.find
+            .update(cx, |find, cx| find.find_match(previous, cx));
+    }
+
+    /// Close the innermost open popover, or else the search, returning focus to the grid.
+    /// Returns false when nothing was open.
+    pub(crate) fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.close_panel(window, cx) {
+            return true;
+        }
+        if !self.find.read(cx).open {
+            return false;
+        }
+        self.find.update(cx, |find, cx| find.close(window, cx));
+        window.focus(&self.focus, cx);
+        true
+    }
+
+    pub(crate) fn snapshot(&self) -> gewu_app::AppliedView {
+        self.data.snapshot()
+    }
+
+    /// Visible columns in display order.
+    pub(crate) fn visible_columns(&self) -> Vec<gewu_core::ColumnInfo> {
+        self.data.columns.iter().cloned().collect()
+    }
+
+    /// Whether the applied or the requested query filters or sorts any column.
+    pub(crate) fn has_conditions(&self) -> bool {
+        [self.data.query().as_ref(), self.requested_query()]
+            .iter()
+            .any(|query| !query.filters.is_empty() || !query.sorts.is_empty())
+    }
+
+    pub(crate) fn has_requested_filters(&self) -> bool {
+        !self.requested_query().filters.is_empty()
+    }
+
+    /// The selected column, once the displayed query has settled.
+    pub(crate) fn analyzable_column(&self) -> Option<gewu_core::ColumnId> {
+        self.selected_column()
+            .filter(|_| !self.data.queries().is_running())
     }
 
     fn compute_layout(&self, bounds: Bounds<Pixels>, auto_hide_scrollbars: bool) -> Layout {
@@ -297,7 +351,7 @@ impl TableView {
         self.layout.scrollbar(Axis::Vertical).unwrap().thumb
     }
 
-    pub fn scroll_to_row(&mut self, row: u64) {
+    pub(crate) fn scroll_to_row(&mut self, row: u64) {
         self.scroll
             .set_anchor(crate::table::scroll::Anchor { row, offset: 0.0 });
     }

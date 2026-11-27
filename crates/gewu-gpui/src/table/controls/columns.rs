@@ -25,7 +25,7 @@ pub(super) struct HideConfirmation {
 }
 
 impl TableView {
-    pub(in crate::table) fn open_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let search = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Find column");
             input.set_accessibility(

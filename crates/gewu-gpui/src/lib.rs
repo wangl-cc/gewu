@@ -13,8 +13,9 @@ mod ui;
 #[cfg(feature = "ui-capture")]
 #[doc(hidden)]
 pub mod capture;
+#[doc(hidden)]
+pub mod examples;
 
-pub use table::TableView;
 pub(crate) use ui::messages::counted;
 
 /// Launch Gewu and open each path in its own document window.

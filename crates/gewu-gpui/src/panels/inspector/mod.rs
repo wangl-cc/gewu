@@ -72,6 +72,7 @@ impl Default for InspectorSettings {
 }
 
 pub(crate) struct Inspector {
+    /// Whether this document shows the panel now. A hidden panel loads nothing.
     visible: bool,
     snapshot: AppliedView,
     columns: Vec<ColumnInfo>,
@@ -92,13 +93,23 @@ impl Inspector {
         visible_columns: Vec<ColumnInfo>,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::with_settings(
+        let mut inspector = Self {
+            visible: true,
             snapshot,
-            visible_columns,
-            InspectorSettings::default(),
-            true,
-            cx,
-        )
+            columns: visible_columns,
+            selected: None,
+            x: None,
+            y: None,
+            settings: InspectorSettings::default(),
+            chart_options_open: false,
+            scatter_options_open: false,
+            showing: Showing::Empty,
+            _chart_observation: None,
+            task: None,
+        };
+        inspector.repair_selection();
+        inspector.load(cx);
+        inspector
     }
 
     pub(crate) fn is_visible(&self) -> bool {
@@ -117,10 +128,6 @@ impl Inspector {
             self.showing = Showing::Empty;
         }
         cx.notify();
-    }
-
-    pub(crate) fn settings(&self) -> InspectorSettings {
-        self.settings
     }
 
     pub(crate) fn plotted_column(&self, chart_id: EntityId) -> Option<ColumnId> {
@@ -147,32 +154,25 @@ impl Inspector {
         }
     }
 
-    pub(crate) fn with_settings(
+    /// Show another dataset. Column choices do not carry over to it; the panel's
+    /// page, sizes and chart options do.
+    pub(crate) fn set_dataset(
+        &mut self,
         snapshot: AppliedView,
         visible_columns: Vec<ColumnInfo>,
-        settings: InspectorSettings,
-        visible: bool,
         cx: &mut Context<Self>,
-    ) -> Self {
-        let mut inspector = Self {
-            visible,
-            snapshot,
-            columns: visible_columns,
-            selected: None,
-            x: None,
-            y: None,
-            settings,
-            chart_options_open: false,
-            scatter_options_open: false,
-            showing: Showing::Empty,
-            _chart_observation: None,
-            task: None,
-        };
-        inspector.repair_selection();
-        inspector.load(cx);
-        inspector
+    ) {
+        self.snapshot = snapshot;
+        self.columns = visible_columns;
+        (self.selected, self.x, self.y) = (None, None, None);
+        self.chart_options_open = false;
+        self.scatter_options_open = false;
+        self.repair_selection();
+        self.load(cx);
+        cx.notify();
     }
 
+    /// Follow a new query or column order of the same dataset.
     pub(crate) fn set_context(
         &mut self,
         snapshot: AppliedView,

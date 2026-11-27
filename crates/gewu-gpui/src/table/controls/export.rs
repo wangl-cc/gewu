@@ -1,42 +1,23 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+//! The export dialog captures the displayed view and visible column order when it opens.
+//! Confirming hands the draft to the document, which owns the export job.
+use std::{path::PathBuf, sync::Arc};
 
-use gewu_core::{ColumnId, Export, ExportOptions, FileType, OrderedView, ParquetCompression};
+use gewu_core::{ColumnId, FileType, OrderedView, ParquetCompression};
 use gpui_kit::*;
 
 use super::{Drawer, Preferences, TableView, button};
-use crate::panels::choice::{Choice, ChoiceField};
+use crate::{
+    panels::choice::{Choice, ChoiceField},
+    table::TableEvent,
+};
 
-pub(super) struct ExportDraft {
-    view: Arc<OrderedView>,
-    source: PathBuf,
-    columns: Vec<ColumnId>,
-    format: FileType,
-    compression: ParquetCompression,
-}
-
-#[derive(Default)]
-pub(super) enum ExportController {
-    #[default]
-    Idle,
-    Choosing {
-        _task: Task<()>,
-    },
-    Writing(WorkingExport),
-    Finished(String),
-    Failed(String),
-}
-
-pub(super) struct WorkingExport {
-    job: Arc<Export>,
-    _write: Task<()>,
-    _progress: Task<()>,
-}
-
-// A closed document must stop its writer even when the blocking encoder has already started.
-impl Drop for WorkingExport {
-    fn drop(&mut self) {
-        self.job.cancel();
-    }
+#[derive(Clone)]
+pub(crate) struct ExportDraft {
+    pub(crate) view: Arc<OrderedView>,
+    pub(crate) source: PathBuf,
+    pub(crate) columns: Vec<ColumnId>,
+    pub(crate) format: FileType,
+    pub(crate) compression: ParquetCompression,
 }
 
 const FORMATS: [FileType; 4] = [
@@ -55,19 +36,13 @@ const COMPRESSIONS: [(ParquetCompression, &str); 6] = [
 ];
 
 impl TableView {
-    pub(in crate::table) fn can_export(&self, cx: &App) -> bool {
-        !self.data.queries().is_running()
-            && !self.data.columns.is_empty()
-            && !self.controls.export.as_ref().is_some_and(|e| {
-                matches!(
-                    e.read(cx),
-                    ExportController::Choosing { .. } | ExportController::Writing(_)
-                )
-            })
+    /// A settled query with at least one visible column can be exported.
+    pub(crate) fn can_export(&self) -> bool {
+        !self.data.queries().is_running() && !self.data.columns.is_empty()
     }
 
-    pub(in crate::table) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_export(cx) {
+    pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_export() {
             return;
         }
         self.focus_panel(window, cx);
@@ -164,162 +139,18 @@ impl TableView {
                     .child(button("choose-export-path", "Export…", true, cx).on_click(
                         cx.listener(|t, _, w, cx| {
                             w.focus(&t.focus, cx);
-                            t.choose_export_path(cx);
+                            t.submit_export(cx);
                         }),
                     )),
             )
             .into_any_element()
     }
 
-    pub(super) fn choose_export_path(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn submit_export(&mut self, cx: &mut Context<Self>) {
         let Some(Drawer::Export(draft)) = self.controls.drawer.take() else {
             return;
         };
-        let controller = self
-            .controls
-            .export
-            .get_or_insert_with(|| cx.new(|_| ExportController::Idle))
-            .clone();
-        controller.update(cx, |model, cx| model.choose_path(draft, cx));
+        cx.emit(TableEvent::Export(draft));
         cx.notify();
-    }
-
-    pub(super) fn export_status(&self, bar: Div, _: &mut Context<Self>) -> Div {
-        // Mounting the same entity in the replacement table keeps its status and progress
-        // subscribed.
-        bar.children(self.controls.export.iter().cloned())
-    }
-}
-
-impl ExportController {
-    fn choose_path(&mut self, draft: ExportDraft, cx: &mut Context<Self>) {
-        let stem = draft
-            .source
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy();
-        let extension = draft.format.to_string().to_lowercase();
-        let name = format!("{stem}-export.{extension}");
-        let receiver = cx.prompt_for_new_path(
-            draft.source.parent().unwrap_or(std::path::Path::new(".")),
-            Some(&name),
-        );
-        *self = ExportController::Choosing {
-            _task: cx.spawn(async move |this, cx| {
-                let destination = receiver.await;
-                let _ = this.update(cx, |model, cx| {
-                    *model = ExportController::Idle;
-                    match destination {
-                        Ok(Ok(Some(path))) => model.write_export(draft, path, cx),
-                        Ok(Err(e)) => {
-                            *model = ExportController::Failed(format!(
-                                "Could not choose export destination: {e}"
-                            ))
-                        }
-                        _ => {}
-                    }
-                    cx.notify();
-                });
-            }),
-        };
-        cx.notify();
-    }
-
-    fn write_export(&mut self, draft: ExportDraft, path: PathBuf, cx: &mut Context<Self>) {
-        let job = match draft.view.export(&draft.columns, draft.format) {
-            Ok(job) => Arc::new(job),
-            Err(error) => {
-                *self = ExportController::Failed(crate::ui::errors::message(&error));
-                return;
-            }
-        };
-        let writer = job.clone();
-        let options = ExportOptions {
-            nested_as_text: true,
-            parquet_compression: draft.compression,
-            ..Default::default()
-        };
-        let title = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        let write = cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { writer.write_with_options(path, &options) })
-                .await;
-            let _ = this.update(cx, |model, cx| {
-                *model = match result {
-                    Ok(()) => {
-                        Preferences::update(cx, |p| {
-                            p.last_export_format = draft.format;
-                            if draft.format == FileType::Parquet {
-                                p.parquet_compression = draft.compression;
-                            }
-                        });
-                        ExportController::Finished(format!("Exported {title}"))
-                    }
-                    Err(gewu_core::Error::Cancelled) => {
-                        ExportController::Finished("Export cancelled".into())
-                    }
-                    Err(error) => ExportController::Failed(crate::ui::errors::message(&error)),
-                };
-                cx.notify();
-            });
-        });
-        let progress = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(150))
-                    .await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    break;
-                }
-            }
-        });
-        *self = ExportController::Writing(WorkingExport {
-            job,
-            _write: write,
-            _progress: progress,
-        });
-        cx.notify();
-    }
-}
-
-impl Render for ExportController {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bar = div().min_w_0().flex().items_center().gap_1();
-        let status = |text: SharedString| div().min_w_0().truncate().child(text);
-        match self {
-            ExportController::Idle => bar,
-            ExportController::Choosing { .. } => {
-                bar.child(status("Choosing export destination…".into()))
-            }
-            ExportController::Finished(message) => bar.child(status(message.clone().into())),
-            ExportController::Failed(message) => bar
-                .text_color(crate::theme::GewuPalette::get(cx).danger_text)
-                .child(crate::ui::errors::warning_icon())
-                .child(status(message.clone().into())),
-            ExportController::Writing(active) => {
-                let progress = active.job.progress();
-                bar.child(status(
-                    format!(
-                        "Exporting {} / {}",
-                        crate::ui::messages::format_count(progress.rows_written),
-                        crate::counted(progress.total_rows, "row")
-                    )
-                    .into(),
-                ))
-                .child(
-                    crate::ui::status_button("cancel-export", "Cancel export", false, cx).on_click(
-                        cx.listener(|t, _, _, _| {
-                            if let ExportController::Writing(active) = t {
-                                active.job.cancel();
-                            }
-                        }),
-                    ),
-                )
-            }
-        }
     }
 }

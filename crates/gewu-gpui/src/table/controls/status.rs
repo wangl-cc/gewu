@@ -1,14 +1,13 @@
+//! The table's contributions to the document status bar: counts, query state, notices and
+//! the applied-condition summaries with their popovers.
 use gpui_kit::{assets::IconName, component::Icon};
 
 use super::*;
 use crate::{table::Notice, ui::messages::format_count};
 
 impl TableView {
-    pub(in crate::table) fn status_bar(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    /// Counts, query progress and operation notices for the document's status bar.
+    pub(crate) fn status_items(&self, cx: &App) -> Vec<AnyElement> {
         let colors = crate::theme::GewuPalette::get(cx);
         let rows = self.data.row_count();
         let columns = crate::counted(self.data.columns.len() as u64, "column");
@@ -21,55 +20,54 @@ impl TableView {
                 crate::counted(self.data.snapshot().dataset().n_rows() as u64, "row")
             )
         };
-        let worksheet_tabs = self.worksheet_tabs.clone();
-        let bar = div()
-            .id("document-footer")
-            .test_support()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .min_h(px(24.))
-            .border_t_1()
-            .border_color(colors.border)
-            .bg(colors.surface)
-            .text_color(colors.muted_foreground)
-            .text_size(px(11.))
-            .font_features(crate::theme::tabular_digits());
-        let mut status = div().min_w_0().flex().items_center().gap_2().child(
+        let mut items = vec![
             div()
                 .min_w_0()
                 .truncate()
-                .child(format!("{row_count} · {columns}")),
-        );
+                .child(format!("{row_count} · {columns}"))
+                .into_any_element(),
+        ];
         if let Some(selection) = self.selection {
-            status = status.child(div().min_w_0().truncate().child(format!(
-                "{} selected",
-                format_count(selection.rows().end - selection.rows().start)
-            )));
+            items.push(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(format!(
+                        "{} selected",
+                        format_count(selection.rows().end - selection.rows().start)
+                    ))
+                    .into_any_element(),
+            );
         }
         if self.data.queries().is_running() {
-            status = status.child(div().min_w_0().truncate().child("Applying query…"));
+            items.push(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child("Applying query…")
+                    .into_any_element(),
+            );
         }
         if let Some(error) = self.data.queries().error() {
-            status = status.child(
+            items.push(
                 crate::ui::errors::inline_warning(crate::ui::errors::message(error))
                     .truncate()
-                    .text_color(colors.danger_text),
+                    .text_color(colors.danger_text)
+                    .into_any_element(),
             );
         }
         match &self.notice {
             Some(Notice::SelectCellToFilter) if self.selection.is_none() => {
-                status = status.child(
+                items.push(
                     div()
                         .min_w_0()
                         .truncate()
-                        .child(crate::ui::errors::SELECT_CELL_TO_FILTER),
+                        .child(crate::ui::errors::SELECT_CELL_TO_FILTER)
+                        .into_any_element(),
                 );
             }
             Some(Notice::CopyFailed(message) | Notice::FilterFailed(message)) => {
-                status = status.child(
+                items.push(
                     crate::ui::errors::inline_warning(message.clone())
                         .id("operation-notice")
                         .role(Role::Alert)
@@ -77,19 +75,23 @@ impl TableView {
                         .text_color(colors.danger_text)
                         .min_w_0()
                         .truncate()
-                        .test_support(),
+                        .test_support()
+                        .into_any_element(),
                 );
             }
             _ => {}
         }
-        if worksheet_tabs.is_some() {
-            // Keep a track for navigating tabs, alongside working summary controls at narrow
-            // widths.
-            status = status.max_w(relative(0.72)).justify_end();
-        } else {
-            status = status.flex_1().child(div().flex_1());
-        }
+        items
+    }
+
+    /// Status-bar triggers for the applied filter and sort summaries.
+    pub(crate) fn condition_summaries(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let applied = self.data.query();
+        let mut summaries = Vec::new();
         for (filters, count, id, noun) in [
             (true, applied.filters.len(), "filtered-count", "filtered"),
             (false, applied.sorts.len(), "sorted-count", "sorted"),
@@ -112,7 +114,7 @@ impl TableView {
             };
             let label: SharedString = format!("{} {noun}", format_count(count as u64)).into();
             let trigger = crate::ui::status_button(id, label, open, cx).aria_expanded(open);
-            status = status.child(
+            summaries.push(
                 base::Popover::new(("status-summary", filters as usize))
                     .anchor(Anchor::BottomRight)
                     .offset(px(4.))
@@ -135,15 +137,11 @@ impl TableView {
                         }
                         cx.notify();
                     }))
-                    .content(move |_, _, _| div().children(content)),
+                    .content(move |_, _, _| div().children(content))
+                    .into_any_element(),
             );
         }
-        bar.children(worksheet_tabs.map(|tabs| div().flex_1().min_w_0().child(tabs)))
-            .child(
-                self.export_status(status, cx)
-                    .id("footer-status")
-                    .test_support(),
-            )
+        summaries
     }
 
     pub(super) fn filter_summary(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {

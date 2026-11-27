@@ -390,8 +390,8 @@ fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
         w.render_frame(cx);
         let field = w.find("table-search").bounds();
         let table = doc.read(cx).table.as_ref().unwrap().read(cx);
-        assert!(table.find.read(cx).input_focused(w, cx));
-        assert_eq!(table.find.read(cx).text(cx).as_ref(), "two");
+        assert!(table.find_bar().read(cx).input_focused(w, cx));
+        assert_eq!(table.find_bar().read(cx).text(cx).as_ref(), "two");
         assert!(field.size.width >= px(70.));
         let center = w.find("show-inspector").bounds().center().y;
         for id in ["table-search", "previous", "next", "close-find"] {

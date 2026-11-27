@@ -40,6 +40,8 @@ pub(crate) struct Preferences {
     pub remember_export_format: bool,
     pub last_export_format: FileType,
     pub parquet_compression: ParquetCompression,
+    /// Whether a newly opened document shows its Inspector. Each document keeps its own
+    /// visibility afterwards; toggling it there also changes this default.
     pub show_inspector: bool,
     pub skip_hide_warning: bool,
     pub automatic_update_checks: bool,

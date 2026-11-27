@@ -1,6 +1,7 @@
 //! Document controls operate on stable column identities and the displayed view snapshot.
 use std::{cell::Cell as ValueCell, collections::HashSet, rc::Rc};
 
+pub(crate) use export::ExportDraft;
 use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow, ViewRow};
 use gpui_kit::{
     base::{self, input::InputState},
@@ -8,9 +9,9 @@ use gpui_kit::{
     *,
 };
 
-use super::{Cell, Layout, Selection, TableView};
+use super::{Cell, Layout, Selection, TableEvent, TableView};
 use crate::{
-    panels::{FilterEditor, FilterEvent, Inspector},
+    panels::{FilterEditor, FilterEvent},
     preferences::Preferences,
     ui::button,
 };
@@ -27,15 +28,6 @@ pub(super) struct Controls {
     /// Column visibility commits with the query that clears these columns' conditions.
     pub(super) pending_hides: HashSet<ColumnId>,
     panel_focus: Option<FocusHandle>,
-    inspector: Option<Entity<Inspector>>,
-    marked_point: Option<MarkedPoint>,
-    export: Option<Entity<export::ExportController>>,
-}
-
-struct MarkedPoint {
-    chart: EntityId,
-    column: ColumnId,
-    row: SourceRow,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,134 +107,56 @@ enum Drawer {
 
 impl TableView {
     pub(super) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
-        self.selection = selection;
-        let Some(mark) = &self.controls.marked_point else {
-            return;
-        };
-        // Reordering visible columns moves the cell's coordinates but keeps its identity.
-        if selection.is_some_and(|s| {
-            s.anchor == s.head
-                && self
-                    .data
-                    .columns
-                    .get(s.head.column)
-                    .is_some_and(|col| col.id == mark.column)
-                && self.data.view().source_row_at(ViewRow(s.head.row)) == Some(mark.row)
-        }) {
-            return;
-        }
-        let chart = mark.chart;
-        self.controls.marked_point = None;
-        if let Some(panel) = &self.controls.inspector {
-            panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
+        if self.selection != selection {
+            self.selection = selection;
+            cx.emit(TableEvent::SelectionChanged);
         }
     }
 
-    pub(super) fn reveal_scatter_point(
+    /// Select and reveal the displayed cell of `row` in `column`, giving a distant record
+    /// context. Returns whether the row and column are displayed.
+    pub(crate) fn reveal_source_cell(
         &mut self,
-        hit: &crate::actions::RevealScatterPoint,
+        row: SourceRow,
+        column: ColumnId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.commit_grid_layout(cx);
-        let Some(panel) = self.controls.inspector.clone() else {
-            return;
-        };
-        let Some(id) = panel.read(cx).plotted_column(hit.chart) else {
-            return;
-        };
-        let Some(row) = self.data.view().display_row_for_source(hit.source_row) else {
-            return;
-        };
-        let Some(cell) = self.data.display_cell(row, id) else {
-            return;
+        let Some(cell) = self
+            .data
+            .view()
+            .display_row_for_source(row)
+            .and_then(|display| self.data.display_cell(display, column))
+        else {
+            return false;
         };
         self.set_selection(Some(Selection::single(cell)), cx);
-        self.controls.marked_point = Some(MarkedPoint {
-            chart: hit.chart,
-            column: id,
-            row: hit.source_row,
-        });
-        panel.update(cx, |panel, cx| {
-            panel.mark_scatter(hit.chart, Some(hit.source_row), cx)
-        });
         self.scroll.center_if_outside(cell.row);
         self.reveal(cell);
         window.focus(&self.focus, cx);
         cx.notify();
+        true
     }
 
-    pub(crate) fn initialize_inspector(&mut self, cx: &mut Context<Self>) {
-        if Preferences::get(cx).show_inspector {
-            self.inspector(cx);
+    /// The column and source row of a single selected cell, independent of column order.
+    pub(crate) fn selected_source_cell(&self) -> Option<(ColumnId, SourceRow)> {
+        let selection = self.selection.filter(|s| s.anchor == s.head)?;
+        let column = self.data.columns.get(selection.head.column)?.id;
+        let row = self
+            .data
+            .view()
+            .source_row_at(ViewRow(selection.head.row))?;
+        Some((column, row))
+    }
+
+    /// Close the open menu and drawer without moving focus.
+    pub(crate) fn dismiss_panels(&mut self, cx: &mut Context<Self>) {
+        let menu = self.controls.menu.take();
+        let drawer = self.controls.drawer.take();
+        if menu.is_some() || drawer.is_some() {
+            cx.notify();
         }
-    }
-
-    pub(crate) fn inherit_document_state(
-        &mut self,
-        previous: &Entity<Self>,
-        cx: &mut Context<Self>,
-    ) {
-        let previous = &previous.read(cx).controls;
-        self.controls.export = previous.export.clone();
-        if let Some(panel) = &previous.inspector {
-            let visible = panel.read(cx).is_visible();
-            let settings = panel.read(cx).settings();
-            let snapshot = self.data.snapshot();
-            let columns = self.data.columns.iter().cloned().collect();
-            self.controls.inspector = Some(
-                cx.new(|cx| Inspector::with_settings(snapshot, columns, settings, visible, cx)),
-            );
-        }
-    }
-
-    fn inspector(&mut self, cx: &mut Context<Self>) -> Entity<Inspector> {
-        self.controls
-            .inspector
-            .get_or_insert_with(|| {
-                let snapshot = self.data.snapshot();
-                cx.new(|cx| {
-                    Inspector::new(snapshot, self.data.columns.iter().cloned().collect(), cx)
-                })
-            })
-            .clone()
-    }
-
-    pub(super) fn inspector_visible(&self, cx: &App) -> bool {
-        self.controls
-            .inspector
-            .as_ref()
-            .is_some_and(|panel| panel.read(cx).is_visible())
-    }
-
-    pub(super) fn toggle_inspector(&mut self, cx: &mut Context<Self>) {
-        self.set_inspector_visible(!self.inspector_visible(cx), cx);
-    }
-
-    fn set_inspector_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        self.controls.menu = None;
-        self.controls.drawer = None;
-        if visible {
-            self.inspector(cx);
-        }
-        if let Some(panel) = &self.controls.inspector {
-            panel.update(cx, |panel, cx| panel.set_visible(visible, cx));
-        }
-        Preferences::update(cx, |p| p.show_inspector = visible);
-        cx.notify();
-    }
-
-    pub(super) fn show_chart(&mut self, cx: &mut Context<Self>) {
-        self.set_inspector_visible(true, cx);
-        self.inspector(cx).update(cx, |panel, cx| {
-            panel.set_page(crate::panels::InspectorPage::Chart, cx)
-        });
-    }
-
-    pub(super) fn analyze_column(&mut self, column: ColumnId, cx: &mut Context<Self>) {
-        self.set_inspector_visible(true, cx);
-        self.inspector(cx)
-            .update(cx, |panel, cx| panel.inspect(column, cx));
     }
 
     /// Row or column coordinates changed. Drop interactions tied to the old grid.
@@ -252,15 +166,7 @@ impl TableView {
         if matches!(self.controls.drawer, Some(Drawer::Cell { .. })) {
             self.controls.drawer = None;
         }
-        if let Some(panel) = &self.controls.inspector {
-            panel.update(cx, |panel, cx| {
-                panel.set_context(
-                    self.data.snapshot(),
-                    self.data.columns.iter().cloned().collect(),
-                    cx,
-                )
-            });
-        }
+        cx.emit(TableEvent::ContextChanged);
     }
 
     pub(super) fn refresh_query_drawer(&mut self, cx: &mut Context<Self>) {
@@ -286,7 +192,7 @@ impl TableView {
         window.focus(handle, cx);
     }
 
-    pub(super) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.controls.menu.take().is_none() && self.controls.drawer.take().is_none() {
             return false;
         }
@@ -295,12 +201,12 @@ impl TableView {
         true
     }
 
-    pub(super) fn selected_column(&self) -> Option<ColumnId> {
+    pub(crate) fn selected_column(&self) -> Option<ColumnId> {
         let index = self.selection.map_or(0, |s| s.head.column);
         self.data.columns.get(index).map(|column| column.id)
     }
 
-    pub(in crate::table) fn filter_column(
+    pub(crate) fn filter_column(
         &mut self,
         id: ColumnId,
         window: &mut Window,
@@ -380,11 +286,6 @@ impl TableView {
         let mut elements = Vec::new();
         if let Some(menu) = &self.controls.menu {
             elements.push(menu.element(window, cx));
-        }
-        if let Some(panel) = &self.controls.inspector
-            && panel.read(cx).is_visible()
-        {
-            elements.push(panel.clone().into_any_element());
         }
         let panel = match &self.controls.drawer {
             Some(Drawer::Filter { editor, .. }) => editor.clone().into_any_element(),
@@ -478,7 +379,7 @@ impl TableView {
                                     false
                                 }
                                 Some(Drawer::Export(_)) => {
-                                    table.choose_export_path(cx);
+                                    table.submit_export(cx);
                                     window.focus(&table.focus, cx);
                                     false
                                 }

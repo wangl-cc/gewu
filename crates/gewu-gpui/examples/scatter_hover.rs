@@ -1,13 +1,12 @@
-//! Replay pointer moves against the production table Inspector and verify each plotted row.
-//! Pass --display to dispatch on native frame callbacks in an active window.
+//! Replay pointer moves against the production document Inspector and verify each plotted
+//! row. Pass --display to dispatch on native frame callbacks in an active window.
 use std::{
     io::Write,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use gewu_core::{AxisScale, Dataset};
-use gewu_gpui::TableView;
+use gewu_gpui::examples::Document;
 use gpui_kit::{test::TestWindowExt, *};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const POINTS: usize = 2048;
@@ -15,6 +14,15 @@ const STEPS: usize = 360;
 const ROWS: usize = 8192;
 
 mod support;
+
+/// The window's root, showing one document.
+struct Host(Document);
+
+impl Render for Host {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.0.view())
+    }
+}
 
 struct Measurement {
     sampled_rows: Vec<u64>,
@@ -121,12 +129,24 @@ fn percentiles(data: &mut [Duration]) -> String {
 }
 
 async fn run(display: bool, sampled_rows: Vec<u64>, cx: &mut AsyncWindowContext) -> Result<()> {
-    cx.update(|w, cx| -> Result<()> {
-        w.render_frame(cx);
-        let action = cx.build_action("gewu::ShowInspector", None)?;
-        w.dispatch_action(action, cx);
-        Ok(())
-    })??;
+    let show = cx.update(|_, cx| cx.build_action("gewu::ShowInspector", None))??;
+    let mut loaded = false;
+    for _ in 0..100 {
+        loaded = cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.is_action_available(show.as_ref(), cx)
+        })?;
+        if loaded {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(80))
+            .await;
+    }
+    if !loaded {
+        return Err("the document did not load its table".into());
+    }
+    cx.update(|w, cx| w.dispatch_action(show, cx))?;
     let mut tab = false;
     let mut geometry = None;
     for _ in 0..100 {
@@ -202,7 +222,7 @@ fn main() -> Result<()> {
         writeln!(csv, "{i}")?;
     }
     csv.flush()?;
-    let dataset = Arc::new(Dataset::open(path)?);
+    let dataset = std::sync::Arc::new(Dataset::open(&path)?);
     let sample = dataset.unfiltered().scatter(
         None,
         dataset.info().columns[0].id,
@@ -216,7 +236,7 @@ fn main() -> Result<()> {
     let mut sampled_rows: Vec<_> = sample.points.iter().map(|p| p.source_row.0).collect();
     sampled_rows.sort_unstable();
     gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
+        gewu_gpui::examples::init(cx);
         cx.set_activation_policy(ActivationPolicy::Regular);
         cx.activate(true);
         let options = WindowOptions {
@@ -228,17 +248,14 @@ fn main() -> Result<()> {
             ..Default::default()
         };
         if let Err(e) = gpui_kit::open_window(options, cx, |w, cx| {
-            w.set_window_title("Gewu scatter hover benchmark");
-            let table = cx.new(|cx| TableView::from_dataset(dataset.clone(), w, cx));
-            let focus = table.read(cx).focus.clone();
-            w.focus(&focus, cx);
+            let document = Document::open(path.clone(), w, cx);
             w.spawn(cx, async move |cx| {
                 if let Err(e) = run(display, sampled_rows, cx).await {
                     AsyncApp::update(cx, |cx| support::fail(e, cx));
                 }
             })
             .detach();
-            table
+            cx.new(|_| Host(document))
         }) {
             support::fail(e, cx);
         } else {

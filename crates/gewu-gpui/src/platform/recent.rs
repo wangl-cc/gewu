@@ -31,7 +31,7 @@ impl RecentDocuments {
         }
     }
 
-    #[cfg(any(test, feature = "ui-capture"))]
+    /// Recent documents of this session only, neither saved nor announced to the system.
     pub(crate) fn session() -> Self {
         Self {
             paths: Vec::new(),

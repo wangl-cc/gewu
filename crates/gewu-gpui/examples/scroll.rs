@@ -9,7 +9,7 @@ use std::{
 };
 
 use gewu_core::Dataset;
-use gewu_gpui::TableView;
+use gewu_gpui::examples::Document;
 use gpui_kit::{test::TestWindowExt, *};
 
 #[path = "scroll/frame.rs"]
@@ -105,7 +105,7 @@ struct Samples {
 }
 
 struct Driver {
-    table: Entity<TableView>,
+    document: Document,
     content_inset: Size<Pixels>,
     samples: Rc<Samples>,
     phase: usize,
@@ -119,9 +119,9 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(table: Entity<TableView>, rows: u64, duration: Duration) -> Self {
+    fn new(document: Document, rows: u64, duration: Duration) -> Self {
         Self {
-            table,
+            document,
             content_inset: Size::default(),
             samples: Rc::default(),
             phase: 0,
@@ -229,10 +229,7 @@ impl Driver {
         self.samples.pending.set(now - self.start >= WARMUP);
         let row = self.workload.advance(self.phase);
         self.submitted += 1;
-        self.table.update(cx, |t, cx| {
-            t.scroll_to_row(row);
-            cx.notify();
-        });
+        self.document.scroll_to_row(row, cx);
         cx.notify();
         Ok(true)
     }
@@ -259,7 +256,7 @@ impl Render for Driver {
             .pr(self.content_inset.width)
             .pb(self.content_inset.height)
             .relative()
-            .child(self.table.clone())
+            .child(self.document.view())
             .child(
                 canvas(
                     |_, _, _| (),
@@ -283,6 +280,12 @@ async fn run(
     cx: &mut AsyncWindowContext,
 ) -> Result<()> {
     let pause = Duration::from_millis(120);
+    for _ in 0..500 {
+        if driver.read_with(cx, |d, cx| d.document.is_loaded(cx)) {
+            break;
+        }
+        cx.background_executor().timer(pause).await;
+    }
     if opts.grid.is_none() {
         cx.update(|window, _| window.toggle_simple_fullscreen())?;
     }
@@ -349,7 +352,6 @@ async fn run(
         geometry.row_height as f32 / w.scale_factor(), geometry.full_rows(), geometry.columns.len()))?;
     if opts.verify {
         let view = dataset.unfiltered().unsorted();
-        let table = driver.read_with(cx, |d, _| d.table.clone());
         let jump_capture = opts.capture.as_ref().map(|p| p.with_extension("jump.png"));
         for (mode, label) in MODES.iter().enumerate() {
             let mut workload = Workload::new(rows);
@@ -364,10 +366,7 @@ async fn run(
                 };
                 let (cells, cost) = cx.update(|window, cx| -> Result<_> {
                     let start = Instant::now();
-                    table.update(cx, |t, cx| {
-                        t.scroll_to_row(row);
-                        cx.notify();
-                    });
+                    driver.update(cx, |d, cx| d.document.scroll_to_row(row, cx));
                     window.render_frame(cx);
                     let cost = start.elapsed();
                     let cells = geometry.verify(window, &view, row, capture)?;
@@ -387,10 +386,7 @@ async fn run(
         }
         if let Some(path) = opts.capture {
             cx.update(|window, cx| -> Result<()> {
-                table.update(cx, |t, cx| {
-                    t.scroll_to_row(1);
-                    cx.notify();
-                });
+                driver.update(cx, |d, cx| d.document.scroll_to_row(1, cx));
                 window.render_frame(cx);
                 geometry.capture_drag(window, cx, &path.with_extension("selection.png"))
             })??;
@@ -447,7 +443,7 @@ fn main() -> Result<()> {
         return Err("scrolling benchmark requires at least 100 rows and two columns".into());
     }
     gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
+        gewu_gpui::examples::init(cx);
         cx.set_activation_policy(ActivationPolicy::Regular);
         cx.activate(true);
         let bounds = Bounds::centered(None, opts.grid.unwrap_or(size(px(1280.), px(800.))), cx);
@@ -456,11 +452,10 @@ fn main() -> Result<()> {
             ..Default::default()
         };
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
-            window.set_window_title("Gewu scrolling benchmark");
-            let table = cx.new(|cx| TableView::from_dataset(dataset.clone(), window, cx));
+            let document = Document::open(opts.path.clone(), window, cx);
             let driver = cx.new(|_| {
                 Driver::new(
-                    table,
+                    document,
                     dataset.n_rows() as u64,
                     Duration::from_secs(u64::from(opts.count)),
                 )

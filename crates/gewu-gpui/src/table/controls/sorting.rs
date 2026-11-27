@@ -7,7 +7,7 @@ use super::{ColumnDrag, Drawer, Order, TableView, button};
 use crate::panels::choice::{Choice, ChoiceField, column_labels};
 
 impl TableView {
-    pub(in crate::table) fn open_sort(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_sort(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_panel(window, cx);
         self.controls.drawer = Some(Drawer::Sort { summary: false });
         self.controls.menu = None;

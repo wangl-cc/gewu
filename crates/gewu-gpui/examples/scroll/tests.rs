@@ -1,7 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use gewu_core::Dataset;
-use gewu_gpui::TableView;
+use gewu_gpui::examples::Document;
 use gpui_kit::{
     AppContext, Bounds, OperatingSystem, PlatformInfo, PlatformTarget, Point, TestAppContext,
     VisualTestContext, WindowBounds, WindowOptions, px, size, test::TestWindowExt,
@@ -18,14 +17,13 @@ fn retina_grid_fits_inside_a_whole_point_window() {
         csv.push_str("1,2,3,4,5,6,7,8,9,10\n");
     }
     std::fs::write(&path, csv).unwrap();
-    let data = Arc::new(Dataset::open(path).unwrap());
     let mut app = TestAppContext::single();
     app.set_platform_info(PlatformInfo {
         os: OperatingSystem::Mac,
         target: PlatformTarget::Native,
     });
     let (handle, driver) = app.update(|cx| {
-        gpui_kit::init(cx);
+        gewu_gpui::examples::init(cx);
         let opts = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 Point::default(),
@@ -34,8 +32,8 @@ fn retina_grid_fits_inside_a_whole_point_window() {
             ..Default::default()
         };
         gpui_kit::open_window(opts, cx, |w, cx| {
-            let table = cx.new(|cx| TableView::from_dataset(data.clone(), w, cx));
-            cx.new(|_| Driver::new(table, data.n_rows() as u64, Duration::from_secs(1)))
+            let document = Document::open(path.clone(), w, cx);
+            cx.new(|_| Driver::new(document, 150, Duration::from_secs(1)))
         })
         .unwrap()
     });

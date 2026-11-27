@@ -1,17 +1,14 @@
 use std::path::Path;
 
 use gpui_kit::{
-    AppContext, Bounds, Entity, Modifiers, OperatingSystem, Pixels, PlatformInfo, PlatformTarget,
-    Point, TestAppContext, VisualTestContext, WindowBounds, WindowOptions, point, px, size,
-    test::TestWindowExt,
+    Entity, Modifiers, OperatingSystem, Pixels, PlatformInfo, PlatformTarget, Point,
+    TestAppContext, VisualTestContext, point, px, size, test::TestWindowExt,
 };
 
 use super::{HEADER_HEIGHT, ROW_HEIGHT, TableView};
-use crate::{
-    actions,
-    table::{data::TableData, selection::Selection},
-};
+use crate::table::selection::Selection;
 
+/// A document window opened the way the app opens a file, driven through its table.
 pub(super) struct TableWindow {
     pub app: TestAppContext,
     pub ui: VisualTestContext,
@@ -25,31 +22,25 @@ impl TableWindow {
             os: OperatingSystem::Mac,
             target: PlatformTarget::Native,
         });
-        let (window, table) = app.update(|cx| {
-            gpui_kit::init(cx);
-            actions::init(cx);
-            cx.set_global(crate::preferences::Preferences {
-                row_height: ROW_HEIGHT,
-                show_inspector: false,
-                copy_includes_headers: false,
-                ..Default::default()
-            });
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    Point::default(),
-                    size(px(680.), px(420.)),
-                ))),
-                ..Default::default()
-            };
-            let data = TableData::open(path.to_str().unwrap()).unwrap();
-            gpui_kit::open_window(options, cx, |window, cx| {
-                let table = cx.new(|cx| TableView::new(data, window, cx));
-                let focus = table.read(cx).focus.clone();
-                window.focus(&focus, cx);
-                table
-            })
+        let (window, document) = app.update(|cx| {
+            crate::shell::init_session(
+                crate::preferences::Preferences {
+                    row_height: ROW_HEIGHT,
+                    show_inspector: false,
+                    copy_includes_headers: false,
+                    ..Default::default()
+                },
+                cx,
+            );
+            crate::shell::open_document_with_size(
+                path.to_path_buf(),
+                Some(size(px(680.), px(420.))),
+                cx,
+            )
             .unwrap()
         });
+        app.run_until_parked();
+        let table = app.read(|cx| document.read(cx).table().unwrap());
         let ui = VisualTestContext::from_window(window, &app);
         let mut window = Self { app, ui, table };
         window.settle();

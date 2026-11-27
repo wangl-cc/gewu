@@ -65,11 +65,10 @@ pub fn installed_theme_id(cx: &App) -> Option<&'static str> {
         .map(|theme| theme.id)
 }
 
-/// Keeps a headless document session's open-URL channel alive for its lifetime.
+/// A document window in a headless capture session.
 pub struct DocumentSession {
     pub window: AnyWindowHandle,
     document: Entity<shell::document::Document>,
-    _open_urls: async_channel::Sender<Vec<PathBuf>>,
 }
 
 /// Returns Gewu's bundled asset source for headless screenshot rendering.
@@ -83,17 +82,9 @@ pub fn open_document(
     window_size: Option<Size<Pixels>>,
     cx: &mut App,
 ) -> Option<DocumentSession> {
-    gpui_kit::init(cx);
-    actions::init(cx);
-    cx.set_global(preferences::Preferences::default());
-    let (send, recv) = async_channel::unbounded();
-    shell::install_file_actions(platform::RecentDocuments::session(), recv, cx);
+    shell::init_session(preferences::Preferences::default(), cx);
     let (window, document) = shell::open_document_with_size(path, window_size, cx)?;
-    Some(DocumentSession {
-        window,
-        document,
-        _open_urls: send,
-    })
+    Some(DocumentSession { window, document })
 }
 
 /// Opens (or focuses) the Settings window.
