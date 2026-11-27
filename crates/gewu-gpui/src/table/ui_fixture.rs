@@ -83,7 +83,7 @@ impl TableWindow {
         self.read(|t| {
             t.layout.bounds.origin
                 + point(
-                    px(t.column_left(column).unwrap() + 10.),
+                    px(t.layout.column_left(column).unwrap() + 10.),
                     px(HEADER_HEIGHT + t.layout.vertical.row_top(row) as f32 + ROW_HEIGHT / 2.),
                 )
         })
@@ -93,14 +93,14 @@ impl TableWindow {
         self.read(|t| {
             t.layout.bounds.origin
                 + point(
-                    px(t.column_left(column).unwrap() + 10.),
+                    px(t.layout.column_left(column).unwrap() + 10.),
                     px(HEADER_HEIGHT / 2.),
                 )
         })
     }
 
     pub fn selection(&self) -> Option<Selection> {
-        self.read(|t| t.selection)
+        self.read(|t| t.grid.selection())
     }
 
     pub fn source_rows(&self) -> Vec<u64> {

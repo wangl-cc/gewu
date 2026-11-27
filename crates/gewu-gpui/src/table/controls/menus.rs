@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use super::{Cell, Drawer, Selection, TableView, button};
-use crate::table::{HEADER_HEIGHT, TableEvent};
+use crate::table::{HEADER_HEIGHT, TableEvent, grid::GridHit};
 
 #[derive(Clone, Copy)]
 struct MenuTarget {
@@ -110,20 +110,16 @@ impl TableView {
     ) {
         self.commit_grid_layout(cx);
         let local = event.position - self.layout.bounds.origin;
-        if self.scrollbar_at(local, self.show_scrollbars(cx)).is_some() {
-            return;
-        }
-        let x = local.x.as_f32();
-        let y = local.y.as_f32();
-        let Some(column) = self.layout.column_at(x) else {
-            return;
+        let (column, cell) = match self.grid.hit(local, &self.layout, self.show_scrollbars(cx)) {
+            GridHit::Cell(cell) => (cell.column, Some(cell)),
+            GridHit::Header(part) => (part.column(), None),
+            GridHit::Scrollbar(..) | GridHit::Outside => return,
         };
-        let cell = self.layout.cell_at(x, y);
-        if cell.is_none() && !(0.0..HEADER_HEIGHT).contains(&y) {
-            return;
-        }
         if let Some(cell) = cell
-            && !self.selection.is_some_and(|s| s.rows().contains(&cell.row))
+            && !self
+                .grid
+                .selection()
+                .is_some_and(|s| s.rows().contains(&cell.row))
         {
             self.set_selection(Some(Selection::single(cell)), cx);
         }
@@ -291,7 +287,10 @@ impl TableView {
         };
         let anchor = self.layout.bounds.origin
             + point(
-                px(self.column_left(cell.column).unwrap_or(self.layout.gutter)),
+                px(self
+                    .layout
+                    .column_left(cell.column)
+                    .unwrap_or(self.layout.gutter)),
                 px(HEADER_HEIGHT + self.layout.vertical.row_top(cell.row + 1) as f32 + 4.),
             );
         self.set_selection(Some(Selection::single(cell)), cx);

@@ -1,4 +1,4 @@
-use super::*;
+use super::{layout::FUNNEL_WIDTH, *};
 
 pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
     let l = &frame.layout;
@@ -273,10 +273,17 @@ pub(super) fn paint(frame: Frame, window: &mut Window, cx: &mut App) {
                         }
                         if let Some(active) = header.funnel {
                             let color = if active { colors.accent } else { muted };
-                            let left = right - PAD - 9.;
-                            for (dy, line_width) in [(0., 10.), (2., 7.), (4., 4.), (6., 2.)] {
+                            let left = Layout::funnel_left(right);
+                            for (dy, line_width) in
+                                [(0., FUNNEL_WIDTH), (2., 7.), (4., 4.), (6., 2.)]
+                            {
                                 window.paint_quad(fill(
-                                    rect(left + (10. - line_width) / 2., 11. + dy, line_width, 2.),
+                                    rect(
+                                        left + (FUNNEL_WIDTH - line_width) / 2.,
+                                        11. + dy,
+                                        line_width,
+                                        2.,
+                                    ),
                                     color,
                                 ));
                             }

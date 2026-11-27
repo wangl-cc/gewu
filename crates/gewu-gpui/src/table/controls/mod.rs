@@ -107,8 +107,7 @@ enum Drawer {
 
 impl TableView {
     pub(super) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
-        if self.selection != selection {
-            self.selection = selection;
+        if self.grid.select(selection) {
             cx.emit(TableEvent::SelectionChanged);
         }
     }
@@ -132,7 +131,7 @@ impl TableView {
             return false;
         };
         self.set_selection(Some(Selection::single(cell)), cx);
-        self.scroll.center_if_outside(cell.row);
+        self.grid.center_if_outside(cell.row);
         self.reveal(cell);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -141,7 +140,7 @@ impl TableView {
 
     /// The column and source row of a single selected cell, independent of column order.
     pub(crate) fn selected_source_cell(&self) -> Option<(ColumnId, SourceRow)> {
-        let selection = self.selection.filter(|s| s.anchor == s.head)?;
+        let selection = self.grid.selection().filter(|s| s.anchor == s.head)?;
         let column = self.data.columns.get(selection.head.column)?.id;
         let row = self
             .data
@@ -161,7 +160,7 @@ impl TableView {
 
     /// Row or column coordinates changed. Drop interactions tied to the old grid.
     pub(super) fn grid_changed(&mut self, cx: &mut Context<Self>) {
-        self.reset_grid_interaction();
+        self.grid.reset_interaction();
         self.controls.menu = None;
         if matches!(self.controls.drawer, Some(Drawer::Cell { .. })) {
             self.controls.drawer = None;
@@ -202,7 +201,7 @@ impl TableView {
     }
 
     pub(crate) fn selected_column(&self) -> Option<ColumnId> {
-        let index = self.selection.map_or(0, |s| s.head.column);
+        let index = self.grid.selection().map_or(0, |s| s.head.column);
         self.data.columns.get(index).map(|column| column.id)
     }
 

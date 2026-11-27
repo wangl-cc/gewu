@@ -42,7 +42,7 @@ impl TableView {
     }
 
     pub(crate) fn filter_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(cell) = self.selection.map(|s| s.head) else {
+        let Some(cell) = self.grid.selection().map(|s| s.head) else {
             self.notice = Some(Notice::SelectCellToFilter);
             cx.notify();
             return;
@@ -95,7 +95,7 @@ impl TableView {
             QueryCompletion::Run(next) => return Some(next),
             QueryCompletion::Ignored => return None,
             QueryCompletion::Installed => {
-                self.scroll.set_rows(self.data.row_count());
+                self.grid.set_rows(self.data.row_count());
                 self.set_selection(None, cx);
                 self.apply_pending_hides(cx);
                 self.grid_changed(cx);

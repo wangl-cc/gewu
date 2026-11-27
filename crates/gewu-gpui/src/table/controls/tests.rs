@@ -482,7 +482,7 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
     let score_divider = w.read(|t| {
         t.layout.bounds.origin
             + point(
-                px(t.column_left(1).unwrap() + t.data.columns.width(1)),
+                px(t.layout.column_left(1).unwrap() + t.data.columns.width(1)),
                 px(16.),
             )
     });
@@ -537,7 +537,8 @@ fn restoring_column_order_preserves_the_query_selection_widths_and_visibility() 
         Arc::ptr_eq(&view, t.data.view())
             && t.data.columns.len() == 2
             && t.data.columns.width(1) == width
-            && t.selection
+            && t.grid
+                .selection()
                 .is_some_and(|s| s.head.column == 1 && s.head.row == 0)
     }));
 }
@@ -638,7 +639,7 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
 
     for col in [3, 0, 6] {
         let (center, right, bottom) = w.read(|t| {
-            let left = t.layout.bounds.left() + px(t.column_left(col).unwrap());
+            let left = t.layout.bounds.left() + px(t.layout.column_left(col).unwrap());
             let width = px(t.column_width(col));
             (
                 left + width / 2.,
@@ -676,8 +677,9 @@ fn filter_popover_centers_on_its_column_and_stays_inside_the_window() {
         ..Default::default()
     });
     w.settle();
-    let header =
-        w.read(|t| t.layout.bounds.left() + px(t.column_left(3).unwrap() + t.column_width(3) / 2.));
+    let header = w.read(|t| {
+        t.layout.bounds.left() + px(t.layout.column_left(3).unwrap() + t.column_width(3) / 2.)
+    });
     let after =
         w.ui.update(|window, _| window.find("filter-editor").bounds());
     assert!(after.left() < before.left());

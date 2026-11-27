@@ -107,7 +107,8 @@ pub(super) fn rows(table: &mut TableView, frame: &Frame, cx: &Context<TableView>
             };
             let id = table.data.columns[column].id;
             let selected = table
-                .selection
+                .grid
+                .selection()
                 .filter(|s| s.rows().contains(&row) && s.columns().contains(&column));
             let mut node = div()
                 .id(("column", id.into_raw()))

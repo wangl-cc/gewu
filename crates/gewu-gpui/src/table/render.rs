@@ -27,7 +27,7 @@ fn formatting_alert(message: SharedString, cx: &App) -> AnyElement {
 
 impl Render for TableView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dragging = !matches!(self.drag, Drag::None);
+        let dragging = self.grid.is_dragging();
         let entity = cx.entity();
         let publish = entity.downgrade();
         let pending_layout = Rc::clone(&self.pending_layout);
@@ -55,18 +55,7 @@ impl Render for TableView {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::context_menu))
             .on_mouse_move(cx.listener(Self::mouse_move))
-            .on_hover(cx.listener(|table, hovering, _, cx| {
-                if !hovering
-                    && (table.header_hover.is_some()
-                        || table.thumb_hover.is_some()
-                        || table.body_pointer.is_some())
-                {
-                    table.header_hover = None;
-                    table.thumb_hover = None;
-                    table.body_pointer = None;
-                    cx.notify();
-                }
-            }))
+            .on_hover(cx.listener(Self::mouse_left))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_scroll(cx.listener(Self::scroll_wheel))

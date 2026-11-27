@@ -27,7 +27,7 @@ impl TableView {
                 .child(format!("{row_count} · {columns}"))
                 .into_any_element(),
         ];
-        if let Some(selection) = self.selection {
+        if let Some(selection) = self.grid.selection() {
             items.push(
                 div()
                     .min_w_0()
@@ -57,7 +57,7 @@ impl TableView {
             );
         }
         match &self.notice {
-            Some(Notice::SelectCellToFilter) if self.selection.is_none() => {
+            Some(Notice::SelectCellToFilter) if self.grid.selection().is_none() => {
                 items.push(
                     div()
                         .min_w_0()
@@ -189,7 +189,7 @@ impl TableView {
                         .on_click(cx.listener(move |t, _, w, cx| {
                             t.commit_grid_layout(cx);
                             if let Some(column) = t.data.columns.position(id) {
-                                let row = t.selection.map(|s| s.head.row).unwrap_or(0);
+                                let row = t.grid.selection().map(|s| s.head.row).unwrap_or(0);
                                 let cell = Cell {
                                     column: column.index(),
                                     row,

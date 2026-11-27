@@ -166,3 +166,7 @@ impl Index<usize> for TableColumns {
         &self.entry(index).info
     }
 }
+
+#[cfg(test)]
+#[path = "columns_fixture.rs"]
+pub(super) mod fixture;

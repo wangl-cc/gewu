@@ -14,7 +14,8 @@ impl TableView {
             visible_rows.end - visible_rows.start,
             "the viewport must fit the displayed view"
         );
-        let selected_rows = self.selection.map(|s| s.rows());
+        let selection = self.grid.selection();
+        let selected_rows = selection.map(|s| s.rows());
         let rows: Vec<_> = visible_rows
             .zip(sources)
             .map(|(row, source)| FrameRow {
@@ -118,11 +119,10 @@ impl TableView {
                     }
                 });
                 let filtered = self.data.query().filters.iter().any(|f| f.column == id);
-                let selected = self
-                    .selection
-                    .is_some_and(|s| s.columns().contains(&column));
-                let show =
-                    filtered || self.header_hover == Some(HeaderHover::Column(column)) || selected;
+                let selected = selection.is_some_and(|s| s.columns().contains(&column));
+                let show = filtered
+                    || self.grid.header_hover() == Some(HeaderHover::Column(column))
+                    || selected;
                 PaintHeader {
                     name,
                     kind: self.data.columns[column].display_type.clone().into(),
@@ -139,26 +139,18 @@ impl TableView {
             (y1 > HEADER_HEIGHT && y0 < layout.body_bottom())
                 .then(|| Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))))
         };
-        let selection = self
-            .selection
-            .and_then(|s| cell_bounds(s.rows(), s.columns()));
-        let head = self.selection.and_then(|s| {
+        let head = selection.and_then(|s| {
             cell_bounds(s.head.row..s.head.row + 1, s.head.column..s.head.column + 1)
         });
+        let hovered_row_y = self.grid.hovered_cell(&layout).map(|cell| row_y(cell.row));
+        let selection = selection.and_then(|s| cell_bounds(s.rows(), s.columns()));
         Frame {
             formatting_error,
+            hovered_row_y,
             style: self.prefs,
-            active_thumb: match self.drag {
-                Drag::Scrollbar { axis, .. } => Some(axis),
-                _ => self.thumb_hover,
-            },
-            header_hover: self.header_hover,
+            active_thumb: self.grid.active_thumb(),
+            header_hover: self.grid.header_hover(),
             show_scrollbars: self.show_scrollbars(cx),
-            hovered_row_y: self.body_pointer.and_then(|point| {
-                layout
-                    .cell_at(point.x.as_f32(), point.y.as_f32())
-                    .map(|cell| row_y(cell.row))
-            }),
             layout,
             header,
             rows,

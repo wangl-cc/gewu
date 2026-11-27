@@ -203,6 +203,48 @@ impl Layout {
         Some((first.1, last.1 + last.2))
     }
 
+    /// The left edge of the funnel glyph in the header of the column ending at `right`.
+    pub(super) fn funnel_left(right: f32) -> f32 {
+        right - PAD + 1. - FUNNEL_WIDTH
+    }
+
+    /// The divider band around the right edge of a visible column, clipped to the body.
+    pub(super) fn divider_band(&self, column: usize) -> Option<(f32, f32)> {
+        let &(_, left, width) = self.columns.iter().find(|c| c.0 == column)?;
+        let edge = left + width;
+        let start = (edge - RESIZE_SLOP).max(self.gutter);
+        let end = (edge + RESIZE_SLOP).min(self.body_right());
+        (end > start).then_some((start, end))
+    }
+
+    /// The header part at `x`, for drawing and pointer input alike.
+    pub(super) fn header_part_at(&self, x: f32) -> Option<HeaderPart> {
+        if !(self.gutter..self.body_right()).contains(&x) {
+            return None;
+        }
+        if let Some(&(column, ..)) = self
+            .columns
+            .iter()
+            .find(|&&(_, left, width)| (x - (left + width)).abs() <= RESIZE_SLOP)
+        {
+            return Some(HeaderPart::Divider(column));
+        }
+        let &(column, left, width) = self
+            .columns
+            .iter()
+            .find(|(_, left, width)| (*left..left + width).contains(&x))?;
+        Some(if x >= Self::funnel_left(left + width) - FUNNEL_SLOP {
+            HeaderPart::Funnel(column)
+        } else {
+            HeaderPart::Title(column)
+        })
+    }
+
+    /// The left edge of a visible column.
+    pub(super) fn column_left(&self, column: usize) -> Option<f32> {
+        self.columns.iter().find(|c| c.0 == column).map(|c| c.1)
+    }
+
     pub(super) fn column_at(&self, x: f32) -> Option<usize> {
         if !(self.gutter..self.body_right()).contains(&x) {
             return None;
@@ -270,10 +312,35 @@ fn viewport_size(
         )
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Scrollbar {
     pub track: Bounds<Pixels>,
     pub thumb: Bounds<Pixels>,
 }
+
+/// A part of a visible column's header under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HeaderPart {
+    /// The resize target around the column's right edge.
+    Divider(usize),
+    /// The filter funnel near the right edge, and the slop around it up to the divider.
+    Funnel(usize),
+    /// The rest of the header, which sorts the column.
+    Title(usize),
+}
+
+impl HeaderPart {
+    pub(super) fn column(self) -> usize {
+        match self {
+            Self::Divider(column) | Self::Funnel(column) | Self::Title(column) => column,
+        }
+    }
+}
+
+/// The funnel glyph's width. It ends one point into the header's right padding.
+pub(super) const FUNNEL_WIDTH: f32 = 10.;
+/// How far left of the glyph a press still opens the filter.
+const FUNNEL_SLOP: f32 = 5.;
 
 struct MeasuredColumn {
     id: gewu_core::ColumnId,
@@ -328,8 +395,8 @@ impl TableView {
                         .get(&index)
                         .map_or_else(|| self.data.columns.width(index), |column| column.width)
                 },
-                &self.scroll,
-                self.horizontal,
+                self.grid.scroll(),
+                self.grid.horizontal(),
                 auto_hide,
             );
         }
@@ -337,14 +404,14 @@ impl TableView {
             layout: Rc::new(layout),
             measured,
             font_size: self.prefs.font_size,
-            horizontal: self.horizontal,
+            horizontal: self.grid.horizontal(),
         }
     }
 
     pub(super) fn grid_layout_changed(&self, frame: &GridFrameLayout) -> bool {
         self.layout != frame.layout
             || !frame.measured.is_empty()
-            || self.horizontal != HorizontalScroll::Offset(frame.layout.scroll_x)
+            || self.grid.horizontal() != HorizontalScroll::Offset(frame.layout.scroll_x)
     }
 
     pub(super) fn commit_grid_layout(&mut self, cx: &mut Context<Self>) {
@@ -368,10 +435,7 @@ impl TableView {
                 }
             }
         }
-        self.scroll.set_viewport(frame.layout.vertical.viewport());
-        if self.horizontal == frame.horizontal {
-            self.horizontal = HorizontalScroll::Offset(frame.layout.scroll_x);
-        }
+        self.grid.commit(&frame.layout, frame.horizontal);
         let find_viewport_changed = frame.layout.highlight_blocks()
             != self.layout.highlight_blocks()
             || frame.layout.visible_columns() != self.layout.visible_columns();

@@ -466,7 +466,7 @@ impl TableView {
         update: impl FnOnce(&mut TableColumns) -> bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let selected = self.selection.map(|s| {
+        let selected = self.grid.selection().map(|s| {
             (
                 s,
                 self.data.columns[s.anchor.column].id,

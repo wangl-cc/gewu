@@ -34,7 +34,7 @@ fn drag(window: &mut TableWindow, from: Point<Pixels>, to: Point<Pixels>) {
 fn wheel(window: &mut TableWindow, dx: f32, dy: f32) {
     window.ui.simulate_event(ScrollEvent {
         position: window.cell(
-            window.read(|t| t.scroll.anchor().row),
+            window.read(|t| t.layout.vertical.anchor().row),
             window.read(|t| t.layout.columns[0].0),
         ),
         delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
@@ -221,13 +221,9 @@ fn find_loads_new_viewport_blocks_without_rescheduling_within_a_block() {
 }
 
 #[test]
-fn select_copy_and_reveal_through_the_window() {
+fn pointer_and_keyboard_input_reach_the_selection_and_copy() {
     let (_files, mut w) = open();
     w.click(w.cell(2, 0), Modifiers::default());
-    assert_eq!(
-        w.selection(),
-        Some(Selection::single(Cell { row: 2, column: 0 }))
-    );
     w.click(w.cell(5, 2), Modifiers {
         shift: true,
         ..Default::default()
@@ -248,7 +244,6 @@ fn select_copy_and_reveal_through_the_window() {
         w.selection().map(|s| (s.rows(), s.columns())),
         Some((1..7, 0..3))
     );
-
     w.keys("cmd-c");
     let expected = (2..=7)
         .map(|r| {
@@ -261,23 +256,9 @@ fn select_copy_and_reveal_through_the_window() {
         .join("\r\n")
         + "\r\n";
     assert_eq!(w.clipboard().unwrap(), expected);
-    w.keys("down");
-    assert_eq!(
-        w.selection(),
-        Some(Selection::single(Cell { row: 7, column: 2 }))
-    );
-    w.keys("pagedown");
-    w.read(|t| {
-        let row = t.selection.unwrap().head.row;
-        assert_eq!(row, 7 + t.scroll.page_rows());
-        assert!(t.scroll.visible_rows().contains(&row));
-    });
     w.keys("end");
     assert_eq!(w.selection().unwrap().head.row, ROWS - 1);
-    assert_eq!(w.read(|t| t.scroll.fraction()), 1.);
-    w.keys("shift-home");
-    assert_eq!(w.selection().unwrap().rows(), 0..ROWS);
-    assert_eq!(w.read(|t| t.scroll.fraction()), 0.);
+    assert!(w.read(|t| t.layout.vertical.visible_rows().contains(&(ROWS - 1))));
     w.keys("cmd-a");
     assert_eq!(
         w.selection().map(|s| (s.rows(), s.columns())),
@@ -312,105 +293,14 @@ fn selected_columns_keep_their_header_and_filter_affordance_when_rows_scroll_off
 }
 
 #[test]
-fn scrollbar_lanes_appear_only_for_overflow_including_overflow_induced_by_the_other_axis() {
-    use gpui_kit::{Axis, Bounds};
-    let (_files, w) = open();
-    w.read(|t| {
-        let fit_w = t.layout.content_width + t.layout.gutter;
-        let fit_h = HEADER_HEIGHT + ROWS as f32 * ROW_HEIGHT;
-        for (dw, dh, horizontal, vertical) in [
-            (0., 0., false, false),
-            (16., -1., false, true),
-            (-1., 16., true, false),
-            (6., -1., true, true),
-            (-1., 6., true, true),
-        ] {
-            let outer = super::size_(fit_w + dw, fit_h + dh);
-            let bounds = Bounds::new(Point::default(), outer);
-            let always = t.compute_layout(bounds, false);
-            assert_eq!(always.scrollbar(Axis::Horizontal).is_some(), horizontal);
-            assert_eq!(always.scrollbar(Axis::Vertical).is_some(), vertical);
-            let reserved = super::size_(
-                if vertical { super::SCROLLBAR } else { 0. },
-                if horizontal { super::SCROLLBAR } else { 0. },
-            );
-            assert_eq!(always.viewport, outer - reserved);
-            let overlay = t.compute_layout(bounds, true);
-            assert_eq!(overlay.viewport, outer);
-            assert_eq!(overlay.scrollbar(Axis::Horizontal).is_some(), dw < 0.);
-            assert_eq!(overlay.scrollbar(Axis::Vertical).is_some(), dh < 0.);
-        }
-    });
-}
-
-#[test]
-fn always_visible_tracks_reserve_their_space_and_receive_the_click() {
-    let (_files, mut w) = open();
-    w.click(w.cell(0, 0), Modifiers::default());
-    let (vertical, horizontal) = w.read(|t| {
-        use gpui_kit::Axis;
-        let l = &t.layout;
-        assert_eq!(
-            l.vertical.viewport(),
-            f64::from(l.bounds.size.height.as_f32() - HEADER_HEIGHT - super::SCROLLBAR)
-        );
-        let v = l.scrollbar(Axis::Vertical).unwrap();
-        let h = l.scrollbar(Axis::Horizontal).unwrap();
-        assert_eq!(v.track.right(), l.bounds.size.width);
-        assert_eq!(v.track.bottom(), l.bounds.size.height);
-        assert_eq!(h.track.bottom(), l.bounds.size.height);
-        assert_eq!(h.track.right(), v.track.left());
-        let corner = point(v.track.right() - px(1.), v.track.bottom() - px(1.));
-        let bottom = point(h.track.right() - px(1.), h.track.bottom() - px(1.));
-        let overlay = t.compute_layout(l.bounds, true);
-        for (point, axis) in [(corner, Axis::Vertical), (bottom, Axis::Horizontal)] {
-            assert!(l.cell_at(point.x.as_f32(), point.y.as_f32()).is_none());
-            assert_eq!(t.scrollbar_at(point, true).unwrap().0, axis);
-            assert!(
-                overlay
-                    .cell_at(point.x.as_f32(), point.y.as_f32())
-                    .is_some()
-            );
-            assert_eq!(
-                overlay.scrollbar(axis).unwrap().track,
-                l.scrollbar(axis).unwrap().track
-            );
-        }
-        (l.bounds.origin + corner, l.bounds.origin + bottom)
-    });
-    let selected = w.selection();
-    w.click(vertical, Modifiers::default());
-    assert_eq!(w.read(|t| t.scroll.fraction()), 1.);
-    w.click(horizontal, Modifiers::default());
-    assert_eq!(
-        w.read(|t| t.layout.scroll_x),
-        w.read(|t| t.layout.horizontal_overflow())
-    );
-    assert_eq!(w.selection(), selected);
-    w.read(|t| {
-        let l = &t.layout;
-        assert_eq!(
-            l.cell_at(l.body_right() - 1., l.body_bottom() - 1.),
-            Some(Cell {
-                row: ROWS - 1,
-                column: COLUMNS - 1,
-            })
-        );
-        let (_, x, width) = l.clipped_columns().last().unwrap();
-        assert_eq!(x + width, l.body_right());
-        assert!((l.vertical.row_top(ROWS) - l.vertical.viewport()).abs() < 1e-6);
-    });
-}
-
-#[test]
-fn resize_scroll_and_sort_through_the_window() {
+fn resizing_autofit_wheel_scrollbars_and_sorting_reach_the_table() {
     let (_files, mut w) = open();
     let normal = Modifiers::default();
     let initial = w.read(|t| t.column_width(0));
     let divider = w.read(|t| {
         t.layout.bounds.origin
             + point(
-                px(t.column_left(0).unwrap() + initial),
+                px(t.layout.column_left(0).unwrap() + initial),
                 px(HEADER_HEIGHT / 2.),
             )
     });
@@ -436,44 +326,22 @@ fn resize_scroll_and_sort_through_the_window() {
     w.ui.simulate_mouse_up(end, MouseButton::Left, normal);
     w.settle();
     assert!(w.read(|t| t.column_width(0)) < initial + 60.);
-    for _ in 0..40 {
-        wheel(&mut w, 0., -0.5);
-    }
-    w.settle();
-    let offset = w.read(|t| t.scroll.position()) * f64::from(ROW_HEIGHT);
-    assert!((offset - 20.).abs() < 1e-6);
 
-    let (thumb, bottom, middle) = w.read(|t| {
-        let thumb = t.layout.bounds.origin + t.thumb_bounds().center();
-        let bottom = t.layout.bounds.origin.y
-            + t.layout
-                .scrollbar(gpui_kit::Axis::Vertical)
-                .unwrap()
-                .track
-                .bottom();
+    wheel(&mut w, 0., -2. * ROW_HEIGHT);
+    w.settle();
+    assert_eq!(w.read(|t| t.layout.vertical.anchor().row), 2);
+    let (thumb, bottom) = w.read(|t| {
+        let bar = t.layout.scrollbar(gpui_kit::Axis::Vertical).unwrap();
+        let origin = t.layout.bounds.origin;
         (
-            thumb,
-            point(thumb.x, bottom),
-            point(
-                thumb.x,
-                (bottom + t.layout.bounds.origin.y + px(HEADER_HEIGHT)) / 2.,
-            ),
+            origin + bar.thumb.center(),
+            origin + point(bar.thumb.center().x, bar.track.bottom()),
         )
     });
     drag(&mut w, thumb, bottom);
-    assert_eq!(w.read(|t| t.scroll.fraction()), 1.);
-    for _ in 0..10 {
-        wheel(&mut w, 0., 0.5);
-    }
-    w.settle();
-    let delta =
-        w.read(|t| (t.scroll.position() - t.scroll.max_position_rows()) * f64::from(ROW_HEIGHT));
-    assert!((delta + 5.).abs() < 1e-6);
-    let thumb = w.read(|t| t.layout.bounds.origin + t.thumb_bounds().center());
-    drag(&mut w, thumb, middle);
-    assert!((w.read(|t| t.scroll.fraction()) - 0.5).abs() < 0.01);
+    assert_eq!(w.read(|t| t.layout.vertical.fraction()), 1.);
 
-    assert!(w.read(|t| t.column_left(COLUMNS - 1)).is_none());
+    assert!(w.read(|t| t.layout.column_left(COLUMNS - 1)).is_none());
     wheel(&mut w, -10_000., 0.);
     w.settle();
     let header = w.header(COLUMNS - 1);

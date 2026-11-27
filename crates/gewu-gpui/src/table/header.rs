@@ -31,28 +31,27 @@ impl Render for HeaderTip {
 
 impl TableView {
     pub(super) fn hover_target(&self, l: &Layout) -> Option<AnyElement> {
-        let hover = self.header_hover?;
-        let (HeaderHover::Column(index) | HeaderHover::Divider(index)) = hover;
+        let index = match self.grid.header_hover()? {
+            HeaderHover::Divider(index) => {
+                let (start, end) = l.divider_band(index)?;
+                return Some(
+                    div()
+                        .relative()
+                        .size_full()
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(start))
+                                .w(px(end - start))
+                                .h(px(HEADER_HEIGHT))
+                                .cursor(CursorStyle::ResizeColumn),
+                        )
+                        .into_any_element(),
+                );
+            }
+            HeaderHover::Column(index) => index,
+        };
         let &(_, left, width) = l.columns.iter().find(|c| c.0 == index)?;
-        if matches!(hover, HeaderHover::Divider(_)) {
-            let edge = left + width;
-            let start = (edge - RESIZE_SLOP).max(l.gutter);
-            let end = (edge + RESIZE_SLOP).min(l.body_right());
-            return (end > start).then(|| {
-                div()
-                    .relative()
-                    .size_full()
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(start))
-                            .w(px(end - start))
-                            .h(px(HEADER_HEIGHT))
-                            .cursor(CursorStyle::ResizeColumn),
-                    )
-                    .into_any_element()
-            });
-        }
         let column = &self.data.columns[index];
         let start = left.max(l.gutter);
         let end = (left + width).min(l.body_right());

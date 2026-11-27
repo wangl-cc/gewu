@@ -10,11 +10,12 @@ pub(crate) use controls::ExportDraft;
 use data::{TableData, TableQuery, copy_tsv};
 use gewu_core::ColumnSort;
 use gpui_kit::*;
+use grid::{GridModel, HeaderHover};
 use scroll::VerticalScroll;
 use selection::{Cell, Selection};
 
 use crate::{
-    actions::{self, Motion, Navigate},
+    actions::{self, Navigate},
     preferences::Preferences,
 };
 
@@ -27,24 +28,6 @@ const ROW_NUMBER_SIZE: f32 = 11.;
 const PAD: f32 = 8.;
 const RESIZE_SLOP: f32 = 4.;
 const MIN_COLUMN: f32 = 76.;
-
-use layout::HorizontalScroll;
-
-enum Drag {
-    None,
-    Select {
-        edge_pointer: Option<Point<Pixels>>,
-    },
-    Resize {
-        column: usize,
-        start_x: f32,
-        start_width: f32,
-    },
-    Scrollbar {
-        axis: Axis,
-        grab: Pixels,
-    },
-}
 
 /// What the document hosting a table reacts to.
 pub(crate) enum TableEvent {
@@ -64,14 +47,9 @@ pub(crate) struct TableView {
     prefs: Preferences,
     _style_changes: Subscription,
     _window_activation: Subscription,
-    pub(crate) scroll: VerticalScroll,
-    horizontal: HorizontalScroll,
-    selection: Option<Selection>,
-    drag: Drag,
+    grid: GridModel,
+    /// A frame callback is queued to continue a selection drag past the body edge.
     edge_frame_pending: bool,
-    header_hover: Option<HeaderHover>,
-    thumb_hover: Option<Axis>,
-    body_pointer: Option<Point<Pixels>>,
     scrollbar_timer: Option<Task<()>>,
     pub(crate) focus: FocusHandle,
     find: Entity<crate::table::find::FindController>,
@@ -101,12 +79,6 @@ struct PaintCell {
     current_match: bool,
     /// Slice of the frame's text matches belonging to this cell.
     spans: Range<usize>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HeaderHover {
-    Column(usize),
-    Divider(usize),
 }
 
 struct PaintHeader {
@@ -152,9 +124,7 @@ impl TableView {
                 table.data.columns.invalidate_measurements();
             }
             table.prefs = prefs;
-            table
-                .scroll
-                .set_row_height(f64::from(table.prefs.row_height));
+            table.grid.set_row_height(f64::from(table.prefs.row_height));
             cx.notify();
         });
         let scroll = VerticalScroll::new(
@@ -194,18 +164,12 @@ impl TableView {
                 content_width: 0.,
                 vertical: scroll.clone(),
             }),
+            grid: GridModel::new(scroll),
             pending_layout: Rc::default(),
             _find_viewport: cx.subscribe_self(|table, _: &layout::FindViewportChanged, cx| {
                 table.refresh_highlights(cx);
             }),
-            scroll,
-            horizontal: HorizontalScroll::Offset(0.),
-            selection: None,
-            drag: Drag::None,
             edge_frame_pending: false,
-            header_hover: None,
-            thumb_hover: None,
-            body_pointer: None,
             scrollbar_timer: None,
             focus: cx.focus_handle(),
             find,
@@ -228,13 +192,6 @@ impl TableView {
         self.find.update(cx, |find, cx| {
             find.set_viewport(self.layout.vertical.visible_rows(), columns, cx)
         });
-    }
-
-    fn reset_grid_interaction(&mut self) {
-        self.drag = Drag::None;
-        self.header_hover = None;
-        self.thumb_hover = None;
-        self.body_pointer = None;
     }
 
     fn sync_find_columns(&mut self, reordered: bool, cx: &mut Context<Self>) {
@@ -322,15 +279,10 @@ impl TableView {
             bounds,
             gutter,
             &self.data.columns,
-            &self.scroll,
-            self.horizontal,
+            self.grid.scroll(),
+            self.grid.horizontal(),
             auto_hide_scrollbars,
         )
-    }
-
-    #[cfg(test)]
-    pub fn gutter_width(&self) -> f32 {
-        self.layout.gutter
     }
 
     #[cfg(test)]
@@ -338,29 +290,15 @@ impl TableView {
         self.data.columns.width(column)
     }
 
-    fn column_left(&self, column: usize) -> Option<f32> {
-        self.layout
-            .columns
-            .iter()
-            .find(|c| c.0 == column)
-            .map(|c| c.1)
-    }
-
-    #[cfg(test)]
-    fn thumb_bounds(&self) -> Bounds<Pixels> {
-        self.layout.scrollbar(Axis::Vertical).unwrap().thumb
-    }
-
     pub(crate) fn scroll_to_row(&mut self, row: u64) {
-        self.scroll
-            .set_anchor(crate::table::scroll::Anchor { row, offset: 0.0 });
+        self.grid.scroll_to_row(row);
     }
 
     #[cfg(feature = "ui-capture")]
     pub(crate) fn capture_cell_point(&self, column: &str, row: u64) -> Option<Point<Pixels>> {
         let index =
             (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
-        let left = self.column_left(index)?;
+        let left = self.layout.column_left(index)?;
         let row_height = self.layout.vertical.row_height() as f32;
         Some(
             self.layout.bounds.origin
@@ -375,7 +313,7 @@ impl TableView {
     pub(crate) fn capture_header_bounds(&self, column: &str) -> Option<Bounds<Pixels>> {
         let index =
             (0..self.data.columns.len()).find(|&i| self.data.columns.entry(i).label == column)?;
-        let left = self.column_left(index)?;
+        let left = self.layout.column_left(index)?;
         let width = self.data.columns.width(index);
         Some(Bounds::new(
             self.layout.bounds.origin + point(px(left), px(0.)),
@@ -388,19 +326,8 @@ impl TableView {
         (self.data.row_count(), self.data.columns.len())
     }
 
-    fn scroll_x(&self) -> f32 {
-        self.horizontal.offset(
-            &self.data.columns,
-            (self.layout.body_right() - self.layout.gutter).max(0.),
-        )
-    }
-
     pub(crate) fn reveal(&mut self, cell: Cell) {
-        self.scroll.reveal(cell.row);
-        self.horizontal = HorizontalScroll::Reveal {
-            from: self.scroll_x(),
-            column: self.data.columns[cell.column].id,
-        };
+        self.grid.reveal(cell, &self.data.columns, &self.layout);
     }
 
     fn copy_cell_text(&mut self, text: String, cx: &mut Context<Self>) {
@@ -420,7 +347,7 @@ impl TableView {
     }
 
     fn copy(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(selection) = self.selection else {
+        let Some(selection) = self.grid.selection() else {
             return;
         };
         let view = self.data.view().clone();
@@ -458,6 +385,7 @@ pub(crate) mod data;
 mod find;
 mod find_style;
 mod frame;
+mod grid;
 mod header;
 mod input;
 mod layout;

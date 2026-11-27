@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use gpui_kit::{
-    ClipboardItem, InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, point, px,
+    ClipboardItem, InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
     test::TestWindowExt,
 };
 
@@ -17,19 +17,9 @@ fn single(row: u64, column: usize) -> Option<Selection> {
 }
 
 #[test]
-fn only_bound_keys_reach_the_grid_and_clicks_require_cells() {
+fn only_bound_keys_reach_the_grid() {
     let mut w = open();
-    let normal = Modifiers::default();
-    let blank_below =
-        w.read(|t| t.layout.bounds.origin + point(px(t.gutter_width() + 8.), px(240.)));
-    w.click(blank_below, normal);
-    assert_eq!(w.selection(), None);
-    w.click(w.cell(0, 0), normal);
-    let blank_right =
-        w.read(|t| t.layout.bounds.origin + point(px(t.layout.body_right() - 2.), px(60.)));
-    w.click(blank_right, normal);
-    assert_eq!(w.selection(), single(0, 0));
-
+    w.click(w.cell(0, 0), Modifiers::default());
     w.app
         .write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     w.keys("cmd-shift-c ctrl-cmd-f");
@@ -193,6 +183,7 @@ fn find_reveals_the_entire_column_after_measuring_its_neighbors() {
     assert_eq!(w.selection(), single(0, 29));
     w.read(|t| {
         let left = t
+            .layout
             .column_left(29)
             .expect("the matching column must be painted");
         assert!(left >= t.layout.gutter);

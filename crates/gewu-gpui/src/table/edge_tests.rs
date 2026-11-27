@@ -298,7 +298,7 @@ fn copying_a_cell_supersedes_an_unfinished_row_copy() {
         window.press("cmd-c", cx);
         w.table.update(cx, |t, cx| {
             assert!(t.copy_task.is_some());
-            let cell = t.selection.unwrap().head;
+            let cell = t.grid.selection().unwrap().head;
             let text = t.data.cell(cell.column, cell.row).unwrap().unwrap();
             t.copy_cell_text(text.to_string(), cx);
         });
