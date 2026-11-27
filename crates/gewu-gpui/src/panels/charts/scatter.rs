@@ -4,7 +4,10 @@ use gewu_core::{AxisScale, ScatterResult, SourceRow};
 use gpui_kit::{base::TestSupportExt, *};
 
 use super::axis::{Axis, seconds};
-use crate::{actions::RevealScatterPoint, preferences::Preferences};
+use crate::{
+    actions::{NextPoint, PreviousPoint, RevealPoint, RevealScatterPoint},
+    preferences::Preferences,
+};
 
 const TICK_LINE_HEIGHT: Pixels = px(14.);
 const TICK_LABEL_GAP: Pixels = px(4.);
@@ -387,15 +390,11 @@ impl Render for ScatterChart {
                 .role(Role::Image)
                 .aria_label(label)
                 .aria_description("Use Left and Right to inspect points. Press Return to reveal the point in the table.")
-                .on_key_down(cx.listener(|chart, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.modifiers.modified() { return; }
-                    match event.keystroke.key.as_str() {
-                        "left" => chart.step(false, cx),
-                        "right" => chart.step(true, cx),
-                        "enter" | "space" => chart.reveal(chart.hover.unwrap_or(0), window, cx),
-                        _ => return,
-                    }
-                    cx.stop_propagation();
+                .key_context("GewuScatter")
+                .on_action(cx.listener(|chart, _: &PreviousPoint, _, cx| chart.step(false, cx)))
+                .on_action(cx.listener(|chart, _: &NextPoint, _, cx| chart.step(true, cx)))
+                .on_action(cx.listener(|chart, _: &RevealPoint, window, cx| {
+                    chart.reveal(chart.hover.unwrap_or(0), window, cx)
                 }));
         for action in [
             AccessibleAction::Increment,

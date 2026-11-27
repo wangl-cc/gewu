@@ -1,4 +1,4 @@
-//! Keyboard commands are scoped to either the document or the focused grid.
+//! Keyboard commands are scoped to the document, the focused grid or the focused scatter plot.
 use gpui_kit::{Action, App, KeyBinding, base::input};
 
 gpui_kit::actions!(gewu, [
@@ -13,7 +13,10 @@ gpui_kit::actions!(gewu, [
     EditFilter,
     ManageColumns,
     EditSort,
-    ExportTable
+    ExportTable,
+    PreviousPoint,
+    NextPoint,
+    RevealPoint
 ]);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,6 +51,7 @@ pub(crate) struct RevealScatterPoint {
 pub(crate) fn init(cx: &mut App) {
     let table = Some("GewuGrid");
     let document = Some("GewuDocument");
+    let scatter = Some("GewuScatter");
     // The component library's debug inspector claims this chord globally, including inside a grid.
     #[cfg(all(debug_assertions, target_os = "macos"))]
     cx.bind_keys([KeyBinding::new(
@@ -69,6 +73,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-g", FindPrevious, document),
         KeyBinding::new("escape", input::Escape, document),
         KeyBinding::new("cmd-shift-e", ExportTable, document),
+        KeyBinding::new("left", PreviousPoint, scatter),
+        KeyBinding::new("right", NextPoint, scatter),
+        KeyBinding::new("enter", RevealPoint, scatter),
+        KeyBinding::new("space", RevealPoint, scatter),
     ]);
     for (key, shifted, motion) in [
         ("up", "shift-up", Motion::Up),

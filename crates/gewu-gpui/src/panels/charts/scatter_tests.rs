@@ -59,6 +59,7 @@ fn hovering_the_plotted_position_reads_the_original_row_and_exact_text() {
     let app = TestAppContext::single();
     let (handle, chart) = app.update(|cx| {
         gpui_kit::init(cx);
+        crate::actions::init(cx);
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
