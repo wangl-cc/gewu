@@ -22,6 +22,7 @@ unwrap_used = "warn"
 expect_used = "warn"
 todo = "deny"
 dbg_macro = "deny"
+self_named_module_files = "warn"
 
 [profile.release]
 opt-level = 3

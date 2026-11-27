@@ -501,5 +501,5 @@ impl Render for WorksheetTabs {
 }
 
 #[cfg(test)]
-#[path = "../shell_tests.rs"]
+#[path = "document_tests.rs"]
 mod tests;
