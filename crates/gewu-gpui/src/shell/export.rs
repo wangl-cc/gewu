@@ -149,7 +149,7 @@ impl ExportController {
     ) -> impl Future<Output = Result<Option<Destination>, ExportFailure>> + 'static {
         use crate::platform::macos::{
             ns_window,
-            save::{ExportPanelOptions, choose_export},
+            panels::{ExportPanelOptions, choose_export},
         };
 
         /// The formats offered, in menu order.
@@ -189,21 +189,18 @@ impl ExportController {
             compressions: &COMPRESSIONS,
             compression,
         };
-        let (sender, receiver) = async_channel::bounded(1);
-        let shown = objc2::MainThreadMarker::new().is_some_and(|main| {
+        let chosen = objc2::MainThreadMarker::new().and_then(|main| {
             // The panel belongs to this document: attach it as a sheet on the document's window.
             let sheet = ns_window(window);
-            choose_export(main, sheet.as_deref(), &options, move |choice| {
-                let _ = sender.try_send(choice);
-            })
+            choose_export(main, sheet.as_deref(), &options)
         });
         async move {
-            if !shown {
+            let Some(chosen) = chosen else {
                 return Err(ExportFailure::Destination(
                     "macOS could not open the save panel".into(),
                 ));
-            }
-            Ok(receiver
+            };
+            Ok(chosen
                 .recv()
                 .await
                 .ok()

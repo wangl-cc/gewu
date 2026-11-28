@@ -10,13 +10,15 @@ use objc2::{
     runtime::{AnyObject, ProtocolObject},
 };
 use objc2_app_kit::{
-    NSModalResponseOK, NSOpenSavePanelDelegate, NSPopUpButton, NSSavePanel, NSStackView,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSModalResponseOK, NSOpenSavePanelDelegate, NSPopUpButton, NSSavePanel, NSTextField, NSView,
+    NSWindow,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSRect, NSString, NSURL,
 };
 use objc2_uniform_type_identifiers::UTType;
+
+use super::{Choice, accessory, choice, content_type};
 
 /// What the panel offers and starts with. Labels are the interface's names for each choice.
 pub(crate) struct ExportPanelOptions<'a> {
@@ -110,17 +112,6 @@ mod delegate {
     }
 }
 
-/// The type the system knows each format by. Parquet is declared by the app bundle.
-fn content_type(format: FileType) -> Retained<UTType> {
-    let identifier = match format {
-        FileType::Parquet => "org.apache.parquet",
-        FileType::Csv => "public.comma-separated-values-text",
-        FileType::Tsv => "public.tab-separated-values-text",
-        FileType::Xlsx => "org.openxmlformats.spreadsheetml.sheet",
-    };
-    UTType::importedTypeWithIdentifier(&NSString::from_str(identifier))
-}
-
 fn compression_options(
     main: MainThreadMarker,
     options: &ExportPanelOptions,
@@ -141,10 +132,7 @@ fn compression_options(
     {
         popup.selectItemAtIndex(index as isize);
     }
-    let views: [&NSView; 2] = [&label, &popup];
-    let stack = NSStackView::stackViewWithViews(&NSArray::from_slice(&views), main);
-    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-    stack.setSpacing(8.);
+    let stack = accessory(main, &[&label, &popup]);
     stack.setEdgeInsets(NSEdgeInsets {
         top: 12.,
         left: 16.,
@@ -155,8 +143,8 @@ fn compression_options(
     (popup, Retained::into_super(stack))
 }
 
-/// Show the export panel, as a sheet on `window` when given. `on_finish` receives the choice,
-/// or `None` when cancelled. Returns whether the panel could be shown.
+/// Show the export panel, as a sheet on `window` when given. `None` when the panel could not
+/// be shown.
 #[expect(
     unsafe_code,
     reason = "AppKit's panel constructor and weak delegate are checked here"
@@ -165,14 +153,11 @@ pub(crate) fn choose_export(
     main: MainThreadMarker,
     window: Option<&NSWindow>,
     options: &ExportPanelOptions,
-    on_finish: impl Fn(Option<ExportChoice>) + 'static,
-) -> bool {
+) -> Option<Choice<ExportChoice>> {
     // SAFETY: This class selector is called on the main thread. AppKit can return nil despite
     // objc2-app-kit's non-null 0.3 binding. Capture the autoreleased result as an Option.
     let panel: Option<Retained<NSSavePanel>> = unsafe { msg_send![class!(NSSavePanel), savePanel] };
-    let Some(panel) = panel else {
-        return false;
-    };
+    let panel = panel?;
     let formats: Vec<_> = options
         .formats
         .iter()
@@ -201,6 +186,7 @@ pub(crate) fn choose_export(
     panel.setCanCreateDirectories(true);
     panel.setExtensionHidden(false);
     panel.setShowsTagField(false);
+    let (on_finish, chosen) = choice();
     let delegate = delegate::new(main, Selection {
         formats,
         compression,
@@ -243,5 +229,5 @@ pub(crate) fn choose_export(
         Some(window) => panel.beginSheetModalForWindow_completionHandler(window, &completion),
         None => panel.beginWithCompletionHandler(&completion),
     }
-    true
+    Some(chosen)
 }

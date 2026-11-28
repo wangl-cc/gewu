@@ -15,7 +15,7 @@ pub(crate) enum PickerError {
 
 pub(super) struct FilePicker {
     #[cfg(target_os = "macos")]
-    panel: Option<crate::platform::macos::OpenPanel>,
+    panel: Option<crate::platform::macos::panels::OpenPanel>,
     _selection: Task<()>,
 }
 
@@ -24,18 +24,20 @@ impl FilePicker {
         #[cfg(target_os = "macos")]
         if !cx.is_test() {
             let main = objc2::MainThreadMarker::new().ok_or(PickerError::NotMainThread)?;
-            let (sender, receiver) = async_channel::bounded(1);
-            let panel =
-                crate::platform::macos::open_files(main, super::supports_header, move |choice| {
-                    let _ = sender.try_send(choice);
-                })
-                .ok_or(PickerError::Unavailable)?;
+            let (panel, chosen) =
+                crate::platform::macos::panels::open_files(main, super::supports_header)
+                    .ok_or(PickerError::Unavailable)?;
+            let selection = async move {
+                Ok(chosen
+                    .recv()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|files| (files.paths, files.has_header)))
+            };
             return Ok(Self {
                 panel: Some(panel),
-                _selection: Self::receive(
-                    async move { Ok(receiver.recv().await.ok().flatten()) },
-                    cx,
-                ),
+                _selection: Self::receive(selection, cx),
             });
         }
         let paths = cx.prompt_for_paths(PathPromptOptions {

@@ -8,11 +8,9 @@ use objc2_foundation::NSURL;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 mod display;
+pub(crate) mod panels;
 pub(crate) mod pasteboard;
-mod picker;
-pub(crate) mod save;
 pub(crate) use display::{DisplayObservation, accessibility_display_options};
-pub(crate) use picker::{OpenPanel, open_files};
 
 /// The AppKit window behind a gpui window, to attach sheets to.
 #[expect(

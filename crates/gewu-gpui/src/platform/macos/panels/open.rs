@@ -1,4 +1,6 @@
-//! The document picker owns the first-row option while the panel is open.
+//! The open panel for documents. It offers the first-row option while the selection includes
+//! a file that can read its first row as column names. It does not filter by type: Parquet
+//! is also recognized by content, without an extension.
 use std::path::{Path, PathBuf};
 
 use block2::RcBlock;
@@ -9,12 +11,24 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSButton, NSControlStateValueOn, NSModalResponseOK, NSOpenPanel, NSOpenSavePanelDelegate,
+    NSView,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, ns_string};
 
+use super::{Choice, accessory, choice};
+
 struct Options {
     header: Retained<NSButton>,
+    /// The header option as the panel shows it.
+    accessory: Retained<NSView>,
     supports_header: fn(&Path) -> bool,
+}
+
+/// The files chosen in a completed open panel.
+pub(crate) struct OpenedFiles {
+    pub paths: Vec<PathBuf>,
+    /// Whether eligible files read their first row as column names.
+    pub has_header: bool,
 }
 
 #[expect(
@@ -49,7 +63,7 @@ mod delegate {
                             .is_some_and(|p| (options.supports_header)(&p))
                 });
                 if eligible != panel.accessoryView().is_some() {
-                    panel.setAccessoryView(eligible.then_some(&options.header));
+                    panel.setAccessoryView(eligible.then_some(&options.accessory));
                     if eligible {
                         panel.setAccessoryViewDisclosed(true);
                     }
@@ -82,6 +96,7 @@ impl OpenPanel {
 }
 
 /// Show a multi-file panel. The header choice applies to paths accepted by `supports_header`.
+/// `None` when the panel could not be shown.
 #[expect(
     unsafe_code,
     reason = "AppKit's panel constructor, action and weak delegate are checked here"
@@ -89,8 +104,7 @@ impl OpenPanel {
 pub(crate) fn open_files(
     main: MainThreadMarker,
     supports_header: fn(&Path) -> bool,
-    on_finish: impl Fn(Option<(Vec<PathBuf>, bool)>) + 'static,
-) -> Option<OpenPanel> {
+) -> Option<(OpenPanel, Choice<OpenedFiles>)> {
     // SAFETY: This class selector is called on the main thread. AppKit can return nil despite
     // objc2-app-kit's non-null 0.3 binding. Capture the autoreleased result as an Option.
     let panel: Option<Retained<NSOpenPanel>> = unsafe { msg_send![class!(NSOpenPanel), openPanel] };
@@ -110,8 +124,11 @@ pub(crate) fn open_files(
     };
     header.setState(NSControlStateValueOn);
     header.sizeToFit();
+    let accessory = Retained::into_super(accessory(main, &[&header]));
+    let (on_finish, chosen) = choice();
     let delegate = delegate::new(main, Options {
         header,
+        accessory,
         supports_header,
     });
     // SAFETY: The panel holds a weak reference. Its completion block retains the delegate
@@ -123,18 +140,17 @@ pub(crate) fn open_files(
             // SAFETY: Modal interaction has ended; detach the weak delegate before releasing it.
             unsafe { panel.setDelegate(None) };
             on_finish((response == NSModalResponseOK).then(|| {
-                let paths = panel
-                    .URLs()
-                    .iter()
-                    .filter_map(|url| url.to_file_path())
-                    .collect();
-                (
-                    paths,
-                    delegate.ivars().header.state() == NSControlStateValueOn,
-                )
+                OpenedFiles {
+                    paths: panel
+                        .URLs()
+                        .iter()
+                        .filter_map(|url| url.to_file_path())
+                        .collect(),
+                    has_header: delegate.ivars().header.state() == NSControlStateValueOn,
+                }
             }));
         }
     });
     panel.beginWithCompletionHandler(&completion);
-    Some(OpenPanel(panel))
+    Some((OpenPanel(panel), chosen))
 }
