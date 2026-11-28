@@ -16,6 +16,9 @@ use gpui_kit::{
 };
 
 pub(crate) const TYPING_DELAY: Duration = Duration::from_millis(150);
+/// The field keeps this width with and without a query, so typing never moves it. It leaves
+/// room for text beside a count in the millions and the clear button.
+const FIELD_WIDTH: Pixels = px(280.);
 
 pub(crate) struct FindController {
     input: Entity<InputState>,
@@ -316,14 +319,18 @@ impl Render for FindController {
         let active_focus = focused && window.is_window_active();
         let mut field = div()
             .id("table-search")
-            .flex_1()
+            .role(Role::Group)
+            .aria_label("Find in table")
+            .aria_description(self.message(cx))
+            .w(FIELD_WIDTH)
+            .max_w(relative(0.62))
             .flex()
             .items_center()
             .gap_1()
             .min_w_0()
             .h(px(28.))
             .pl_2()
-            .pr(px(if searching { 4. } else { 8. }))
+            .pr_1()
             .bg(colors.canvas)
             .border_1()
             .border_color(if active_focus {
@@ -353,42 +360,6 @@ impl Render for FindController {
                     .child("×"),
             );
         }
-        let field = field.test_support();
-        let mut bar = div()
-            .id("find-toolbar")
-            .role(Role::Group)
-            .aria_label("Find in table")
-            .aria_description(self.message(cx))
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap_1()
-            .w(px(if searching { 300. } else { 240. }))
-            .max_w(relative(0.62))
-            .child(field);
-        if searching {
-            let enabled = self.can_navigate();
-            let arrow = |id, label: &'static str, direction| {
-                crate::ui::ghost_button(id, label, false, !enabled, cx)
-                    .h(px(28.))
-                    .w(px(24.))
-                    .rounded(px(6.))
-                    .child(crate::ui::chevron(direction, colors.foreground))
-            };
-            bar = bar
-                .child(
-                    arrow(
-                        "previous",
-                        "Previous match",
-                        crate::ui::ChevronDirection::Left,
-                    )
-                    .on_click(cx.listener(|find, _, _, cx| find.find_match(true, cx))),
-                )
-                .child(
-                    arrow("next", "Next match", crate::ui::ChevronDirection::Right)
-                        .on_click(cx.listener(|find, _, _, cx| find.find_match(false, cx))),
-                );
-        }
-        bar.into_any_element()
+        field.test_support()
     }
 }

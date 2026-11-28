@@ -77,6 +77,8 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
             .read(cx)
             .input_focused(window, cx)
     }));
+    let empty_field =
+        w.ui.update(|window, _| window.find("table-search").bounds());
     w.type_in_find("marker");
     assert_eq!(w.selection(), single(0, 2));
     assert_eq!(
@@ -87,12 +89,9 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
     w.ui.update(|window, _| {
         let count = window.find("find-count");
         assert_eq!(count.label(), Some("Match 1 of 2"));
-        assert!(
-            window
-                .find("table-search")
-                .bounds()
-                .contains(&count.bounds().center())
-        );
+        let field = window.find("table-search").bounds();
+        assert_eq!(field, empty_field, "a query should not move the field");
+        assert!(field.contains(&count.bounds().center()));
         assert!(window.try_find("find-notice").is_none());
     });
     assert_eq!(
@@ -145,10 +144,9 @@ fn sorted_filtered_find_and_copy_use_the_displayed_result() {
         let field = window.find("table-search").bounds();
         assert_eq!(notice.label(), Some("No matches"));
         assert!(window.try_find("find-count").is_none());
-        assert_eq!(window.find("previous").disabled(), Some(true));
-        assert_eq!(window.find("next").disabled(), Some(true));
         assert!(field.contains(&notice.bounds().center()));
     });
+    assert!(!w.app.read(|cx| w.table.read(cx).can_step_find(cx)));
     w.keys("escape");
     w.click(w.header(1), Modifiers::default());
     assert_eq!(w.source_rows(), [0, 1, 2, 3, 4]);

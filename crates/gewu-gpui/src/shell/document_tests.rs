@@ -427,7 +427,7 @@ fn document_title_search_and_inspector_share_the_top_row_in_narrow_windows() {
         assert_eq!(table.find_bar().read(cx).text(cx).as_ref(), "two");
         assert!(field.size.width >= px(70.));
         let center = w.find("show-inspector").bounds().center().y;
-        for id in ["table-search", "previous", "next", "close-find"] {
+        for id in ["table-search", "close-find"] {
             assert!(
                 (w.find(id).bounds().center().y - center).abs() <= px(1.),
                 "{id} should be vertically centered in the title bar"

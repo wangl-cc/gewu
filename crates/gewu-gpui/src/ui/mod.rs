@@ -17,7 +17,6 @@ use gpui_kit::{
 pub(crate) enum ChevronDirection {
     Down,
     Right,
-    Left,
 }
 
 #[derive(Clone, Copy)]
@@ -238,7 +237,6 @@ pub(crate) fn chevron(direction: ChevronDirection, color: Hsla) -> impl IntoElem
             let vertices = match direction {
                 ChevronDirection::Down => [(-3., -1.5), (0., 1.5), (3., -1.5)],
                 ChevronDirection::Right => [(-1.5, -3.), (1.5, 0.), (-1.5, 3.)],
-                ChevronDirection::Left => [(1.5, -3.), (-1.5, 0.), (1.5, 3.)],
             };
             let [a, b, c] = vertices.map(|(x, y)| center + point(px(x), px(y)));
             path.move_to(a);
