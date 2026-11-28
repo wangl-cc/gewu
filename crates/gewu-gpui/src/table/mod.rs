@@ -24,7 +24,7 @@ mod selection;
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use columns::ColumnWidth;
-pub(crate) use controls::ExportDraft;
+pub(crate) use controls::ExportSource;
 use data::{TableData, TableQuery, copy_tsv};
 use gewu_core::ColumnSort;
 use gpui_kit::*;
@@ -55,8 +55,6 @@ pub(crate) enum TableEvent {
     /// The displayed snapshot or the visible columns changed.
     ContextChanged,
     SelectionChanged,
-    /// The user confirmed an export of the captured view.
-    Export(ExportDraft),
 }
 
 impl EventEmitter<TableEvent> for TableView {}

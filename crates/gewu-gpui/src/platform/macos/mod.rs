@@ -1,5 +1,5 @@
 //! Every Objective-C call the app makes: typed operations over AppKit and Foundation for the
-//! open panel, the pasteboard, recent documents and display options.
+//! open and export panels, the pasteboard, recent documents and display options.
 use std::path::Path;
 
 use objc2::MainThreadMarker;
@@ -9,6 +9,7 @@ use objc2_foundation::NSURL;
 mod display;
 pub(crate) mod pasteboard;
 mod picker;
+pub(crate) mod save;
 pub(crate) use display::{DisplayObservation, accessibility_display_options};
 pub(crate) use picker::{OpenPanel, open_files};
 

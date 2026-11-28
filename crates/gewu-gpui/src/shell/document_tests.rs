@@ -636,10 +636,6 @@ fn export_keeps_the_original_worksheet_when_the_save_panel_outlives_a_switch() {
     session.open(vec![fixture("multi-sheet.xlsx")]);
     let (doc, mut ui) = session.viewer(0);
     ui.dispatch_action(crate::actions::ExportTable);
-    for id in ["export-format", "CSV", "choose-export-path"] {
-        ui.run_until_parked();
-        ui.update(|w, cx| w.click(id, cx));
-    }
     ui.run_until_parked();
     assert!(session.app.did_prompt_for_new_path());
     let last = doc.read_with(&session.app, |doc, _| {

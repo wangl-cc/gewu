@@ -8,7 +8,7 @@ The macOS Open panel offers **Use first row as column names** when its selection
 
 In an open CSV, TSV or XLSX document, **File → Import Options…** changes header interpretation, including when the initial open fails. Changing the option reloads the document and resets Find, filters and sorting. The dialog warns about this reset when filters or sorts are active. For XLSX, the header is the first occupied row, and the chosen policy also applies when switching worksheets.
 
-**File → Export…** offers the supported formats in the system format menu and compression options for Parquet. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression.
+**File → Export…** offers the supported formats in the system format menu of the save panel. The file name's extension follows the chosen format, and choosing Parquet shows its compression options below the menu. The app remembers the last successful export format unless **Remember last export format** is disabled in Settings; the initial default is Parquet with Zstd compression.
 
 ## Parquet
 

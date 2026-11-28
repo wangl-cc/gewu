@@ -247,14 +247,19 @@ impl Document {
                     panel.update(cx, |panel, cx| panel.mark_scatter(chart, None, cx));
                 }
             }
-            TableEvent::Export(draft) => {
-                let export = self
-                    .export
-                    .get_or_insert_with(|| cx.new(|_| ExportController::Idle))
-                    .clone();
-                export.update(cx, |export, cx| export.choose_path(draft.clone(), cx));
-            }
         }
+    }
+
+    /// Export the table's displayed rows and visible columns as they are now.
+    fn export(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = self.table.as_ref().and_then(|t| t.read(cx).export_source()) else {
+            return;
+        };
+        let export = self
+            .export
+            .get_or_insert_with(|| cx.new(|_| ExportController::Idle))
+            .clone();
+        export.update(cx, |export, cx| export.choose(source, cx));
     }
 
     fn reveal_scatter_point(
@@ -560,7 +565,8 @@ impl Document {
             ));
         }
         if export {
-            view = forward::<actions::ExportTable>(view, table, TableView::open_export);
+            view =
+                view.on_action(cx.listener(|doc, _: &actions::ExportTable, _, cx| doc.export(cx)));
         }
         view
     }

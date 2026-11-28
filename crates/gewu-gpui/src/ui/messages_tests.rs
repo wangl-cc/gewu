@@ -28,3 +28,22 @@ fn formats_numeric_statistics_with_thousands_separators_before_scientific_notati
     assert_eq!(format_numeric_statistic(1.2345e12, 4), "1.234e12");
     assert_eq!(format_numeric_statistic(1.2346e12, 4), "1.235e12");
 }
+
+#[test]
+fn export_choices_name_the_format_and_the_extension_it_writes() {
+    use gewu_core::FileType;
+    let labels = [
+        FileType::Parquet,
+        FileType::Csv,
+        FileType::Tsv,
+        FileType::Xlsx,
+    ]
+    .map(super::format_choice_label);
+    assert_eq!(labels, [
+        "Apache Parquet (.parquet)",
+        "Comma-separated values (.csv)",
+        "Tab-separated values (.tsv)",
+        "Excel workbook (.xlsx)",
+    ]);
+    assert_eq!(super::format_name(FileType::Xlsx), "Excel");
+}

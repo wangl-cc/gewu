@@ -869,9 +869,6 @@ fn export_uses_the_displayed_snapshot_from_before_the_save_panel() {
     w.click(w.cell(0, 0), Modifiers::default());
     w.keys("cmd-alt-shift-l");
     action(&mut w, ExportTable);
-    click(&mut w, "export-format");
-    click(&mut w, "CSV");
-    click(&mut w, "choose-export-path");
     assert!(w.app.did_prompt_for_new_path());
     w.ui.update(|window, cx| assert!(!window.is_action_available(&ExportTable, cx)));
     w.keys("cmd-alt-l");
@@ -893,39 +890,4 @@ fn export_uses_the_displayed_snapshot_from_before_the_save_panel() {
             "keep,9,marker-high"
         ]
     );
-}
-
-#[test]
-fn return_starts_export_from_the_dialog_and_commits_a_focused_choice_locally() {
-    let mut w = window();
-    action(&mut w, ExportTable);
-    click(&mut w, "export-format");
-    w.keys("down enter");
-    assert!(!w.app.did_prompt_for_new_path());
-    assert!(w.read(|table| matches!(table.controls.drawer, Some(super::Drawer::Export(_)))));
-    w.keys("escape");
-    action(&mut w, ExportTable);
-    w.keys("enter");
-    assert!(w.app.did_prompt_for_new_path());
-}
-
-#[test]
-fn export_announces_the_selected_format_and_compression() {
-    let mut w = window();
-    action(&mut w, ExportTable);
-    click(&mut w, "export-compression");
-    click(&mut w, "Brotli");
-    w.ui.update(|window, _| {
-        for (id, value) in [
-            ("export-format", "Parquet"),
-            ("export-compression", "Brotli"),
-        ] {
-            let control = window.find(id);
-            assert_eq!(control.role(), Some(gpui_kit::Role::ComboBox));
-            assert_eq!(control.value(), Some(value));
-        }
-        let save = window.find("choose-export-path");
-        assert_eq!(save.role(), Some(gpui_kit::Role::Button));
-        assert_eq!(save.checked(), None);
-    });
 }

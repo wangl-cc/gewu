@@ -11,6 +11,22 @@ pub(crate) fn format_name(format: gewu_core::FileType) -> &'static str {
     }
 }
 
+/// A format as offered for export: its full name and the extension it writes.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the macOS save panel lists formats by name")
+)]
+pub(crate) fn format_choice_label(format: gewu_core::FileType) -> String {
+    use gewu_core::FileType;
+    let name = match format {
+        FileType::Parquet => "Apache Parquet",
+        FileType::Csv => "Comma-separated values",
+        FileType::Tsv => "Tab-separated values",
+        FileType::Xlsx => "Excel workbook",
+    };
+    format!("{name} (.{})", format.extension())
+}
+
 /// Find found nothing in the current scope.
 pub(crate) const NO_MATCHES: &str = "No matches";
 

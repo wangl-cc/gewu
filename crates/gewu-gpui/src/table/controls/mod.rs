@@ -1,7 +1,7 @@
 //! Document controls operate on stable column identities and the displayed view snapshot.
 use std::{cell::Cell as ValueCell, collections::HashSet, rc::Rc};
 
-pub(crate) use export::ExportDraft;
+pub(crate) use export::ExportSource;
 use gewu_core::{ColumnFilter, ColumnId, Filter, SourceRow};
 use gpui_kit::{
     base::{self, input::InputState},
@@ -105,7 +105,6 @@ enum Drawer {
         anchor: Point<Pixels>,
         value: Option<SharedString>,
     },
-    Export(export::ExportDraft),
 }
 
 impl TableView {
@@ -304,7 +303,6 @@ impl TableView {
             }) => self.columns_panel(search, confirm.as_ref(), list, window, cx),
             Some(Drawer::Sort { summary: false }) => self.sort_panel(window, cx),
             Some(Drawer::Cell { value, .. }) => self.cell_panel(value.as_ref(), window, cx),
-            Some(Drawer::Export(draft)) => self.export_panel(draft, window, cx),
             // The status-bar triggers own the geometry of their popups.
             Some(Drawer::Filters | Drawer::Sort { summary: true }) | None => return elements,
         };
@@ -383,11 +381,6 @@ impl TableView {
                                 Some(Drawer::Columns { search, .. })
                                     if search.focus_handle(cx).is_focused(window) =>
                                 {
-                                    false
-                                }
-                                Some(Drawer::Export(_)) => {
-                                    table.submit_export(cx);
-                                    window.focus(&table.focus, cx);
                                     false
                                 }
                                 _ => true,

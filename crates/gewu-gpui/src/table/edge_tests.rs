@@ -236,7 +236,9 @@ fn a_filter_that_keeps_every_row_stays_in_the_summary_until_its_replacement_appl
 }
 
 #[test]
-fn export_panel_writes_each_format_and_selected_parquet_codec() {
+fn export_writes_the_format_of_the_chosen_name_and_the_remembered_parquet_codec() {
+    use gewu_core::ParquetCompression;
+
     let mut w = open();
     w.click(w.cell(0, 0), Modifiers::default());
     w.keys("cmd-alt-shift-l");
@@ -245,36 +247,26 @@ fn export_panel_writes_each_format_and_selected_parquet_codec() {
         ("csv", None),
         ("tsv", None),
         ("xlsx", None),
-        ("parquet", Some(("Zstd", "ZSTD"))),
-        ("parquet", Some(("Snappy", "SNAPPY"))),
-        ("parquet", Some(("Gzip", "GZIP"))),
-        ("parquet", Some(("Brotli", "BROTLI"))),
-        ("parquet", Some(("LZ4", "LZ4_RAW"))),
-        ("parquet", Some(("Uncompressed", "UNCOMPRESSED"))),
+        ("parquet", Some((ParquetCompression::Zstd, "ZSTD"))),
+        ("parquet", Some((ParquetCompression::Snappy, "SNAPPY"))),
+        ("parquet", Some((ParquetCompression::Gzip, "GZIP"))),
+        ("parquet", Some((ParquetCompression::Brotli, "BROTLI"))),
+        ("parquet", Some((ParquetCompression::Lz4, "LZ4_RAW"))),
+        (
+            "parquet",
+            Some((ParquetCompression::Uncompressed, "UNCOMPRESSED")),
+        ),
     ] {
-        w.keys("cmd-shift-e");
-        w.ui.update(|window, cx| window.click("export-format", cx));
-        w.settle();
-        let label = match format {
-            "parquet" => "Parquet",
-            "xlsx" => "Excel",
-            "csv" => "CSV",
-            _ => "TSV",
-        };
-        w.ui.update(|window, cx| window.click(label, cx));
-        w.settle();
-        if let Some((label, _)) = option {
-            w.ui.update(|window, cx| window.click("export-compression", cx));
-            w.settle();
-            w.ui.update(|window, cx| window.click(label, cx));
-            w.settle();
+        if let Some((codec, _)) = option {
+            w.app.update(|cx| {
+                crate::preferences::Preferences::update(cx, |p| p.parquet_compression = codec)
+            });
         }
-        w.ui.update(|window, cx| window.click("choose-export-path", cx));
-        w.settle();
+        w.keys("cmd-shift-e");
         assert!(w.app.did_prompt_for_new_path());
         let dest = directory.path().join(format!(
             "filtered-{}.{format}",
-            option.map_or("rows", |o| o.0)
+            option.map_or("rows", |o| o.1)
         ));
         w.app.simulate_new_path_selection(|_| Some(dest.clone()));
         w.settle();
@@ -282,7 +274,7 @@ fn export_panel_writes_each_format_and_selected_parquet_codec() {
         assert_eq!(result.n_rows(), 3);
         let info = result.info();
         assert_eq!(info.columns.len(), 3);
-        assert!(info.format.to_string().eq_ignore_ascii_case(format));
+        assert_eq!(info.format.extension(), format);
         if let Some((_, expected)) = option {
             let gewu_core::FileMetadata::Parquet { compression, .. } = info.metadata else {
                 panic!("missing Parquet metadata");
