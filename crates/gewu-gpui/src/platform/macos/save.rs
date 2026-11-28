@@ -11,7 +11,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSModalResponseOK, NSOpenSavePanelDelegate, NSPopUpButton, NSSavePanel, NSStackView,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSView,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSObject, NSObjectProtocol, NSRect, NSString, NSURL,
@@ -155,14 +155,15 @@ fn compression_options(
     (popup, Retained::into_super(stack))
 }
 
-/// Show the export panel. `on_finish` receives the choice, or `None` when cancelled. Returns
-/// whether the panel could be shown.
+/// Show the export panel, as a sheet on `window` when given. `on_finish` receives the choice,
+/// or `None` when cancelled. Returns whether the panel could be shown.
 #[expect(
     unsafe_code,
     reason = "AppKit's panel constructor and weak delegate are checked here"
 )]
 pub(crate) fn choose_export(
     main: MainThreadMarker,
+    window: Option<&NSWindow>,
     options: &ExportPanelOptions,
     on_finish: impl Fn(Option<ExportChoice>) + 'static,
 ) -> bool {
@@ -238,6 +239,9 @@ pub(crate) fn choose_export(
             on_finish(choice);
         }
     });
-    panel.beginWithCompletionHandler(&completion);
+    match window {
+        Some(window) => panel.beginSheetModalForWindow_completionHandler(window, &completion),
+        None => panel.beginWithCompletionHandler(&completion),
+    }
     true
 }

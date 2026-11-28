@@ -251,7 +251,7 @@ impl Document {
     }
 
     /// Export the table's displayed rows and visible columns as they are now.
-    fn export(&mut self, cx: &mut Context<Self>) {
+    fn export(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(source) = self.table.as_ref().and_then(|t| t.read(cx).export_source()) else {
             return;
         };
@@ -259,7 +259,7 @@ impl Document {
             .export
             .get_or_insert_with(|| cx.new(|_| ExportController::Idle))
             .clone();
-        export.update(cx, |export, cx| export.choose(source, cx));
+        export.update(cx, |export, cx| export.choose(source, window, cx));
     }
 
     fn reveal_scatter_point(
@@ -565,8 +565,9 @@ impl Document {
             ));
         }
         if export {
-            view =
-                view.on_action(cx.listener(|doc, _: &actions::ExportTable, _, cx| doc.export(cx)));
+            view = view.on_action(
+                cx.listener(|doc, _: &actions::ExportTable, window, cx| doc.export(window, cx)),
+            );
         }
         view
     }

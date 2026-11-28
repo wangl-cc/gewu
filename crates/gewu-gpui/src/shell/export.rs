@@ -65,7 +65,7 @@ impl ExportController {
     }
 
     /// Ask where and as what to export `source`, starting from the remembered format.
-    pub(super) fn choose(&mut self, source: ExportSource, cx: &mut Context<Self>) {
+    pub(super) fn choose(&mut self, source: ExportSource, window: &Window, cx: &mut Context<Self>) {
         let prefs = Preferences::get(cx);
         let format = if prefs.remember_export_format {
             prefs.last_export_format
@@ -82,7 +82,7 @@ impl ExportController {
                 .unwrap_or_default()
                 .to_string_lossy()
         );
-        let chosen = Self::destination(&source, &directory, &stem, format, compression, cx);
+        let chosen = Self::destination(&source, &directory, &stem, format, compression, window, cx);
         *self = ExportController::Choosing {
             _task: cx.spawn(async move |this, cx| {
                 let destination = chosen.await;
@@ -107,6 +107,7 @@ impl ExportController {
         stem: &str,
         format: FileType,
         compression: ParquetCompression,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Destination>, ExportFailure>>>> {
         #[cfg(target_os = "macos")]
@@ -117,9 +118,10 @@ impl ExportController {
                 stem,
                 format,
                 compression,
+                window,
             ));
         }
-        let _ = source;
+        let _ = (source, window);
         let receiver =
             cx.prompt_for_new_path(directory, Some(&format!("{stem}.{}", format.extension())));
         Box::pin(async move {
@@ -143,8 +145,12 @@ impl ExportController {
         stem: &str,
         format: FileType,
         compression: ParquetCompression,
+        window: &Window,
     ) -> impl Future<Output = Result<Option<Destination>, ExportFailure>> + 'static {
-        use crate::platform::macos::save::{ExportPanelOptions, choose_export};
+        use crate::platform::macos::{
+            ns_window,
+            save::{ExportPanelOptions, choose_export},
+        };
 
         /// The formats offered, in menu order.
         const FORMATS: [FileType; 4] = [
@@ -185,7 +191,9 @@ impl ExportController {
         };
         let (sender, receiver) = async_channel::bounded(1);
         let shown = objc2::MainThreadMarker::new().is_some_and(|main| {
-            choose_export(main, &options, move |choice| {
+            // The panel belongs to this document: attach it as a sheet on the document's window.
+            let sheet = ns_window(window);
+            choose_export(main, sheet.as_deref(), &options, move |choice| {
                 let _ = sender.try_send(choice);
             })
         });
